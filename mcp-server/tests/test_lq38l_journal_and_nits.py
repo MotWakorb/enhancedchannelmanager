@@ -227,6 +227,62 @@ class TestStreamGroupProviderResolution:
 
 
 # ===========================================================================
+# bd-8w1ba — get_streams_for_channel surfaces a clean not-found message when the
+# backend now returns 404 for a non-existent channel id (the backend fix maps the
+# upstream Dispatcharr 404 instead of an opaque 500). The MCP client wraps that
+# 404 in a RuntimeError chained from the original httpx.HTTPStatusError.
+# ===========================================================================
+
+class TestStreamsForChannelNotFound:
+    @staticmethod
+    def _not_found_runtime_error() -> RuntimeError:
+        """Mirror ecm_client._http_error(...) raise-from for a 404: a
+        RuntimeError chained (__cause__) to the httpx.HTTPStatusError."""
+        import httpx
+
+        request = httpx.Request(
+            "GET", "http://ecm/api/channels/999999/streams"
+        )
+        response = httpx.Response(
+            404, request=request, text='{"detail": "Not found."}'
+        )
+        status_err = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=response
+        )
+        err = RuntimeError(
+            "GET /api/channels/999999/streams -> HTTP 404 Not Found: Not found."
+        )
+        err.__cause__ = status_err
+        return err
+
+    @pytest.mark.asyncio
+    async def test_not_found_returns_clean_message(self):
+        mcp = _register("streams")
+        mock_client = _client(side_effect=self._not_found_runtime_error())
+        with patch("tools.streams.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "get_streams_for_channel", {"channel_id": 999999}
+            )
+        text = result[0][0].text
+        assert "Channel 999999 not found" in text
+        assert "internal channel id" in text
+        # the not-found message replaces the opaque "Error getting streams" wrap
+        assert "Error getting streams" not in text
+
+    @pytest.mark.asyncio
+    async def test_non_404_error_keeps_generic_wrap(self):
+        mcp = _register("streams")
+        mock_client = _client(side_effect=RuntimeError("upstream exploded"))
+        with patch("tools.streams.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "get_streams_for_channel", {"channel_id": 5}
+            )
+        text = result[0][0].text
+        assert "Error getting streams for channel 5" in text
+        assert "not found" not in text
+
+
+# ===========================================================================
 # lq38l.13 #3 — get_epg_grid resolves channel names via channel_uuid
 # ===========================================================================
 
