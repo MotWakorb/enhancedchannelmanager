@@ -606,6 +606,92 @@ ENDPOINTS: dict[str, Endpoint] = {
         request_fields=frozenset({"channels", "mode"}),  # ComputeSortRequest
         response_fields=frozenset({"results"}),  # ComputeSortResponse
     ),
+    # -- co5wh.2: per-provider stats (Stats v2 Providers panel, bd-skqln.16) --
+    # All four routes are admin-only on the backend; the MCP static key is
+    # admin-equivalent (bd-1wq7z.1). None declare a response_model so
+    # response_is_list stays at its default (False) — the contract test
+    # compares against the OpenAPI schema which has no array type declared.
+    "stats_providers_buffering": Endpoint(
+        name="stats_providers_buffering",
+        method="GET",
+        path="/api/stats/providers/buffering",
+        query_params=frozenset({"window", "bucket"}),
+    ),
+    "stats_providers_watch_time": Endpoint(
+        name="stats_providers_watch_time",
+        method="GET",
+        path="/api/stats/providers/watch-time",
+        query_params=frozenset({"window"}),
+    ),
+    "stats_providers_channel_heatmap": Endpoint(
+        name="stats_providers_channel_heatmap",
+        method="GET",
+        path="/api/stats/providers/channel-heatmap",
+        query_params=frozenset({"window", "top_n"}),
+    ),
+    "stats_providers_bitrate": Endpoint(
+        name="stats_providers_bitrate",
+        method="GET",
+        path="/api/stats/providers/bitrate",
+        query_params=frozenset({"window", "bucket"}),
+    ),
+    # -- co5wh.3: per-user watch-time (Stats v2 GH-62, bd-skqln.5) -----------
+    # /watch-time: group_by=total|day; response_is_list stays default (untyped).
+    # /users/dispatcharr/{user_id} and /users/emby/{emby_user_id}: path-param
+    # routes; no body; no typed response_model in OpenAPI.
+    "stats_watch_time": Endpoint(
+        name="stats_watch_time",
+        method="GET",
+        path="/api/stats/watch-time",
+        query_params=frozenset({"group_by", "user_id", "from", "to"}),
+    ),
+    "stats_users_dispatcharr": Endpoint(
+        name="stats_users_dispatcharr",
+        method="GET",
+        path="/api/stats/users/dispatcharr/{user_id}",
+        query_params=frozenset({"from", "to"}),
+    ),
+    "stats_users_emby": Endpoint(
+        name="stats_users_emby",
+        method="GET",
+        path="/api/stats/users/emby/{emby_user_id}",
+        query_params=frozenset({"from", "to"}),
+    ),
+    # -- co5wh.4: popularity trending + per-channel score --------------------
+    # /popularity/trending: direction + limit query params; returns a runtime
+    # list of ChannelPopularityScore.to_dict() — no response_model in OpenAPI.
+    # /popularity/channel/{channel_id}: path-param; returns one score dict or
+    # 404; no response_model in OpenAPI.
+    # response_is_list stays default (False) — untyped in OpenAPI.
+    "stats_popularity_trending": Endpoint(
+        name="stats_popularity_trending",
+        method="GET",
+        path="/api/stats/popularity/trending",
+        query_params=frozenset({"direction", "limit"}),
+    ),
+    "stats_popularity_channel": Endpoint(
+        name="stats_popularity_channel",
+        method="GET",
+        path="/api/stats/popularity/channel/{channel_id}",
+    ),
+    # -- co5wh.5: activity feed + per-channel bandwidth ----------------------
+    # /activity: proxies Dispatcharr /api/core/system-events/; returns a
+    # Dispatcharr paginated dict {count, next, previous, results:[...]} — no
+    # response_model in OpenAPI. response_is_list stays default (False).
+    # /channel-bandwidth: BandwidthTracker.get_channel_bandwidth_stats returns
+    # a plain list — again no response_model declared in OpenAPI.
+    "stats_activity": Endpoint(
+        name="stats_activity",
+        method="GET",
+        path="/api/stats/activity",
+        query_params=frozenset({"limit", "offset", "event_type"}),
+    ),
+    "stats_channel_bandwidth": Endpoint(
+        name="stats_channel_bandwidth",
+        method="GET",
+        path="/api/stats/channel-bandwidth",
+        query_params=frozenset({"days", "limit", "sort_by"}),
+    ),
     # -- streams domain ----------------------------------------------------
     "streams_list": Endpoint(
         name="streams_list",
