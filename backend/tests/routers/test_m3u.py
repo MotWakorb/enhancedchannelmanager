@@ -5,8 +5,16 @@ Tests: 26 M3U endpoints covering account CRUD, refresh, filters,
        profiles, group settings, and server groups.
 Mocks: get_client() to isolate from Dispatcharr.
 """
+import httpx
 import pytest
 from unittest.mock import AsyncMock, patch
+
+
+def _upstream_404(method="GET", path="http://disp/api/m3u/accounts/999/"):
+    """Build an httpx.HTTPStatusError mirroring a Dispatcharr 404 (raise_for_status)."""
+    request = httpx.Request(method, path)
+    response = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+    return httpx.HTTPStatusError("404 Client Error", request=request, response=response)
 
 
 class TestGetM3UAccount:
@@ -23,6 +31,29 @@ class TestGetM3UAccount:
 
         assert response.status_code == 200
         mock_client.get_m3u_account.assert_called_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_missing_account_returns_404_not_500(self, async_client):
+        """A missing account id surfaces upstream 404 as 404, not 500 (bd-lq38l.4)."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.side_effect = _upstream_404()
+
+        with patch("routers.m3u.get_client", return_value=mock_client):
+            response = await async_client.get("/api/m3u/accounts/999")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error stays a 500 (bd-lq38l.4)."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.side_effect = RuntimeError("boom")
+
+        with patch("routers.m3u.get_client", return_value=mock_client):
+            response = await async_client.get("/api/m3u/accounts/1")
+
+        assert response.status_code == 500
 
 
 class TestCreateM3UAccount:
@@ -44,6 +75,61 @@ class TestCreateM3UAccount:
         assert response.status_code == 200
         assert response.json()["name"] == "New M3U"
 
+    @pytest.mark.asyncio
+    async def test_standard_account_url_persisted_as_server_url(self, async_client):
+        """url field is normalized to server_url before forwarding to Dispatcharr.
+
+        The MCP create_m3u_account tool sends {name, url, server_type} but
+        Dispatcharr expects server_url.  The router must promote url → server_url
+        so the playlist URL round-trips correctly (bd-znc76.4).
+        """
+        mock_client = AsyncMock()
+        mock_client.create_m3u_account.return_value = {
+            "id": 7,
+            "name": "StandardProvider",
+            "server_url": "https://example.com/playlist.m3u8",
+        }
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"):
+            response = await async_client.post("/api/m3u/accounts", json={
+                "name": "StandardProvider",
+                "url": "https://example.com/playlist.m3u8",
+                "server_type": "standard",
+            })
+
+        assert response.status_code == 200
+        # The payload forwarded to Dispatcharr must use server_url, not url
+        called_data = mock_client.create_m3u_account.call_args[0][0]
+        assert called_data.get("server_url") == "https://example.com/playlist.m3u8", (
+            f"Expected server_url in forwarded payload; got: {called_data!r}"
+        )
+        assert "url" not in called_data, (
+            f"'url' key must be promoted to 'server_url'; got: {called_data!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_server_url_not_overwritten_if_already_present(self, async_client):
+        """When the caller already provides server_url, it is not overwritten."""
+        mock_client = AsyncMock()
+        mock_client.create_m3u_account.return_value = {
+            "id": 8,
+            "name": "XtreamProvider",
+            "server_url": "https://xtream.example.com",
+        }
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"):
+            response = await async_client.post("/api/m3u/accounts", json={
+                "name": "XtreamProvider",
+                "server_url": "https://xtream.example.com",
+                "server_type": "xtream",
+            })
+
+        assert response.status_code == 200
+        called_data = mock_client.create_m3u_account.call_args[0][0]
+        assert called_data.get("server_url") == "https://xtream.example.com"
+
 
 class TestUpdateM3UAccount:
     """Tests for PUT /api/m3u/accounts/{account_id}."""
@@ -63,6 +149,20 @@ class TestUpdateM3UAccount:
 
         assert response.status_code == 200
 
+    @pytest.mark.asyncio
+    async def test_missing_account_returns_404_not_500(self, async_client):
+        """Updating a nonexistent account surfaces upstream 404 as 404, not 500
+        (bd-lq38l.4). The before-state get_m3u_account raises 404."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.side_effect = _upstream_404()
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"):
+            response = await async_client.put("/api/m3u/accounts/999", json={"name": "New"})
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
 
 class TestPatchM3UAccount:
     """Tests for PATCH /api/m3u/accounts/{account_id}."""
@@ -81,6 +181,20 @@ class TestPatchM3UAccount:
             })
 
         assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_missing_account_returns_404_not_500(self, async_client):
+        """Patching a nonexistent account surfaces upstream 404 as 404, not 500
+        (bd-lq38l.4)."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.side_effect = _upstream_404()
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"):
+            response = await async_client.patch("/api/m3u/accounts/999", json={"enabled": False})
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestDeleteM3UAccount:
@@ -158,6 +272,20 @@ class TestDeleteM3UAccount:
         # Account 2 removed from link group [1, 2, 3] → [1, 3]; [4, 5] untouched
         assert saved["settings"].linked_m3u_accounts == [[1, 3], [4, 5]]
 
+    @pytest.mark.asyncio
+    async def test_missing_account_returns_404_not_500(self, async_client):
+        """Deleting a nonexistent account surfaces upstream 404 as 404, not 500
+        (bd-lq38l.4). The before-state get_m3u_account raises 404."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.side_effect = _upstream_404()
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"):
+            response = await async_client.delete("/api/m3u/accounts/999")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
 
 class TestRefreshAll:
     """Tests for POST /api/m3u/refresh."""
@@ -202,6 +330,21 @@ class TestRefreshSingle:
             response = await async_client.post("/api/m3u/refresh/1")
 
         assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_missing_account_returns_404_not_500(self, async_client):
+        """Refreshing a nonexistent account surfaces upstream 404 as 404, not 500
+        (bd-lq38l.4). The initial get_m3u_account raises 404."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.side_effect = _upstream_404()
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.send_alert", new=AsyncMock()), \
+             patch("asyncio.create_task"):
+            response = await async_client.post("/api/m3u/refresh/999")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestRefreshVOD:

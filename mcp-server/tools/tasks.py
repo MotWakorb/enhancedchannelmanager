@@ -15,15 +15,19 @@ def register(mcp: FastMCP):
         """List all scheduled tasks and their status."""
         try:
             client = get_ecm_client()
-            tasks = await client.call_endpoint(ENDPOINTS["tasks_list"])
+            resp = await client.call_endpoint(ENDPOINTS["tasks_list"])
+            # Backend returns {"tasks": [...]}; unwrap defensively
+            # (same class as bd-pvw35 / GH #222 — iterating the dict gives string keys).
+            tasks = resp.get("tasks", []) if isinstance(resp, dict) else (resp or [])
 
             if not tasks:
                 return "No tasks configured."
 
             lines = [f"Found {len(tasks)} tasks:"]
             for t in tasks:
-                name = t.get("name", "Unknown")
                 tid = t.get("task_id", t.get("id", "?"))
+                raw_name = t.get("task_name") or t.get("name")
+                name = raw_name if raw_name else tid.replace("_", " ").title() if tid != "?" else "Unknown"
                 enabled = "enabled" if t.get("enabled") else "disabled"
                 last_run = t.get("last_run", "never")
                 status = t.get("status", "idle")
@@ -64,8 +68,15 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(ENDPOINTS["tasks_cancel"], path_args={"task_id": task_id})
-            msg = result.get("message", "") if isinstance(result, dict) else ""
-            return f"Task '{task_id}' cancelled. {msg}".rstrip()
+            if isinstance(result, dict):
+                status = result.get("status", "")
+                msg = result.get("message", "")
+                # bd-1wq7z.12: backend returns HTTP 200 {"status": "not_running", ...}
+                # when the task isn't running — don't hardcode "cancelled".
+                if status == "not_running":
+                    return f"Task '{task_id}' was not running. {msg}".rstrip()
+                return f"Task '{task_id}' cancelled. {msg}".rstrip()
+            return f"Task '{task_id}' cancelled."
         except Exception as e:
             logger.error("[MCP] cancel_task failed: %s", e)
             return f"Error cancelling task '{task_id}': {e}"
@@ -148,6 +159,7 @@ def register(mcp: FastMCP):
         day_of_month: int | None = None,
         enabled: bool = True,
         name: str | None = None,
+        timezone: str | None = None,
     ) -> str:
         """Create a new schedule for a task.
 
@@ -164,10 +176,17 @@ def register(mcp: FastMCP):
             day_of_month: Day of month 1-31, or -1 for last day (for monthly)
             enabled: Whether the schedule is active (default True)
             name: Optional display name for the schedule
+            timezone: IANA timezone name for the schedule (e.g. 'America/Chicago',
+                'Europe/London'). Defaults to 'UTC'. Schedules stored as UTC will
+                fire at the wrong local time if the operator is in a different zone.
         """
         try:
             client = get_ecm_client()
-            payload: dict = {"schedule_type": schedule_type, "enabled": enabled}
+            payload: dict = {
+                "schedule_type": schedule_type,
+                "enabled": enabled,
+                "timezone": timezone if timezone is not None else "UTC",
+            }
             if schedule_time is not None:
                 payload["schedule_time"] = schedule_time
             if interval_seconds is not None:

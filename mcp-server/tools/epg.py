@@ -9,6 +9,39 @@ from ecm_client import get_ecm_client
 logger = logging.getLogger(__name__)
 
 
+async def _build_channel_uuid_map(client) -> dict:
+    """Fetch all channels and map ``uuid -> {"id", "name"}``.
+
+    Dispatcharr EPG grid program items key the channel by ``channel_uuid``
+    (NOT ``channel_id`` / ``channel_name``), so the grid renderer resolves
+    names and the channel-id filter through the channel list (lq38l.13 #3).
+    A failed lookup degrades to an empty map (caller falls back to the uuid).
+    """
+    uuid_map: dict = {}
+    try:
+        page = 1
+        while True:
+            result = await client.call_endpoint(
+                ENDPOINTS["channels_list"],
+                query={"page": page, "page_size": 500},
+            )
+            if isinstance(result, dict):
+                batch = result.get("results", result.get("channels", []))
+            else:
+                batch = result
+            if not batch:
+                break
+            for c in batch:
+                if isinstance(c, dict) and c.get("uuid"):
+                    uuid_map[c["uuid"]] = {"id": c.get("id"), "name": c.get("name")}
+            if not (isinstance(result, dict) and result.get("next")):
+                break
+            page += 1
+    except Exception as e:  # degrade gracefully
+        logger.warning("[MCP] could not resolve channel names for EPG grid: %s", e)
+    return uuid_map
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def list_epg_sources() -> str:
@@ -26,9 +59,12 @@ def register(mcp: FastMCP):
             for s in sources:
                 name = s.get("name", "Unknown")
                 sid = s.get("id", "?")
-                url = s.get("url", "")[:50]
-                channel_count = s.get("channel_count", 0)
-                lines.append(f"  {name} (id={sid}) — {channel_count} channels, url: {url}...")
+                # url may be present-but-None (4 of 8 real sources); `or ""` handles that
+                url = (s.get("url") or "")[:50]
+                # Dispatcharr payload uses epg_data_count for channel count; channel_count is absent
+                epg_count = s.get("epg_data_count", s.get("channel_count"))
+                count_str = f"{epg_count} channels, " if epg_count is not None else ""
+                lines.append(f"  {name} (id={sid}) — {count_str}url: {url}...")
 
             return "\n".join(lines)
         except Exception as e:
@@ -94,30 +130,136 @@ def register(mcp: FastMCP):
             return f"Error refreshing EPG sources: {e}"
 
     @mcp.tool()
-    async def match_channels_epg() -> str:
-        """Auto-match channels to EPG data based on channel names."""
+    async def match_channels_epg(
+        channel_ids: list[int] | None = None,
+        epg_source_ids: list[int] | None = None,
+        source_order: list[int] | None = None,
+    ) -> str:
+        """Auto-match channels to EPG data based on channel names.
+
+        Args:
+            channel_ids: Optional list of channel IDs to match (default: all channels)
+            epg_source_ids: Optional list of EPG source IDs to search (default: all sources)
+            source_order: Optional list of EPG source IDs defining preferred match order
+        """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["epg_match"], timeout=300.0)
+            # EPGMatchRequest requires a body; all fields are optional (default []).
+            # Omitting the body entirely → HTTP 422 "Field required, loc:['body']".
+            body: dict = {
+                "channel_ids": channel_ids or [],
+                "epg_source_ids": epg_source_ids or [],
+                "source_order": source_order or [],
+            }
+            result = await client.call_endpoint(ENDPOINTS["epg_match"], body=body, timeout=300.0)
 
-            matched = result.get("matched", 0)
-            unmatched = result.get("unmatched", 0)
-            return f"EPG auto-match complete: {matched} channels matched, {unmatched} unmatched."
+            # Real backend response shape (v0.15.0):
+            # {"exact":[...], "multiple":[...], "none":[...],
+            #  "summary":{"total_channels":N, "exact_count":N, "multiple_count":N,
+            #              "none_count":N, "match_time_ms":N}}
+            summary = result.get("summary", {}) if isinstance(result, dict) else {}
+            total = summary.get("total_channels", len(result.get("exact", [])) + len(result.get("multiple", [])) + len(result.get("none", [])))
+            exact_count = summary.get("exact_count", len(result.get("exact", [])) if isinstance(result, dict) else 0)
+            multiple_count = summary.get("multiple_count", len(result.get("multiple", [])) if isinstance(result, dict) else 0)
+            none_count = summary.get("none_count", len(result.get("none", [])) if isinstance(result, dict) else 0)
+
+            lines = [
+                f"EPG auto-match complete: {total} channels total — "
+                f"{exact_count} exact, {multiple_count} multiple candidates, {none_count} unmatched."
+            ]
+
+            # Surface candidate details for ambiguous channels so the operator
+            # can see the options without dropping to the UI (bd-1icn8).
+            # The backend returns result["multiple"] as a list of per-channel
+            # entries, each with a "matches" list capped at 10 candidates.
+            multiple_entries = result.get("multiple", []) if isinstance(result, dict) else []
+            if multiple_entries:
+                lines.append(f"\nChannels with multiple candidates ({len(multiple_entries)}):")
+                for entry in multiple_entries:
+                    ch_name = entry.get("channel_name", f"channel {entry.get('channel_id', '?')}")
+                    candidates = entry.get("matches", [])
+                    lines.append(f"  {ch_name}:")
+                    if candidates:
+                        for c in candidates:
+                            tvg_id = c.get("tvg_id", "?")
+                            epg_name = c.get("epg_name", "")
+                            confidence = c.get("confidence")
+                            conf_str = f" ({confidence:.0f}%)" if confidence is not None else ""
+                            name_str = f" — {epg_name}" if epg_name else ""
+                            lines.append(f"    • {tvg_id}{name_str}{conf_str}")
+                    else:
+                        lines.append("    (no candidate details available)")
+
+            return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] match_channels_epg failed: %s", e)
             return f"Error running EPG auto-match: {e}"
 
     @mcp.tool()
-    async def create_epg_source(name: str, url: str) -> str:
+    async def link_channel_epg(
+        channel_id: int,
+        tvg_id: str | None = None,
+        epg_data_id: int | None = None,
+    ) -> str:
+        """Link a channel to a chosen EPG candidate so its guide data attaches.
+
+        Use this after ``match_channels_epg`` reports a channel with *multiple
+        candidates*: pick one candidate's ``tvg_id`` (shown in that output) and
+        link it here. This sets the channel's EPG data association (epg_data_id),
+        which ``bulk_assign_epg`` does NOT do — and which ``set_logo_from_epg``
+        needs to find the linked entry. Completes the
+        match -> link -> set-logo workflow without dropping to the UI.
+
+        Args:
+            channel_id: The channel to link.
+            tvg_id: The chosen candidate's tvg_id (resolved server-side to its
+                EPG data row). Either tvg_id or epg_data_id is required.
+            epg_data_id: The EPG data row id directly (preferred when known —
+                e.g. a candidate's "epg_id"). Wins over tvg_id if both given.
+        """
+        if tvg_id is None and epg_data_id is None:
+            return "Provide either tvg_id or epg_data_id to link."
+        try:
+            client = get_ecm_client()
+            body: dict = {}
+            if epg_data_id is not None:
+                body["epg_data_id"] = epg_data_id
+            if tvg_id is not None:
+                body["tvg_id"] = tvg_id
+
+            result = await client.call_endpoint(
+                ENDPOINTS["epg_link_channel"],
+                path_args={"channel_id": channel_id},
+                body=body,
+            )
+
+            linked_id = result.get("epg_data_id") if isinstance(result, dict) else None
+            ch_name = result.get("name") if isinstance(result, dict) else None
+            label = f"'{ch_name}' (id={channel_id})" if ch_name else f"channel {channel_id}"
+            return (
+                f"Linked {label} to EPG data id={linked_id}. "
+                "set_logo_from_epg can now resolve this channel's EPG entry."
+            )
+        except Exception as e:
+            logger.error("[MCP] link_channel_epg failed: %s", e)
+            return f"Error linking channel {channel_id} to EPG: {e}"
+
+    @mcp.tool()
+    async def create_epg_source(name: str, url: str, source_type: str = "xmltv") -> str:
         """Create a new EPG data source.
 
         Args:
             name: Display name for the EPG source
             url: URL of the XMLTV EPG feed
+            source_type: EPG source type — "xmltv" (default, standard XMLTV format)
         """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["epg_create_source"], body={"name": name, "url": url})
+            # source_type is required by Dispatcharr; omitting it → HTTP 400 (bd-1wq7z.9)
+            result = await client.call_endpoint(
+                ENDPOINTS["epg_create_source"],
+                body={"name": name, "url": url, "source_type": source_type},
+            )
             sid = result.get("id", "?") if isinstance(result, dict) else "?"
             rname = result.get("name", name) if isinstance(result, dict) else name
             return f"EPG source created: {rname} (id={sid})"
@@ -195,12 +337,18 @@ def register(mcp: FastMCP):
             # fixed in bd-vtghg Phase 2).
             result = await client.call_endpoint(ENDPOINTS["epg_grid"])
 
-            programs = result if isinstance(result, list) else result.get("programs", [])
+            # Backend returns the raw Dispatcharr grid, whose program items key
+            # the channel by ``channel_uuid`` (not channel_id / channel_name).
+            # Resolve names + the channel-id filter through the channel list.
+            programs = result if isinstance(result, list) else result.get("data", result.get("programs", []))
+
+            uuid_map = await _build_channel_uuid_map(client)
 
             if channel_id is not None:
                 programs = [
                     p for p in programs
-                    if channel_id in (p.get("channel_id"), p.get("channel"))
+                    if (uuid_map.get(p.get("channel_uuid"), {}).get("id") == channel_id)
+                    or channel_id in (p.get("channel_id"), p.get("channel"))
                 ]
 
             if not programs:
@@ -208,10 +356,17 @@ def register(mcp: FastMCP):
 
             lines = [f"EPG Schedule ({min(len(programs), limit)} programs):"]
             for p in programs[:limit]:
-                channel = p.get("channel_name", p.get("channel", "Unknown"))
+                ch_info = uuid_map.get(p.get("channel_uuid"), {})
+                channel = (
+                    ch_info.get("name")
+                    or p.get("channel_name")
+                    or p.get("channel")
+                    or p.get("channel_uuid")
+                    or "Unknown"
+                )
                 title = p.get("title", "Unknown")
                 start = p.get("start", p.get("start_time", "?"))
-                end = p.get("end", p.get("end_time", "?"))
+                end = p.get("stop", p.get("end", p.get("end_time", "?")))
                 lines.append(f"  [{channel}] {title} ({start} - {end})")
 
             if len(programs) > limit:

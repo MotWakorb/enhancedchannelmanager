@@ -57,6 +57,11 @@ def register(mcp: FastMCP):
         Args:
             name: Display name for the export profile
         """
+        # The backend accepts a blank name and creates an unnamed profile
+        # (lq38l.13 #7). Validate up front and return a clean error.
+        if not name or not name.strip():
+            return "Error: export profile name must not be empty."
+        name = name.strip()
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(ENDPOINTS["export_create_profile"], body={"name": name})
@@ -81,6 +86,39 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] delete_export_profile failed: %s", e)
             return f"Error deleting export profile {profile_id}: {e}"
+
+    @mcp.tool()
+    async def list_publish_configs() -> str:
+        """List all publish configurations.
+
+        Use this to discover valid config_id values for publish_export.
+        Each publish config ties an export profile to a cloud storage target
+        and specifies a schedule (manual, cron, or event-triggered).
+        """
+        try:
+            client = get_ecm_client()
+            configs = await client.call_endpoint(ENDPOINTS["export_list_publish_configs"])
+
+            if not configs:
+                return "No publish configurations found."
+
+            lines = [f"Found {len(configs)} publish configuration(s):"]
+            for c in configs:
+                cid = c.get("id", "?")
+                name = c.get("name", "Unknown")
+                profile_name = c.get("profile_name") or f"profile_id={c.get('profile_id', '?')}"
+                target_name = c.get("target_name") or "no target"
+                stype = c.get("schedule_type", "?")
+                enabled = "enabled" if c.get("enabled") else "disabled"
+                lines.append(
+                    f"  {name} (id={cid}) — profile: {profile_name}, target: {target_name}"
+                    f", schedule: {stype} ({enabled})"
+                )
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] list_publish_configs failed: %s", e)
+            return f"Error listing publish configurations: {e}"
 
     @mcp.tool()
     async def list_cloud_targets() -> str:

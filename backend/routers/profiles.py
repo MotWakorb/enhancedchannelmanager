@@ -8,7 +8,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 
-from dispatcharr_client import get_client
+from dispatcharr_client import get_client, upstream_http_exception
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,12 @@ async def bulk_update_profile_channels(profile_id: int, request: Request):
         logger.info("[PROFILES] Bulk updated channels for profile id=%s in %.1fms", profile_id, elapsed_ms)
         return result
     except Exception as e:
+        # A missing profile id (or invalid channel id) surfaces as an upstream
+        # 4xx — map it to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[PROFILES] Bulk update profile %s channels rejected by Dispatcharr: %s", profile_id, e)
+            raise mapped
         logger.exception("[PROFILES] Failed to bulk update profile channels id=%s", profile_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 

@@ -5,6 +5,7 @@ Tests: 10 channel-group endpoints covering group CRUD, hide/restore,
        orphaned detection/deletion, auto-created detection, and with-streams.
 Mocks: get_client() for Dispatcharr API, get_session() via conftest for HiddenChannelGroup.
 """
+import httpx
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -199,6 +200,42 @@ class TestDeleteChannelGroup:
         hidden = test_session.query(HiddenChannelGroup).filter_by(group_id=1).first()
         assert hidden is not None
         assert hidden.group_name == "Sports"
+
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_400_not_500(self, async_client, test_session):
+        """A Dispatcharr 4xx on delete (e.g. protected/non-empty group) maps to
+        400 with the upstream detail, not an opaque 500 (bd-1wq7z.22).
+
+        delete_channel_group raises httpx.HTTPStatusError via raise_for_status().
+        """
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        request = httpx.Request("DELETE", "http://disp/api/channels/groups/1/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"detail": "Cannot delete group with channels."}',
+        )
+        mock_client.delete_channel_group.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/1")
+
+        assert response.status_code == 400
+        assert "Cannot delete group" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client, test_session):
+        """A non-upstream error on delete stays a 500 (bd-1wq7z.22)."""
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.delete_channel_group.side_effect = RuntimeError("boom")
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/1")
+
+        assert response.status_code == 500
 
 
 class TestRestoreChannelGroup:

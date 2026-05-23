@@ -1,4 +1,5 @@
 """Stream management and health tools."""
+import asyncio
 import logging
 import re
 
@@ -268,6 +269,63 @@ def _stream_query(*, search=None, m3u_account=None, channel_group_name=None, pag
     return {k: v for k, v in q.items() if v is not None}
 
 
+async def _build_id_name_maps(client) -> tuple[dict, dict]:
+    """Fetch provider (m3u_account) and channel-group id->name lookup maps.
+
+    Raw Dispatcharr stream objects carry ``m3u_account`` (provider id) and
+    ``channel_group`` (group id) — numbers, not names. The streams-list
+    endpoint enriches list results with ``channel_group_name``, but
+    ``/api/channels/{id}/streams`` and ``/api/streams/by-ids`` return the raw
+    objects, so the MCP tool resolves names itself (lq38l.13 #2).
+
+    Returns ``(provider_map, group_map)``. A failed lookup degrades to an empty
+    map so the caller falls back to ids rather than erroring.
+    """
+    provider_map: dict = {}
+    group_map: dict = {}
+    try:
+        providers = await client.call_endpoint(ENDPOINTS["m3u_list_providers"])
+        for p in providers or []:
+            if isinstance(p, dict) and p.get("id") is not None:
+                provider_map[p["id"]] = p.get("name")
+    except Exception as e:  # degrade gracefully — fall back to ids
+        logger.warning("[MCP] could not resolve provider names: %s", e)
+    try:
+        groups = await client.call_endpoint(ENDPOINTS["groups_list"])
+        for g in groups or []:
+            if isinstance(g, dict) and g.get("id") is not None:
+                group_map[g["id"]] = g.get("name")
+    except Exception as e:
+        logger.warning("[MCP] could not resolve channel-group names: %s", e)
+    return provider_map, group_map
+
+
+def _stream_group_provider_suffix(s: dict, provider_map: dict, group_map: dict) -> str:
+    """Render the `` [Group] from Provider`` suffix for a raw stream dict.
+
+    Prefers an already-enriched ``channel_group_name`` / ``provider_name`` if
+    present; otherwise resolves the numeric ``channel_group`` / ``m3u_account``
+    ids through the supplied maps, falling back to the raw id when no name is
+    known.
+    """
+    group = s.get("channel_group_name") or s.get("group") or ""
+    if not group:
+        gid = s.get("channel_group")
+        if gid is not None:
+            group = group_map.get(gid) or f"group {gid}"
+
+    provider = s.get("provider_name") or ""
+    if not provider:
+        pid = s.get("m3u_account")
+        if pid is not None:
+            provider = provider_map.get(pid) or f"provider {pid}"
+
+    suffix = f" [{group}]" if group else ""
+    if provider:
+        suffix += f" from {provider}"
+    return suffix
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def list_streams(
@@ -385,6 +443,11 @@ def register(mcp: FastMCP):
     async def probe_single_stream(stream_id: int) -> str:
         """Probe a single stream to check its health.
 
+        Note: this manual probe does NOT feed get_probe_results (only the
+        scheduled probe task does), but the result IS persisted, so
+        get_stream_health and get_streams_by_ids reflect it.
+        (See bd enhancedchannelmanager-znc76.5.)
+
         Args:
             stream_id: The stream ID to probe
         """
@@ -392,6 +455,7 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
             result = await client.call_endpoint(
                 ENDPOINTS["stream_stats_probe_one"], path_args={"stream_id": stream_id},
+                timeout=300.0,
             )
             status = result.get("status", result.get("probe_status", "unknown")) if isinstance(result, dict) else "unknown"
             return f"Stream {stream_id} probe complete. Status: {status}"
@@ -499,6 +563,7 @@ def register(mcp: FastMCP):
 
             # Delete empty channels if requested
             deleted_channels = []
+            failed_channel_deletions: list[str] = []
             if delete_empty_channels and affected_channels:
                 for ch_id, info in affected_channels.items():
                     try:
@@ -507,8 +572,13 @@ def register(mcp: FastMCP):
                         if remaining == 0:
                             await client.call_endpoint(ENDPOINTS["channels_delete"], path_args={"channel_id": ch_id})
                             deleted_channels.append(f"{info['name']} (id={ch_id})")
-                    except Exception:
-                        pass  # Channel may already be gone
+                    except Exception as ch_err:
+                        # Channel may already be gone, or deletion may have failed.
+                        # Collect the failure so it is surfaced in the result rather
+                        # than silently swallowed.
+                        failed_channel_deletions.append(
+                            f"{info['name']} (id={ch_id}): {ch_err}"
+                        )
 
                 if deleted_channels:
                     lines.append(f"  Deleted {len(deleted_channels)} empty channels:")
@@ -516,6 +586,13 @@ def register(mcp: FastMCP):
                         lines.append(f"    - {ch}")
                 else:
                     lines.append("  No channels were left empty.")
+
+                if failed_channel_deletions:
+                    lines.append(
+                        f"  WARNING: {len(failed_channel_deletions)} channel deletion(s) failed:"
+                    )
+                    for failure in failed_channel_deletions:
+                        lines.append(f"    - {failure}")
 
             # Summary of affected streams
             unassigned = sum(1 for s in streams if not s.get("channels"))
@@ -566,7 +643,13 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(ENDPOINTS["stream_stats_probe_cancel"])
+            status = result.get("status") if isinstance(result, dict) else None
             msg = result.get("message", "") if isinstance(result, dict) else ""
+            # Backend returns status='no_probe_running' when nothing is active —
+            # don't prepend "Probe cancelled." (it contradicts the message).
+            # lq38l.13 #11.
+            if status == "no_probe_running":
+                return msg or "No probe is currently running."
             return f"Probe cancelled. {msg}".rstrip()
         except Exception as e:
             logger.error("[MCP] cancel_probe failed: %s", e)
@@ -574,7 +657,15 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def get_probe_results() -> str:
-        """Get results from the most recent completed probe run."""
+        """Get results from the most recent completed probe run.
+
+        Populated by the scheduled stream probe task, by probe_streams (probe
+        all), and by probe_bulk_streams (which now runs as a background probe
+        through the same envelope). NOT populated by probe_single_stream, which
+        stays synchronous — read its return value, or use get_stream_health /
+        get_struck_out_streams (persisted per-stream stats) for a single probe.
+        (See bd enhancedchannelmanager-znc76.5.)
+        """
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(ENDPOINTS["stream_stats_probe_results"])
@@ -583,6 +674,15 @@ def register(mcp: FastMCP):
                 return "No probe results available."
 
             if isinstance(result, dict):
+                # The backend returns an all-zero/all-empty envelope (success_count,
+                # failed_count, ... = 0; stream lists empty) when no probe has
+                # completed — a truthy dict that the `not result` guard misses.
+                # Treat "every *_count is 0" as "no results" rather than printing
+                # an empty structure (lq38l.13 #10).
+                count_keys = [k for k in result if k.endswith("_count")]
+                if count_keys and all((result.get(k) or 0) == 0 for k in count_keys):
+                    return "No probe results available."
+
                 lines = ["Latest Probe Results:"]
                 for key, value in result.items():
                     label = key.replace("_", " ").title()
@@ -615,14 +715,13 @@ def register(mcp: FastMCP):
             if not streams:
                 return f"Channel {channel_id} has no streams assigned."
 
+            provider_map, group_map = await _build_id_name_maps(client)
+
             lines = [f"Channel {channel_id} has {len(streams)} streams:"]
             for i, s in enumerate(streams, 1):
                 name = s.get("name", "Unknown")
                 sid = s.get("id", "?")
-                group = s.get("group", "")
-                provider = s.get("provider_name", s.get("m3u_account", ""))
-                info = f" [{group}]" if group else ""
-                info += f" from {provider}" if provider else ""
+                info = _stream_group_provider_suffix(s, provider_map, group_map)
                 lines.append(f"  {i}. {name} (id={sid}){info}")
 
             return "\n".join(lines)
@@ -694,14 +793,13 @@ def register(mcp: FastMCP):
             if not streams:
                 return f"No streams found for the given {len(stream_ids)} IDs."
 
+            provider_map, group_map = await _build_id_name_maps(client)
+
             lines = [f"Found {len(streams)} of {len(stream_ids)} requested streams:"]
             for s in streams:
                 name = s.get("name", "Unknown")
                 sid = s.get("id", "?")
-                group = s.get("group", "")
-                provider = s.get("provider_name", "")
-                info = f" [{group}]" if group else ""
-                info += f" from {provider}" if provider else ""
+                info = _stream_group_provider_suffix(s, provider_map, group_map)
                 lines.append(f"  {name} (id={sid}){info}")
 
             return "\n".join(lines)
@@ -711,40 +809,93 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def probe_bulk_streams(stream_ids: list[int]) -> str:
-        """Probe multiple streams at once and return health results summary.
+        """Probe multiple streams at once and return a health results summary.
+
+        Starts an asynchronous background probe of the given streams (the same
+        job/progress/results machinery probe_streams uses), then polls progress
+        until it completes and reports the real success/failed counts.
+
+        The probe feeds get_probe_progress / get_probe_results, and the per-stream
+        stats are persisted, so get_stream_health, get_struck_out_streams, and
+        get_streams_by_ids also reflect the new results. Because it is async, it
+        no longer times out at the gateway (504) on larger batches. If a probe is
+        already running, this returns without starting a second one. If the probe
+        is still running when the poll budget is exhausted, this returns a
+        "still running" message — use get_probe_progress / get_probe_results to
+        follow it. (Fixes enhancedchannelmanager-znc76.5.)
 
         Args:
             stream_ids: List of stream IDs to probe
         """
+        # Bounded polling: cap how long we wait for the background probe before
+        # handing back to the caller. ~5 minutes total at 3s intervals — enough
+        # for sizable batches without hanging the tool indefinitely.
+        poll_interval_s = 3.0
+        max_polls = 100
+
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(
-                ENDPOINTS["stream_stats_probe_bulk"], body={"stream_ids": stream_ids}, timeout=300.0,
+            start = await client.call_endpoint(
+                ENDPOINTS["stream_stats_probe_bulk"], body={"stream_ids": stream_ids}, timeout=60.0,
             )
 
-            if isinstance(result, dict):
-                total = result.get("total", len(stream_ids))
-                success = result.get("success", 0)
-                failed = result.get("failed", 0)
-                lines = [
-                    f"Bulk probe completed for {total} streams:",
-                    f"  Success: {success}",
-                    f"  Failed: {failed}",
-                ]
-                results_list = result.get("results", [])
-                if results_list:
-                    failed_streams = [r for r in results_list if r.get("status") == "failed"]
-                    if failed_streams:
-                        lines.append("  Failed streams:")
-                        for r in failed_streams[:20]:
-                            name = r.get("name", f"id={r.get('stream_id', '?')}")
-                            error = r.get("error", "unknown error")
-                            lines.append(f"    - {name}: {error}")
-                        if len(failed_streams) > 20:
-                            lines.append(f"    ... and {len(failed_streams) - 20} more failures")
-                return "\n".join(lines)
+            status = start.get("status") if isinstance(start, dict) else None
+            if status == "already_running":
+                return (
+                    "A stream probe is already in progress, so this bulk probe was "
+                    "not started. Check get_probe_progress, or cancel_probe first."
+                )
 
-            return f"Bulk probe started for {len(stream_ids)} streams. {result}"
+            # Poll progress until the run leaves the in_progress state.
+            final = None
+            for _ in range(max_polls):
+                await asyncio.sleep(poll_interval_s)
+                progress = await client.call_endpoint(ENDPOINTS["stream_stats_probe_progress"])
+                if not progress.get("in_progress"):
+                    final = progress
+                    break
+
+            if final is None:
+                # Poll budget exhausted while still running — don't hang or error.
+                progress = await client.call_endpoint(ENDPOINTS["stream_stats_probe_progress"])
+                current = progress.get("current", 0)
+                total = progress.get("total", len(stream_ids))
+                return (
+                    f"Bulk probe still running ({current}/{total}) after the poll "
+                    "window — check get_probe_progress / get_probe_results for the "
+                    "final outcome."
+                )
+
+            # Completed (or cancelled/failed): report real counts from the
+            # results envelope, falling back to the final progress snapshot.
+            results = await client.call_endpoint(ENDPOINTS["stream_stats_probe_results"])
+            success = results.get("success_count", final.get("success_count", 0))
+            failed = results.get("failed_count", final.get("failed_count", 0))
+            total = final.get("total", len(stream_ids))
+
+            run_status = final.get("status", "completed")
+            if run_status == "cancelled":
+                header = f"Bulk probe cancelled after {success + failed} of {total} streams:"
+            elif run_status == "failed":
+                header = f"Bulk probe failed after {success + failed} of {total} streams:"
+            else:
+                header = f"Bulk probe completed for {total} streams:"
+
+            lines = [
+                header,
+                f"  Success: {success}",
+                f"  Failed: {failed}",
+            ]
+            failed_streams = results.get("failed_streams", [])
+            if failed_streams:
+                lines.append("  Failed streams:")
+                for r in failed_streams[:20]:
+                    name = r.get("name") or f"id={r.get('id', '?')}"
+                    error = r.get("error") or "unknown error"
+                    lines.append(f"    - {name}: {error}")
+                if len(failed_streams) > 20:
+                    lines.append(f"    ... and {len(failed_streams) - 20} more failures")
+            return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] probe_bulk_streams failed: %s", e)
             return f"Error probing streams in bulk: {e}"

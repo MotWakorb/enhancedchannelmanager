@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 import asyncio
+import hmac
 from fastapi.exceptions import RequestValidationError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -129,7 +130,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.1",
+    version="0.17.2",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -503,9 +504,16 @@ async def auth_middleware(request: Request, call_next):
             # Check if path is exempt
             if path not in AUTH_EXEMPT_PATHS:
                 token = get_token_from_request(request)
-                # Allow MCP API key as alternative to JWT
+                # Allow MCP API key as alternative to JWT. Constant-time compare
+                # to avoid a timing oracle on the static key (bd-1wq7z.24 (a));
+                # the truthiness guards on both operands keep compare_digest from
+                # ever seeing None (it raises on None) and reject an empty key.
                 settings = get_settings()
-                if settings.mcp_api_key and token == settings.mcp_api_key:
+                if (
+                    settings.mcp_api_key
+                    and token
+                    and hmac.compare_digest(token, settings.mcp_api_key)
+                ):
                     return await call_next(request)
                 if not token or not decode_token_safe(token):
                     return JSONResponse(
@@ -789,6 +797,42 @@ async def startup_event():
             session.close()
     except Exception as e:
         logger.warning("[MAIN] Could not ensure Title Case rule: %s", e)
+
+    # Backfill tag_group_id on strip rules that were never wired (znc76.3).
+    # Pre-existing installs have tag_group rules with NULL tag_group_id, so the
+    # engine matcher short-circuits and the strips never fire. This repairs the
+    # config drift so quality/country/etc. tags get stripped again.
+    try:
+        from normalization_migration import backfill_tag_group_rule_ids
+        session = get_session()
+        try:
+            result = backfill_tag_group_rule_ids(session)
+            if result.get("rules_wired", 0) > 0:
+                logger.info(
+                    "[MAIN] Backfilled tag_group_id on %s normalization rule(s)",
+                    result["rules_wired"]
+                )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not backfill tag_group rule ids: %s", e)
+
+    # Ensure US/UK/EU are in Abbreviation Tags so Title Case preserves them
+    # (otherwise US -> Us). Companion repair to the tag_group_id backfill.
+    try:
+        from normalization_migration import ensure_abbreviation_tags_acronyms
+        session = get_session()
+        try:
+            result = ensure_abbreviation_tags_acronyms(session)
+            if result.get("tags_added", 0) > 0:
+                logger.info(
+                    "[MAIN] Added %s acronym(s) to Abbreviation Tags",
+                    result["tags_added"]
+                )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not ensure Abbreviation Tags acronyms: %s", e)
 
     # Repair duplicate auto-creation rule priorities
     try:

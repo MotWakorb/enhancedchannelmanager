@@ -62,20 +62,43 @@ def register(mcp: FastMCP):
             return f"Error marking notifications as read: {e}"
 
     @mcp.tool()
-    async def delete_all_notifications() -> str:
-        """Delete all notifications."""
+    async def delete_all_notifications(include_unread: bool = False) -> str:
+        """Delete notifications.
+
+        By default only deletes read notifications (safe behaviour).  Set
+        ``include_unread=True`` to also delete unread ones.
+
+        The backend DELETE /api/notifications accepts a ``read_only`` query
+        parameter (default ``True``) that controls whether unread notifications
+        are included.  Without this parameter the tool can only ever delete read
+        notifications (bd-1wq7z.14).
+
+        Args:
+            include_unread: If False (default), only delete read notifications.
+                            If True, delete all notifications including unread ones.
+        """
         try:
             client = get_ecm_client()
-            await client.call_endpoint(ENDPOINTS["notifications_delete_all"])
-            # Read-back: confirm the notification list is empty.
+            # read_only=True → only delete read notifications (safe default).
+            # read_only=False → delete all including unread (opt-in).
+            read_only = not include_unread
+            await client.call_endpoint(
+                ENDPOINTS["notifications_delete_all"],
+                query={"read_only": read_only},
+            )
+            # Read-back: confirm the notification list reflects the deletion.
             try:
                 result = await client.call_endpoint(ENDPOINTS["notifications_list"], query={"page_size": 1})
                 remaining = result.get("total", 0) if isinstance(result, dict) else len(result or [])
             except Exception:
                 remaining = None
+            scope = "all" if include_unread else "read"
             if remaining:
-                return f"WARNING: requested delete-all but {remaining} notification(s) remain."
-            return "All notifications deleted."
+                return (
+                    f"WARNING: requested delete-all ({scope}) but {remaining} "
+                    f"notification(s) remain."
+                )
+            return f"All {scope} notifications deleted."
         except Exception as e:
             logger.error("[MCP] delete_all_notifications failed: %s", e)
             return f"Error deleting notifications: {e}"

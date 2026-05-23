@@ -4,12 +4,14 @@ FastAPI authentication dependencies.
 Provides dependency injection functions for extracting and validating
 user authentication from requests.
 """
+import hmac
 import logging
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from config import get_settings
 from database import get_session
 from models import User
 from .tokens import decode_token, TokenExpiredError, InvalidTokenError, TokenRevokedError
@@ -17,6 +19,86 @@ from .settings import get_auth_settings
 
 
 logger = logging.getLogger(__name__)
+
+# Synthetic, non-persisted user id for the static-MCP-key service principal.
+# Negative so it can never collide with a real autoincrement users.id row
+# (SQLite/Postgres autoincrement is always positive) and so any accidental
+# FK write would fail loudly rather than silently corrupting a real row.
+# The only place a principal's id reaches the DB is the dedup audit
+# ``actor_token_id`` column (models.PendingMergeJournal), which is free-text
+# (``Text``), not a foreign key — see routers/channel_merges.py:_actor_token_id.
+MCP_SERVICE_PRINCIPAL_ID = -1
+MCP_SERVICE_PRINCIPAL_USERNAME = "mcp-service"
+
+
+def _is_mcp_service_token(token: str) -> bool:
+    """Return True iff ``token`` is the configured static MCP API key.
+
+    The static MCP key is a permanent, operator-set bearer credential
+    (threat model EP2). The global ``auth_middleware`` in main.py already
+    accepts it for any ``/api/*`` path; this recognizes it at the route
+    dependency layer too so that JWT route-guards (``RequireAuthIfEnabled``
+    / ``RequireAdminIfEnabled``) stop rejecting it as a malformed JWT.
+
+    Uses :func:`hmac.compare_digest` (constant-time) rather than ``==`` to
+    avoid a timing oracle on the static key (bd-i3axt LOW-1). An empty or
+    unset ``mcp_api_key`` never matches — including against an empty token.
+    """
+    if not token:
+        return False
+    expected = get_settings().mcp_api_key
+    if not expected:
+        return False
+    return hmac.compare_digest(token, expected)
+
+
+def _build_mcp_service_principal() -> User:
+    """Construct the admin-equivalent, non-persisted MCP service principal.
+
+    Returned to callers of ``get_current_user`` when the static MCP key is
+    presented. It is a transient ``User`` instance — never added to a
+    session, never committed. Callers only read ``.id``, ``.username``,
+    ``.is_admin`` and ``.is_active``.
+    """
+    return User(
+        id=MCP_SERVICE_PRINCIPAL_ID,
+        username=MCP_SERVICE_PRINCIPAL_USERNAME,
+        is_admin=True,
+        is_active=True,
+        auth_provider="mcp",
+    )
+
+
+def is_mcp_service_principal(user: User) -> bool:
+    """Return True iff ``user`` is the transient, non-persisted MCP principal.
+
+    The MCP service principal (built by :func:`_build_mcp_service_principal`)
+    is a detached ``User`` instance that was never added to a session — it
+    carries ``auth_provider == "mcp"`` and the synthetic
+    :data:`MCP_SERVICE_PRINCIPAL_ID`. We key off both so a real DB row that
+    somehow had ``auth_provider == "mcp"`` (it never should) still wouldn't be
+    mistaken for the transient principal, and vice versa.
+    """
+    return getattr(user, "auth_provider", None) == "mcp" or (
+        getattr(user, "id", None) == MCP_SERVICE_PRINCIPAL_ID
+    )
+
+
+def reject_mcp_service_principal_mutation(user: User) -> None:
+    """Reject self-mutation routes invoked with the MCP service principal.
+
+    The MCP principal is transient (never persisted), so ORM operations like
+    ``session.refresh(current_user)`` raise an opaque 500. It also has no
+    business mutating an ECM user account: the static MCP key is an
+    admin-equivalent *service* credential, not a user identity. Self-mutation
+    routes (e.g. ``PUT /api/auth/me``, ``POST /api/auth/change-password``)
+    call this to fail fast with a clean 403 instead (bd-1wq7z.24 (c)).
+    """
+    if is_mcp_service_principal(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="MCP service principal cannot modify a user account",
+        )
 
 
 class AuthenticationError(HTTPException):
@@ -122,6 +204,15 @@ async def get_current_user(
     token = get_token_from_request(request)
     if not token:
         raise AuthenticationError("Not authenticated")
+
+    # Static MCP API key: recognize it BEFORE attempting JWT decode. The key
+    # is not a 3-part JWT, so decode_token() would reject it as "Malformed
+    # token". The global auth_middleware already grants this key full /api/*
+    # access; honoring it here aligns the route-dependency layer with that
+    # grant and unblocks JWT-guarded routes (dedup, backup, add_stream).
+    if _is_mcp_service_token(token):
+        logger.debug("[AUTH] Authenticated request via static MCP service key")
+        return _build_mcp_service_principal()
 
     try:
         payload = decode_token(token)

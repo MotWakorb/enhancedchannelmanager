@@ -20,13 +20,57 @@ from concurrency import run_cpu_bound
 from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
-from dispatcharr_client import get_client
+from dispatcharr_client import get_client, upstream_http_exception
 from normalization_engine import get_normalization_engine
 import journal
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/channels", tags=["Channels"])
+
+
+def validate_stream_permutation(
+    current_stream_ids: list[int], new_stream_ids: list[int]
+) -> Optional[str]:
+    """Validate that ``new_stream_ids`` is a true permutation of the channel's
+    current streams (a pure reorder), guarding against the replace-semantics
+    data loss of Dispatcharr's ``streams`` field.
+
+    Updating a channel's ``streams`` to a partial list silently DETACHES any
+    omitted streams. A reorder must therefore contain exactly the same set of
+    stream IDs as the channel currently has — no missing, unknown, or duplicate
+    IDs (bd-1wq7z.3 single-channel reorder; bd-1wq7z.25 bulk-commit reorder).
+
+    Returns ``None`` if ``new_stream_ids`` is a valid permutation, otherwise a
+    human-readable message describing the problem (suitable for an HTTP 400
+    detail or a per-op bulk error).
+    """
+    current = list(current_stream_ids)
+    new = list(new_stream_ids)
+
+    if len(new) != len(set(new)):
+        seen: set[int] = set()
+        dupes = sorted({sid for sid in new if sid in seen or seen.add(sid)})
+        return f"streamIds contains duplicate ids: {dupes}"
+
+    current_set = set(current)
+    new_set = set(new)
+
+    missing = sorted(current_set - new_set)  # would be detached
+    unknown = sorted(new_set - current_set)  # not attached to this channel
+
+    if missing or unknown:
+        parts = []
+        if missing:
+            parts.append(f"would detach attached streams {missing}")
+        if unknown:
+            parts.append(f"includes streams not on the channel {unknown}")
+        return (
+            "streamIds is not a permutation of the channel's current streams "
+            f"({'; '.join(parts)})"
+        )
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +402,15 @@ async def create_channel(request: CreateChannelRequest):
         )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # Surface actionable Dispatcharr 4xx (e.g. non-existent channel_group_id)
+        # instead of masking it as a generic 500 (bd-1wq7z.22).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Channel creation rejected by Dispatcharr: %s", e)
+            raise mapped
         logger.exception("[CHANNELS] Channel creation failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -1406,6 +1458,21 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                 elif op.type == "reorderChannelStreams":
                     channel_id = resolve_id(op.channelId)
                     logger.debug("[CHANNELS-BULK] [%s/%s] reorderChannelStreams: channel_id=%s, streams=%s", idx+1, len(request.operations), channel_id, op.streamIds)
+                    # Guard against silent stream detachment (bd-1wq7z.25):
+                    # Dispatcharr's ``streams`` field uses replace-semantics, so
+                    # a partial streamIds list would detach the omitted streams.
+                    # Require a true permutation of the channel's current set.
+                    channel = await client.get_channel(channel_id)
+                    current_streams = channel.get("streams", [])
+                    perm_error = validate_stream_permutation(current_streams, op.streamIds)
+                    if perm_error is not None:
+                        logger.warning(
+                            "[CHANNELS-BULK] reorderChannelStreams rejected for channel %s: %s",
+                            channel_id, perm_error,
+                        )
+                        raise ValueError(
+                            f"Cannot reorder streams for channel {channel_id}: {perm_error}"
+                        )
                     await client.update_channel(channel_id, {"streams": op.streamIds})
                     result["operationsApplied"] += 1
 
@@ -1825,7 +1892,15 @@ async def get_channel(channel_id: int):
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Fetched channel id=%s in %.1fms", channel_id, elapsed_ms)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id surfaces as an upstream 404 — return 404, not 500
+        # (bd-1wq7z.22).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Fetch channel id=%s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to fetch channel id=%s", channel_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -1953,7 +2028,15 @@ async def update_channel(channel_id: int, data: dict):
             logger.debug("[CHANNELS] No changes detected for channel %s", channel_id)
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id (or bad group/logo/etc.) surfaces as an upstream
+        # 4xx — map it to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Update channel %s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to update channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2077,6 +2160,12 @@ async def merge_channels(request: "MergeChannelsRequest"):
                 logger.info("[CHANNELS] Rolled back merged channel %s after error", new_channel["id"])
             except Exception:
                 logger.warning("[CHANNELS] Failed to rollback merged channel %s", new_channel["id"])
+        # Map an upstream 4xx (e.g. a bad target group/logo id) to a clean 4xx
+        # instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Channel merge rejected by Dispatcharr: %s", e)
+            raise mapped
         logger.exception("[CHANNELS] Channel merge failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2108,7 +2197,15 @@ async def delete_channel(channel_id: int):
         )
 
         return {"success": True}
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id surfaces as an upstream 404 — return 404, not 500
+        # (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Delete channel %s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to delete channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2148,7 +2245,15 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
             return result
         logger.debug("[CHANNELS] Stream %s already in channel %s", request.stream_id, channel_id)
         return channel
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel/stream id surfaces as an upstream 4xx — map it to a
+        # clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Add stream %s to channel %s rejected by Dispatcharr: %s", request.stream_id, channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to add stream %s to channel %s: %s", request.stream_id, channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2204,7 +2309,15 @@ async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest):
         )
 
         return {"channel": result, "added": added, "skipped": skipped, "total_streams": len(current_streams)}
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel/stream id surfaces as an upstream 4xx — map it to a
+        # clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Add streams to channel %s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to add streams to channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2244,14 +2357,30 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
             return result
         logger.debug("[CHANNELS] Stream %s not in channel %s", request.stream_id, channel_id)
         return channel
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id surfaces as an upstream 404 — map it to a clean
+        # 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Remove stream %s from channel %s rejected by Dispatcharr: %s", request.stream_id, channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to remove stream %s from channel %s: %s", request.stream_id, channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{channel_id}/reorder-streams")
 async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
-    """Reorder streams within a channel."""
+    """Reorder streams within a channel.
+
+    This endpoint REPLACES the channel's stream set with the supplied list, so
+    the list must be a true reorder — a permutation of the channel's *current*
+    streams. A partial list would silently DETACH the omitted streams (data
+    loss). To guard against that (bd-1wq7z.3) we validate that the request is a
+    permutation before writing: same set of ids, no missing, no unknown, no
+    duplicates. Use add-stream / remove-stream to change membership.
+    """
     logger.debug("[CHANNELS] POST /channels/%s/reorder-streams - stream_ids=%s", channel_id, request.stream_ids)
     client = get_client()
     try:
@@ -2260,6 +2389,42 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         channel = await client.get_channel(channel_id)
         channel_name = channel.get("name", "Unknown")
         before_streams = channel.get("streams", [])
+
+        # Streams normally come back as bare ints, but defensively handle the
+        # case where upstream returns stream objects ({"id": ...}).
+        before_ids = [
+            (s.get("id") if isinstance(s, dict) else s)
+            for s in before_streams
+        ]
+
+        # --- Permutation guard (data-loss protection) ---
+        requested = request.stream_ids
+        requested_set = set(requested)
+        before_set = set(before_ids)
+
+        duplicate_ids = sorted({sid for sid in requested if requested.count(sid) > 1})
+        missing_ids = sorted(before_set - requested_set)      # on channel, absent from list -> would detach
+        unknown_ids = sorted(requested_set - before_set)      # in list, not on channel
+
+        if duplicate_ids or missing_ids or unknown_ids:
+            problems = []
+            if missing_ids:
+                problems.append(f"Missing (would be detached): {missing_ids}.")
+            if unknown_ids:
+                problems.append(f"Unknown (not on this channel): {unknown_ids}.")
+            if duplicate_ids:
+                problems.append(f"Duplicated: {duplicate_ids}.")
+            detail = (
+                "reorder-streams expects all of the channel's current streams in "
+                "the desired order. " + " ".join(problems) + " Use "
+                "remove_stream_from_channel to detach, or add_stream_to_channel "
+                "to add."
+            )
+            logger.warning(
+                "[CHANNELS] Rejected reorder-streams for channel %s (not a permutation): %s",
+                channel_id, detail,
+            )
+            raise HTTPException(status_code=400, detail=detail)
 
         result = await client.update_channel(channel_id, {"streams": request.stream_ids})
         elapsed_ms = (time.time() - start) * 1000
@@ -2277,7 +2442,19 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         )
 
         return result
+    except HTTPException:
+        # Validation rejections (e.g. the permutation guard above) are
+        # intentional client errors — let them propagate unchanged rather than
+        # masking them as a 500.
+        raise
     except Exception as e:
+        # A missing channel id (or a stream id not on the channel that slips past
+        # the permutation guard) surfaces as an upstream 4xx — map it to a clean
+        # 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Reorder streams for channel %s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to reorder streams for channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2469,18 +2646,22 @@ async def bulk_merge_channels(request: BulkMergeRequest):
             raise
         except Exception as e:
             failed_count += 1
-            # CodeQL py/stack-trace-exposure (#1413): log full exception (with
-            # trace) but only return the exception type to the client. ADR-005
-            # disallows "won't fix" dismissal, so we replace str(e) with
-            # type(e).__name__ — operators correlate via X-Request-ID.
+            # If the per-item failure is an upstream client error (e.g. a bad
+            # target/source id), surface the actionable upstream detail so the
+            # caller can tell "does not exist" from a real server fault, instead
+            # of the bare exception type (bd-lq38l.4). For genuine server faults
+            # we keep CodeQL py/stack-trace-exposure (#1413) hygiene: log the
+            # full trace but only return the exception type name to the client.
             logger.exception(
                 "[CHANNELS] bulk-merge: group failed (target=%s)",
                 item.target_channel_id,
             )
+            mapped = upstream_http_exception(e)
+            error_detail = mapped.detail if mapped is not None else type(e).__name__
             results.append({
                 "target_channel_id": item.target_channel_id,
                 "success": False,
-                "error": type(e).__name__,
+                "error": error_detail,
             })
 
     logger.info("[CHANNELS] bulk-merge complete: %d merged, %d failed", merged_count, failed_count)

@@ -18,6 +18,7 @@ real tokens (valid HS256 JWT for OAuth, opaque key for static), so the matrix
 exercises the SHAPE router end-to-end through ``server.app`` (no network).
 """
 import base64
+import hmac
 import json
 import time
 
@@ -286,6 +287,42 @@ class TestMCPAuth:
         """A bare GET /mcp (event stream) is also auth-checked."""
         with patch("server.get_mcp_api_key", return_value="valid-key"):
             response = client.get("/mcp")
+        assert response.status_code == 401
+
+    def test_mcp_uses_constant_time_compare(self, client):
+        """The static-key check goes through hmac.compare_digest (bd-i3axt LOW-1).
+
+        Spy on hmac.compare_digest as imported into the server module and assert
+        the wrong-key path runs the constant-time comparator (never a plain
+        ``!=``), and that it still rejects with 401.
+        """
+        with patch("server.get_mcp_api_key", return_value="valid-key"), \
+             patch("server.hmac.compare_digest", wraps=hmac.compare_digest) as spy:
+            response = client.post(
+                "/mcp?api_key=wrong-key", headers=_MCP_HEADERS, json=_INITIALIZE
+            )
+        assert response.status_code == 401
+        spy.assert_called_once_with("wrong-key", "valid-key")
+
+    def test_mcp_accepts_lowercase_bearer_scheme(self, client):
+        """RFC 6750 §2.1: the Bearer scheme is case-insensitive (bd-i3axt LOW-2)."""
+        headers = {**_MCP_HEADERS, "Authorization": "bearer valid-key"}
+        with patch("server.get_mcp_api_key", return_value="valid-key"):
+            response = client.post("/mcp", headers=headers, json=_INITIALIZE)
+        assert response.status_code == 200
+
+    def test_mcp_strips_bearer_credential_whitespace(self, client):
+        """RFC 6750: surrounding whitespace on the credential is trimmed (LOW-2)."""
+        headers = {**_MCP_HEADERS, "Authorization": "Bearer   valid-key   "}
+        with patch("server.get_mcp_api_key", return_value="valid-key"):
+            response = client.post("/mcp", headers=headers, json=_INITIALIZE)
+        assert response.status_code == 200
+
+    def test_mcp_empty_bearer_value_rejected(self, client):
+        """A header of just 'Bearer' (no credential) fails safe with 401."""
+        headers = {**_MCP_HEADERS, "Authorization": "Bearer"}
+        with patch("server.get_mcp_api_key", return_value="valid-key"):
+            response = client.post("/mcp", headers=headers, json=_INITIALIZE)
         assert response.status_code == 401
 
 

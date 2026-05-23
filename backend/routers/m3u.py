@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from cache import get_cache
 from config import CONFIG_DIR, get_settings, save_settings, validate_url_scheme
 from database import get_session
-from dispatcharr_client import get_client
+from dispatcharr_client import get_client, upstream_http_exception
 from alert_methods import send_alert
 from tasks.m3u_digest import send_immediate_digest
 import journal
@@ -309,6 +309,13 @@ async def get_m3u_account(account_id: int):
         logger.debug("[M3U] Fetched M3U account id=%s in %.1fms", account_id, elapsed_ms)
         return result
     except Exception as e:
+        # A missing account id surfaces as an upstream 404 — return 404, not 500
+        # (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[M3U] Fetch M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            raise mapped
+        logger.exception("[M3U] Failed to fetch M3U account %s: %s", account_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -404,6 +411,14 @@ async def create_m3u_account(request: Request):
     start = time.time()
     try:
         data = await request.json()
+        # Normalize: callers (including MCP) may send `url`; Dispatcharr
+        # expects `server_url`.  Promote `url` → `server_url` when only
+        # `url` is supplied so the round-trip works for standard accounts
+        # (bd-znc76.4 / bd-ma5qn).
+        if data.get("url") and not data.get("server_url"):
+            url_val = data["url"]
+            data = {k: v for k, v in data.items() if k != "url"}
+            data["server_url"] = url_val
         if data.get("server_url"):
             validate_url_scheme(data["server_url"], "server URL")
         result = await client.create_m3u_account(data)
@@ -514,6 +529,13 @@ async def update_m3u_account(account_id: int, request: Request):
     except HTTPException:
         raise
     except Exception as e:
+        # A missing account id (or bad field) surfaces as an upstream 4xx — map
+        # it to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[M3U] Update M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            raise mapped
+        logger.exception("[M3U] Failed to update M3U account %s: %s", account_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -554,6 +576,13 @@ async def patch_m3u_account(account_id: int, request: Request):
     except HTTPException:
         raise
     except Exception as e:
+        # A missing account id (or bad field) surfaces as an upstream 4xx — map
+        # it to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[M3U] Patch M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            raise mapped
+        logger.exception("[M3U] Failed to patch M3U account %s: %s", account_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -672,7 +701,16 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
             "skipped_groups": skipped_groups,
             "failed_groups": failed_groups,
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing account id surfaces as an upstream 404 — return 404, not 500
+        # (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[M3U] Delete M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            raise mapped
+        logger.exception("[M3U] Failed to delete M3U account %s: %s", account_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -737,6 +775,13 @@ async def refresh_m3u_account(account_id: int):
             )
         except Exception:
             pass  # Don't fail the request if notification fails
+        # A missing account id surfaces as an upstream 404 — return 404, not 500
+        # (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[M3U-REFRESH] Refresh M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            raise mapped
+        logger.exception("[M3U-REFRESH] Failed to refresh M3U account %s: %s", account_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

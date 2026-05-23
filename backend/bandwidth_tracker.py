@@ -1161,8 +1161,23 @@ def _telemetry_opt_out_enabled() -> bool:
     return raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
+# One-time deprecation-warning latch for ``ECM_TELEMETRY_EXCLUDE_USERS`` (bead
+# enhancedchannelmanager-ye075). Flipped True the first poll that observes the
+# env var configured, so the deprecation notice logs once per process lifetime
+# rather than every poll cycle.
+_EXCLUDE_USERS_DEPRECATION_WARNED = False
+
+
 def _parse_telemetry_exclude_users() -> frozenset[str]:
     """Parse ``ECM_TELEMETRY_EXCLUDE_USERS`` into a normalized token set.
+
+    .. deprecated:: post-bd-gsn3r
+        The bd-gsn3r namespace fix (``session_telemetry.dispatcharr_username``,
+        migration 0011) removed the ECM/Dispatcharr user-id collision this
+        filter was built to work around (bead ``enhancedchannelmanager-ye075``).
+        The filter still applies for ad-hoc "exclude this Dispatcharr viewer"
+        needs, but is slated for removal in v0.18.0. A one-time WARNING is
+        logged the first poll the env var is observed set.
 
     Operator-facing filter (bead ``enhancedchannelmanager-uqbob``) for
     suppressing ``session_telemetry`` writes attributed to non-stream-
@@ -1202,7 +1217,21 @@ def _parse_telemetry_exclude_users() -> frozenset[str]:
     if not raw:
         return frozenset()
     tokens = (t.strip().lower() for t in raw.split(","))
-    return frozenset(t for t in tokens if t)
+    result = frozenset(t for t in tokens if t)
+    if result:
+        global _EXCLUDE_USERS_DEPRECATION_WARNED
+        if not _EXCLUDE_USERS_DEPRECATION_WARNED:
+            logger.warning(
+                "[BANDWIDTH] ECM_TELEMETRY_EXCLUDE_USERS is set (%d token(s)) "
+                "but is DEPRECATED: the bd-gsn3r namespace fix "
+                "(session_telemetry.dispatcharr_username, migration 0011) "
+                "resolved the ECM/Dispatcharr user-id collision it worked "
+                "around. The filter still applies for ad-hoc 'exclude this "
+                "Dispatcharr viewer' needs but will be REMOVED in v0.18.0.",
+                len(result),
+            )
+            _EXCLUDE_USERS_DEPRECATION_WARNED = True
+    return result
 
 
 def _is_excluded_telemetry_user(
