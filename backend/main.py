@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 import asyncio
+import hmac
 from fastapi.exceptions import RequestValidationError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -503,9 +504,16 @@ async def auth_middleware(request: Request, call_next):
             # Check if path is exempt
             if path not in AUTH_EXEMPT_PATHS:
                 token = get_token_from_request(request)
-                # Allow MCP API key as alternative to JWT
+                # Allow MCP API key as alternative to JWT. Constant-time compare
+                # to avoid a timing oracle on the static key (bd-1wq7z.24 (a));
+                # the truthiness guards on both operands keep compare_digest from
+                # ever seeing None (it raises on None) and reject an empty key.
                 settings = get_settings()
-                if settings.mcp_api_key and token == settings.mcp_api_key:
+                if (
+                    settings.mcp_api_key
+                    and token
+                    and hmac.compare_digest(token, settings.mcp_api_key)
+                ):
                     return await call_next(request)
                 if not token or not decode_token_safe(token):
                     return JSONResponse(
