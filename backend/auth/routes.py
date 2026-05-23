@@ -38,6 +38,7 @@ from .dependencies import (
     AuthenticationError,
     get_current_user,
     get_refresh_token_from_request,
+    reject_mcp_service_principal_mutation,
 )
 
 
@@ -596,6 +597,12 @@ async def update_current_user_profile(
 
     Allows users to update their display name and email.
     """
+    # The transient MCP service principal has no DB row; mutating it (and the
+    # subsequent session.refresh) would raise a 500. Reject with a clean 403
+    # (bd-1wq7z.24 (c)) — the static MCP key is a service credential, not a
+    # user account it can edit.
+    reject_mcp_service_principal_mutation(current_user)
+
     # Update fields if provided
     if update_request.display_name is not None:
         current_user.display_name = update_request.display_name or None
@@ -746,6 +753,11 @@ async def change_password(
 
     Requires the current password for verification.
     """
+    # The transient MCP service principal cannot own/change an account password
+    # — reject with a clean 403 rather than letting a transient-User mutation
+    # surface as a 500 (bd-1wq7z.24 (c)).
+    reject_mcp_service_principal_mutation(current_user)
+
     # Verify current password
     if not current_user.password_hash or not verify_password(change_request.current_password, current_user.password_hash):
         raise HTTPException(
