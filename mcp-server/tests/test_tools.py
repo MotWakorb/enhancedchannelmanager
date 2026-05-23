@@ -1207,7 +1207,9 @@ class TestListTasksEnvelopeUnwrap:
 
     @pytest.mark.asyncio
     async def test_unwraps_tasks_envelope(self):
-        """Backend returns {"tasks": [...]}; tool must iterate the list, not dict keys."""
+        """Backend returns {"tasks": [...]}; tool must iterate the list, not dict keys.
+        Backend uses task_name (not name) for the human-readable label (lq38l.1).
+        """
         from tools.tasks import register
         from mcp.server.fastmcp import FastMCP
 
@@ -1216,8 +1218,8 @@ class TestListTasksEnvelopeUnwrap:
 
         mock_client = _make_ecm_client_mock(call_endpoint={
             "tasks": [
-                {"task_id": "m3u_refresh", "name": "M3U Refresh", "enabled": True, "status": "idle", "last_run": "2026-05-22"},
-                {"task_id": "stream_probe", "name": "Stream Probe", "enabled": False, "status": "idle", "last_run": "never"},
+                {"task_id": "m3u_refresh", "task_name": "M3U Refresh", "enabled": True, "status": "idle", "last_run": "2026-05-22"},
+                {"task_id": "stream_probe", "task_name": "Stream Probe", "enabled": False, "status": "idle", "last_run": "never"},
             ]
         })
 
@@ -1229,6 +1231,7 @@ class TestListTasksEnvelopeUnwrap:
         assert "M3U Refresh" in text
         assert "Stream Probe" in text
         assert "m3u_refresh" in text
+        assert "Unknown" not in text
         assert "has no attribute" not in text
 
     @pytest.mark.asyncio
@@ -1246,6 +1249,76 @@ class TestListTasksEnvelopeUnwrap:
             result = await mcp.call_tool("list_tasks", {})
 
         assert "No tasks" in result[0][0].text
+
+
+class TestListTasksTaskNameRendering:
+    """list_tasks reads task_name (not name) from backend payload (lq38l.1)."""
+
+    @pytest.mark.asyncio
+    async def test_task_name_field_rendered(self):
+        """Backend payload carries task_name; tool must render it, not 'Unknown'."""
+        from tools.tasks import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "tasks": [
+                {
+                    "task_id": "epg_refresh",
+                    "task_name": "EPG Refresh",
+                    "enabled": True,
+                    "status": "idle",
+                    "last_run": "never",
+                },
+                {
+                    "task_id": "popularity_calculation",
+                    "task_name": "Stats v2 Rollup & Prune",
+                    "enabled": True,
+                    "status": "running",
+                    "last_run": "2026-05-22T10:00:00Z",
+                },
+            ]
+        })
+
+        with patch("tools.tasks.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_tasks", {})
+
+        text = result[0][0].text
+        assert "EPG Refresh" in text, "task_name must be rendered"
+        assert "Stats v2 Rollup & Prune" in text, "task_name must be rendered"
+        assert "Unknown" not in text, "Unknown must not appear when task_name is present"
+        assert "id=epg_refresh" in text
+        assert "id=popularity_calculation" in text
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_prettified_task_id_when_no_task_name(self):
+        """When task_name is absent, tool prettifies task_id rather than 'Unknown'."""
+        from tools.tasks import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "tasks": [
+                {
+                    "task_id": "stream_probe",
+                    "enabled": True,
+                    "status": "idle",
+                    "last_run": "never",
+                    # no task_name key at all
+                },
+            ]
+        })
+
+        with patch("tools.tasks.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_tasks", {})
+
+        text = result[0][0].text
+        assert "Unknown" not in text, "Unknown must not appear; prettified task_id used instead"
+        assert "stream_probe" in text  # task_id still in output as id=...
 
 
 # --- TestDeleteOrphanedGroupsResultKeys (A1) ---

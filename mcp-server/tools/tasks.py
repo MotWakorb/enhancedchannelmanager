@@ -25,8 +25,9 @@ def register(mcp: FastMCP):
 
             lines = [f"Found {len(tasks)} tasks:"]
             for t in tasks:
-                name = t.get("name", "Unknown")
                 tid = t.get("task_id", t.get("id", "?"))
+                raw_name = t.get("task_name") or t.get("name")
+                name = raw_name if raw_name else tid.replace("_", " ").title() if tid != "?" else "Unknown"
                 enabled = "enabled" if t.get("enabled") else "disabled"
                 last_run = t.get("last_run", "never")
                 status = t.get("status", "idle")
