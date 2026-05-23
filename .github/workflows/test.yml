@@ -14,6 +14,11 @@ on:
       - dev
     paths-ignore:
       - '.beads/**'
+      # Docs-only PRs are satisfied by docs-only-pass.yml (the sentinel posts
+      # the required Backend/Frontend/Semgrep check-runs). Without this, the
+      # real suite ALSO runs and needlessly gates a Markdown-only merge.
+      # Keep in sync with the push trigger above + build.yml's paths-ignore.
+      - '**.md'
   workflow_dispatch:
 
 jobs:
