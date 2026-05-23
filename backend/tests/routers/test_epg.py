@@ -368,3 +368,127 @@ class TestBatchLCN:
 
         assert response.status_code == 200
         assert response.json()["results"] == {}
+
+
+class TestLinkChannelToEPG:
+    """Tests for POST /api/epg/channels/{channel_id}/link.
+
+    Closes the Scenario 6 seam: picking a 'multiple candidate' tvg_id/epg_data_id
+    and establishing the channel's epg_data link (so set_logo_from_epg works).
+    """
+
+    @pytest.mark.asyncio
+    async def test_links_by_explicit_epg_data_id(self, async_client):
+        """Sets the channel's epg_data_id via update_channel when given an id."""
+        mock_client = AsyncMock()
+        mock_client.update_channel.return_value = {
+            "id": 7, "name": "ESPN", "epg_data_id": 42,
+        }
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.post(
+                "/api/epg/channels/7/link", json={"epg_data_id": 42},
+            )
+
+        assert response.status_code == 200
+        # The link is established with the exact-match mechanism: PATCH epg_data_id.
+        mock_client.update_channel.assert_called_once_with(7, {"epg_data_id": 42})
+        mock_client.get_epg_data.assert_not_called()
+        assert response.json()["epg_data_id"] == 42
+
+    @pytest.mark.asyncio
+    async def test_links_by_tvg_id_resolves_to_epg_data_row(self, async_client):
+        """Resolves a tvg_id to its EPG data row id, then sets epg_data_id."""
+        mock_client = AsyncMock()
+        mock_client.get_epg_data.return_value = [
+            {"id": 11, "tvg_id": "CNN.us", "name": "CNN"},
+            {"id": 99, "tvg_id": "ESPN.us", "name": "ESPN"},
+        ]
+        mock_client.update_channel.return_value = {
+            "id": 7, "name": "ESPN", "epg_data_id": 99,
+        }
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.post(
+                "/api/epg/channels/7/link", json={"tvg_id": "ESPN.us"},
+            )
+
+        assert response.status_code == 200
+        mock_client.get_epg_data.assert_called_once_with(search="ESPN.us")
+        mock_client.update_channel.assert_called_once_with(7, {"epg_data_id": 99})
+
+    @pytest.mark.asyncio
+    async def test_epg_data_id_wins_over_tvg_id(self, async_client):
+        """When both are supplied, epg_data_id is used (no tvg_id resolution)."""
+        mock_client = AsyncMock()
+        mock_client.update_channel.return_value = {"id": 7, "epg_data_id": 5}
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.post(
+                "/api/epg/channels/7/link",
+                json={"epg_data_id": 5, "tvg_id": "ESPN.us"},
+            )
+
+        assert response.status_code == 200
+        mock_client.get_epg_data.assert_not_called()
+        mock_client.update_channel.assert_called_once_with(7, {"epg_data_id": 5})
+
+    @pytest.mark.asyncio
+    async def test_missing_both_returns_400(self, async_client):
+        """Returns 400 when neither epg_data_id nor tvg_id is provided."""
+        mock_client = AsyncMock()
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post("/api/epg/channels/7/link", json={})
+
+        assert response.status_code == 400
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_tvg_id_returns_404(self, async_client):
+        """Returns 404 when no EPG data row matches the given tvg_id."""
+        mock_client = AsyncMock()
+        mock_client.get_epg_data.return_value = [
+            {"id": 11, "tvg_id": "CNN.us", "name": "CNN"},
+        ]
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/epg/channels/7/link", json={"tvg_id": "NOPE.us"},
+            )
+
+        assert response.status_code == 404
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_400_not_500(self, async_client):
+        """A Dispatcharr 4xx on the PATCH maps to a clean 4xx, not an opaque 500."""
+        request = httpx.Request("PATCH", "http://x/api/channels/channels/7/")
+        bad_response = httpx.Response(400, request=request, text="bad epg_data_id")
+        mock_client = AsyncMock()
+        mock_client.update_channel.side_effect = httpx.HTTPStatusError(
+            "400", request=request, response=bad_response,
+        )
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/epg/channels/7/link", json={"epg_data_id": 42},
+            )
+
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-HTTP error still surfaces as 500."""
+        mock_client = AsyncMock()
+        mock_client.update_channel.side_effect = Exception("boom")
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/epg/channels/7/link", json={"epg_data_id": 42},
+            )
+
+        assert response.status_code == 500

@@ -1887,9 +1887,121 @@ class TestMatchChannelsEpg:
         assert "no candidate details available" in text
 
 
+# --- TestLinkChannelEpg (znc76.2 / r5pu5) ---
+class TestLinkChannelEpg:
+    """link_channel_epg picks a 'multiple' candidate and links it to a channel.
+
+    Closes the Scenario 6 seam: match_channels_epg lists candidates, but only
+    this tool establishes the channel's epg_data link so set_logo_from_epg works.
+    """
+
+    @pytest.mark.asyncio
+    async def test_links_by_tvg_id_calls_endpoint(self):
+        """Resolves channel + tvg_id through the link endpoint with path_args+body."""
+        from tools.epg import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.return_value = {
+            "id": 20, "name": "Fox News", "epg_data_id": 555,
+        }
+
+        with patch("tools.epg.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "link_channel_epg", {"channel_id": 20, "tvg_id": "FoxNews.us"},
+            )
+
+        # Calls the registered link endpoint with the channel in path_args and
+        # the chosen tvg_id in the body.
+        call = mock_client.call_endpoint.call_args
+        assert call.args[0] is ENDPOINTS["epg_link_channel"]
+        assert call.kwargs["path_args"] == {"channel_id": 20}
+        assert call.kwargs["body"] == {"tvg_id": "FoxNews.us"}
+
+        text = result[0][0].text
+        assert "Fox News" in text
+        assert "555" in text  # linked epg_data_id surfaced
+        assert "set_logo_from_epg" in text
+
+    @pytest.mark.asyncio
+    async def test_links_by_epg_data_id(self):
+        """epg_data_id is forwarded in the body when provided."""
+        from tools.epg import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.return_value = {"id": 7, "epg_data_id": 42}
+
+        with patch("tools.epg.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "link_channel_epg", {"channel_id": 7, "epg_data_id": 42},
+            )
+
+        body = mock_client.call_endpoint.call_args.kwargs["body"]
+        assert body == {"epg_data_id": 42}
+        assert "42" in result[0][0].text
+
+    @pytest.mark.asyncio
+    async def test_requires_a_candidate(self):
+        """Neither tvg_id nor epg_data_id -> guidance, no backend call."""
+        from tools.epg import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+
+        with patch("tools.epg.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("link_channel_epg", {"channel_id": 7})
+
+        text = result[0][0].text
+        assert "tvg_id" in text and "epg_data_id" in text
+        mock_client.call_endpoint.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_message(self):
+        """Backend error surfaces as a readable message."""
+        from tools.epg import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = Exception("HTTP 404: channel not found")
+
+        with patch("tools.epg.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "link_channel_epg", {"channel_id": 999, "tvg_id": "X.us"},
+            )
+
+        text = result[0][0].text
+        assert "Error" in text
+        assert "404" in text
+
+
 # --- TestEpgContractRegistry (A2) ---
 class TestEpgContractRegistry:
     """Verify endpoint contracts are correct for the EPG domain after fixes."""
+
+    def test_epg_link_channel_registered(self):
+        """epg_link_channel endpoint is registered with correct method/path/fields."""
+        from _endpoint_contracts import ENDPOINTS
+
+        ep = ENDPOINTS["epg_link_channel"]
+        assert ep.method == "POST"
+        assert ep.path == "/api/epg/channels/{channel_id}/link"
+        assert "epg_data_id" in ep.request_fields
+        assert "tvg_id" in ep.request_fields
+        assert ep.response_is_list is False
 
     def test_epg_create_source_includes_source_type(self):
         """epg_create_source contract must declare source_type as a request field."""
