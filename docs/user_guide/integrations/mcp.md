@@ -232,11 +232,14 @@ Example — register for all your projects:
 claude mcp add --transport http --scope user ecm "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
 ```
 
-> **Security note:** `project` scope commits the URL (including the API key) to
-> your repo. For shared projects, consider using `local` scope per developer, or
-> an environment-variable substitution pattern — see the
-> [security/mcp-json-envvar branch](https://github.com/MotWakorb/enhancedchannelmanager/compare/security/mcp-json-envvar)
-> for the `${ECM_MCP_API_KEY}` pattern if your Claude Code version supports it.
+> **Security note:** `project` scope stores the URL in `.mcp.json` at the repo
+> root — which you will likely commit. Do not put your API key in plaintext in a
+> committed file. Instead, use an environment-variable reference: Claude Code
+> expands `${VAR}` from your shell environment when it reads `.mcp.json`. The
+> repo ships a working example at `.mcp.json` in the project root, using
+> `http://localhost:6101/mcp?api_key=${ECM_MCP_API_KEY}`. Set
+> `ECM_MCP_API_KEY` in your shell (e.g. in `~/.zshrc` or `~/.bashrc`) and the
+> key never appears in the committed file.
 
 ---
 
