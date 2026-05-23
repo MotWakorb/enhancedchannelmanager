@@ -794,6 +794,19 @@ class EPGMatchRequest(BaseModel):
     source_order: list[int] = []
 
 
+class EPGLinkRequest(BaseModel):
+    """Link one chosen EPG candidate to a channel.
+
+    Supply either ``epg_data_id`` (the EPG data row id — preferred, exact) or
+    ``tvg_id`` (resolved server-side to its EPG data row). ``epg_data_id`` wins
+    if both are given. Both are the fields the ``match`` endpoint already
+    surfaces per candidate (``epg_id`` + ``tvg_id``), closing the
+    match -> link -> set-logo chain.
+    """
+    epg_data_id: int | None = None
+    tvg_id: str | None = None
+
+
 @router.post("/match")
 async def match_channels_to_epg(request: EPGMatchRequest):
     """Batch match channels to EPG data with confidence scoring.
@@ -939,3 +952,74 @@ async def match_channels_to_epg(request: EPGMatchRequest):
     except Exception as e:
         logger.exception("[EPG-MATCH] Failed: %s", e)
         raise HTTPException(status_code=500, detail="EPG matching failed")
+
+
+@router.post("/channels/{channel_id}/link")
+async def link_channel_to_epg(channel_id: int, request: EPGLinkRequest):
+    """Link a channel to a chosen EPG candidate (sets its ``epg_data_id``).
+
+    The ``match`` endpoint reports ``multiple`` candidates per channel but never
+    establishes the EPG association — only an exact match would. This endpoint
+    closes that seam: given the operator's chosen candidate (by ``epg_data_id``
+    or ``tvg_id``, both surfaced by ``match``), it sets the channel's
+    ``epg_data_id`` via the *same* ``update_channel`` PATCH the merge path uses,
+    so a downstream "Set Logo from EPG" can then resolve the linked entry.
+
+    Returns the updated channel (the linked state).
+    """
+    if request.epg_data_id is None and not request.tvg_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either epg_data_id or tvg_id to link.",
+        )
+
+    client = get_client()
+    try:
+        epg_data_id = request.epg_data_id
+
+        # Resolve a tvg_id to its EPG data row id when no explicit id was given.
+        if epg_data_id is None:
+            tvg_id = request.tvg_id
+            candidates = await client.get_epg_data(search=tvg_id)
+            match = next(
+                (e for e in candidates if e.get("tvg_id") == tvg_id),
+                None,
+            )
+            if match is None:
+                logger.warning(
+                    "[EPG-LINK] No EPG data row found for tvg_id=%r (channel=%s)",
+                    tvg_id, channel_id,
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No EPG data found for tvg_id '{tvg_id}'.",
+                )
+            epg_data_id = match.get("id")
+
+        # Establish the link with the same mechanism the exact-match/merge path
+        # uses: PATCH the channel's epg_data_id.
+        result = await client.update_channel(channel_id, {"epg_data_id": epg_data_id})
+
+        journal.log_entry(
+            category="channel",
+            action_type="update",
+            entity_id=channel_id,
+            entity_name=result.get("name") if isinstance(result, dict) else None,
+            description=f"Linked channel to EPG data id={epg_data_id}",
+            after_value={"epg_data_id": epg_data_id},
+        )
+
+        logger.info(
+            "[EPG-LINK] Linked channel=%s -> epg_data_id=%s", channel_id, epg_data_id,
+        )
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG-LINK] Link rejected by Dispatcharr: %s", e)
+            raise mapped
+        logger.exception("[EPG-LINK] Failed to link channel %s: %s", channel_id, e)
+        raise HTTPException(status_code=500, detail="EPG link failed")

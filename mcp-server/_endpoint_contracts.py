@@ -382,6 +382,13 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/epg/match",
         request_fields=frozenset({"channel_ids", "epg_source_ids", "source_order"}),  # EPGMatchRequest
     ),
+    "epg_link_channel": Endpoint(
+        name="epg_link_channel",
+        method="POST",
+        path="/api/epg/channels/{channel_id}/link",
+        request_fields=frozenset({"epg_data_id", "tvg_id"}),  # EPGLinkRequest
+        # Returns the updated channel dict (linked state) — not a list.
+    ),
     "epg_grid": Endpoint(
         name="epg_grid",
         method="GET",
