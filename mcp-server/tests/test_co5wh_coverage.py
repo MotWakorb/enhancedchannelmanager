@@ -971,3 +971,139 @@ class TestGetChannelBandwidth:
             result = await mcp.call_tool("get_channel_bandwidth", {})
 
         assert "No channel bandwidth data" in result[0][0].text
+
+
+# =============================================================================
+# znc76.1 — channel_id surfaced in get_popularity_rankings + get_top_watched
+# =============================================================================
+
+
+class TestChannelIdSurfacedInRankings:
+    """channel_id must appear in get_popularity_rankings output so operators
+    can pass it directly to get_channel_popularity(channel_id=...)."""
+
+    @pytest.mark.asyncio
+    async def test_popularity_rankings_includes_channel_id(self):
+        """get_popularity_rankings renders (id=<channel_id>) in each line."""
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        _register_stats(mcp)
+
+        # Real shape: PopularityCalculator.get_rankings() →
+        # {"total": N, "rankings": [ChannelPopularityScore.to_dict(), ...]}
+        rankings_response = {
+            "total": 1,
+            "rankings": [
+                {
+                    "id": 1,
+                    "channel_id": "uuid-brewers-0001",
+                    "channel_name": "Milwaukee Brewers",
+                    "score": 93.8,
+                    "rank": 1,
+                    "trend": "up",
+                    "trend_percent": 5.0,
+                    "watch_count_7d": 200,
+                    "watch_time_7d": 72000,
+                    "unique_viewers_7d": 60,
+                    "bandwidth_7d": 8_000_000_000,
+                    "previous_score": 89.2,
+                    "previous_rank": 2,
+                    "calculated_at": "2026-05-23T06:00:00Z",
+                    "created_at": "2026-05-01T00:00:00Z",
+                    "updated_at": "2026-05-23T06:00:00Z",
+                }
+            ],
+        }
+
+        mock_client = _make_mock(rankings_response)
+        with patch("tools.stats.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("get_popularity_rankings", {"limit": 10})
+
+        text = result[0][0].text
+        assert "Milwaukee Brewers" in text
+        assert "id=uuid-brewers-0001" in text
+        assert "score: 93.8" in text
+
+    @pytest.mark.asyncio
+    async def test_top_watched_includes_channel_id(self):
+        """get_top_watched renders (id=<channel_id>) in each line."""
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        _register_stats(mcp)
+
+        # Real shape: BandwidthTracker.get_top_watched_channels() →
+        # [{"channel_id", "channel_name", "watch_count", "total_watch_seconds",
+        #   "last_watched"}, ...]
+        top_watched_response = [
+            {
+                "channel_id": "uuid-nesn-0002",
+                "channel_name": "NESN",
+                "watch_count": 150,
+                "total_watch_seconds": 54000,
+                "last_watched": "2026-05-23T10:00:00Z",
+            }
+        ]
+
+        mock_client = _make_mock(top_watched_response)
+        with patch("tools.stats.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("get_top_watched", {"limit": 10})
+
+        text = result[0][0].text
+        assert "NESN" in text
+        assert "id=uuid-nesn-0002" in text
+        assert "15.0h watched" in text
+
+    @pytest.mark.asyncio
+    async def test_rankings_without_channel_id_still_renders(self):
+        """If channel_id is absent (legacy response), line still renders without crash."""
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        _register_stats(mcp)
+
+        rankings_response = {
+            "total": 1,
+            "rankings": [
+                {
+                    "channel_name": "ESPN",
+                    "score": 70.0,
+                    "trend": "stable",
+                }
+            ],
+        }
+
+        mock_client = _make_mock(rankings_response)
+        with patch("tools.stats.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("get_popularity_rankings", {})
+
+        text = result[0][0].text
+        assert "ESPN" in text
+        assert "score: 70.0" in text
+        # No (id=...) fragment when channel_id is absent
+        assert "(id=" not in text
+
+    @pytest.mark.asyncio
+    async def test_top_watched_without_channel_id_still_renders(self):
+        """If channel_id is absent (legacy response), line still renders without crash."""
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        _register_stats(mcp)
+
+        top_watched_response = [
+            {
+                "channel_name": "CNN",
+                "total_watch_seconds": 3600,
+                "unique_viewers": 5,
+            }
+        ]
+
+        mock_client = _make_mock(top_watched_response)
+        with patch("tools.stats.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("get_top_watched", {})
+
+        text = result[0][0].text
+        assert "CNN" in text
+        assert "(id=" not in text
