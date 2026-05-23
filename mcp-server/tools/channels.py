@@ -602,12 +602,17 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.call_endpoint(
+            result = await client.call_endpoint(
                 ENDPOINTS["channels_reorder_streams"],
                 path_args={"channel_id": channel_id},
                 body={"stream_ids": stream_ids},
             )
-            return f"Streams reordered for channel {channel_id}. New order: {stream_ids}"
+            # reorder-streams is a pure reorder: the backend rejects (HTTP 400)
+            # any list that isn't a permutation of the channel's current streams,
+            # so it can't silently detach streams. Report the order the backend
+            # confirmed rather than blindly echoing the input.
+            new_order = result.get("streams", stream_ids) if isinstance(result, dict) else stream_ids
+            return f"Streams reordered for channel {channel_id}. New order: {new_order}"
         except Exception as e:
             logger.error("[MCP] reorder_streams failed: %s", e)
             return f"Error reordering streams for channel {channel_id}: {e}"
