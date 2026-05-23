@@ -25,6 +25,30 @@ async def _poll_sleep(seconds: float) -> None:
     await asyncio.sleep(seconds)
 
 
+def _action_descriptor(a: dict) -> str:
+    """Return a human-readable descriptor for an auto-creation action.
+
+    Actions are flattened ``{type, ...params}`` dicts whose descriptor field
+    varies by type (auto_creation_schema): create_channel / create_group /
+    merge_streams carry ``name_template``; merge_streams also has ``target``;
+    assign_* / set_channel_number carry ``value``; assign_epg has ``epg_id``;
+    assign_profile has ``profile_id``. Reading only ``value``/``target`` left
+    create_channel rendering as ``?`` (lq38l.13 #4).
+    """
+    for key in (
+        "name_template",
+        "value",
+        "target",
+        "epg_id",
+        "profile_id",
+        "channel_profile_ids",
+        "name",
+    ):
+        if a.get(key) not in (None, ""):
+            return str(a[key])
+    return "?"
+
+
 def _format_analyze_result(result: dict, source: str) -> str:
     """Render a /rules/analyze response as a markdown report.
 
@@ -201,9 +225,18 @@ def register(mcp: FastMCP):
             if rule_counts:
                 lines.append(f"  Rule matches: {rule_counts}")
 
-            # Show sample of planned/created entities
+            # Show a sample of the entities that were / would be created.
+            #
+            # lq38l.13 #5: the dry-run path used to read raw dry_run_results
+            # rows — which have no channel_name/channel_number (only stream_name
+            # + an `action` string + would_create), so every sample rendered "?"
+            # and the "N more" counted ALL simulated actions (e.g. 482) while the
+            # summary's "Channels would be created" counted only would_create
+            # rows (e.g. 45). Filter dry_run_results to would_create entries so
+            # the sample and the "N more" line are consistent with the count.
             if dry_run:
-                created = result.get("dry_run_results", []) or []
+                all_rows = result.get("dry_run_results", []) or []
+                created = [r for r in all_rows if r.get("would_create")]
                 label = "would be created"
             else:
                 created = result.get("created_entities", []) or []
@@ -212,10 +245,18 @@ def register(mcp: FastMCP):
             if created:
                 lines.append(f"\n  Sample channels ({label}):")
                 for entity in created[:20]:
-                    name = entity.get("channel_name", entity.get("name", "?"))
-                    num = entity.get("channel_number", "")
-                    num_str = f" #{num}" if num else ""
-                    lines.append(f"    {name}{num_str}")
+                    if dry_run:
+                        # dry_run rows: source stream name + the action taken.
+                        name = entity.get("stream_name") or "?"
+                        action_desc = entity.get("action", "")
+                        detail = f" — {action_desc}" if action_desc else ""
+                        lines.append(f"    {name}{detail}")
+                    else:
+                        # created_entities rows: {type, id, name}.
+                        name = entity.get("name", entity.get("channel_name", "?"))
+                        num = entity.get("channel_number", "")
+                        num_str = f" #{num}" if num else ""
+                        lines.append(f"    {name}{num_str}")
                 if len(created) > 20:
                     lines.append(f"    ... and {len(created) - 20} more")
 
@@ -273,7 +314,7 @@ def register(mcp: FastMCP):
             if actions:
                 lines.append(f"  Actions ({len(actions)}):")
                 for a in actions[:10]:
-                    lines.append(f"    - {a.get('type', '?')}: {a.get('value', a.get('target', '?'))}")
+                    lines.append(f"    - {a.get('type', '?')}: {_action_descriptor(a)}")
                 if len(actions) > 10:
                     lines.append(f"    ... and {len(actions) - 10} more")
 
@@ -382,6 +423,8 @@ def register(mcp: FastMCP):
         normalization_group_ids: list[int] | None = None,
         skip_struck_streams: bool = False,
         orphan_action: str = "delete",
+        quality_tie_break_order: str | None = None,
+        match_scope_target_group: bool | None = None,
     ) -> str:
         """Create a new auto-creation rule.
 
@@ -444,6 +487,11 @@ def register(mcp: FastMCP):
             normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
             skip_struck_streams: Skip streams with consecutive probe failures
             orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
+            quality_tie_break_order: Tie-break order ('asc' or 'desc') when two streams
+                have equal quality during quality-based M3U sorting (backend default 'desc')
+            match_scope_target_group: When True, restrict the existing-channel name
+                lookup (for merge/skip decisions) to the rule's target group
+                instead of searching all groups (backend default True)
         """
         try:
             client = get_ecm_client()
@@ -475,6 +523,12 @@ def register(mcp: FastMCP):
                 payload["stream_sort_field"] = stream_sort_field
             if normalization_group_ids is not None:
                 payload["normalization_group_ids"] = normalization_group_ids
+            # lq38l.13 #12: both fields are accepted by the backend
+            # CreateAutoCreationRuleRequest and persisted by the create handler.
+            if quality_tie_break_order is not None:
+                payload["quality_tie_break_order"] = quality_tie_break_order
+            if match_scope_target_group is not None:
+                payload["match_scope_target_group"] = match_scope_target_group
 
             result = await client.call_endpoint(ENDPOINTS["ac_create_rule"], body=payload)
 
