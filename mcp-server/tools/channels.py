@@ -309,13 +309,16 @@ def register(mcp: FastMCP):
         * ``force_new`` — skip dedup entirely; always create a new channel
           regardless of any existing match.
         * ``merge_if_found`` — async-queue the candidate, then auto-accept it
-          when its confidence is at or above the operator-configured threshold
-          (the merge is applied and the row resolved for you).  When the
-          confidence is below the threshold (but above the ADR-008 §D2 floor),
-          fall back to ``prompt`` semantics: the row stays queued and the
-          ``merge_id`` is returned for you to ``accept_channel_merge`` /
-          ``dismiss_channel_merge``.  If no candidate is found, proceed with
-          normal channel creation.
+          **only on an exact normalized-name match** (the enqueue response's
+          ``confidence`` is ``1.0``).  An exact match is the only signal strong
+          enough to merge without confirmation; any fuzzy candidate
+          (``confidence < 1.0``), even one above the operator's auto-merge
+          threshold, falls back to ``prompt`` semantics — the row stays queued
+          and the ``merge_id`` is returned for you to ``accept_channel_merge`` /
+          ``dismiss_channel_merge`` so the merge target is confirmed before the
+          stream is attached (lq38l.7: a 90% token-set over-match auto-merged
+          'US: ESPN 2' into 'US: ESPN U').  If no candidate is found, proceed
+          with normal channel creation.
 
         In all cases where channel creation proceeds, the tool creates a new
         channel with the stream name as the channel name, assigns it to
@@ -374,9 +377,15 @@ def register(mcp: FastMCP):
                     candidate_channel_id = enqueue_resp.get("candidate_channel_id", "?")
                     candidate_channel_name = enqueue_resp.get("candidate_channel_name", "?")
                     confidence = enqueue_resp.get("confidence", 0.0)
-                    meets_threshold = bool(enqueue_resp.get("meets_threshold"))
+                    # Auto-accept ONLY on an exact normalized-name match
+                    # (confidence == 1.0). The matcher emits 1.0 exclusively
+                    # for an exact match (dedup_matcher._normalize equality);
+                    # any fuzzy candidate — even above the operator's
+                    # meets_threshold — must be confirmed via accept/dismiss
+                    # rather than auto-merged (lq38l.7).
+                    is_exact_match = (confidence or 0.0) >= 1.0
 
-                    if dedup_action == "merge_if_found" and meets_threshold:
+                    if dedup_action == "merge_if_found" and is_exact_match:
                         # Auto-accept the queued merge — accept_channel_merge
                         # applies the Dispatcharr-side merge and resolves the
                         # row, with the full §D6 audit trail.
@@ -405,11 +414,11 @@ def register(mcp: FastMCP):
                             f"via merge_id={merge_id}."
                         )
 
-                    # prompt, OR merge_if_found below-threshold fallback: the row
-                    # is queued; hand the merge_id to the agent to accept/dismiss.
+                    # prompt, OR merge_if_found non-exact fallback: the row is
+                    # queued; hand the merge_id to the agent to accept/dismiss.
                     fallback_note = (
-                        " (below the auto-merge threshold — falling back to "
-                        "prompt semantics)"
+                        " (not an exact name match — falling back to prompt "
+                        "semantics for operator confirmation)"
                         if dedup_action == "merge_if_found"
                         else ""
                     )
