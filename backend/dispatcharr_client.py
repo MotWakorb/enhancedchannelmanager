@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
 import hmac
+import json
+import re
 import secrets
 import httpx
 import logging
@@ -8,6 +10,96 @@ from typing import Optional
 from config import get_settings, DispatcharrSettings
 
 logger = logging.getLogger(__name__)
+
+
+# Matches the message format produced by the create_* helpers below
+# (``create_channel``, ``create_channel_group``, ``create_logo``, ...), which
+# embed the upstream status + body in a bare ``Exception`` string rather than
+# raising ``httpx.HTTPStatusError``:  "<thing> failed: <status> - <body>".
+_UPSTREAM_FAILURE_RE = re.compile(r"failed:\s*(\d{3})\s*-\s*(.*)", re.DOTALL)
+
+
+def _format_upstream_detail(status_code: int, body: str) -> str:
+    """Turn a raw upstream response body into a concise HTTPException detail.
+
+    Dispatcharr returns DRF-style validation errors as JSON, e.g.
+    ``{"channel_group_id": ["Invalid pk \"999\" - object does not exist."]}``.
+    We surface the actionable content rather than the whole envelope. If the
+    body is not JSON (HTML error page, plain text), it is passed through
+    trimmed.
+    """
+    body = (body or "").strip()
+    if not body:
+        return f"Dispatcharr returned HTTP {status_code}"
+    try:
+        parsed = json.loads(body)
+    except (ValueError, TypeError):
+        return body
+    # DRF errors are usually a dict of field -> [messages] or {"detail": "..."}.
+    if isinstance(parsed, dict):
+        if "detail" in parsed and len(parsed) == 1:
+            return str(parsed["detail"])
+        parts = []
+        for field, messages in parsed.items():
+            if isinstance(messages, (list, tuple)):
+                joined = "; ".join(str(m) for m in messages)
+            else:
+                joined = str(messages)
+            parts.append(f"{field}: {joined}")
+        return " ".join(parts) if parts else body
+    if isinstance(parsed, list):
+        return "; ".join(str(m) for m in parsed)
+    return str(parsed)
+
+
+def upstream_http_exception(exc: Exception):
+    """Map a Dispatcharr-client error to a client-facing ``HTTPException``.
+
+    The Dispatcharr client surfaces upstream failures in two shapes:
+
+    1. ``httpx.HTTPStatusError`` — from helpers that call
+       ``response.raise_for_status()`` (e.g. ``create_epg_source``,
+       ``delete_channel_group``, ``get_channel``). Carries ``.response``.
+    2. A bare ``Exception`` whose message is
+       ``"<thing> failed: <status> - <body>"`` — from helpers that build the
+       error string by hand (e.g. ``create_channel``, ``create_channel_group``).
+
+    For an upstream **4xx** this returns an ``HTTPException`` that preserves the
+    actionable upstream status + detail (404 stays 404; every other 4xx maps to
+    400 with the upstream detail so the caller sees *why* the request was
+    rejected instead of an opaque 500). For anything else (5xx, connection
+    errors, non-matching exceptions) it returns ``None`` so the caller falls
+    through to its generic ``500 Internal server error`` handler. This keeps
+    genuine server faults as 500 while exposing actionable client errors.
+
+    Imported lazily inside callers' ``except`` blocks; FastAPI's
+    ``HTTPException`` is imported here to avoid a module-level web-framework
+    dependency in the HTTP client.
+    """
+    from fastapi import HTTPException
+
+    status_code: Optional[int] = None
+    body: str = ""
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        body = exc.response.text
+    else:
+        match = _UPSTREAM_FAILURE_RE.search(str(exc))
+        if match:
+            status_code = int(match.group(1))
+            body = match.group(2)
+
+    if status_code is None or not (400 <= status_code < 500):
+        return None
+
+    detail = _format_upstream_detail(status_code, body)
+    if status_code == 404:
+        return HTTPException(status_code=404, detail=detail)
+    # Collapse other client errors (400/409/422/...) to 400 with the upstream
+    # detail. The point of the bead is "stop masking the actionable 4xx detail
+    # as 500", not to perfectly mirror every upstream status code.
+    return HTTPException(status_code=400, detail=detail)
 
 # Process-local random key used by ``_settings_hash`` (see below). Generated
 # once per Python process; same Python process always produces the same hash
