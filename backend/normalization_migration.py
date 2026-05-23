@@ -554,3 +554,199 @@ def ensure_title_case_rule(db: Session) -> dict:
 
     logger.info("[NORMALIZE-MIGRATE] Created 'Title Case' rule group")
     return {"created": True}
+
+
+# Map a strip rule group's name to the tag group it should match against.
+# Derived from DEMO_RULE_CONFIGS (the canonical wiring create_demo_rules uses)
+# so this stays in sync if the demo configs change. Legacy group names that
+# create_demo_rules has since renamed (e.g. the suffix-only State/Province
+# variant) are aliased explicitly.
+RULE_GROUP_TO_TAG_GROUP = {
+    cfg["rule_group_name"]: cfg["tag_group_name"] for cfg in DEMO_RULE_CONFIGS
+}
+RULE_GROUP_TO_TAG_GROUP["Strip State/Province Suffixes"] = "State/Province Tags"
+
+# Map a directional action_type to its tag_match_position. The strip rules
+# already encode position in their action_type (strip_prefix -> prefix,
+# strip_suffix -> suffix); 'remove' has no direction so it matches anywhere
+# (contains). This is the robust derivation requested by znc76.3 — position is
+# inferred from the rule, not hardcoded by index.
+ACTION_TYPE_TO_POSITION = {
+    "strip_prefix": "prefix",
+    "strip_suffix": "suffix",
+    "remove": "contains",
+}
+
+
+def backfill_tag_group_rule_ids(db: Session) -> dict:
+    """
+    Repair tag_group rules whose tag_group_id was never wired (CONFIG drift).
+
+    For pre-existing installations, the strip rule groups were created before
+    create_demo_rules learned to wire tag_group_id via a name->id map. Those
+    rules have condition_type='tag_group' but tag_group_id IS NULL, so the
+    engine matcher short-circuits to no-match (normalization_engine.py
+    _match_condition) and the strips never fire. This backfills the missing
+    tag_group_id (and tag_match_position) by matching each rule's parent group
+    to its tag group BY NAME — reusing the exact name->id approach
+    create_demo_rules uses.
+
+    Strictly idempotent:
+    - Only rules with condition_type='tag_group' AND tag_group_id IS NULL are
+      touched. Already-wired rules are left untouched, so re-running is a no-op.
+    - tag_match_position is derived from the rule's action_type (strip_prefix ->
+      prefix, strip_suffix -> suffix, remove -> contains), falling back to the
+      DEMO_RULE_CONFIGS match_position for the rule's group when action_type is
+      ambiguous. Position is only set when currently NULL.
+
+    Conservative: if a rule's parent group name does not map to a known tag
+    group, the rule is skipped (logged) rather than guessed.
+
+    Returns:
+        Dict with counts of rules wired and rules skipped.
+    """
+    # Find every tag_group rule that was never wired to a tag group.
+    null_rules = db.query(NormalizationRule).filter(
+        NormalizationRule.condition_type == "tag_group",
+        NormalizationRule.tag_group_id.is_(None)
+    ).all()
+
+    if not null_rules:
+        logger.info("[NORMALIZE-MIGRATE] No tag_group rules with NULL tag_group_id; backfill is a no-op")
+        return {"rules_wired": 0, "rules_skipped": 0}
+
+    # Build the name -> id map exactly like create_demo_rules does.
+    tag_group_map = {tg.name: tg.id for tg in db.query(TagGroup).all()}
+
+    # Cache parent group names so we can map rule -> rule group -> tag group.
+    group_name_by_id = {
+        g.id: g.name for g in db.query(NormalizationRuleGroup).all()
+    }
+
+    # Cache the demo match_position fallback keyed by tag group name.
+    demo_position_by_tag_group = {
+        cfg["tag_group_name"]: cfg["match_position"] for cfg in DEMO_RULE_CONFIGS
+    }
+
+    wired = 0
+    skipped = 0
+
+    for rule in null_rules:
+        parent_group_name = group_name_by_id.get(rule.group_id)
+        tag_group_name = RULE_GROUP_TO_TAG_GROUP.get(parent_group_name)
+
+        if not tag_group_name:
+            logger.warning(
+                "[NORMALIZE-MIGRATE] Rule id=%s in group '%s' has no known tag-group "
+                "mapping; skipping (conservative)",
+                rule.id, parent_group_name
+            )
+            skipped += 1
+            continue
+
+        tag_group_id = tag_group_map.get(tag_group_name)
+        if not tag_group_id:
+            logger.warning(
+                "[NORMALIZE-MIGRATE] Tag group '%s' not found for rule id=%s; skipping",
+                tag_group_name, rule.id
+            )
+            skipped += 1
+            continue
+
+        rule.tag_group_id = tag_group_id
+
+        # Only set position when it's missing; derive from action_type first,
+        # then fall back to the demo config for this tag group, then 'contains'.
+        if not rule.tag_match_position:
+            position = ACTION_TYPE_TO_POSITION.get(rule.action_type)
+            if not position:
+                position = demo_position_by_tag_group.get(tag_group_name, "contains")
+            rule.tag_match_position = position
+
+        wired += 1
+        logger.info(
+            "[NORMALIZE-MIGRATE] Wired rule id=%s ('%s') -> tag group '%s' (id=%s, position=%s)",
+            rule.id, parent_group_name, tag_group_name, tag_group_id, rule.tag_match_position
+        )
+
+    if wired > 0:
+        db.commit()
+        logger.info(
+            "[NORMALIZE-MIGRATE] Backfilled tag_group_id on %s rule(s); %s skipped",
+            wired, skipped
+        )
+    else:
+        logger.info(
+            "[NORMALIZE-MIGRATE] No tag_group rules wired (%s skipped)", skipped
+        )
+
+    return {"rules_wired": wired, "rules_skipped": skipped}
+
+
+# Acronyms that title-casing must preserve. "US" and "EU" contain a vowel and
+# are short, so the engine's structural heuristic would lowercase them
+# (US -> Us) unless they're in the Abbreviation Tags group. "UK" is vowel-free
+# and already preserved, but we ensure it for consistency / explicitness.
+REQUIRED_ABBREVIATION_ACRONYMS = ["US", "UK", "EU"]
+
+
+def ensure_abbreviation_tags_acronyms(db: Session) -> dict:
+    """
+    Ensure 'US', 'UK', 'EU' exist in the 'Abbreviation Tags' tag group so the
+    Title Case rule preserves them instead of lowercasing (US -> Us).
+
+    The Abbreviation Tags seed (database._seed_builtin_tags) includes "USA"
+    but not "US"/"UK"/"EU", so country acronyms left after stripping get
+    corrupted by Smart Title Case. This adds only the missing acronyms.
+
+    Strictly idempotent: only acronyms that are missing are added. After adding,
+    the engine's abbreviation cache is invalidated so the next normalization
+    reload picks them up.
+
+    Returns:
+        Dict with count of tags added.
+    """
+    from models import Tag
+
+    abbr_group = db.query(TagGroup).filter(
+        TagGroup.name == "Abbreviation Tags"
+    ).first()
+
+    if not abbr_group:
+        logger.warning(
+            "[NORMALIZE-MIGRATE] Abbreviation Tags tag group not found; skipping acronym fix"
+        )
+        return {"tags_added": 0, "skipped": True}
+
+    added = 0
+    for value in REQUIRED_ABBREVIATION_ACRONYMS:
+        existing = db.query(Tag).filter(
+            Tag.group_id == abbr_group.id,
+            Tag.value == value
+        ).first()
+        if not existing:
+            db.add(Tag(
+                group_id=abbr_group.id,
+                value=value,
+                case_sensitive=False,
+                enabled=True,
+                is_builtin=True
+            ))
+            added += 1
+
+    if added > 0:
+        db.commit()
+        # Drop the cached abbreviation set so the engine reloads the new tags.
+        try:
+            from normalization_engine import clear_abbreviation_cache
+            clear_abbreviation_cache()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug("[NORMALIZE-MIGRATE] Could not clear abbreviation cache: %s", e)
+        logger.info(
+            "[NORMALIZE-MIGRATE] Added %s missing acronym(s) to Abbreviation Tags (US/UK/EU)",
+            added
+        )
+    else:
+        logger.info("[NORMALIZE-MIGRATE] Abbreviation Tags already has US/UK/EU")
+
+    return {"tags_added": added, "skipped": False}
