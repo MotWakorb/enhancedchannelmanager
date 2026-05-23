@@ -392,6 +392,7 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
             result = await client.call_endpoint(
                 ENDPOINTS["stream_stats_probe_one"], path_args={"stream_id": stream_id},
+                timeout=300.0,
             )
             status = result.get("status", result.get("probe_status", "unknown")) if isinstance(result, dict) else "unknown"
             return f"Stream {stream_id} probe complete. Status: {status}"
@@ -499,6 +500,7 @@ def register(mcp: FastMCP):
 
             # Delete empty channels if requested
             deleted_channels = []
+            failed_channel_deletions: list[str] = []
             if delete_empty_channels and affected_channels:
                 for ch_id, info in affected_channels.items():
                     try:
@@ -507,8 +509,13 @@ def register(mcp: FastMCP):
                         if remaining == 0:
                             await client.call_endpoint(ENDPOINTS["channels_delete"], path_args={"channel_id": ch_id})
                             deleted_channels.append(f"{info['name']} (id={ch_id})")
-                    except Exception:
-                        pass  # Channel may already be gone
+                    except Exception as ch_err:
+                        # Channel may already be gone, or deletion may have failed.
+                        # Collect the failure so it is surfaced in the result rather
+                        # than silently swallowed.
+                        failed_channel_deletions.append(
+                            f"{info['name']} (id={ch_id}): {ch_err}"
+                        )
 
                 if deleted_channels:
                     lines.append(f"  Deleted {len(deleted_channels)} empty channels:")
@@ -516,6 +523,13 @@ def register(mcp: FastMCP):
                         lines.append(f"    - {ch}")
                 else:
                     lines.append("  No channels were left empty.")
+
+                if failed_channel_deletions:
+                    lines.append(
+                        f"  WARNING: {len(failed_channel_deletions)} channel deletion(s) failed:"
+                    )
+                    for failure in failed_channel_deletions:
+                        lines.append(f"    - {failure}")
 
             # Summary of affected streams
             unassigned = sum(1 for s in streams if not s.get("channels"))

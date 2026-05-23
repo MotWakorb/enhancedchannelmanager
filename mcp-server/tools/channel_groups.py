@@ -125,7 +125,20 @@ def register(mcp: FastMCP):
                             channel_delete_err,
                         )
 
-            await client.call_endpoint(ENDPOINTS["groups_delete"], path_args={"group_id": group_id})
+            delete_response = await client.call_endpoint(ENDPOINTS["groups_delete"], path_args={"group_id": group_id})
+
+            # Inspect the backend response status — the backend returns
+            # {"status": "hidden"} when M3U sync settings prevent true deletion
+            # and {"status": "deleted"} (or None/204) when truly gone.
+            backend_status = (
+                delete_response.get("status") if isinstance(delete_response, dict) else None
+            )
+
+            if backend_status == "hidden":
+                return (
+                    f"Channel group {group_id} hidden (has M3U sync settings; not deleted). "
+                    f"Remove M3U sync settings first to fully delete this group."
+                )
 
             # Read-back: confirm the group is actually gone.
             try:
