@@ -2028,7 +2028,15 @@ async def update_channel(channel_id: int, data: dict):
             logger.debug("[CHANNELS] No changes detected for channel %s", channel_id)
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id (or bad group/logo/etc.) surfaces as an upstream
+        # 4xx — map it to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Update channel %s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to update channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2152,6 +2160,12 @@ async def merge_channels(request: "MergeChannelsRequest"):
                 logger.info("[CHANNELS] Rolled back merged channel %s after error", new_channel["id"])
             except Exception:
                 logger.warning("[CHANNELS] Failed to rollback merged channel %s", new_channel["id"])
+        # Map an upstream 4xx (e.g. a bad target group/logo id) to a clean 4xx
+        # instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Channel merge rejected by Dispatcharr: %s", e)
+            raise mapped
         logger.exception("[CHANNELS] Channel merge failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2183,7 +2197,15 @@ async def delete_channel(channel_id: int):
         )
 
         return {"success": True}
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id surfaces as an upstream 404 — return 404, not 500
+        # (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Delete channel %s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to delete channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2223,7 +2245,15 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
             return result
         logger.debug("[CHANNELS] Stream %s already in channel %s", request.stream_id, channel_id)
         return channel
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel/stream id surfaces as an upstream 4xx — map it to a
+        # clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Add stream %s to channel %s rejected by Dispatcharr: %s", request.stream_id, channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to add stream %s to channel %s: %s", request.stream_id, channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2279,7 +2309,15 @@ async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest):
         )
 
         return {"channel": result, "added": added, "skipped": skipped, "total_streams": len(current_streams)}
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel/stream id surfaces as an upstream 4xx — map it to a
+        # clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Add streams to channel %s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to add streams to channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2319,7 +2357,15 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
             return result
         logger.debug("[CHANNELS] Stream %s not in channel %s", request.stream_id, channel_id)
         return channel
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id surfaces as an upstream 404 — map it to a clean
+        # 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Remove stream %s from channel %s rejected by Dispatcharr: %s", request.stream_id, channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to remove stream %s from channel %s: %s", request.stream_id, channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2402,6 +2448,13 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         # masking them as a 500.
         raise
     except Exception as e:
+        # A missing channel id (or a stream id not on the channel that slips past
+        # the permutation guard) surfaces as an upstream 4xx — map it to a clean
+        # 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Reorder streams for channel %s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to reorder streams for channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2593,18 +2646,22 @@ async def bulk_merge_channels(request: BulkMergeRequest):
             raise
         except Exception as e:
             failed_count += 1
-            # CodeQL py/stack-trace-exposure (#1413): log full exception (with
-            # trace) but only return the exception type to the client. ADR-005
-            # disallows "won't fix" dismissal, so we replace str(e) with
-            # type(e).__name__ — operators correlate via X-Request-ID.
+            # If the per-item failure is an upstream client error (e.g. a bad
+            # target/source id), surface the actionable upstream detail so the
+            # caller can tell "does not exist" from a real server fault, instead
+            # of the bare exception type (bd-lq38l.4). For genuine server faults
+            # we keep CodeQL py/stack-trace-exposure (#1413) hygiene: log the
+            # full trace but only return the exception type name to the client.
             logger.exception(
                 "[CHANNELS] bulk-merge: group failed (target=%s)",
                 item.target_channel_id,
             )
+            mapped = upstream_http_exception(e)
+            error_detail = mapped.detail if mapped is not None else type(e).__name__
             results.append({
                 "target_channel_id": item.target_channel_id,
                 "success": False,
-                "error": type(e).__name__,
+                "error": error_detail,
             })
 
     logger.info("[CHANNELS] bulk-merge complete: %d merged, %d failed", merged_count, failed_count)

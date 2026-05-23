@@ -28,8 +28,10 @@ def register(mcp: FastMCP):
                 sid = s.get("id", "?")
                 # url may be present-but-None (4 of 8 real sources); `or ""` handles that
                 url = (s.get("url") or "")[:50]
-                channel_count = s.get("channel_count", 0)
-                lines.append(f"  {name} (id={sid}) — {channel_count} channels, url: {url}...")
+                # Dispatcharr payload uses epg_data_count for channel count; channel_count is absent
+                epg_count = s.get("epg_data_count", s.get("channel_count"))
+                count_str = f"{epg_count} channels, " if epg_count is not None else ""
+                lines.append(f"  {name} (id={sid}) — {count_str}url: {url}...")
 
             return "\n".join(lines)
         except Exception as e:
