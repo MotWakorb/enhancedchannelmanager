@@ -69,6 +69,38 @@ def _build_mcp_service_principal() -> User:
     )
 
 
+def is_mcp_service_principal(user: User) -> bool:
+    """Return True iff ``user`` is the transient, non-persisted MCP principal.
+
+    The MCP service principal (built by :func:`_build_mcp_service_principal`)
+    is a detached ``User`` instance that was never added to a session — it
+    carries ``auth_provider == "mcp"`` and the synthetic
+    :data:`MCP_SERVICE_PRINCIPAL_ID`. We key off both so a real DB row that
+    somehow had ``auth_provider == "mcp"`` (it never should) still wouldn't be
+    mistaken for the transient principal, and vice versa.
+    """
+    return getattr(user, "auth_provider", None) == "mcp" or (
+        getattr(user, "id", None) == MCP_SERVICE_PRINCIPAL_ID
+    )
+
+
+def reject_mcp_service_principal_mutation(user: User) -> None:
+    """Reject self-mutation routes invoked with the MCP service principal.
+
+    The MCP principal is transient (never persisted), so ORM operations like
+    ``session.refresh(current_user)`` raise an opaque 500. It also has no
+    business mutating an ECM user account: the static MCP key is an
+    admin-equivalent *service* credential, not a user identity. Self-mutation
+    routes (e.g. ``PUT /api/auth/me``, ``POST /api/auth/change-password``)
+    call this to fail fast with a clean 403 instead (bd-1wq7z.24 (c)).
+    """
+    if is_mcp_service_principal(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="MCP service principal cannot modify a user account",
+        )
+
+
 class AuthenticationError(HTTPException):
     """Authentication failed."""
     def __init__(self, detail: str = "Could not validate credentials"):
