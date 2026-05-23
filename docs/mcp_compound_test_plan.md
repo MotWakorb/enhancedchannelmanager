@@ -372,17 +372,30 @@ dedup/duplicate tools rely on — a cross-feature consistency seam.
 
 | # | Scenario | Result |
 |---|----------|--------|
-| 1 | Build channel from streams under new group + EPG + logo | ☐ |
-| 2 | Fuzzy-match provider streams onto a fresh lineup | ☐ |
-| 3 | Add-stream dedup decision loop | ☐ |
-| 4 | Provider onboarding → auto-creation → rollback | ☐ |
-| 5 | Duplicate cleanup: find → merge → renumber → reorder | ☐ |
-| 6 | EPG source lifecycle → grid → match → logos | ☐ |
-| 7 | Stream-health triage loop | ☐ |
-| 8 | Stats cross-reference (consistency) | ☐ |
-| 9 | Export profile → generate → publish discovery | ☐ |
-| 10 | Backup-guarded destructive operation | ☐ |
-| 11 | Task + schedule lifecycle | ☐ |
-| 12 | Normalization-driven dedup preview | ☐ |
+| 1 | Build channel from streams under new group + EPG + logo | ✅ PASS |
+| 2 | Fuzzy-match provider streams onto a fresh lineup | ✅ PASS |
+| 3 | Add-stream dedup decision loop | ✅ PASS |
+| 4 | Provider onboarding → auto-creation → rollback | ✅ PASS |
+| 5 | Duplicate cleanup: find → merge → renumber → reorder | ✅ PASS |
+| 6 | EPG source lifecycle → grid → match → logos | ✅ PASS (seam fix: znc76.2) |
+| 7 | Stream-health triage loop | ⚠️ PARTIAL (znc76.5) |
+| 8 | Stats cross-reference (consistency) | ✅ PASS (seam fix: znc76.1) |
+| 9 | Export profile → generate → publish discovery | ✅ PASS |
+| 10 | Backup-guarded destructive operation | ✅ PASS |
+| 11 | Task + schedule lifecycle | ✅ PASS |
+| 12 | Normalization-driven dedup preview | ❌ FAIL (znc76.3 — config) |
 
 **Filing findings:** a chain failure is usually a *seam* bug — record which step's output the next step failed to consume, and whether each individual tool behaves correctly on its own. If both tools pass alone but fail chained, that's the high-value finding this plan exists to catch.
+
+## Execution results — 2026-05-23 (live dev instance, agent-driven)
+
+First full run, executed by agents against the live dev ECM. 9/12 PASS; the seam findings were filed under epic `enhancedchannelmanager-znc76` and most were fixed the same day:
+
+- **znc76.1** (S8) — `get_popularity_rankings` / `get_top_watched` now surface the channel `id`, so `get_channel_popularity` is reachable from the chain. **Fixed.**
+- **znc76.2** (S6) — `match_channels_epg` now lists the per-channel candidate tvg_ids (with confidence) on a "multiple candidates" result, so the operator can see the options. **Fixed (visibility).** Remaining follow-up: an MCP affordance to *pick + link* a chosen candidate so `set_logo_from_epg` can then proceed.
+- **znc76.4** (S4) — `get_m3u_account` now shows the URL for a standard-type account (create normalizes `url`→`server_url`). **Fixed.**
+- **znc76.5** (S7) — `probe_bulk_streams` now returns a correct `{total, success, failed}` accounting envelope. **Partly fixed.** Remaining: the bulk endpoint is synchronous and 504s on batches ≥ ~3 — needs an async/background redesign (start+poll); and manual probes still don't populate the `get_probe_results` "latest run" envelope (documented in the tool docstrings).
+- **znc76.3** (S12) — the normalization strip rules are **config, not code**: the 7 strip rule groups have `tag_group_id` unset, so they never match (the engine is correct); and Title Case lowercases `US`→`Us` because "US" isn't in the Abbreviation Tags group. **Remedy is rule-data repair** (wire each strip rule's `tag_group_id`/`tag_match_position`; add "US"/"UK"/"EU" to Abbreviation Tags), or a one-shot backfill migration — not an engine change.
+- S7's `cleanup_struck_out_streams` was run separately (operator-authorized): 135 struck streams cleared, all unassigned → 0 channels affected.
+
+Reconfirmed pre-existing open items: `lq38l.11` (journal empty for all mutations), `lq38l.12` (probe_bulk 504), `lq38l.13` (cosmetic cluster).
