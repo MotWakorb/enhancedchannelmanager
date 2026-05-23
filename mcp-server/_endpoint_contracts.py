@@ -448,7 +448,10 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="export_list_publish_configs",
         method="GET",
         path="/api/export/publish-configs",
-        response_is_list=True,
+        # Backend route is an untyped bare-list response (no response_model), so
+        # OpenAPI declares no array schema — matches the sibling list endpoints
+        # (export_list_profiles / export_list_cloud_targets) which also leave
+        # response_is_list at its default. The tool iterates the runtime list.
     ),
     "export_publish_config": Endpoint(
         name="export_publish_config",

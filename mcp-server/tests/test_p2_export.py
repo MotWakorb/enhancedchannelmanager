@@ -38,9 +38,13 @@ class TestListPublishConfigsEndpointContract:
         assert ep.path == "/api/export/publish-configs"
 
     def test_endpoint_is_list_response(self):
-        """Backend returns a JSON array, so response_is_list must be True."""
+        """response_is_list stays at its default (False): the backend route is an
+        untyped bare-list response (no response_model), so its OpenAPI declares no
+        array schema. This matches the sibling export list endpoints and the
+        cross-repo contract test (test_mcp_tool_contracts) which compares against
+        OpenAPI. The tool still iterates the runtime list."""
         ep = ENDPOINTS["export_list_publish_configs"]
-        assert ep.response_is_list is True
+        assert ep.response_is_list is False
 
 
 class TestListPublishConfigsTool:
