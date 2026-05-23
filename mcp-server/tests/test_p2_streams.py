@@ -214,3 +214,87 @@ class TestProbeSingleStreamTimeout:
         text = result[0][0].text
         assert "healthy" in text
         assert "7" in text
+
+
+# ---------------------------------------------------------------------------
+# bd-clb9a (from enhancedchannelmanager-znc76.5) —
+# probe_bulk_streams must report the real success/failed counts from the
+# backend envelope instead of the old 0/0 accounting.
+# ---------------------------------------------------------------------------
+
+class TestProbeBulkStreamsAccounting:
+    """Verify probe_bulk_streams reports real success/failed tallies."""
+
+    @pytest.mark.asyncio
+    async def test_reports_real_success_and_failed_counts(self):
+        """The tool reads total/success/failed from the backend envelope.
+
+        Before the fix the backend returned only {probed, results} and the tool
+        defaulted success/failed to 0 -> "Success: 0 / Failed: 0" even on a
+        completed run. With the envelope it must surface the real numbers.
+        """
+        mcp = _make_mcp_and_register()
+
+        envelope = {
+            "total": 3,
+            "success": 2,
+            "failed": 1,
+            "probed": 3,
+            "results": [
+                {"stream_id": 10, "stream_name": "Stream 10", "probe_status": "success"},
+                {"stream_id": 11, "stream_name": "Stream 11", "probe_status": "success"},
+                {"stream_id": 12, "stream_name": "Stream 12", "probe_status": "failed",
+                 "error_message": "ffprobe failed: 404 Not Found"},
+            ],
+        }
+
+        client = AsyncMock()
+        client.call_endpoint.return_value = envelope
+
+        with patch("tools.streams.get_ecm_client", return_value=client):
+            result = await mcp.call_tool("probe_bulk_streams", {"stream_ids": [10, 11, 12]})
+
+        text = result[0][0].text
+        assert "Bulk probe completed for 3 streams" in text
+        assert "Success: 2" in text
+        assert "Failed: 1" in text
+        # 0/0 accounting bug must not reappear.
+        assert "Success: 0" not in text
+
+    @pytest.mark.asyncio
+    async def test_lists_failed_streams_with_name_and_error(self):
+        """Failed streams are listed using probe_status/stream_name/error_message keys.
+
+        The per-stream dicts are StreamStats.to_dict() — outcome under
+        probe_status (not status), name under stream_name (not name), error
+        under error_message (not error). Treats anything != success as failed.
+        """
+        mcp = _make_mcp_and_register()
+
+        envelope = {
+            "total": 2,
+            "success": 0,
+            "failed": 2,
+            "probed": 2,
+            "results": [
+                {"stream_id": 12, "stream_name": "Bad Stream", "probe_status": "failed",
+                 "error_message": "ffprobe failed: 404 Not Found"},
+                {"stream_id": 13, "stream_name": "Slow Stream", "probe_status": "timeout",
+                 "error_message": "Probe timed out after 30s"},
+            ],
+        }
+
+        client = AsyncMock()
+        client.call_endpoint.return_value = envelope
+
+        with patch("tools.streams.get_ecm_client", return_value=client):
+            result = await mcp.call_tool("probe_bulk_streams", {"stream_ids": [12, 13]})
+
+        text = result[0][0].text
+        assert "Failed: 2" in text
+        assert "Failed streams:" in text
+        # Name + error surfaced from the correct keys; timeout treated as failed.
+        assert "Bad Stream" in text
+        assert "404 Not Found" in text
+        assert "Slow Stream" in text
+        assert "timed out" in text.lower()

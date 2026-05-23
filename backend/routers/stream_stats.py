@@ -371,7 +371,15 @@ async def get_stream_stats_by_ids(request: BulkStreamIdsRequest):
 # to avoid the path parameter matching "bulk" or "all" as a stream_id
 @router.post("/probe/bulk")
 async def probe_bulk_streams(request: BulkProbeRequest):
-    """Trigger on-demand probe for multiple streams."""
+    """Trigger on-demand probe for multiple streams.
+
+    Returns an envelope with outcome tallies:
+        {total, success, failed, probed, results: [...]}
+    where ``results`` is the list of per-stream StreamStats dicts. ``success``
+    counts results whose ``probe_status`` is "success"; everything else
+    (failed / timeout) counts toward ``failed``. ``probed`` is retained as an
+    alias of ``total`` for backward compatibility.
+    """
     logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/bulk - %d streams", len(request.stream_ids))
 
     prober = ensure_prober()
@@ -404,7 +412,18 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         logger.error("[STREAM-STATS-PROBE] Bulk probe failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
-    logger.info("[STREAM-STATS-PROBE] Bulk probe completed: %s streams probed", len(results))
+    # Tally outcomes so callers (UI, MCP) get success/failed counts directly
+    # instead of having to re-derive them from the per-stream list. Each result
+    # is a StreamStats.to_dict() whose outcome lives under "probe_status"
+    # (values: success / failed / timeout). Anything that isn't "success" counts
+    # as a failure for accounting purposes.
+    success = sum(1 for r in results if r.get("probe_status") == "success")
+    failed = len(results) - success
+
+    logger.info(
+        "[STREAM-STATS-PROBE] Bulk probe completed: %s streams probed (%s success, %s failed)",
+        len(results), success, failed,
+    )
 
     # Trigger smart sort if auto_reorder_after_probe is enabled
     settings = get_settings()
@@ -522,7 +541,13 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         except Exception as e:
             logger.warning("[STREAM-STATS-PROBE] Smart sort after bulk probe failed: %s", e)
 
-    return {"probed": len(results), "results": results}
+    return {
+        "total": len(results),
+        "success": success,
+        "failed": failed,
+        "probed": len(results),  # retained for backward compatibility
+        "results": results,
+    }
 
 
 @router.post("/probe/all")
