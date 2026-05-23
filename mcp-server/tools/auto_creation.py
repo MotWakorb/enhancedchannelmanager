@@ -1,4 +1,5 @@
 """Auto-creation pipeline tools."""
+import asyncio
 import logging
 
 from mcp.server.fastmcp import FastMCP
@@ -7,6 +8,21 @@ from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Polling constants for run_auto_creation (bd-1wq7z.8).
+# Extracted as module-level names so tests can patch them cheaply.
+# ---------------------------------------------------------------------------
+_POLL_INTERVAL_SECONDS: float = 5.0   # seconds between status checks
+_POLL_MAX_ATTEMPTS: int = 120          # cap at 120 × 5 s = 10 minutes
+
+# Terminal statuses that end the poll loop.
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "rolled_back"})
+
+
+async def _poll_sleep(seconds: float) -> None:
+    """Thin asyncio.sleep wrapper — patchable in tests."""
+    await asyncio.sleep(seconds)
 
 
 def _format_analyze_result(result: dict, source: str) -> str:
@@ -103,33 +119,98 @@ def register(mcp: FastMCP):
     async def run_auto_creation(dry_run: bool = True) -> str:
         """Run the auto-creation pipeline to create channels from matching streams.
 
+        The backend returns 202 immediately and runs the pipeline in the
+        background. This tool polls until the run completes (or times out),
+        then reports the real results.
+
         Args:
             dry_run: If true (default), preview what would be created without making changes.
                      Set to false to actually create the channels.
         """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["ac_run"], body={"dry_run": dry_run}, timeout=300.0)
+
+            # Kick off the run. Backend returns 202 + execution_id immediately.
+            kickoff = await client.call_endpoint(
+                ENDPOINTS["ac_run"], body={"dry_run": dry_run}
+            )
+            execution_id = kickoff.get("execution_id")
+            if execution_id is None:
+                logger.error("[MCP] run_auto_creation: no execution_id in 202 response: %s", kickoff)
+                return "Error running auto-creation: backend did not return an execution_id"
+
+            logger.info("[MCP] run_auto_creation started execution_id=%s dry_run=%s", execution_id, dry_run)
+
+            # Poll until the execution reaches a terminal status.
+            result = None
+            for attempt in range(_POLL_MAX_ATTEMPTS):
+                await _poll_sleep(_POLL_INTERVAL_SECONDS)
+                try:
+                    result = await client.call_endpoint(
+                        ENDPOINTS["ac_get_execution"],
+                        path_args={"execution_id": execution_id},
+                    )
+                except Exception as poll_err:
+                    logger.warning(
+                        "[MCP] run_auto_creation poll attempt %d failed: %s",
+                        attempt + 1, poll_err,
+                    )
+                    continue
+
+                status = result.get("status", "")
+                logger.debug(
+                    "[MCP] run_auto_creation poll attempt=%d status=%s",
+                    attempt + 1, status,
+                )
+                if status in _TERMINAL_STATUSES:
+                    break
+            else:
+                # Timed out — return execution_id so the user can check manually.
+                return (
+                    f"Auto-creation run is still running after {_POLL_MAX_ATTEMPTS} polls "
+                    f"(execution_id={execution_id}). "
+                    "Check status with list_auto_creation_executions."
+                )
+
+            # result is now the final execution row.
+            status = result.get("status", "unknown")
+            if status == "failed":
+                err = result.get("error_message") or "unknown error"
+                return (
+                    f"Auto-creation run failed (execution_id={execution_id}): {err}"
+                )
 
             mode = "Dry run" if dry_run else "Execution"
-            lines = [f"Auto-creation {mode} complete:"]
+            dur = result.get("duration_seconds")
+            dur_str = f"{dur:.1f}s" if dur is not None else "N/A"
+
+            lines = [f"Auto-creation {mode} complete (execution_id={execution_id}):"]
             lines.append(f"  Streams evaluated: {result.get('streams_evaluated', 0)}")
             lines.append(f"  Streams matched: {result.get('streams_matched', 0)}")
-            lines.append(f"  Channels {'would be ' if dry_run else ''}created: {result.get('channels_created', 0)}")
+            lines.append(
+                f"  Channels {'would be ' if dry_run else ''}created: "
+                f"{result.get('channels_created', 0)}"
+            )
             lines.append(f"  Channels updated: {result.get('channels_updated', 0)}")
             lines.append(f"  Groups created: {result.get('groups_created', 0)}")
             lines.append(f"  Streams skipped: {result.get('streams_skipped', 0)}")
-            lines.append(f"  Duration: {result.get('duration_seconds', 0):.1f}s")
+            lines.append(f"  Duration: {dur_str}")
 
-            # Show rule match breakdown
+            # Show rule match breakdown (present on some execution shapes)
             rule_counts = result.get("rule_match_counts", {})
             if rule_counts:
                 lines.append(f"  Rule matches: {rule_counts}")
 
-            # Show sample of created entities
-            created = result.get("created_entities", [])
+            # Show sample of planned/created entities
+            if dry_run:
+                created = result.get("dry_run_results", []) or []
+                label = "would be created"
+            else:
+                created = result.get("created_entities", []) or []
+                label = "created"
+
             if created:
-                lines.append(f"\n  Sample channels ({'would be ' if dry_run else ''}created):")
+                lines.append(f"\n  Sample channels ({label}):")
                 for entity in created[:20]:
                     name = entity.get("channel_name", entity.get("name", "?"))
                     num = entity.get("channel_number", "")
@@ -523,8 +604,17 @@ def register(mcp: FastMCP):
             result = await client.call_endpoint(
                 ENDPOINTS["ac_rollback"], path_args={"execution_id": execution_id}, timeout=300.0,
             )
-            deleted = result.get("deleted", result.get("channels_deleted", 0))
-            return f"Execution {execution_id} rolled back. {deleted} channels deleted."
+            # Engine returns entities_removed (channels deleted) and
+            # entities_restored (streams/entities un-merged). Neither
+            # "deleted" nor "channels_deleted" exists in the response shape
+            # — reading those keys always produced 0 (bd-1wq7z.5).
+            removed = result.get("entities_removed", 0)
+            restored = result.get("entities_restored", 0)
+            msg = f"Execution {execution_id} rolled back. {removed} channel(s) deleted"
+            if restored:
+                msg += f", {restored} entit{'y' if restored == 1 else 'ies'} restored"
+            msg += "."
+            return msg
         except Exception as e:
             logger.error("[MCP] rollback_auto_creation failed: %s", e)
             return f"Error rolling back execution {execution_id}: {e}"

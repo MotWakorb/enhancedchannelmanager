@@ -166,6 +166,45 @@ def register(mcp: FastMCP):
             logger.error("[MCP] delete_m3u_account failed: %s", e)
             return f"Error deleting M3U account {account_id}: {e}"
 
+    async def _resolve_group_ids(client, account_id: int, group_names: list[str]) -> tuple[list[dict], list[str]]:
+        """Map a list of group names to the integer channel_group IDs expected by
+        PATCH /api/m3u/accounts/{id}/group-settings.
+
+        The M3U account response embeds ``channel_groups`` — a list of dicts with
+        ``channel_group`` (int id) and ``name`` (str).  This helper fetches the
+        account, builds a name→id map, then returns:
+
+        * A list of ``{"channel_group": <id>, "name": <name>}`` dicts for each
+          matched group name (preserving the order of *group_names*).
+        * A list of unresolved names (those not found in the account).
+
+        Backend expects the structured body — not a flat ``{name: bool}`` dict
+        (bd-1wq7z.7).
+        """
+        account = await client.call_endpoint(
+            ENDPOINTS["m3u_get_account"], path_args={"account_id": account_id}
+        )
+        # channel_groups is embedded in the account; each entry has "channel_group" (int id)
+        # and "name" (str, provided by Dispatcharr).
+        embedded_groups = account.get("channel_groups", []) if isinstance(account, dict) else []
+        # Build case-insensitive name → id map.
+        name_to_id: dict[str, int] = {}
+        for g in embedded_groups:
+            gname = g.get("name", "")
+            gid = g.get("channel_group")
+            if gname and gid is not None:
+                name_to_id[gname.casefold()] = gid
+
+        resolved: list[dict] = []
+        unresolved: list[str] = []
+        for name in group_names:
+            gid = name_to_id.get(name.casefold())
+            if gid is not None:
+                resolved.append({"channel_group": gid, "name": name})
+            else:
+                unresolved.append(name)
+        return resolved, unresolved
+
     @mcp.tool()
     async def update_m3u_group_settings(
         account_id: int,
@@ -181,10 +220,23 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            # PATCH /api/m3u/accounts/{id}/group-settings takes a body keyed by
-            # arbitrary group names — it can't be expressed as one Endpoint with
-            # a fixed request_fields set, so it stays on raw client.patch.
-            await client.patch(f"/api/m3u/accounts/{account_id}/group-settings", json_data={group_name: enabled})  # contract-exempt: dynamic-key body (group names)
+            # Resolve group name → integer channel_group id. The backend
+            # PATCH /api/m3u/accounts/{id}/group-settings expects:
+            # {"group_settings": [{"channel_group": <int id>, "enabled": bool}]}
+            # NOT a flat {name: bool} dict (bd-1wq7z.7).
+            resolved, unresolved = await _resolve_group_ids(client, account_id, [group_name])
+            if unresolved:
+                return (
+                    f"Group '{group_name}' not found on M3U account {account_id}. "
+                    f"Check the group name and try again."
+                )
+            group_entry = resolved[0]
+            body = {
+                "group_settings": [
+                    {"channel_group": group_entry["channel_group"], "enabled": enabled}
+                ]
+            }
+            await client.patch(f"/api/m3u/accounts/{account_id}/group-settings", json_data=body)  # contract-exempt: dynamic-key body (group names)
             state = "enabled" if enabled else "disabled"
             return f"Group '{group_name}' {state} on M3U account {account_id}."
         except Exception as e:
@@ -204,10 +256,30 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            # Dynamic-key body (group names) — see update_m3u_group_settings.
-            await client.patch(f"/api/m3u/accounts/{account_id}/group-settings", json_data=groups)  # contract-exempt: dynamic-key body (group names)
-            changes = [f"{'enabled' if v else 'disabled'} '{k}'" for k, v in groups.items()]
-            return f"Updated {len(groups)} groups on M3U account {account_id}:\n  " + "\n  ".join(changes)
+            # Resolve all group names → integer channel_group ids. Backend
+            # expects {"group_settings": [{"channel_group": <id>, "enabled": bool}]}.
+            resolved, unresolved = await _resolve_group_ids(client, account_id, list(groups.keys()))
+
+            group_settings = [
+                {"channel_group": g["channel_group"], "enabled": groups[g["name"]]}
+                for g in resolved
+            ]
+            body = {"group_settings": group_settings}
+            await client.patch(f"/api/m3u/accounts/{account_id}/group-settings", json_data=body)  # contract-exempt: dynamic-key body (group names)
+
+            changes = [
+                f"{'enabled' if groups[g['name']] else 'disabled'} '{g['name']}'"
+                for g in resolved
+            ]
+            lines = [f"Updated {len(resolved)} groups on M3U account {account_id}:"]
+            if changes:
+                lines.append("  " + "\n  ".join(changes))
+            if unresolved:
+                lines.append(
+                    f"  WARNING: {len(unresolved)} group(s) not found: "
+                    + ", ".join(f"'{n}'" for n in unresolved)
+                )
+            return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] bulk_update_m3u_group_settings failed: %s", e)
             return f"Error updating group settings: {e}"
