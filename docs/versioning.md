@@ -42,7 +42,7 @@ History — why this guard exists:
 
 Version `0.16.0` was tagged and pushed to GHCR on 2026-04-20 and then **hard-rolled-back the same day** — the tag, GitHub Release, and GHCR image were all deleted before any external consumer pulled them. See [`docs/runbooks/v0.16.0-rollback.md`](runbooks/v0.16.0-rollback.md) for the full incident and [ADR-004](adr/ADR-004-release-cut-promotion-discipline.md) for the pre-cut gate that now blocks a repeat.
 
-Because of the rollback, the current dev stream is still on `0.16.0-NNNN`. Per PO decision (grooming 2026-04-22, bd-eio04.10), there is no `0.16.1` release cut planned — dev continues to increment `BUILD` until a full `0.17.0` cut. External users running `0.16.0-NNNN` images are on dev builds, not a promoted release; the `[Unreleased]` section of [`CHANGELOG.md`](../CHANGELOG.md) is the canonical list of fixes awaiting a cut.
+The 0.16.x line was never re-cut after the yank. As of the 0.17.2 cut, three subsequent releases have since been promoted: **0.17.0** (2026-05-16), **0.17.1** (2026-05-22), and **0.17.2** (2026-05-23). `dev` now increments `BUILD` toward the next planned release as `0.18.0-NNNN` (tip is `0.18.0-0000` after the 0.17.2 cut). External users running `0.18.0-NNNN` images are on dev builds, not a promoted release; the `[Unreleased]` section of [`CHANGELOG.md`](../CHANGELOG.md) is the canonical list of fixes awaiting the next cut.
 
 ## Where to read the version
 
