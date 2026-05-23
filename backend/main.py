@@ -790,6 +790,42 @@ async def startup_event():
     except Exception as e:
         logger.warning("[MAIN] Could not ensure Title Case rule: %s", e)
 
+    # Backfill tag_group_id on strip rules that were never wired (znc76.3).
+    # Pre-existing installs have tag_group rules with NULL tag_group_id, so the
+    # engine matcher short-circuits and the strips never fire. This repairs the
+    # config drift so quality/country/etc. tags get stripped again.
+    try:
+        from normalization_migration import backfill_tag_group_rule_ids
+        session = get_session()
+        try:
+            result = backfill_tag_group_rule_ids(session)
+            if result.get("rules_wired", 0) > 0:
+                logger.info(
+                    "[MAIN] Backfilled tag_group_id on %s normalization rule(s)",
+                    result["rules_wired"]
+                )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not backfill tag_group rule ids: %s", e)
+
+    # Ensure US/UK/EU are in Abbreviation Tags so Title Case preserves them
+    # (otherwise US -> Us). Companion repair to the tag_group_id backfill.
+    try:
+        from normalization_migration import ensure_abbreviation_tags_acronyms
+        session = get_session()
+        try:
+            result = ensure_abbreviation_tags_acronyms(session)
+            if result.get("tags_added", 0) > 0:
+                logger.info(
+                    "[MAIN] Added %s acronym(s) to Abbreviation Tags",
+                    result["tags_added"]
+                )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not ensure Abbreviation Tags acronyms: %s", e)
+
     # Repair duplicate auto-creation rule priorities
     try:
         from models import AutoCreationRule
