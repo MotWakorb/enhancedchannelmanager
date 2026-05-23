@@ -52,7 +52,9 @@ def register(mcp: FastMCP):
         """List all normalization rule groups and their rules."""
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["normalization_list_groups"])
+            # Use the /rules endpoint — it returns groups WITH nested rules.
+            # The /groups endpoint returns group metadata only (no rules).
+            result = await client.call_endpoint(ENDPOINTS["normalization_list_rules"])
 
             groups = result.get("groups", []) if isinstance(result, dict) else result
 
@@ -64,11 +66,11 @@ def register(mcp: FastMCP):
                 name = g.get("name", "Unknown")
                 gid = g.get("id", "?")
                 enabled = "enabled" if g.get("enabled", True) else "disabled"
-                rules = g.get("rules", [])
+                rules = g.get("rules") or []
                 lines.append(f"\n  {name} (id={gid}) — {enabled}, {len(rules)} rules")
                 for r in rules[:5]:
-                    rname = r.get("name", r.get("pattern", "?"))
-                    rtype = r.get("type", "?")
+                    rname = r.get("name", "?")
+                    rtype = r.get("action_type", r.get("condition_type", "?"))
                     lines.append(f"    - {rname} ({rtype})")
                 if len(rules) > 5:
                     lines.append(f"    ... and {len(rules) - 5} more")

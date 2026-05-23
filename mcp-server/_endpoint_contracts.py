@@ -510,6 +510,14 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/normalization/groups",
     ),
+    # GET /api/normalization/rules — returns {"groups": [{group fields...,
+    # "rules": [{rule fields...}]}]}.  Used by list_normalization_rules so
+    # rule counts and names are available (groups-only endpoint has no rules).
+    "normalization_list_rules": Endpoint(
+        name="normalization_list_rules",
+        method="GET",
+        path="/api/normalization/rules",
+    ),
     # -- notifications domain ---------------------------------------------
     "notifications_list": Endpoint(
         name="notifications_list",
