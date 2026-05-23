@@ -9,6 +9,39 @@ from ecm_client import get_ecm_client
 logger = logging.getLogger(__name__)
 
 
+async def _build_channel_uuid_map(client) -> dict:
+    """Fetch all channels and map ``uuid -> {"id", "name"}``.
+
+    Dispatcharr EPG grid program items key the channel by ``channel_uuid``
+    (NOT ``channel_id`` / ``channel_name``), so the grid renderer resolves
+    names and the channel-id filter through the channel list (lq38l.13 #3).
+    A failed lookup degrades to an empty map (caller falls back to the uuid).
+    """
+    uuid_map: dict = {}
+    try:
+        page = 1
+        while True:
+            result = await client.call_endpoint(
+                ENDPOINTS["channels_list"],
+                query={"page": page, "page_size": 500},
+            )
+            if isinstance(result, dict):
+                batch = result.get("results", result.get("channels", []))
+            else:
+                batch = result
+            if not batch:
+                break
+            for c in batch:
+                if isinstance(c, dict) and c.get("uuid"):
+                    uuid_map[c["uuid"]] = {"id": c.get("id"), "name": c.get("name")}
+            if not (isinstance(result, dict) and result.get("next")):
+                break
+            page += 1
+    except Exception as e:  # degrade gracefully
+        logger.warning("[MCP] could not resolve channel names for EPG grid: %s", e)
+    return uuid_map
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def list_epg_sources() -> str:
@@ -304,12 +337,18 @@ def register(mcp: FastMCP):
             # fixed in bd-vtghg Phase 2).
             result = await client.call_endpoint(ENDPOINTS["epg_grid"])
 
-            programs = result if isinstance(result, list) else result.get("programs", [])
+            # Backend returns the raw Dispatcharr grid, whose program items key
+            # the channel by ``channel_uuid`` (not channel_id / channel_name).
+            # Resolve names + the channel-id filter through the channel list.
+            programs = result if isinstance(result, list) else result.get("data", result.get("programs", []))
+
+            uuid_map = await _build_channel_uuid_map(client)
 
             if channel_id is not None:
                 programs = [
                     p for p in programs
-                    if channel_id in (p.get("channel_id"), p.get("channel"))
+                    if (uuid_map.get(p.get("channel_uuid"), {}).get("id") == channel_id)
+                    or channel_id in (p.get("channel_id"), p.get("channel"))
                 ]
 
             if not programs:
@@ -317,10 +356,17 @@ def register(mcp: FastMCP):
 
             lines = [f"EPG Schedule ({min(len(programs), limit)} programs):"]
             for p in programs[:limit]:
-                channel = p.get("channel_name", p.get("channel", "Unknown"))
+                ch_info = uuid_map.get(p.get("channel_uuid"), {})
+                channel = (
+                    ch_info.get("name")
+                    or p.get("channel_name")
+                    or p.get("channel")
+                    or p.get("channel_uuid")
+                    or "Unknown"
+                )
                 title = p.get("title", "Unknown")
                 start = p.get("start", p.get("start_time", "?"))
-                end = p.get("end", p.get("end_time", "?"))
+                end = p.get("stop", p.get("end", p.get("end_time", "?")))
                 lines.append(f"  [{channel}] {title} ({start} - {end})")
 
             if len(programs) > limit:

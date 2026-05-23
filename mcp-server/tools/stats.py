@@ -117,10 +117,14 @@ def register(mcp: FastMCP):
                 name = c.get("channel_name", c.get("name", "Unknown"))
                 watch_time = c.get("total_watch_seconds", c.get("total_watch_time", 0))
                 hours = watch_time / 3600 if watch_time else 0
-                viewers = c.get("unique_viewers", c.get("viewer_count", "?"))
+                # /api/stats/top-watched returns watch_count (distinct sessions),
+                # not a unique-viewer count — render the metric the endpoint
+                # actually provides instead of a fabricated "? unique viewers"
+                # (lq38l.13 #6).
+                watch_count = c.get("watch_count", 0)
                 channel_id = c.get("channel_id", "")
                 id_suffix = f" (id={channel_id})" if channel_id else ""
-                lines.append(f"  {i}. {name}{id_suffix} — {hours:.1f}h watched, {viewers} unique viewers")
+                lines.append(f"  {i}. {name}{id_suffix} — {hours:.1f}h watched, {watch_count} views")
 
             return "\n".join(lines)
         except Exception as e:
