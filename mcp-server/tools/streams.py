@@ -1,4 +1,5 @@
 """Stream management and health tools."""
+import asyncio
 import logging
 import re
 
@@ -595,11 +596,12 @@ def register(mcp: FastMCP):
     async def get_probe_results() -> str:
         """Get results from the most recent completed probe run.
 
-        Note: this envelope is populated only by the scheduled stream probe task,
-        NOT by manual probe_single_stream / probe_bulk_streams calls. To see the
-        outcome of a manual probe, read its return value directly, or use
-        get_stream_health / get_struck_out_streams which draw from persisted
-        per-stream stats. (See bd enhancedchannelmanager-znc76.5.)
+        Populated by the scheduled stream probe task, by probe_streams (probe
+        all), and by probe_bulk_streams (which now runs as a background probe
+        through the same envelope). NOT populated by probe_single_stream, which
+        stays synchronous — read its return value, or use get_stream_health /
+        get_struck_out_streams (persisted per-stream stats) for a single probe.
+        (See bd enhancedchannelmanager-znc76.5.)
         """
         try:
             client = get_ecm_client()
@@ -737,53 +739,93 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def probe_bulk_streams(stream_ids: list[int]) -> str:
-        """Probe multiple streams at once and return health results summary.
+        """Probe multiple streams at once and return a health results summary.
 
-        Note: manual probes triggered here do NOT feed get_probe_results — that
-        "latest probe run" envelope is populated only by the scheduled stream
-        probe task. The per-stream stats ARE persisted, so get_stream_health,
-        get_struck_out_streams, and get_streams_by_ids reflect the new results.
-        Large batches may time out at the gateway (504); probe in smaller
-        batches if that happens. (See bd enhancedchannelmanager-znc76.5.)
+        Starts an asynchronous background probe of the given streams (the same
+        job/progress/results machinery probe_streams uses), then polls progress
+        until it completes and reports the real success/failed counts.
+
+        The probe feeds get_probe_progress / get_probe_results, and the per-stream
+        stats are persisted, so get_stream_health, get_struck_out_streams, and
+        get_streams_by_ids also reflect the new results. Because it is async, it
+        no longer times out at the gateway (504) on larger batches. If a probe is
+        already running, this returns without starting a second one. If the probe
+        is still running when the poll budget is exhausted, this returns a
+        "still running" message — use get_probe_progress / get_probe_results to
+        follow it. (Fixes enhancedchannelmanager-znc76.5.)
 
         Args:
             stream_ids: List of stream IDs to probe
         """
+        # Bounded polling: cap how long we wait for the background probe before
+        # handing back to the caller. ~5 minutes total at 3s intervals — enough
+        # for sizable batches without hanging the tool indefinitely.
+        poll_interval_s = 3.0
+        max_polls = 100
+
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(
-                ENDPOINTS["stream_stats_probe_bulk"], body={"stream_ids": stream_ids}, timeout=300.0,
+            start = await client.call_endpoint(
+                ENDPOINTS["stream_stats_probe_bulk"], body={"stream_ids": stream_ids}, timeout=60.0,
             )
 
-            if isinstance(result, dict):
-                total = result.get("total", len(stream_ids))
-                success = result.get("success", 0)
-                failed = result.get("failed", 0)
-                lines = [
-                    f"Bulk probe completed for {total} streams:",
-                    f"  Success: {success}",
-                    f"  Failed: {failed}",
-                ]
-                results_list = result.get("results", [])
-                if results_list:
-                    # Per-stream results are StreamStats dicts: the outcome is
-                    # under "probe_status" (success/failed/timeout) and the
-                    # human-readable error under "error_message". Anything that
-                    # isn't "success" is a failure for reporting purposes.
-                    failed_streams = [
-                        r for r in results_list if r.get("probe_status") != "success"
-                    ]
-                    if failed_streams:
-                        lines.append("  Failed streams:")
-                        for r in failed_streams[:20]:
-                            name = r.get("stream_name") or f"id={r.get('stream_id', '?')}"
-                            error = r.get("error_message") or "unknown error"
-                            lines.append(f"    - {name}: {error}")
-                        if len(failed_streams) > 20:
-                            lines.append(f"    ... and {len(failed_streams) - 20} more failures")
-                return "\n".join(lines)
+            status = start.get("status") if isinstance(start, dict) else None
+            if status == "already_running":
+                return (
+                    "A stream probe is already in progress, so this bulk probe was "
+                    "not started. Check get_probe_progress, or cancel_probe first."
+                )
 
-            return f"Bulk probe started for {len(stream_ids)} streams. {result}"
+            # Poll progress until the run leaves the in_progress state.
+            final = None
+            for _ in range(max_polls):
+                await asyncio.sleep(poll_interval_s)
+                progress = await client.call_endpoint(ENDPOINTS["stream_stats_probe_progress"])
+                if not progress.get("in_progress"):
+                    final = progress
+                    break
+
+            if final is None:
+                # Poll budget exhausted while still running — don't hang or error.
+                progress = await client.call_endpoint(ENDPOINTS["stream_stats_probe_progress"])
+                current = progress.get("current", 0)
+                total = progress.get("total", len(stream_ids))
+                return (
+                    f"Bulk probe still running ({current}/{total}) after the poll "
+                    "window — check get_probe_progress / get_probe_results for the "
+                    "final outcome."
+                )
+
+            # Completed (or cancelled/failed): report real counts from the
+            # results envelope, falling back to the final progress snapshot.
+            results = await client.call_endpoint(ENDPOINTS["stream_stats_probe_results"])
+            success = results.get("success_count", final.get("success_count", 0))
+            failed = results.get("failed_count", final.get("failed_count", 0))
+            total = final.get("total", len(stream_ids))
+
+            run_status = final.get("status", "completed")
+            if run_status == "cancelled":
+                header = f"Bulk probe cancelled after {success + failed} of {total} streams:"
+            elif run_status == "failed":
+                header = f"Bulk probe failed after {success + failed} of {total} streams:"
+            else:
+                header = f"Bulk probe completed for {total} streams:"
+
+            lines = [
+                header,
+                f"  Success: {success}",
+                f"  Failed: {failed}",
+            ]
+            failed_streams = results.get("failed_streams", [])
+            if failed_streams:
+                lines.append("  Failed streams:")
+                for r in failed_streams[:20]:
+                    name = r.get("name") or f"id={r.get('id', '?')}"
+                    error = r.get("error") or "unknown error"
+                    lines.append(f"    - {name}: {error}")
+                if len(failed_streams) > 20:
+                    lines.append(f"    ... and {len(failed_streams) - 20} more failures")
+            return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] probe_bulk_streams failed: %s", e)
             return f"Error probing streams in bulk: {e}"

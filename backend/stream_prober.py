@@ -2011,6 +2011,128 @@ class StreamProber:
 
         return reordered
 
+    async def _auto_reorder_channels_for_streams(self, probed_stream_ids: list[int]) -> list[dict]:
+        """Reorder only channels that contain one of ``probed_stream_ids``.
+
+        Used by the bulk-by-ID probe (probe_streams_by_ids) so auto-reorder stays
+        scoped to channels the operator actually touched — matching the prior
+        synchronous bulk endpoint's behavior — rather than reordering the whole
+        lineup the way the group-scoped _auto_reorder_channels would.
+        """
+        reordered = []
+        probed_set = set(probed_stream_ids)
+
+        # Fetch all channels and keep those containing a probed stream.
+        all_channels = []
+        page = 1
+        while True:
+            try:
+                result = await self.client.get_channels(page=page, page_size=500)
+                batch = result.get("results", [])
+                if not batch:
+                    break
+                all_channels.extend(batch)
+                if not result.get("next"):
+                    break
+                page += 1
+                if page > 50:  # Safety limit
+                    break
+            except Exception as e:
+                logger.error("[STREAM-PROBE-SORT] Failed to fetch channels page %s for bulk reorder: %s", page, e)
+                break
+
+        affected = [
+            ch for ch in all_channels
+            if any(sid in probed_set for sid in ch.get("streams", []))
+        ]
+        if not affected:
+            return []
+
+        # Build a stats map for every stream across the affected channels.
+        all_stream_ids = list({sid for ch in affected for sid in ch.get("streams", [])})
+        stats_map = {}
+        with get_session() as session:
+            for i in range(0, len(all_stream_ids), 500):
+                chunk = all_stream_ids[i:i + 500]
+                for stat in session.query(StreamStats).filter(StreamStats.stream_id.in_(chunk)).all():
+                    stats_map[stat.stream_id] = stat
+
+        # Build an M3U account map for m3u_priority sorting.
+        stream_m3u_map = {}
+        try:
+            streams_data = await self.client.get_streams_by_ids(all_stream_ids)
+            for s in streams_data:
+                sid = s.get("id", s.get("stream_id"))
+                if sid is not None:
+                    stream_m3u_map[int(sid)] = self._extract_m3u_account_id(s.get("m3u_account"))
+        except Exception as e:
+            logger.warning("[STREAM-PROBE-SORT] Failed to fetch M3U data for bulk reorder: %s", e)
+
+        for ch in affected:
+            channel_id = ch["id"]
+            channel_name = ch.get("name", f"Channel {channel_id}")
+            stream_ids = ch.get("streams", [])
+            if len(stream_ids) < 2:
+                continue
+            sorted_ids = smart_sort_streams(
+                stream_ids=stream_ids,
+                stats_map=stats_map,
+                stream_m3u_map=stream_m3u_map,
+                stream_sort_priority=self.stream_sort_priority,
+                stream_sort_enabled=self.stream_sort_enabled,
+                m3u_account_priorities=self.m3u_account_priorities,
+                deprioritize_failed_streams=self.deprioritize_failed_streams,
+                deprioritize_black_screen=self.deprioritize_black_screen,
+                deprioritize_low_fps=self.deprioritize_low_fps,
+                failed_stream_sort_order=self.failed_stream_sort_order,
+                channel_name=channel_name,
+            )
+            if sorted_ids == stream_ids:
+                continue
+            try:
+                await self.client.update_channel(channel_id, {"streams": sorted_ids})
+            except Exception as e:
+                logger.error("[STREAM-PROBE-SORT] Failed to update channel %s during bulk reorder: %s", channel_id, e)
+                continue
+
+            deprioritized = []
+            for sid in sorted_ids:
+                stat = stats_map.get(sid)
+                if stat:
+                    if getattr(stat, 'is_black_screen', False):
+                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "black_screen"})
+                    elif getattr(stat, 'is_low_fps', False):
+                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "low_fps"})
+                    elif stat.probe_status in ('failed', 'timeout'):
+                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": stat.probe_status})
+
+            desc_parts = [f"Smart sort reordered {len(stream_ids)} streams in '{channel_name}'"]
+            if deprioritized:
+                reasons = {}
+                for d in deprioritized:
+                    reasons.setdefault(d["reason"], []).append(d["name"])
+                reason_strs = []
+                for reason, names in reasons.items():
+                    label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                    reason_strs.append(f"{len(names)} {label}")
+                desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
+
+            journal.log_entry(
+                category="channel",
+                action_type="smart_sort",
+                entity_id=channel_id,
+                entity_name=channel_name,
+                description=" ".join(desc_parts),
+                after_value={"deprioritized": deprioritized} if deprioritized else None,
+            )
+            reordered.append({
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "stream_count": len(stream_ids),
+            })
+
+        return reordered
+
     def _smart_sort_streams(
         self,
         stream_ids: list[int],
@@ -2722,6 +2844,172 @@ class StreamProber:
             # Finalize notification with error status
             await self._finalize_probe_notification()
 
+            return {"status": "failed", "error": str(e), "probed": probed_count}
+        finally:
+            self._probing_in_progress = False
+
+    async def probe_streams_by_ids(self, stream_ids: list[int]):
+        """Probe a specific list of stream IDs in the background (on-demand bulk probe).
+
+        This is the async backing for POST /api/stream-stats/probe/bulk. It reuses
+        the SAME progress / results / history envelope as ``probe_all_streams`` —
+        the very state that ``get_probe_progress``, ``get_probe_results`` and
+        ``get_probe_history`` read — so a manual bulk probe shows up there exactly
+        like a scheduled probe-all run (fixing the results-envelope half of
+        enhancedchannelmanager-znc76.5).
+
+        Unlike ``probe_all_streams`` it is NOT scoped to streams-in-channels: any
+        stream ID that exists in Dispatcharr is probed. It also skips the M3U
+        refresh and channel-capacity gating that the channel-scoped probe-all does
+        (those are meaningful for "probe everything in my lineup", not for an
+        explicit, operator-chosen list). Concurrency is bounded by the same
+        ``max_concurrent_probes`` semaphore probe-all uses.
+
+        Args:
+            stream_ids: Specific stream IDs to probe.
+
+        Returns:
+            Dict envelope: {status, probed, total, success, failed} or
+            {status: "already_running"} if a probe is in progress.
+        """
+        logger.info("[STREAM-PROBE] probe_streams_by_ids called with %s stream IDs", len(stream_ids))
+
+        if self._probing_in_progress:
+            logger.warning("[STREAM-PROBE] Probe already in progress — refusing bulk probe")
+            return {"status": "already_running"}
+
+        # Reset the shared probe envelope (mirrors probe_all_streams setup) so
+        # get_probe_progress / get_probe_results report THIS bulk run.
+        self._probing_in_progress = True
+        self._probe_cancelled = False
+        self._probe_paused = False
+        self._probe_progress_current = 0
+        self._probe_progress_total = 0
+        self._probe_progress_status = "fetching"
+        self._probe_progress_current_stream = ""
+        self._probe_progress_success_count = 0
+        self._probe_progress_failed_count = 0
+        self._probe_progress_skipped_count = 0
+        self._probe_success_streams = []
+        self._probe_failed_streams = []
+        self._probe_skipped_streams = []
+        self._probe_black_screen_streams = []
+        self._probe_progress_black_screen_count = 0
+        self._probe_low_fps_streams = []
+        self._probe_progress_low_fps_count = 0
+        self._account_ramp_state = {}
+
+        probed_count = 0
+        start_time = datetime.utcnow()
+        try:
+            # Fetch all streams once and select the requested IDs (preserving
+            # request order). Streams not found in Dispatcharr are recorded as
+            # failures so the tallies stay honest.
+            all_streams = await self._fetch_all_streams()
+            stream_map = {s["id"]: s for s in all_streams}
+            streams_to_probe = []
+            for sid in stream_ids:
+                stream = stream_map.get(sid)
+                if stream:
+                    streams_to_probe.append(stream)
+                else:
+                    logger.warning("[STREAM-PROBE] Bulk probe: stream %s not found in Dispatcharr", sid)
+                    self._probe_progress_failed_count += 1
+                    self._probe_failed_streams.append(
+                        {"id": sid, "name": f"Stream {sid}", "url": "", "error": "Stream not found"}
+                    )
+                    probed_count += 1
+
+            self._probe_progress_total = len(stream_ids)
+            self._probe_progress_current = probed_count
+            self._probe_progress_status = "probing"
+
+            await self._create_probe_notification(len(stream_ids))
+
+            # Bound concurrency with the same global semaphore probe-all uses.
+            semaphore = asyncio.Semaphore(self.max_concurrent_probes)
+            results_lock = asyncio.Lock()
+
+            async def _probe_one(stream: dict):
+                nonlocal probed_count
+                stream_id = stream["id"]
+                stream_name = stream.get("name", f"Stream {stream_id}")
+                stream_url = stream.get("url", "")
+                m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
+                async with semaphore:
+                    if self._probe_cancelled:
+                        return
+                    self._probe_progress_current_stream = stream_name
+                    result = await self.probe_stream(stream_id, stream_url, stream_name)
+                    probe_status = result.get("probe_status", "failed")
+                    error_message = result.get("error_message", "")
+                    stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
+                    async with results_lock:
+                        if probe_status == "success":
+                            self._probe_progress_success_count += 1
+                            self._probe_success_streams.append(stream_info)
+                            if result.get("is_black_screen", False):
+                                self._probe_progress_black_screen_count += 1
+                                self._probe_black_screen_streams.append(stream_info)
+                            if result.get("is_low_fps", False):
+                                self._probe_progress_low_fps_count += 1
+                                self._probe_low_fps_streams.append(stream_info)
+                        else:
+                            self._probe_progress_failed_count += 1
+                            stream_info["error"] = error_message or "Unknown error"
+                            self._probe_failed_streams.append(stream_info)
+                        probed_count += 1
+                        self._probe_progress_current = probed_count
+                    await self._update_probe_notification()
+
+            if streams_to_probe and not self._probe_cancelled:
+                await asyncio.gather(*[_probe_one(s) for s in streams_to_probe])
+
+            if self._probe_cancelled:
+                self._probe_progress_status = "cancelled"
+            else:
+                self._probe_progress_status = "completed"
+            self._probe_progress_current_stream = ""
+
+            logger.info(
+                "[STREAM-PROBE] Bulk probe completed: %s/%s probed (%s success, %s failed)",
+                probed_count, len(stream_ids),
+                self._probe_progress_success_count, self._probe_progress_failed_count,
+            )
+
+            # Honor auto_reorder_after_probe (opt-in). Unlike probe-all (which can
+            # reorder a whole group), a bulk-by-ID probe only reorders channels
+            # that actually contain a probed stream — matching the prior bulk
+            # endpoint's scope so opted-in users don't lose that behavior.
+            reordered_channels = []
+            if self.auto_reorder_after_probe and not self._probe_cancelled:
+                self._probe_progress_status = "reordering"
+                self._probe_progress_current_stream = "Reordering streams..."
+                try:
+                    reordered_channels = await self._auto_reorder_channels_for_streams(stream_ids)
+                    logger.info("[STREAM-PROBE-SORT] Bulk probe auto-reordered %s channels", len(reordered_channels))
+                except Exception as e:
+                    logger.error("[STREAM-PROBE] Bulk probe auto-reorder failed: %s", e)
+                self._probe_progress_status = "completed"
+                self._probe_progress_current_stream = ""
+
+            # Reuse the shared history + notification finalization path.
+            self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
+            await self._finalize_probe_notification()
+
+            return {
+                "status": "cancelled" if self._probe_cancelled else "completed",
+                "probed": probed_count,
+                "total": len(stream_ids),
+                "success": self._probe_progress_success_count,
+                "failed": self._probe_progress_failed_count,
+            }
+        except Exception as e:
+            logger.exception("[STREAM-PROBE] Bulk probe failed: %s", e)
+            self._probe_progress_status = "failed"
+            self._probe_progress_current_stream = ""
+            self._save_probe_history(start_time, probed_count, error=str(e))
+            await self._finalize_probe_notification()
             return {"status": "failed", "error": str(e), "probed": probed_count}
         finally:
             self._probing_in_progress = False
