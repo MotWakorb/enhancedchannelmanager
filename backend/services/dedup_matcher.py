@@ -45,12 +45,21 @@ inputs, but we short-circuit so the contract is explicit in code).
 from __future__ import annotations
 
 import logging
+import re
 import unicodedata
 from dataclasses import dataclass
 
 from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
+
+# Leading channel-number prefix of the form ``<digits> | `` (e.g.
+# ``5 | US : ESPN 2``). Dispatcharr renders channel numbers as a ``N | ``
+# prefix on the channel name; stripping it before scoring lets a real
+# prefixed channel name match an unprefixed incoming stream name (lq38l.7).
+# Anchored at the start and requires the number+pipe so a legitimate
+# interior ``|`` (e.g. ``HBO | East``) is never touched.
+_CHANNEL_NUMBER_PREFIX_RE = re.compile(r"^\s*\d+\s*\|\s*")
 
 # Hard confidence floor — defense-in-depth integrity constraint per ADR-008
 # §D2. Module-level constant so the settings validator (BD-B) can import the
@@ -86,12 +95,28 @@ class MatchResult:
 def _normalize(value: str) -> str:
     """Universal-fallback normalization (ADR-008 §D2-adjacent).
 
-    NFC unicode normalization → lowercase → strip leading/trailing
-    whitespace. This is the matcher's safety net so callers passing raw
-    M3U-derived names still get a sensible score; BD-D's per-group rule
-    runs *before* this for the richer path.
+    NFC unicode normalization → strip a leading ``N | `` channel-number
+    prefix → lowercase → strip leading/trailing whitespace. This is the
+    matcher's safety net so callers passing raw M3U-derived names still get
+    a sensible score; BD-D's per-group rule runs *before* this for the
+    richer path.
+
+    The channel-number-prefix strip (lq38l.7) removes a leading
+    ``<digits> | `` only — Dispatcharr prepends the channel number to the
+    name (e.g. ``5 | US : ESPN 2``), which otherwise drags the score down
+    against an unprefixed incoming stream name. The regex is anchored at
+    the start, so an interior ``|`` (``HBO | East``) is preserved.
     """
-    return unicodedata.normalize("NFC", value).lower().strip()
+    normalized = unicodedata.normalize("NFC", value)
+    # Strip the leading ``N | `` prefix only when a non-blank name remains
+    # after it. A degenerate name that is *only* a channel-number prefix
+    # (e.g. ``5 | ``) keeps its original form rather than collapsing to an
+    # empty, un-matchable string — preserving the invariant that a non-blank
+    # input never normalizes to empty.
+    stripped = _CHANNEL_NUMBER_PREFIX_RE.sub("", normalized)
+    if stripped.strip():
+        normalized = stripped
+    return normalized.lower().strip()
 
 
 def find_candidate(

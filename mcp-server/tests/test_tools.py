@@ -905,8 +905,8 @@ class TestAddStream:
         assert call.kwargs["body"]["group_id"] == 5
 
     @pytest.mark.asyncio
-    async def test_merge_if_found_above_threshold_auto_accepts(self):
-        """merge_if_found with an at/above-threshold candidate auto-accepts the merge."""
+    async def test_merge_if_found_exact_match_auto_accepts(self):
+        """merge_if_found auto-accepts ONLY on an exact name match (confidence 1.0)."""
         from tools.channels import register
         from mcp.server.fastmcp import FastMCP
         from _endpoint_contracts import ENDPOINTS
@@ -915,7 +915,7 @@ class TestAddStream:
         register(mcp)
 
         # call_endpoint order:
-        #   1st: channel_merges_enqueue → candidate above threshold (merge_id 88)
+        #   1st: channel_merges_enqueue → exact-match candidate (merge_id 88)
         #   2nd: channel_merges_accept → auto-accept the queued merge
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = [
@@ -924,7 +924,7 @@ class TestAddStream:
                 "created": True,
                 "candidate_channel_id": "uuid-fox",
                 "candidate_channel_name": "FOX Network",
-                "confidence": 0.85,
+                "confidence": 1.0,  # exact normalized-name match
                 "meets_threshold": True,
                 "status": "pending",
             },
@@ -932,7 +932,7 @@ class TestAddStream:
                 "merged_into_channel_id": "uuid-fox",
                 "journal_entry_id": 5,
                 "source_stream_id": "303",
-                "confidence": 0.85,
+                "confidence": 1.0,
                 "status": "merged",
             },
         ]
@@ -940,19 +940,69 @@ class TestAddStream:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "add_stream",
-                {"stream_name": "FOX", "group_id": 2, "dedup_action": "merge_if_found"},
+                {"stream_name": "FOX Network", "group_id": 2, "dedup_action": "merge_if_found"},
             )
 
         text = result[0][0].text
         assert "merge_if_found" in text
         assert "FOX Network" in text or "uuid-fox" in text
         assert "merge_id=88" in text
+        # Did NOT fall back to prompt — the row was auto-accepted.
+        assert "pending_merge" not in text
 
         calls = mock_client.call_endpoint.call_args_list
         assert calls[0].args[0] is ENDPOINTS["channel_merges_enqueue"]
         # Auto-accept goes through accept_channel_merge (not direct add-stream).
         assert calls[1].args[0] is ENDPOINTS["channel_merges_accept"]
         assert calls[1].kwargs["path_args"]["merge_id"] == 88
+
+    @pytest.mark.asyncio
+    async def test_merge_if_found_fuzzy_above_threshold_does_not_auto_accept(self):
+        """merge_if_found does NOT auto-accept a fuzzy candidate even above threshold.
+
+        Regression for lq38l.7: a 90% token-set over-match ('US: ESPN 2' vs
+        'US: ESPN U') met the operator threshold and was wrongly auto-merged.
+        Under the exact-match-only rule, any confidence < 1.0 — even with
+        meets_threshold True — must fall back to prompt semantics so the
+        operator/agent confirms via accept/dismiss before the stream attaches.
+        """
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [
+            {
+                "merge_id": 2,
+                "created": True,
+                "candidate_channel_id": "12341",
+                "candidate_channel_name": "US: ESPN U",
+                "confidence": 0.90,  # fuzzy over-match — NOT exact
+                "meets_threshold": True,  # above the operator threshold...
+                "status": "pending",
+            },
+        ]
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "US: ESPN 2", "group_id": 1351, "dedup_action": "merge_if_found"},
+            )
+
+        text = result[0][0].text
+        # ...yet it falls back to prompt — no auto-accept.
+        assert "pending_merge" in text
+        assert "merge_id: 2" in text
+        assert "accept_channel_merge(2)" in text
+        assert "dismiss_channel_merge(2)" in text
+        # Only the enqueue call — accept was NOT invoked for a non-exact match.
+        mock_client.call_endpoint.assert_awaited_once()
+        called_endpoints = [c.args[0] for c in mock_client.call_endpoint.call_args_list]
+        assert ENDPOINTS["channel_merges_enqueue"] in called_endpoints
+        assert ENDPOINTS["channel_merges_accept"] not in called_endpoints
 
     @pytest.mark.asyncio
     async def test_merge_if_found_below_threshold_enqueues_and_prompts(self):
@@ -965,7 +1015,7 @@ class TestAddStream:
         register(mcp)
 
         # The enqueue returns a candidate above the floor but below the
-        # auto-merge threshold → meets_threshold False → prompt fallback.
+        # auto-merge threshold → not exact → prompt fallback.
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = [
             {
