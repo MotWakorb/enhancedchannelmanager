@@ -115,17 +115,34 @@ class TestListM3UAccounts:
 
     @pytest.mark.asyncio
     async def test_returns_accounts(self):
-        """Returns formatted M3U account list."""
+        """Returns formatted M3U account list with stream count derived via streams_list."""
         from tools.m3u import register
         from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
 
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(call_endpoint=[
-            {"id": 1, "name": "Provider A", "stream_count": 5000, "status": "success"},
-            {"id": 2, "name": "Provider B", "stream_count": 3000, "status": "error"},
-        ])
+        # stream_count is NOT in the Dispatcharr account payload; the tool
+        # derives it by calling streams_list with m3u_account=<id>&page_size=1.
+        # Use side_effect to return the right value per endpoint call.
+        async def call_endpoint_side_effect(endpoint, **kwargs):
+            if endpoint.name == "m3u_list_providers":
+                return [
+                    {"id": 1, "name": "Provider A", "server_url": "http://provider-a.example.com/m3u", "status": "active"},
+                    {"id": 2, "name": "Provider B", "server_url": "http://provider-b.example.com/m3u", "status": "error"},
+                ]
+            if endpoint.name == "streams_list":
+                query = kwargs.get("query", {})
+                m3u_id = query.get("m3u_account")
+                if m3u_id == 1:
+                    return {"count": 5000, "results": []}
+                if m3u_id == 2:
+                    return {"count": 3000, "results": []}
+            return {}
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = call_endpoint_side_effect
 
         with patch("tools.m3u.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_m3u_accounts", {})
@@ -888,8 +905,8 @@ class TestAddStream:
         assert call.kwargs["body"]["group_id"] == 5
 
     @pytest.mark.asyncio
-    async def test_merge_if_found_above_threshold_auto_accepts(self):
-        """merge_if_found with an at/above-threshold candidate auto-accepts the merge."""
+    async def test_merge_if_found_exact_match_auto_accepts(self):
+        """merge_if_found auto-accepts ONLY on an exact name match (confidence 1.0)."""
         from tools.channels import register
         from mcp.server.fastmcp import FastMCP
         from _endpoint_contracts import ENDPOINTS
@@ -898,7 +915,7 @@ class TestAddStream:
         register(mcp)
 
         # call_endpoint order:
-        #   1st: channel_merges_enqueue → candidate above threshold (merge_id 88)
+        #   1st: channel_merges_enqueue → exact-match candidate (merge_id 88)
         #   2nd: channel_merges_accept → auto-accept the queued merge
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = [
@@ -907,7 +924,7 @@ class TestAddStream:
                 "created": True,
                 "candidate_channel_id": "uuid-fox",
                 "candidate_channel_name": "FOX Network",
-                "confidence": 0.85,
+                "confidence": 1.0,  # exact normalized-name match
                 "meets_threshold": True,
                 "status": "pending",
             },
@@ -915,7 +932,7 @@ class TestAddStream:
                 "merged_into_channel_id": "uuid-fox",
                 "journal_entry_id": 5,
                 "source_stream_id": "303",
-                "confidence": 0.85,
+                "confidence": 1.0,
                 "status": "merged",
             },
         ]
@@ -923,19 +940,69 @@ class TestAddStream:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "add_stream",
-                {"stream_name": "FOX", "group_id": 2, "dedup_action": "merge_if_found"},
+                {"stream_name": "FOX Network", "group_id": 2, "dedup_action": "merge_if_found"},
             )
 
         text = result[0][0].text
         assert "merge_if_found" in text
         assert "FOX Network" in text or "uuid-fox" in text
         assert "merge_id=88" in text
+        # Did NOT fall back to prompt — the row was auto-accepted.
+        assert "pending_merge" not in text
 
         calls = mock_client.call_endpoint.call_args_list
         assert calls[0].args[0] is ENDPOINTS["channel_merges_enqueue"]
         # Auto-accept goes through accept_channel_merge (not direct add-stream).
         assert calls[1].args[0] is ENDPOINTS["channel_merges_accept"]
         assert calls[1].kwargs["path_args"]["merge_id"] == 88
+
+    @pytest.mark.asyncio
+    async def test_merge_if_found_fuzzy_above_threshold_does_not_auto_accept(self):
+        """merge_if_found does NOT auto-accept a fuzzy candidate even above threshold.
+
+        Regression for lq38l.7: a 90% token-set over-match ('US: ESPN 2' vs
+        'US: ESPN U') met the operator threshold and was wrongly auto-merged.
+        Under the exact-match-only rule, any confidence < 1.0 — even with
+        meets_threshold True — must fall back to prompt semantics so the
+        operator/agent confirms via accept/dismiss before the stream attaches.
+        """
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [
+            {
+                "merge_id": 2,
+                "created": True,
+                "candidate_channel_id": "12341",
+                "candidate_channel_name": "US: ESPN U",
+                "confidence": 0.90,  # fuzzy over-match — NOT exact
+                "meets_threshold": True,  # above the operator threshold...
+                "status": "pending",
+            },
+        ]
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "US: ESPN 2", "group_id": 1351, "dedup_action": "merge_if_found"},
+            )
+
+        text = result[0][0].text
+        # ...yet it falls back to prompt — no auto-accept.
+        assert "pending_merge" in text
+        assert "merge_id: 2" in text
+        assert "accept_channel_merge(2)" in text
+        assert "dismiss_channel_merge(2)" in text
+        # Only the enqueue call — accept was NOT invoked for a non-exact match.
+        mock_client.call_endpoint.assert_awaited_once()
+        called_endpoints = [c.args[0] for c in mock_client.call_endpoint.call_args_list]
+        assert ENDPOINTS["channel_merges_enqueue"] in called_endpoints
+        assert ENDPOINTS["channel_merges_accept"] not in called_endpoints
 
     @pytest.mark.asyncio
     async def test_merge_if_found_below_threshold_enqueues_and_prompts(self):
@@ -948,7 +1015,7 @@ class TestAddStream:
         register(mcp)
 
         # The enqueue returns a candidate above the floor but below the
-        # auto-merge threshold → meets_threshold False → prompt fallback.
+        # auto-merge threshold → not exact → prompt fallback.
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = [
             {
@@ -1207,7 +1274,9 @@ class TestListTasksEnvelopeUnwrap:
 
     @pytest.mark.asyncio
     async def test_unwraps_tasks_envelope(self):
-        """Backend returns {"tasks": [...]}; tool must iterate the list, not dict keys."""
+        """Backend returns {"tasks": [...]}; tool must iterate the list, not dict keys.
+        Backend uses task_name (not name) for the human-readable label (lq38l.1).
+        """
         from tools.tasks import register
         from mcp.server.fastmcp import FastMCP
 
@@ -1216,8 +1285,8 @@ class TestListTasksEnvelopeUnwrap:
 
         mock_client = _make_ecm_client_mock(call_endpoint={
             "tasks": [
-                {"task_id": "m3u_refresh", "name": "M3U Refresh", "enabled": True, "status": "idle", "last_run": "2026-05-22"},
-                {"task_id": "stream_probe", "name": "Stream Probe", "enabled": False, "status": "idle", "last_run": "never"},
+                {"task_id": "m3u_refresh", "task_name": "M3U Refresh", "enabled": True, "status": "idle", "last_run": "2026-05-22"},
+                {"task_id": "stream_probe", "task_name": "Stream Probe", "enabled": False, "status": "idle", "last_run": "never"},
             ]
         })
 
@@ -1229,6 +1298,7 @@ class TestListTasksEnvelopeUnwrap:
         assert "M3U Refresh" in text
         assert "Stream Probe" in text
         assert "m3u_refresh" in text
+        assert "Unknown" not in text
         assert "has no attribute" not in text
 
     @pytest.mark.asyncio
@@ -1246,6 +1316,76 @@ class TestListTasksEnvelopeUnwrap:
             result = await mcp.call_tool("list_tasks", {})
 
         assert "No tasks" in result[0][0].text
+
+
+class TestListTasksTaskNameRendering:
+    """list_tasks reads task_name (not name) from backend payload (lq38l.1)."""
+
+    @pytest.mark.asyncio
+    async def test_task_name_field_rendered(self):
+        """Backend payload carries task_name; tool must render it, not 'Unknown'."""
+        from tools.tasks import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "tasks": [
+                {
+                    "task_id": "epg_refresh",
+                    "task_name": "EPG Refresh",
+                    "enabled": True,
+                    "status": "idle",
+                    "last_run": "never",
+                },
+                {
+                    "task_id": "popularity_calculation",
+                    "task_name": "Stats v2 Rollup & Prune",
+                    "enabled": True,
+                    "status": "running",
+                    "last_run": "2026-05-22T10:00:00Z",
+                },
+            ]
+        })
+
+        with patch("tools.tasks.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_tasks", {})
+
+        text = result[0][0].text
+        assert "EPG Refresh" in text, "task_name must be rendered"
+        assert "Stats v2 Rollup & Prune" in text, "task_name must be rendered"
+        assert "Unknown" not in text, "Unknown must not appear when task_name is present"
+        assert "id=epg_refresh" in text
+        assert "id=popularity_calculation" in text
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_prettified_task_id_when_no_task_name(self):
+        """When task_name is absent, tool prettifies task_id rather than 'Unknown'."""
+        from tools.tasks import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "tasks": [
+                {
+                    "task_id": "stream_probe",
+                    "enabled": True,
+                    "status": "idle",
+                    "last_run": "never",
+                    # no task_name key at all
+                },
+            ]
+        })
+
+        with patch("tools.tasks.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_tasks", {})
+
+        text = result[0][0].text
+        assert "Unknown" not in text, "Unknown must not appear; prettified task_id used instead"
+        assert "stream_probe" in text  # task_id still in output as id=...
 
 
 # --- TestDeleteOrphanedGroupsResultKeys (A1) ---
@@ -2282,3 +2422,162 @@ class TestDeleteAllNotificationsReadOnly:
             f"notifications_delete_all must declare read_only in query_params, "
             f"got query_params={ep.query_params}"
         )
+
+
+# --- TestListNormalizationRules (lq38l.2) ---
+class TestListNormalizationRules:
+    """list_normalization_rules sources rule data from /rules (not /groups) endpoint.
+
+    The /groups endpoint returns group metadata only — no nested rules, no
+    rule count.  The /rules endpoint returns groups WITH rules nested.
+    This class pins that the fix is in place and stays in place.
+    """
+
+    @pytest.mark.asyncio
+    async def test_shows_nonzero_rule_count_and_names(self):
+        """Groups with rules show correct count and up to 5 rule names."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [
+                {
+                    "id": 1,
+                    "name": "Title Case",
+                    "enabled": True,
+                    "priority": 0,
+                    "rules": [
+                        {"id": 10, "name": "Title-case all", "action_type": "replace", "condition_type": "always", "enabled": True},
+                        {"id": 11, "name": "Fix abbreviations", "action_type": "replace", "condition_type": "regex", "enabled": True},
+                    ],
+                },
+                {
+                    "id": 2,
+                    "name": "Strip Quality",
+                    "enabled": True,
+                    "priority": 1,
+                    "rules": [
+                        {"id": 20, "name": "Strip HD suffix", "action_type": "strip_suffix", "condition_type": "ends_with", "enabled": True},
+                        {"id": 21, "name": "Strip FHD", "action_type": "remove", "condition_type": "contains", "enabled": True},
+                        {"id": 22, "name": "Strip 4K", "action_type": "remove", "condition_type": "contains", "enabled": True},
+                    ],
+                },
+            ]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        # Correct group count.
+        assert "2 groups" in text
+        # Group names present.
+        assert "Title Case" in text
+        assert "Strip Quality" in text
+        # Non-zero rule counts — the key regression guard.
+        assert "2 rules" in text
+        assert "3 rules" in text
+        # Rule names surface.
+        assert "Title-case all" in text
+        assert "Strip HD suffix" in text
+        # Called the rules endpoint, not the groups-only endpoint.
+        mock_client.call_endpoint.assert_awaited_once_with(ENDPOINTS["normalization_list_rules"])
+
+    @pytest.mark.asyncio
+    async def test_empty_groups(self):
+        """Empty groups list returns 'no rules' message."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={"groups": []})
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        assert "No normalization rules" in result[0][0].text
+
+    @pytest.mark.asyncio
+    async def test_group_with_zero_rules_shows_zero(self):
+        """A group whose rules list is empty renders '0 rules' (not crashing)."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [
+                {"id": 5, "name": "Empty Group", "enabled": True, "priority": 0, "rules": []},
+            ]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        assert "Empty Group" in text
+        assert "0 rules" in text
+
+    @pytest.mark.asyncio
+    async def test_more_than_five_rules_truncated(self):
+        """When a group has >5 rules, only 5 names are shown plus an overflow line."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        rules = [
+            {"id": i, "name": f"Rule {i}", "action_type": "remove", "condition_type": "contains", "enabled": True}
+            for i in range(1, 9)
+        ]
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [{"id": 3, "name": "Big Group", "enabled": True, "priority": 0, "rules": rules}]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        assert "8 rules" in text
+        assert "Rule 1" in text
+        assert "Rule 5" in text
+        # Rule 6-8 are suppressed — the overflow line must appear.
+        assert "3 more" in text
+
+    @pytest.mark.asyncio
+    async def test_group_with_none_rules_key_handled_gracefully(self):
+        """A group where 'rules' key is None or absent does not crash."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [
+                {"id": 7, "name": "No Key Group", "enabled": False, "priority": 0},
+            ]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        assert "No Key Group" in text
+        assert "0 rules" in text
+
+    def test_normalization_list_rules_endpoint_registered(self):
+        """The normalization_list_rules endpoint is in the registry with correct method/path."""
+        from _endpoint_contracts import ENDPOINTS
+
+        ep = ENDPOINTS["normalization_list_rules"]
+        assert ep.method == "GET"
+        assert ep.path == "/api/normalization/rules"

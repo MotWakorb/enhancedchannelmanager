@@ -140,6 +140,36 @@ class TestUpdateEPGSource:
         assert response.status_code == 200
         mock_client.update_epg_source.assert_called_once_with(1, {"name": "New Name"})
 
+    @pytest.mark.asyncio
+    async def test_missing_source_returns_404_not_500(self, async_client):
+        """Updating a nonexistent EPG source surfaces upstream 404 as 404, not 500
+        (bd-lq38l.4). The before-state get_epg_source raises 404."""
+        request = httpx.Request("GET", "http://disp/api/epg/sources/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_epg_source.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.patch("/api/epg/sources/999", json={"name": "New Name"})
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error stays a 500 (bd-lq38l.4)."""
+        mock_client = AsyncMock()
+        mock_client.get_epg_source.side_effect = RuntimeError("boom")
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.patch("/api/epg/sources/1", json={"name": "New Name"})
+
+        assert response.status_code == 500
+
 
 class TestDeleteEPGSource:
     """Tests for DELETE /api/epg/sources/{source_id}."""
@@ -157,6 +187,24 @@ class TestDeleteEPGSource:
 
         assert response.status_code == 200
         assert response.json()["status"] == "deleted"
+
+    @pytest.mark.asyncio
+    async def test_missing_source_returns_404_not_500(self, async_client):
+        """Deleting a nonexistent EPG source surfaces upstream 404 as 404, not 500
+        (bd-lq38l.4)."""
+        request = httpx.Request("GET", "http://disp/api/epg/sources/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_epg_source.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.delete("/api/epg/sources/999")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestRefreshEPGSource:
@@ -176,6 +224,25 @@ class TestRefreshEPGSource:
             response = await async_client.post("/api/epg/sources/1/refresh")
 
         assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_missing_source_returns_404_not_500(self, async_client):
+        """Refreshing a nonexistent EPG source surfaces upstream 404 as 404, not
+        500 (bd-lq38l.4). The initial get_epg_source raises 404."""
+        request = httpx.Request("GET", "http://disp/api/epg/sources/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_epg_source.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.send_alert", new=AsyncMock()), \
+             patch("routers.epg.asyncio.create_task"):
+            response = await async_client.post("/api/epg/sources/999/refresh")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestTriggerEPGImport:

@@ -309,13 +309,16 @@ def register(mcp: FastMCP):
         * ``force_new`` — skip dedup entirely; always create a new channel
           regardless of any existing match.
         * ``merge_if_found`` — async-queue the candidate, then auto-accept it
-          when its confidence is at or above the operator-configured threshold
-          (the merge is applied and the row resolved for you).  When the
-          confidence is below the threshold (but above the ADR-008 §D2 floor),
-          fall back to ``prompt`` semantics: the row stays queued and the
-          ``merge_id`` is returned for you to ``accept_channel_merge`` /
-          ``dismiss_channel_merge``.  If no candidate is found, proceed with
-          normal channel creation.
+          **only on an exact normalized-name match** (the enqueue response's
+          ``confidence`` is ``1.0``).  An exact match is the only signal strong
+          enough to merge without confirmation; any fuzzy candidate
+          (``confidence < 1.0``), even one above the operator's auto-merge
+          threshold, falls back to ``prompt`` semantics — the row stays queued
+          and the ``merge_id`` is returned for you to ``accept_channel_merge`` /
+          ``dismiss_channel_merge`` so the merge target is confirmed before the
+          stream is attached (lq38l.7: a 90% token-set over-match auto-merged
+          'US: ESPN 2' into 'US: ESPN U').  If no candidate is found, proceed
+          with normal channel creation.
 
         In all cases where channel creation proceeds, the tool creates a new
         channel with the stream name as the channel name, assigns it to
@@ -374,9 +377,15 @@ def register(mcp: FastMCP):
                     candidate_channel_id = enqueue_resp.get("candidate_channel_id", "?")
                     candidate_channel_name = enqueue_resp.get("candidate_channel_name", "?")
                     confidence = enqueue_resp.get("confidence", 0.0)
-                    meets_threshold = bool(enqueue_resp.get("meets_threshold"))
+                    # Auto-accept ONLY on an exact normalized-name match
+                    # (confidence == 1.0). The matcher emits 1.0 exclusively
+                    # for an exact match (dedup_matcher._normalize equality);
+                    # any fuzzy candidate — even above the operator's
+                    # meets_threshold — must be confirmed via accept/dismiss
+                    # rather than auto-merged (lq38l.7).
+                    is_exact_match = (confidence or 0.0) >= 1.0
 
-                    if dedup_action == "merge_if_found" and meets_threshold:
+                    if dedup_action == "merge_if_found" and is_exact_match:
                         # Auto-accept the queued merge — accept_channel_merge
                         # applies the Dispatcharr-side merge and resolves the
                         # row, with the full §D6 audit trail.
@@ -405,11 +414,11 @@ def register(mcp: FastMCP):
                             f"via merge_id={merge_id}."
                         )
 
-                    # prompt, OR merge_if_found below-threshold fallback: the row
-                    # is queued; hand the merge_id to the agent to accept/dismiss.
+                    # prompt, OR merge_if_found non-exact fallback: the row is
+                    # queued; hand the merge_id to the agent to accept/dismiss.
                     fallback_note = (
-                        " (below the auto-merge threshold — falling back to "
-                        "prompt semantics)"
+                        " (not an exact name match — falling back to prompt "
+                        "semantics for operator confirmation)"
                         if dedup_action == "merge_if_found"
                         else ""
                     )
@@ -602,15 +611,48 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
+            # Guard against silent detachment: the backend treats the supplied
+            # list as the AUTHORITATIVE full stream set, so any omitted current
+            # stream is dropped and an empty list clears the channel. Reorder is
+            # a *pure* reorder — only proceed when stream_ids is a permutation of
+            # the channel's current streams (bd-lq38l.3).
+            channel = await client.call_endpoint(
+                ENDPOINTS["channels_get"], path_args={"channel_id": channel_id}
+            )
+            current_ids = list(channel.get("streams", []) or []) if isinstance(channel, dict) else []
+            current_set = set(current_ids)
+
+            if not stream_ids:
+                return (
+                    f"Refused to reorder channel {channel_id}: an empty stream_ids list "
+                    f"would clear all {len(current_ids)} streams. reorder_streams only "
+                    f"changes priority — use remove_stream_from_channel to detach streams."
+                )
+
+            supplied_set = set(stream_ids)
+            dropped = [sid for sid in current_ids if sid not in supplied_set]
+            foreign = [sid for sid in stream_ids if sid not in current_set]
+            if dropped or foreign:
+                parts = []
+                if dropped:
+                    parts.append(f"omits current stream(s) {dropped} (they would be detached)")
+                if foreign:
+                    parts.append(f"includes stream(s) {foreign} not on this channel")
+                return (
+                    f"Refused to reorder channel {channel_id}: stream_ids is not a "
+                    f"permutation of the channel's current streams {current_ids} — it "
+                    f"{' and '.join(parts)}. reorder_streams only changes priority. "
+                    f"Use bulk_add_streams_to_channel to add streams or "
+                    f"remove_stream_from_channel to detach them."
+                )
+
             result = await client.call_endpoint(
                 ENDPOINTS["channels_reorder_streams"],
                 path_args={"channel_id": channel_id},
                 body={"stream_ids": stream_ids},
             )
-            # reorder-streams is a pure reorder: the backend rejects (HTTP 400)
-            # any list that isn't a permutation of the channel's current streams,
-            # so it can't silently detach streams. Report the order the backend
-            # confirmed rather than blindly echoing the input.
+            # Report the order the backend confirmed rather than blindly echoing
+            # the input.
             new_order = result.get("streams", stream_ids) if isinstance(result, dict) else stream_ids
             return f"Streams reordered for channel {channel_id}. New order: {new_order}"
         except Exception as e:
@@ -652,13 +694,23 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
+            # Self-merge guard: merging a channel into itself absorbs+deletes the
+            # target, destroying it while the backend still reports success. Reject
+            # before any backend call (bd-lq38l.5a).
+            if target_channel_id in source_channel_ids:
+                return (
+                    f"Refused to merge: target channel {target_channel_id} appears in "
+                    f"source_channel_ids — merging a channel into itself would delete it. "
+                    f"Remove {target_channel_id} from the sources."
+                )
+
             # Routes through POST /api/channels/bulk-merge with a single merge
             # item — the backend's POST /api/channels/merge endpoint creates a
             # *new* channel from a `target_name` and never accepted
             # `target_channel_id` (the old payload here was silently 422'd —
             # contract drift fixed in bd-vtghg Phase 1). bulk-merge has the
             # "keep target channel, absorb sources" semantics this tool wants.
-            await client.call_endpoint(
+            result = await client.call_endpoint(
                 ENDPOINTS["channels_bulk_merge"],
                 body={"merges": [{
                     "target_channel_id": target_channel_id,
@@ -666,7 +718,28 @@ def register(mcp: FastMCP):
                 }]},
                 timeout=300.0,
             )
-            merged = len(source_channel_ids)
+
+            # Validate the per-result outcome rather than reporting the requested
+            # count as merged: a nonexistent target reports success at the wrapper
+            # level but fails per-result (bd-lq38l.5b). Mirror the per-result
+            # checking in bulk_merge_duplicate_channels.
+            results = result.get("results", []) if isinstance(result, dict) else []
+            outcome = next(
+                (r for r in results if r.get("target_channel_id") == target_channel_id),
+                results[0] if results else None,
+            )
+            if outcome is not None and not outcome.get("success", False):
+                return (
+                    f"Merge failed for channel {target_channel_id}: "
+                    f"{outcome.get('error', 'unknown error')}. No channels were merged."
+                )
+            if outcome is None:
+                return (
+                    f"Merge into channel {target_channel_id} returned no result — "
+                    f"nothing was merged."
+                )
+
+            merged = outcome.get("sources_deleted", len(source_channel_ids))
             return f"Merged {merged} channels into channel {target_channel_id}."
         except Exception as e:
             logger.error("[MCP] merge_channels failed: %s", e)
@@ -987,8 +1060,18 @@ def register(mcp: FastMCP):
                 issues = bulk_result.get("validationIssues", [])
                 return f"Bulk create failed: {issues[:5]}"
 
-            # Step 2: Fetch newly created channels from the group
-            created_channels = []
+            # Identify ONLY the channels created by THIS call via the bulk-commit
+            # tempId -> realId map. Counting/matching all channels in the group
+            # would (mis)report pre-existing channels as created and run the
+            # fuzzy-match pass over them (bd-lq38l.6). Fall back to name+number
+            # identification if tempIdMap is absent.
+            temp_id_map = bulk_result.get("tempIdMap") or {}
+            created_real_ids = {int(v) for v in temp_id_map.values()}
+            requested_keys = {(ch["name"], ch["number"]) for ch in channels}
+
+            # Step 2: Fetch channels from the group, then filter to only the ones
+            # created by this call.
+            group_channels = []
             page = 1
             while True:
                 result = await client.get(  # contract-exempt: see above
@@ -1000,10 +1083,21 @@ def register(mcp: FastMCP):
                     batch = result
                 if not batch:
                     break
-                created_channels.extend(batch)
+                group_channels.extend(batch)
                 if isinstance(result, dict) and not result.get("next"):
                     break
                 page += 1
+
+            if created_real_ids:
+                created_channels = [
+                    ch for ch in group_channels if ch.get("id") in created_real_ids
+                ]
+            else:
+                # Fallback: match on (name, channel_number) requested by this call.
+                created_channels = [
+                    ch for ch in group_channels
+                    if (ch.get("name"), ch.get("channel_number")) in requested_keys
+                ]
 
             # Step 3: For each channel with 0 streams, fuzzy-match a stream
             # Import shared fuzzy matching from streams module

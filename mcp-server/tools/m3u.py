@@ -24,9 +24,21 @@ def register(mcp: FastMCP):
             for p in providers:
                 name = p.get("name", "Unknown")
                 pid = p.get("id", "?")
-                stream_count = p.get("stream_count", 0)
-                status = p.get("status", "unknown")
-                lines.append(f"  {name} (id={pid}) — {stream_count} streams, status: {status}")
+                # Dispatcharr payload uses server_url; there is no stream_count
+                # in the account payload — derive it via a page_size=1 probe.
+                stream_count_str = ""
+                if pid != "?":
+                    try:
+                        sc_resp = await client.call_endpoint(
+                            ENDPOINTS["streams_list"],
+                            query={"m3u_account": pid, "page_size": 1, "enrich": False},
+                        )
+                        stream_count = sc_resp.get("count", 0) if isinstance(sc_resp, dict) else 0
+                        stream_count_str = f"{stream_count} streams, "
+                    except Exception:
+                        pass
+                status = p.get("status", p.get("is_active", "unknown"))
+                lines.append(f"  {name} (id={pid}) — {stream_count_str}status: {status}")
 
             return "\n".join(lines)
         except Exception as e:
@@ -74,13 +86,28 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
             a = await client.call_endpoint(ENDPOINTS["m3u_get_account"], path_args={"account_id": account_id})
 
+            # Dispatcharr payload: server_url holds the URL; stream_count is
+            # not present in the account object — derive via streams_list.
+            url_raw = a.get("server_url") or a.get("url") or ""
+            url_display = url_raw[:60] + ("..." if len(url_raw) > 60 else "") if url_raw else "N/A"
+            stream_count = 0
+            aid = a.get("id")
+            if aid is not None:
+                try:
+                    sc_resp = await client.call_endpoint(
+                        ENDPOINTS["streams_list"],
+                        query={"m3u_account": aid, "page_size": 1, "enrich": False},
+                    )
+                    stream_count = sc_resp.get("count", 0) if isinstance(sc_resp, dict) else 0
+                except Exception:
+                    pass
             lines = [
                 f"M3U Account: {a.get('name', 'Unknown')}",
-                f"  ID: {a.get('id')}",
-                f"  Type: {a.get('type', a.get('server_type', 'standard'))}",
-                f"  URL: {a.get('url', 'N/A')[:60]}{'...' if len(a.get('url', '')) > 60 else ''}",
-                f"  Status: {a.get('status', 'unknown')}",
-                f"  Streams: {a.get('stream_count', 0)}",
+                f"  ID: {aid}",
+                f"  Type: {a.get('account_type', a.get('server_type', 'standard'))}",
+                f"  URL: {url_display}",
+                f"  Status: {a.get('status', a.get('is_active', 'unknown'))}",
+                f"  Streams: {stream_count}",
                 f"  Last refresh: {a.get('last_refresh', a.get('updated_at', 'never'))}",
             ]
 
@@ -144,7 +171,7 @@ def register(mcp: FastMCP):
             )
             if isinstance(result, dict):
                 rname = result.get("name", "?")
-                rurl = (result.get("url") or "")[:60]
+                rurl = (result.get("server_url") or result.get("url") or "")[:60]
                 return f"M3U account {account_id} updated: name='{rname}', url='{rurl}'"
             return f"M3U account {account_id} updated."
         except Exception as e:

@@ -571,12 +571,12 @@ def register(mcp: FastMCP):
             if source == "dispatcharr":
                 result = await client.call_endpoint(
                     ENDPOINTS["stats_users_dispatcharr"],
-                    path_params={"user_id": user_id},
+                    path_args={"user_id": user_id},
                 )
             else:  # emby
                 result = await client.call_endpoint(
                     ENDPOINTS["stats_users_emby"],
-                    path_params={"emby_user_id": user_id},
+                    path_args={"emby_user_id": user_id},
                 )
 
             # Response envelope: {data: [...], meta: {...}, pagination: null}
@@ -670,7 +670,7 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
             result = await client.call_endpoint(
                 ENDPOINTS["stats_popularity_channel"],
-                path_params={"channel_id": channel_id},
+                path_args={"channel_id": channel_id},
             )
 
             if not result:

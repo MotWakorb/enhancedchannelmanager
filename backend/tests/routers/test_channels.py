@@ -189,6 +189,60 @@ class TestUpdateChannel:
         assert response.status_code == 200
         mock_client.update_channel.assert_called_once_with(1, {"name": "New"})
 
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_404_not_500(self, async_client):
+        """Updating a nonexistent channel surfaces upstream 404 as 404, not 500
+        (bd-lq38l.4). The before-state get_channel raises HTTPStatusError."""
+        request = httpx.Request("GET", "http://disp/api/channels/channels/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.patch("/api/channels/999", json={"name": "New"})
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_bad_group_id_surfaces_400_not_500(self, async_client):
+        """A bad channel_group_id is rejected upstream as 4xx -> 400 with detail,
+        not an opaque 500 (bd-lq38l.4)."""
+        request = httpx.Request("PATCH", "http://disp/api/channels/channels/1/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"channel_group_id": ["Invalid pk \\"999\\" - object does not exist."]}',
+        )
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "Old"}
+        mock_client.update_channel.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.patch("/api/channels/1", json={"channel_group_id": 999})
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "channel_group_id" in detail
+        assert "does not exist" in detail
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error stays a 500 (bd-lq38l.4)."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = RuntimeError("boom")
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.patch("/api/channels/1", json={"name": "New"})
+
+        assert response.status_code == 500
+
 
 class TestDeleteChannel:
     """Tests for DELETE /api/channels/{channel_id}."""
@@ -206,6 +260,24 @@ class TestDeleteChannel:
 
         assert response.status_code == 200
         assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_404_not_500(self, async_client):
+        """Deleting a nonexistent channel surfaces upstream 404 as 404, not 500
+        (bd-lq38l.4)."""
+        request = httpx.Request("GET", "http://disp/api/channels/channels/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.delete("/api/channels/999")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestGetChannelStreams:
@@ -257,6 +329,50 @@ class TestAddStream:
 
         assert response.status_code == 200
         mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_404_not_500(self, async_client):
+        """Adding a stream to a nonexistent channel surfaces upstream 404 as 404,
+        not 500 (bd-lq38l.4)."""
+        request = httpx.Request("GET", "http://disp/api/channels/channels/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/999/add-stream", json={
+                "stream_id": 10,
+            })
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_bad_stream_id_surfaces_400_not_500(self, async_client):
+        """A foreign/nonexistent stream id is rejected upstream as 4xx -> 400 with
+        detail, not an opaque 500 (bd-lq38l.4)."""
+        request = httpx.Request("PATCH", "http://disp/api/channels/channels/1/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"streams": ["Invalid pk \\"999\\" - object does not exist."]}',
+        )
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5]}
+        mock_client.update_channel.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-stream", json={
+                "stream_id": 999,
+            })
+
+        assert response.status_code == 400
+        assert "does not exist" in response.json()["detail"]
 
 
 class TestAddStreams:
@@ -333,6 +449,26 @@ class TestAddStreams:
 
         assert response.status_code == 500
 
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_404_not_500(self, async_client):
+        """Bulk-adding streams to a nonexistent channel surfaces upstream 404 as
+        404, not 500 (bd-lq38l.4)."""
+        request = httpx.Request("GET", "http://disp/api/channels/channels/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/999/add-streams", json={
+                "stream_ids": [10],
+            })
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
 
 class TestRemoveStream:
     """Tests for POST /api/channels/{channel_id}/remove-stream."""
@@ -367,6 +503,26 @@ class TestRemoveStream:
 
         assert response.status_code == 200
         mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_404_not_500(self, async_client):
+        """Removing a stream from a nonexistent channel surfaces upstream 404 as
+        404, not 500 (bd-lq38l.4)."""
+        request = httpx.Request("GET", "http://disp/api/channels/channels/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/999/remove-stream", json={
+                "stream_id": 10,
+            })
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestReorderStreams:
@@ -495,6 +651,26 @@ class TestReorderStreams:
 
         assert response.status_code == 200
         mock_client.update_channel.assert_called_once_with(1, {"streams": [5002, 5001]})
+
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_404_not_500(self, async_client):
+        """Reordering streams on a nonexistent channel surfaces upstream 404 as
+        404, not 500 (bd-lq38l.4). The before-state get_channel raises 404."""
+        request = httpx.Request("GET", "http://disp/api/channels/channels/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/999/reorder-streams", json={
+                "stream_ids": [10, 5],
+            })
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestGetLogos:
@@ -1017,6 +1193,38 @@ class TestMergeChannelsStaleSourceIds:
         # Did not proceed to create the merged channel.
         mock_client.create_channel.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_bad_target_group_surfaces_400_not_500(self, async_client):
+        """A Dispatcharr 4xx while creating the merged channel (e.g. bad target
+        group id) maps to 400 with detail, not an opaque 500 (bd-lq38l.4)."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = [
+            {"id": 100, "name": "Live A", "streams": [10]},
+            {"id": 200, "name": "Live B", "streams": [20]},
+        ]
+        request = httpx.Request("POST", "http://disp/api/channels/channels/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"channel_group_id": ["Invalid pk \\"999\\" - object does not exist."]}',
+        )
+        mock_client.create_channel.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/merge",
+                json={
+                    "source_channel_ids": [100, 200],
+                    "target_name": "Merged",
+                    "target_channel_group_id": 999,
+                },
+            )
+
+        assert response.status_code == 400
+        assert "does not exist" in response.json()["detail"]
+
 
 class TestBulkMergeChannelsStaleSourceIds:
     """Tests for POST /api/channels/bulk-merge stale-source-ID handling.
@@ -1106,3 +1314,42 @@ class TestBulkMergeChannelsStaleSourceIds:
         assert str(stale_id) in detail
         assert "no longer exist" in detail
         assert "refresh the channels list and try again" in detail
+
+    @pytest.mark.asyncio
+    async def test_per_item_upstream_4xx_detail_surfaced(self, async_client):
+        """When a per-merge item fails with an upstream 4xx (e.g. bad stream id on
+        the target update), the actionable upstream detail is surfaced in the
+        per-item error instead of the bare exception type name (bd-lq38l.4)."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = [
+            {"id": 1, "name": "Target", "streams": [10]},  # target
+            {"id": 2, "name": "Source A", "streams": [20]},  # source
+        ]
+        request = httpx.Request("PATCH", "http://disp/api/channels/channels/1/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"streams": ["Invalid pk \\"20\\" - object does not exist."]}',
+        )
+        mock_client.update_channel.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/bulk-merge",
+                json={
+                    "merges": [
+                        {"target_channel_id": 1, "source_channel_ids": [2]},
+                    ]
+                },
+            )
+
+        # Endpoint contract is partial-success: HTTP 200 with per-item results.
+        assert response.status_code == 200
+        body = response.json()
+        assert body["failed"] == 1
+        item = body["results"][0]
+        assert item["success"] is False
+        # The upstream detail (not "HTTPStatusError") is surfaced.
+        assert "does not exist" in item["error"]
