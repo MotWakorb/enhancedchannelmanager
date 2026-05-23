@@ -255,12 +255,12 @@ _Merge one or more source channels into a target channel, keeping the target and
 
 ---
 
-#### `clear_auto_created(group_ids: list[int] = None)` — DESTRUCTIVE
-_Delete all channels marked `auto_created=True`, optionally scoped to specific group IDs._
-1. **"Clear all auto-created channels from the 'USA | Sports' and 'Radio' groups."** — Expect: `clear_auto_created(group_ids=[<USA | Sports id>, <Radio id>])` called; returns `"Cleared N auto-created channels in 2 groups."`; channels with `auto_created=True` in those groups are gone. — Result: ☐
-2. **"Clear ALL auto-created channels across the entire system (no group filter)"** — Expect: `clear_auto_created()` called with no args; payload is `{}`; response says "across all groups" with accurate deletion count. — Result: ☐
-3. **"Clear auto-created channels from a group with no auto-created channels — try 'USA | Kids'"** — Expect: Returns `"Cleared 0 auto-created channels in 1 groups."` without error. — Result: ☐
-4. **"Clear auto-created with empty group_ids list []"** — Expect: Backend behavior explicitly observed — either treated as no-op or treated as all groups; confirm the response accurately describes scope. — Result: ☐
+#### `clear_auto_created(group_ids: list[int] = None, all_groups: bool = False)` — DESTRUCTIVE
+_Delete all channels marked `auto_created=True`. Scope must be explicit: pass `group_ids` for specific groups, **or** `all_groups=True` for a system-wide clear. An empty `group_ids=[]` is rejected as ambiguous (this guard prevents accidental system-wide clears)._
+1. **"Clear all auto-created channels from the 'USA | Sports' and 'Radio' groups."** — Expect: `clear_auto_created(group_ids=[<resolved>, <resolved>])` called; returns `"Cleared N auto-created channels in 2 group(s)."`; only auto-created channels in those groups are removed. — Result: ☐
+2. **"Clear auto-created channels from a group with no auto-created channels — try 'USA | Kids'."** — Expect: `"Cleared 0 auto-created channels in 1 group."` without error. — Result: ☐
+3. **"Clear ALL auto-created channels across the entire system."** — Expect: tool requires `all_groups=True`; returns a system-wide clear count. ⚠️ Destructive system-wide — only on a test instance / after a backup. — Result: ☐
+4. **"Clear auto-created channels but don't say where (no group, no all_groups)."** — Expect: tool returns a guard message instructing you to pass `group_ids=[...]` or `all_groups=True`; an empty `group_ids=[]` is explicitly rejected — no accidental system-wide clear. — Result: ☐
 
 ---
 
@@ -676,14 +676,14 @@ _Refresh multiple EPG sources sequentially; refreshes all sources if no IDs are 
 
 ---
 
-#### `match_channels_epg()` — WRITE
+#### `match_channels_epg(channel_ids: list[int] = None, epg_source_ids: list[int] = None, source_order: list[int] = None)` — WRITE
 
-_Auto-match channels to EPG data based on channel names with confidence scoring._
+_Auto-match channels to EPG data by name. Scope to specific channels via `channel_ids` (default: all), restrict to specific EPG sources via `epg_source_ids`, and set a preference order via `source_order`. Output reports the backend's real categories: **exact**, **multiple candidates**, and **unmatched** (not a single matched/unmatched count)._
 
-1. **"Run EPG auto-matching to match my channels to guide data."** — Expect: Claude calls `match_channels_epg()`; response is "EPG auto-match complete: N channels matched, M unmatched." with real counts (not always 0). — Result: ☐
-2. **"Match channels to EPG"** when no EPG sources are configured — Expect: backend returns empty match categories; tool still reports a valid "N channels matched, M unmatched." summary. — Result: ☐
-3. **"Match channels to EPG using the 'Teamarr' source data"** — Expect: run `list_epg_sources` first to confirm Teamarr is loaded, then run `match_channels_epg()`; verify the tool surfaces actual match counts, not always "0 matched, 0 unmatched." — Result: ☐
-4. **"Match channels to EPG"** with 2000+ channels — Expect: no timeout/504 error from the match endpoint; if a 504 occurs, the tool surfaces "Error getting EPG grid: ... HTTP 504". — Result: ☐
+1. **"Match the 'US : ESPN', 'US : ESPN 2', and 'US : ESPN News' channels to guide data."** — Expect: `match_channels_epg(channel_ids=[<resolved>, ...])` called; response: `"EPG auto-match complete: 3 channels total — X exact, Y multiple candidates, Z unmatched."` with real counts (not always 0). — Result: ☐
+2. **"Run EPG auto-matching across all my channels."** — Expect: `match_channels_epg()` with no args; reports real exact/multiple/unmatched counts over all channels. — Result: ☐
+3. **"Match channels to EPG using only the 'Teamarr' source."** — Expect: `match_channels_epg(epg_source_ids=[<Teamarr resolved>])`; only that source is searched; surfaces actual counts. — Result: ☐
+4. **"Match channels to EPG"** with 2000+ channels — Expect: no timeout/504 from the match endpoint; if a 504 occurs, the tool surfaces it cleanly. — Result: ☐
 
 ---
 
