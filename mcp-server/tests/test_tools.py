@@ -2372,3 +2372,162 @@ class TestDeleteAllNotificationsReadOnly:
             f"notifications_delete_all must declare read_only in query_params, "
             f"got query_params={ep.query_params}"
         )
+
+
+# --- TestListNormalizationRules (lq38l.2) ---
+class TestListNormalizationRules:
+    """list_normalization_rules sources rule data from /rules (not /groups) endpoint.
+
+    The /groups endpoint returns group metadata only — no nested rules, no
+    rule count.  The /rules endpoint returns groups WITH rules nested.
+    This class pins that the fix is in place and stays in place.
+    """
+
+    @pytest.mark.asyncio
+    async def test_shows_nonzero_rule_count_and_names(self):
+        """Groups with rules show correct count and up to 5 rule names."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [
+                {
+                    "id": 1,
+                    "name": "Title Case",
+                    "enabled": True,
+                    "priority": 0,
+                    "rules": [
+                        {"id": 10, "name": "Title-case all", "action_type": "replace", "condition_type": "always", "enabled": True},
+                        {"id": 11, "name": "Fix abbreviations", "action_type": "replace", "condition_type": "regex", "enabled": True},
+                    ],
+                },
+                {
+                    "id": 2,
+                    "name": "Strip Quality",
+                    "enabled": True,
+                    "priority": 1,
+                    "rules": [
+                        {"id": 20, "name": "Strip HD suffix", "action_type": "strip_suffix", "condition_type": "ends_with", "enabled": True},
+                        {"id": 21, "name": "Strip FHD", "action_type": "remove", "condition_type": "contains", "enabled": True},
+                        {"id": 22, "name": "Strip 4K", "action_type": "remove", "condition_type": "contains", "enabled": True},
+                    ],
+                },
+            ]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        # Correct group count.
+        assert "2 groups" in text
+        # Group names present.
+        assert "Title Case" in text
+        assert "Strip Quality" in text
+        # Non-zero rule counts — the key regression guard.
+        assert "2 rules" in text
+        assert "3 rules" in text
+        # Rule names surface.
+        assert "Title-case all" in text
+        assert "Strip HD suffix" in text
+        # Called the rules endpoint, not the groups-only endpoint.
+        mock_client.call_endpoint.assert_awaited_once_with(ENDPOINTS["normalization_list_rules"])
+
+    @pytest.mark.asyncio
+    async def test_empty_groups(self):
+        """Empty groups list returns 'no rules' message."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={"groups": []})
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        assert "No normalization rules" in result[0][0].text
+
+    @pytest.mark.asyncio
+    async def test_group_with_zero_rules_shows_zero(self):
+        """A group whose rules list is empty renders '0 rules' (not crashing)."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [
+                {"id": 5, "name": "Empty Group", "enabled": True, "priority": 0, "rules": []},
+            ]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        assert "Empty Group" in text
+        assert "0 rules" in text
+
+    @pytest.mark.asyncio
+    async def test_more_than_five_rules_truncated(self):
+        """When a group has >5 rules, only 5 names are shown plus an overflow line."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        rules = [
+            {"id": i, "name": f"Rule {i}", "action_type": "remove", "condition_type": "contains", "enabled": True}
+            for i in range(1, 9)
+        ]
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [{"id": 3, "name": "Big Group", "enabled": True, "priority": 0, "rules": rules}]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        assert "8 rules" in text
+        assert "Rule 1" in text
+        assert "Rule 5" in text
+        # Rule 6-8 are suppressed — the overflow line must appear.
+        assert "3 more" in text
+
+    @pytest.mark.asyncio
+    async def test_group_with_none_rules_key_handled_gracefully(self):
+        """A group where 'rules' key is None or absent does not crash."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [
+                {"id": 7, "name": "No Key Group", "enabled": False, "priority": 0},
+            ]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        assert "No Key Group" in text
+        assert "0 rules" in text
+
+    def test_normalization_list_rules_endpoint_registered(self):
+        """The normalization_list_rules endpoint is in the registry with correct method/path."""
+        from _endpoint_contracts import ENDPOINTS
+
+        ep = ENDPOINTS["normalization_list_rules"]
+        assert ep.method == "GET"
+        assert ep.path == "/api/normalization/rules"
