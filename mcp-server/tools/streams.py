@@ -11,6 +11,21 @@ from ecm_client import get_ecm_client
 logger = logging.getLogger(__name__)
 
 
+def _is_not_found(exc: Exception) -> bool:
+    """True if ``exc`` represents an upstream HTTP 404.
+
+    The ECM client wraps upstream failures in a ``RuntimeError`` (built by
+    ``ecm_client._http_error``) chained via ``raise ... from e`` to the original
+    ``httpx.HTTPStatusError``. Prefer the precise status code on the chained
+    cause; fall back to the message text (``-> HTTP 404``) for robustness.
+    """
+    cause = getattr(exc, "__cause__", None)
+    resp = getattr(cause, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) == 404:
+        return True
+    return "HTTP 404" in str(exc)
+
+
 # ---- Shared fuzzy matching helpers (used by both streams and channels tools) ----
 
 def _strip_stream_prefix(name: str) -> str:
@@ -727,6 +742,12 @@ def register(mcp: FastMCP):
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] get_streams_for_channel failed: %s", e)
+            if _is_not_found(e):
+                return (
+                    f"Channel {channel_id} not found "
+                    "(channel_id is the internal channel id, not the channel "
+                    "number shown in the UI). Use list_channels to find the id."
+                )
             return f"Error getting streams for channel {channel_id}: {e}"
 
     @mcp.tool()
