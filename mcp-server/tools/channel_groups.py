@@ -256,12 +256,13 @@ def register(mcp: FastMCP):
             if not groups:
                 return "No channel groups found."
 
-            lines = [f"Found {len(groups)} groups with stream info:"]
+            # The /api/channel-groups/with-streams endpoint returns {id, name}
+            # only — no per-group stream count is available in this payload.
+            lines = [f"Found {len(groups)} groups that have channels with streams:"]
             for g in groups:
                 name = g.get("name", "Unknown")
                 gid = g.get("id", "?")
-                stream_count = g.get("stream_count", 0)
-                lines.append(f"  {name} (id={gid}) — {stream_count} streams")
+                lines.append(f"  {name} (id={gid})")
 
             return "\n".join(lines)
         except Exception as e:
