@@ -204,6 +204,83 @@ class TestGetM3UAccountCountAndUrl:
         assert "HD Homerun" in text
         assert "N/A" in text  # graceful fallback for missing URL
 
+    @pytest.mark.asyncio
+    async def test_standard_account_url_rendered_from_server_url(self):
+        """A freshly-created standard account shows its URL, not 'N/A'.
+
+        After the bd-znc76.4 fix the backend router normalises url→server_url
+        before persisting to Dispatcharr.  On read-back the payload carries
+        server_url — verify get_m3u_account renders it (not N/A).
+        """
+        mcp = _make_mcp_m3u()
+
+        async def call_ep(endpoint, **kwargs):
+            if endpoint.name == "m3u_get_account":
+                # Standard account as returned by Dispatcharr after the
+                # url→server_url normalisation in the backend router.
+                return {
+                    "id": 42,
+                    "name": "StandardM3U",
+                    "server_url": "https://provider.example.com/list-STDCHECK.m3u8",
+                    "account_type": "M3U",
+                    "is_active": True,
+                }
+            if endpoint.name == "streams_list":
+                return {"count": 0, "results": []}
+            return {}
+
+        client = AsyncMock()
+        client.call_endpoint.side_effect = call_ep
+
+        with patch("tools.m3u.get_ecm_client", return_value=client):
+            result = await mcp.call_tool("get_m3u_account", {"account_id": 42})
+
+        text = result[0][0].text
+        assert "StandardM3U" in text
+        assert "STDCHECK" in text, (
+            f"Expected server_url to appear in output; got: {text!r}"
+        )
+        assert "N/A" not in text, (
+            f"URL must not be N/A for a standard account with server_url; got: {text!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_standard_account_url_rendered_from_url_field(self):
+        """URL renders correctly when Dispatcharr returns it under 'url' (not server_url).
+
+        The get_m3u_account tool reads server_url-or-url; verify the fallback
+        branch also works for payloads where only 'url' is present (bd-znc76.4).
+        """
+        mcp = _make_mcp_m3u()
+
+        async def call_ep(endpoint, **kwargs):
+            if endpoint.name == "m3u_get_account":
+                return {
+                    "id": 43,
+                    "name": "LegacyStandard",
+                    "url": "https://legacy.example.com/feed-LEGACYCHECK.m3u",
+                    "account_type": "M3U",
+                    "is_active": True,
+                }
+            if endpoint.name == "streams_list":
+                return {"count": 0, "results": []}
+            return {}
+
+        client = AsyncMock()
+        client.call_endpoint.side_effect = call_ep
+
+        with patch("tools.m3u.get_ecm_client", return_value=client):
+            result = await mcp.call_tool("get_m3u_account", {"account_id": 43})
+
+        text = result[0][0].text
+        assert "LegacyStandard" in text
+        assert "LEGACYCHECK" in text, (
+            f"Expected 'url' field to appear in output; got: {text!r}"
+        )
+        assert "N/A" not in text, (
+            f"URL must not be N/A when 'url' field is present; got: {text!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # get_groups_with_streams

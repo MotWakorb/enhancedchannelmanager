@@ -1777,6 +1777,115 @@ class TestMatchChannelsEpg:
         text = result[0][0].text
         assert "Error" in text
 
+    @pytest.mark.asyncio
+    async def test_multiple_candidates_surfaced_in_output(self):
+        """Channels with status=multiple show candidate tvg_ids, names, and confidence (bd-1icn8)."""
+        from tools.epg import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        response = {
+            "exact": [{"channel_id": 10, "channel_name": "ESPN", "matches": [
+                {"tvg_id": "ESPN.us", "epg_name": "ESPN", "confidence": 1.0, "match_type": "exact"},
+            ]}],
+            "multiple": [
+                {
+                    "channel_id": 20,
+                    "channel_name": "Fox News",
+                    "status": "multiple",
+                    "best_score": 0.92,
+                    "matches": [
+                        {"tvg_id": "FoxNews.us", "epg_name": "Fox News Channel", "confidence": 92.0, "match_type": "fuzzy"},
+                        {"tvg_id": "FoxNews.int", "epg_name": "Fox News Int", "confidence": 85.0, "match_type": "fuzzy"},
+                    ],
+                },
+                {
+                    "channel_id": 21,
+                    "channel_name": "Discovery",
+                    "status": "multiple",
+                    "best_score": 0.80,
+                    "matches": [
+                        {"tvg_id": "Discovery.us", "epg_name": "Discovery Channel", "confidence": 80.0, "match_type": "fuzzy"},
+                    ],
+                },
+            ],
+            "none": [],
+            "summary": {
+                "total_channels": 3,
+                "exact_count": 1,
+                "multiple_count": 2,
+                "none_count": 0,
+                "match_time_ms": 75.0,
+            },
+        }
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.return_value = response
+
+        with patch("tools.epg.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("match_channels_epg", {})
+
+        text = result[0][0].text
+
+        # Summary line still present
+        assert "3" in text
+        assert "1" in text   # exact_count
+        assert "2" in text   # multiple_count
+
+        # Channel names for ambiguous channels listed
+        assert "Fox News" in text
+        assert "Discovery" in text
+
+        # Candidate tvg_ids surfaced
+        assert "FoxNews.us" in text
+        assert "FoxNews.int" in text
+        assert "Discovery.us" in text
+
+        # Candidate EPG names surfaced
+        assert "Fox News Channel" in text
+        assert "Discovery Channel" in text
+
+        # Confidence values rendered (92%, 85%, 80%)
+        assert "92%" in text
+        assert "85%" in text
+        assert "80%" in text
+
+    @pytest.mark.asyncio
+    async def test_multiple_candidates_missing_matches_key_handled(self):
+        """Defensive: if a multiple entry has no 'matches' key, renders graceful fallback (bd-1icn8)."""
+        from tools.epg import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        response = {
+            "exact": [],
+            "multiple": [
+                # Entry missing 'matches' key entirely — defensive handling
+                {"channel_id": 30, "channel_name": "CNN"},
+            ],
+            "none": [],
+            "summary": {
+                "total_channels": 1,
+                "exact_count": 0,
+                "multiple_count": 1,
+                "none_count": 0,
+                "match_time_ms": 10.0,
+            },
+        }
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.return_value = response
+
+        with patch("tools.epg.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("match_channels_epg", {})
+
+        text = result[0][0].text
+        # Must not raise; channel name must appear; fallback message present
+        assert "CNN" in text
+        assert "no candidate details available" in text
+
 
 # --- TestEpgContractRegistry (A2) ---
 class TestEpgContractRegistry:
