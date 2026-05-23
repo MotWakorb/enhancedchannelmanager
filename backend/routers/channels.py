@@ -20,7 +20,7 @@ from concurrency import run_cpu_bound
 from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
-from dispatcharr_client import get_client
+from dispatcharr_client import get_client, upstream_http_exception
 from normalization_engine import get_normalization_engine
 import journal
 
@@ -402,7 +402,15 @@ async def create_channel(request: CreateChannelRequest):
         )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # Surface actionable Dispatcharr 4xx (e.g. non-existent channel_group_id)
+        # instead of masking it as a generic 500 (bd-1wq7z.22).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Channel creation rejected by Dispatcharr: %s", e)
+            raise mapped
         logger.exception("[CHANNELS] Channel creation failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -1884,7 +1892,15 @@ async def get_channel(channel_id: int):
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Fetched channel id=%s in %.1fms", channel_id, elapsed_ms)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id surfaces as an upstream 404 — return 404, not 500
+        # (bd-1wq7z.22).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[CHANNELS] Fetch channel id=%s rejected by Dispatcharr: %s", channel_id, e)
+            raise mapped
         logger.exception("[CHANNELS] Failed to fetch channel id=%s", channel_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 

@@ -97,6 +97,44 @@ class TestCreateChannel:
         assert call_data["logo_id"] == 10
         assert call_data["tvg_id"] == "ESPN.us"
 
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_400_not_500(self, async_client):
+        """Dispatcharr 4xx (e.g. bad channel_group_id) maps to 400 with detail,
+        not an opaque 500 (bd-1wq7z.22).
+
+        The client embeds the upstream status + body in a bare Exception
+        message: ``"Channel creation failed: 400 - <json body>"``.
+        """
+        mock_client = AsyncMock()
+        mock_client.create_channel.side_effect = Exception(
+            'Channel creation failed: 400 - '
+            '{"channel_group_id": ["Invalid pk \\"999\\" - object does not exist."]}'
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels", json={
+                "name": "ESPN",
+                "channel_group_id": 999,
+            })
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "channel_group_id" in detail
+        assert "does not exist" in detail
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error (no embedded 4xx) stays a 500 (bd-1wq7z.22)."""
+        mock_client = AsyncMock()
+        mock_client.create_channel.side_effect = RuntimeError("boom")
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels", json={"name": "ESPN"})
+
+        assert response.status_code == 500
+
 
 class TestGetChannel:
     """Tests for GET /api/channels/{channel_id}."""
@@ -112,6 +150,24 @@ class TestGetChannel:
 
         assert response.status_code == 200
         mock_client.get_channel.assert_called_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_404_not_500(self, async_client):
+        """A missing channel id surfaces upstream 404 as 404, not 500
+        (bd-1wq7z.22). The client raises httpx.HTTPStatusError via
+        raise_for_status()."""
+        request = httpx.Request("GET", "http://disp/api/channels/channels/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channels/999")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestUpdateChannel:

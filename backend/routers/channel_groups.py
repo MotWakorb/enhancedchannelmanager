@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 
 from database import get_session
-from dispatcharr_client import get_client
+from dispatcharr_client import get_client, upstream_http_exception
 import journal
 
 logger = logging.getLogger(__name__)
@@ -904,7 +904,15 @@ async def delete_channel_group(group_id: int):
             logger.debug("[GROUPS] Deleted channel group %s via API in %.1fms", group_id, elapsed_ms)
             logger.info("[GROUPS] Deleted channel group id=%s", group_id)
             return {"status": "deleted"}
+    except HTTPException:
+        raise
     except Exception as e:
+        # Surface actionable Dispatcharr 4xx (e.g. group still has channels /
+        # protected) instead of masking it as a generic 500 (bd-1wq7z.22).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[GROUPS] Delete channel group %s rejected by Dispatcharr: %s", group_id, e)
+            raise mapped
         logger.exception("[GROUPS] Failed to delete/hide channel group %s: %s", group_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 

@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from alert_methods import send_alert
 from cache import get_cache
 from config import validate_url_scheme
-from dispatcharr_client import get_client
+from dispatcharr_client import get_client, upstream_http_exception
 from epg_matching import batch_find_epg_matches
 import journal
 
@@ -109,6 +109,13 @@ async def create_epg_source(request: Request):
     except HTTPException:
         raise
     except Exception as e:
+        # Surface actionable Dispatcharr 4xx (e.g. bad/missing fields in the
+        # request body) instead of masking it as a generic 500 (bd-1wq7z.22).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG] Create EPG source rejected by Dispatcharr: %s", e)
+            raise mapped
+        logger.exception("[EPG] Failed to create EPG source: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
