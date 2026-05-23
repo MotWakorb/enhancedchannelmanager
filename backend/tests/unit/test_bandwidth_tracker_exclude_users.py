@@ -229,6 +229,41 @@ def test_parser_drops_empty_tokens(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Deprecation warning (bead enhancedchannelmanager-ye075)
+# ---------------------------------------------------------------------------
+# bd-gsn3r's migration 0011 made ECM_TELEMETRY_EXCLUDE_USERS moot for its
+# original (namespace-collision) purpose. The parser logs a one-time WARNING
+# when the var is observed set, promising removal in v0.18.0 (bead bd-lbpl7).
+
+def test_deprecation_warning_fires_once_when_var_set(monkeypatch, caplog):
+    """A configured env var logs exactly one deprecation WARNING per process."""
+    # Reset the module-level latch so this test is order-independent.
+    monkeypatch.setattr(bandwidth_tracker, "_EXCLUDE_USERS_DEPRECATION_WARNED", False)
+    monkeypatch.setenv("ECM_TELEMETRY_EXCLUDE_USERS", "claude")
+    with caplog.at_level(logging.WARNING, logger="bandwidth_tracker"):
+        assert _parse_telemetry_exclude_users() == frozenset({"claude"})
+        # Second call (next poll) must NOT re-log — the latch is sticky.
+        assert _parse_telemetry_exclude_users() == frozenset({"claude"})
+    deprecation_lines = [
+        r.getMessage()
+        for r in caplog.records
+        if "DEPRECATED" in r.getMessage()
+        and "ECM_TELEMETRY_EXCLUDE_USERS" in r.getMessage()
+    ]
+    assert len(deprecation_lines) == 1
+    assert "v0.18.0" in deprecation_lines[0]
+
+
+def test_deprecation_warning_silent_when_var_unset(monkeypatch, caplog):
+    """Unset / empty env var must not log the deprecation notice (default path)."""
+    monkeypatch.setattr(bandwidth_tracker, "_EXCLUDE_USERS_DEPRECATION_WARNED", False)
+    monkeypatch.delenv("ECM_TELEMETRY_EXCLUDE_USERS", raising=False)
+    with caplog.at_level(logging.WARNING, logger="bandwidth_tracker"):
+        assert _parse_telemetry_exclude_users() == frozenset()
+    assert not any("DEPRECATED" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
 # _is_excluded_telemetry_user matcher
 # ---------------------------------------------------------------------------
 
