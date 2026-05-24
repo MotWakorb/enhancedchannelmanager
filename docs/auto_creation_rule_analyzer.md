@@ -229,3 +229,140 @@ and we don't want a runtime import dependency in the analyzer.
 `test_users_sports_rule_grouping` lock the contract; if the
 evaluator's grouping algorithm ever changes, the analyzer must
 change with it.
+
+---
+
+## Group protection: stream-side fire gate vs merge-target filter
+
+Two distinct mechanisms protect specific channel groups from unwanted
+merges. They are NOT interchangeable — each applies at a different
+point in the pipeline.
+
+| Mechanism | Kind | When it applies | What it checks | Primary use case |
+|---|---|---|---|---|
+| `normalized_name_in_group` / `normalized_name_not_in_group` | **Condition** (stream-side fire gate) | Evaluated before the rule fires | Whether the triggering stream's normalized name IS (or is NOT) already present as a channel in group N | Skip the whole rule for a stream if a same-name channel already exists (or doesn't) in a specific group |
+| `target_channel_in_group` / `target_channel_not_in_group` | **`merge_streams` action param** (merge-target filter) | Applied after the merge target channel is resolved | Whether the resolved target channel's group is in (or not in) the provided list | Keep merges OUT of (or ONLY into) specific groups, regardless of how the stream or rule fired |
+
+### Stream-side fire gate (`normalized_name_[not_]in_group`)
+
+These are **condition types** on the rule's condition list. When
+the evaluator reaches one of these, it checks whether a channel
+whose normalized name matches the triggering stream's normalized
+name already exists inside group N:
+
+- `normalized_name_in_group` — fires the rule only when such a
+  channel **exists** in group N.
+- `normalized_name_not_in_group` — fires the rule only when no
+  such channel exists in group N.
+
+**Critical limitation.** These conditions gate whether the rule
+fires at all. Once the rule fires, they have no further effect.
+They do NOT constrain which existing channel a `merge_streams`
+action eventually targets — the merge resolution runs independently
+and may land the stream in any group.
+
+### Merge-target filter (`target_channel_[not_]in_group`)
+
+These are **parameters on a `merge_streams` action dict**, applied
+post-resolution. After the executor resolves a candidate target
+channel (via `target=auto`, `name_exact`, `name_regex`, or
+`tvg_id`), it checks the resolved channel's `channel_group_id`
+against the filter list:
+
+- `target_channel_not_in_group` — **skip** the merge if the
+  resolved channel's group is in this list.
+- `target_channel_in_group` — **skip** the merge if the resolved
+  channel's group is NOT in this list.
+
+Both default to absent (no filter), preserving existing behavior for
+rules that predate this feature. Provide an empty list (`[]`) to
+explicitly no-op one direction while setting the other. Values must
+be integer group IDs; `bool` values are rejected by the schema
+validator.
+
+Action dict example:
+
+```json
+{
+  "type": "merge_streams",
+  "target": "auto",
+  "target_channel_not_in_group": [42, 99]
+}
+```
+
+### Concrete worked example
+
+Scenario: a rule's condition list includes
+`normalized_name_not_in_group=5` (only fire for streams whose
+normalized name is not yet a channel in group 5). The `merge_streams`
+action has `target_channel_not_in_group=[5]` (skip any merge that
+would land in group 5).
+
+1. Stream "Sky Sport 1" arrives. Its normalized name "sky sport 1"
+   is NOT in group 5 — the **stream-side gate passes**, so the rule
+   fires.
+2. The executor resolves the auto merge target and finds an existing
+   channel named "Sky Sport 1" in group 5.
+3. The **merge-target filter** fires: the resolved channel is in
+   group 5, which is excluded. The merge is **skipped** with
+   `skipped=True`; the stream is left unattached.
+
+Without `target_channel_not_in_group`, step 3 would have merged the
+stream into the group-5 channel — the stream-side condition alone
+could not prevent it, because it only checked whether the name
+existed, not whether the merge itself would land there.
+
+> **Cross-reference.** Both parameters are also documented in the
+> `create_auto_creation_rule` MCP tool docstring
+> (`mcp-server/tools/auto_creation.py`, conditions block and
+> `merge_streams` actions block).
+
+---
+
+## Matching: `loose_name_match` vs the deprecated `match_by`
+
+### `loose_name_match` (the real control)
+
+`loose_name_match` is a **boolean parameter on a `merge_streams`
+action** (default `false`). It controls whether `target=auto`
+matching uses strict or fuzzy resolution:
+
+- `false` (default) — merge into an existing channel only on
+  **exact normalized-name equality** (case-insensitive). The stream's
+  normalized name must equal the channel's normalized name character
+  for character.
+- `true` — restore the **legacy fuzzy cascade**: core-name
+  match → deparenthesize → word-prefix containment → call-sign
+  lookup. Use when you explicitly want the older broad-matching
+  behavior.
+
+The strict default (`false`) was introduced to fix production
+over-matching where the word-prefix step caused unrelated streams
+(e.g., 75 "Sky Sport *" variants) to be absorbed by a single "Sky
+Sport 4K" channel.
+
+Action dict example:
+
+```json
+{
+  "type": "merge_streams",
+  "target": "auto",
+  "loose_name_match": true
+}
+```
+
+### `match_by` (validated, runtime no-op — back-compat only)
+
+There is **no `exact_match` or `match_strict` parameter** — a common
+misconception. `match_by` accepts `"tvg_id"`, `"normalized_name"`,
+or `"stream_group"` and is validated by the schema, but **it is
+never consumed by the executor at runtime**. It is retained solely
+for backward compatibility of stored rules; changing it does not
+change matching behavior. Use `loose_name_match` to control fuzzy
+vs exact matching.
+
+> **Cross-reference.** Both parameters are documented in the
+> `create_auto_creation_rule` MCP tool docstring
+> (`mcp-server/tools/auto_creation.py`, `merge_streams` actions
+> block, including the explicit `NOTE: match_by is a DEPRECATED
+> no-op` callout).
