@@ -713,14 +713,15 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/streams",
         query_params=frozenset(
-            {"page", "page_size", "search", "channel_group_name", "m3u_account", "sort", "enrich", "bypass_cache"}
+            {"page", "page_size", "search", "channel_group_name", "m3u_account",
+             "sort", "enrich", "include_assignment", "bypass_cache"}
         ),
     ),
     "streams_by_ids": Endpoint(
         name="streams_by_ids",
         method="POST",
         path="/api/streams/by-ids",
-        request_fields=frozenset({"stream_ids"}),  # BulkStreamIdsRequest
+        request_fields=frozenset({"stream_ids", "include_assignment"}),  # BulkStreamIdsRequest
     ),
     "stream_stats_summary": Endpoint(
         name="stream_stats_summary",
