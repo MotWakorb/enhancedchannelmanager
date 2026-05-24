@@ -432,6 +432,26 @@ class Action:
             if "loose_name_match" not in self.params:
                 self.params["loose_name_match"] = False
 
+            # bd-0emgo.3: TARGET-CHANNEL group filter (post-resolution reject).
+            # These constrain which existing channel the merge may land in, by
+            # the RESOLVED channel's group — distinct from the stream-side
+            # normalized_name_[not_]in_group *conditions* (which only gate
+            # whether the rule FIRES). Absent = no filter (back-compat); the
+            # keys are NOT auto-injected so a no-filter rule stays unchanged.
+            # An empty list is valid and means "no exclusion / no restriction".
+            for key in ("target_channel_not_in_group", "target_channel_in_group"):
+                if key not in self.params:
+                    continue
+                value = self.params[key]
+                if not isinstance(value, list):
+                    errors.append(f"merge_streams.{key} must be a list of group IDs")
+                    continue
+                # bool is a subclass of int — reject it explicitly so True/False
+                # cannot masquerade as a group ID.
+                if any(not isinstance(item, int) or isinstance(item, bool)
+                       for item in value):
+                    errors.append(f"merge_streams.{key} must contain only integer group IDs")
+
         # Validate assign_logo
         elif action_type == ActionType.ASSIGN_LOGO:
             value = self.params.get("value")

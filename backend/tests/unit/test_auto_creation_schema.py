@@ -381,6 +381,78 @@ class TestActionValidation:
         errors = action.validate()
         assert any("loose_name_match" in e for e in errors)
 
+    # --- bd-0emgo.3: target-channel group filter -------------------------
+
+    def test_merge_streams_target_channel_filters_absent_by_default(self):
+        """bd-0emgo.3: with no filter set the keys are NOT auto-injected.
+
+        Absent = no filter (back-compat). Unlike loose_name_match (which the
+        schema defaults to False), the group-filter lists are left absent so
+        a stored rule with no filter stays byte-identical.
+        """
+        action = Action(type="merge_streams", params={"target": "auto"})
+        errors = action.validate()
+        assert len(errors) == 0
+        assert "target_channel_not_in_group" not in action.params
+        assert "target_channel_in_group" not in action.params
+
+    def test_merge_streams_target_channel_not_in_group_accepts_int_list(self):
+        """bd-0emgo.3: target_channel_not_in_group accepts a list of group IDs."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": [567, 12]},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_not_in_group"] == [567, 12]
+
+    def test_merge_streams_target_channel_in_group_accepts_int_list(self):
+        """bd-0emgo.3: target_channel_in_group accepts a list of group IDs."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_in_group": [42]},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_in_group"] == [42]
+
+    def test_merge_streams_target_channel_not_in_group_rejects_non_list(self):
+        """bd-0emgo.3: target_channel_not_in_group must be a list."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": 567},
+        )
+        errors = action.validate()
+        assert any("target_channel_not_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_not_in_group_rejects_non_int_items(self):
+        """bd-0emgo.3: target_channel_not_in_group items must be integers."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": ["sports"]},
+        )
+        errors = action.validate()
+        assert any("target_channel_not_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_in_group_rejects_non_int_items(self):
+        """bd-0emgo.3: target_channel_in_group items must be integers."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_in_group": [1.5]},
+        )
+        errors = action.validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_empty_list_is_valid(self):
+        """bd-0emgo.3: an empty list is valid (no exclusions) and preserved."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": []},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_not_in_group"] == []
+
     def test_valid_assign_logo(self):
         """Validates assign_logo action."""
         action = Action(

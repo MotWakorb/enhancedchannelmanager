@@ -251,6 +251,114 @@ describe('ActionEditor', () => {
         expect.objectContaining({ type: 'merge_streams', loose_name_match: true })
       );
     });
+
+    // bd-0emgo.3: target-channel group filter
+    it('renders the exclude-target-groups control with a checkbox per group', async () => {
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 1, name: 'Sports' }),
+        createMockChannelGroup({ id: 567, name: 'Excluded' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/exclude target groups/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText('Excluded')).toBeInTheDocument();
+      });
+    });
+
+    it('reflects an existing target_channel_not_in_group selection as checked', async () => {
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 1, name: 'Sports' }),
+        createMockChannelGroup({ id: 567, name: 'Excluded' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto', target_channel_not_in_group: [567] }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
+      await waitFor(() => {
+        const checkboxes = excludeGroupBox.querySelectorAll('input[type="checkbox"]');
+        expect(checkboxes.length).toBe(2);
+      });
+      const checkboxes = excludeGroupBox.querySelectorAll('input[type="checkbox"]');
+      // Order matches channelGroups: [Sports(1), Excluded(567)]
+      expect(checkboxes[0]).not.toBeChecked(); // Sports (1) not excluded
+      expect(checkboxes[1]).toBeChecked();     // Excluded (567) is excluded
+    });
+
+    it('adds a group to target_channel_not_in_group when its checkbox is toggled on', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 567, name: 'Excluded' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
+      const checkbox = await waitFor(() => {
+        const cb = excludeGroupBox.querySelector('input[type="checkbox"]') as HTMLElement;
+        expect(cb).toBeTruthy();
+        return cb;
+      });
+      await user.click(checkbox);
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'merge_streams',
+          target_channel_not_in_group: [567],
+        })
+      );
+    });
+
+    it('clears target_channel_not_in_group to undefined when last group is unchecked', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 567, name: 'Excluded' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto', target_channel_not_in_group: [567] }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
+      const checkbox = await waitFor(() => {
+        const cb = excludeGroupBox.querySelector('input[type="checkbox"]') as HTMLElement;
+        expect(cb).toBeTruthy();
+        return cb;
+      });
+      await user.click(checkbox); // uncheck the only excluded group
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'merge_streams',
+          target_channel_not_in_group: undefined,
+        })
+      );
+    });
   });
 
   describe('assign_logo action', () => {
