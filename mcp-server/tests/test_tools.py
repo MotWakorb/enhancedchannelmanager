@@ -2802,3 +2802,143 @@ class TestListNormalizationRules:
         ep = ENDPOINTS["normalization_list_rules"]
         assert ep.method == "GET"
         assert ep.path == "/api/normalization/rules"
+
+
+# --- TestRunAutoCreationMergeLabels (bd-0emgo.4) ---
+class TestRunAutoCreationMergeLabels:
+    """run_auto_creation output renders 'Stream merges' and 'Channels touched'
+    instead of the misleading single 'Channels updated' label (bd-0emgo.4)."""
+
+    @pytest.mark.asyncio
+    async def test_output_shows_stream_merges_and_channels_touched(self):
+        """Live run with merge data shows 'Stream merges' and 'Channels touched' lines."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+        from unittest.mock import AsyncMock
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        kickoff_response = {"execution_id": 77, "status": "running", "message": "started"}
+        final_response = {
+            "id": 77,
+            "status": "completed",
+            "mode": "execute",
+            "streams_evaluated": 2000,
+            "streams_matched": 1341,
+            "channels_created": 0,
+            "channels_updated": 5,   # genuine property updates only
+            "channels_touched": 726,  # distinct channels that received merges
+            "streams_merged": 1341,   # individual merge operations
+            "groups_created": 0,
+            "streams_skipped": 0,
+            "duration_seconds": 120.0,
+        }
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [kickoff_response, final_response]
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("run_auto_creation", {"dry_run": False})
+
+        text = result[0][0].text
+
+        # Must show the honest merge counts.
+        assert "Stream merges: 1341" in text, (
+            f"Expected 'Stream merges: 1341' in output, got: {text!r}"
+        )
+        assert "Channels touched: 726" in text, (
+            f"Expected 'Channels touched: 726' in output, got: {text!r}"
+        )
+        # channels_updated (5) reflects only property updates — still shown.
+        assert "Channels updated: 5" in text, (
+            f"Expected 'Channels updated: 5' in output, got: {text!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_old_label_does_not_appear_alone_as_merge_count(self):
+        """The misleading 'Channels updated: 1341' pattern from the bug must not appear.
+
+        Pre-fix the output was:  'Channels updated: 1341'  (inflate)
+        Post-fix it is:          'Stream merges: 1341'
+                                 'Channels touched: 726'
+                                 'Channels updated: 5'    (genuine updates)
+
+        This test explicitly guards against regressing to the pre-fix shape.
+        """
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+        from unittest.mock import AsyncMock
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        kickoff_response = {"execution_id": 88, "status": "running"}
+        final_response = {
+            "id": 88,
+            "status": "completed",
+            "mode": "execute",
+            "streams_evaluated": 3000,
+            "streams_matched": 1341,
+            "channels_created": 0,
+            "channels_updated": 0,
+            "channels_touched": 726,
+            "streams_merged": 1341,
+            "groups_created": 0,
+            "streams_skipped": 0,
+            "duration_seconds": 95.0,
+        }
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [kickoff_response, final_response]
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("run_auto_creation", {"dry_run": False})
+
+        text = result[0][0].text
+
+        # The old bug would render "Channels updated: 1341".
+        # After the fix, streams_merged is shown as "Stream merges: 1341"
+        # and channels_updated reflects only property updates (0 here).
+        assert "Channels updated: 1341" not in text, (
+            "Pre-fix inflation bug still present: 'Channels updated: 1341' rendered"
+        )
+        assert "Stream merges: 1341" in text
+        assert "Channels touched: 726" in text
+
+    @pytest.mark.asyncio
+    async def test_channels_touched_defaults_to_zero_when_absent(self):
+        """If the execution result has no channels_touched key, output shows 0 (graceful fallback)."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+        from unittest.mock import AsyncMock
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        kickoff_response = {"execution_id": 99, "status": "running"}
+        # Omit channels_touched / streams_merged — older execution rows won't have them.
+        final_response = {
+            "id": 99,
+            "status": "completed",
+            "mode": "execute",
+            "streams_evaluated": 500,
+            "streams_matched": 10,
+            "channels_created": 10,
+            "channels_updated": 0,
+            "groups_created": 0,
+            "streams_skipped": 0,
+            "duration_seconds": 30.0,
+        }
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [kickoff_response, final_response]
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("run_auto_creation", {"dry_run": False})
+
+        text = result[0][0].text
+
+        # Should render 0 gracefully, not crash.
+        assert "Stream merges: 0" in text
+        assert "Channels touched: 0" in text
