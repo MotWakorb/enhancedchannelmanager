@@ -118,7 +118,10 @@ def register(mcp: FastMCP):
                 name = c.get("name", "Unknown")
                 cid = c.get("id", "?")
                 stream_count = len(c.get("streams", []))
-                lines.append(f"  #{num}: {name} (id={cid}) — {stream_count} streams")
+                # bd-0emgo.6: lead with both identifiers, explicitly labelled,
+                # so callers don't mistake the channel #number for the API id
+                # (mutate/lookup tools need id=<cid>, not the channel number).
+                lines.append(f"  #{num} (id={cid}): {name} — {stream_count} streams")
 
             if total > len(shown):
                 lines.append(f"  ... and {total - len(shown)} more")
