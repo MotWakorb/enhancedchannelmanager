@@ -479,6 +479,9 @@ class TestAutoCreationEngineRollback:
         # Should still succeed (errors are logged but don't fail rollback)
         assert result["success"] is True
 
+        # The delete was attempted — the API-error swallow path was actually hit.
+        self.client.delete_channel.assert_called_once_with(1)
+
     @patch("auto_creation_engine.get_session")
     def test_rollback_unmerge_multiple_into_same_channel_restores_original(self, mock_get_session):
         """bd-a7okb: multiple merges into ONE pre-existing channel restore to the
@@ -1257,7 +1260,7 @@ class TestAutoCreationEngineRollbackHelpers:
         self.client.delete_channel_group.assert_called_once_with(1)
 
     def test_rollback_created_entity_api_error(self):
-        """Rollback handles API error gracefully."""
+        """Rollback handles API error gracefully — and actually attempted the delete."""
         self.client.delete_channel = AsyncMock(side_effect=Exception("API error"))
         entity = {"type": "channel", "id": 1, "name": "ESPN"}
 
@@ -1265,6 +1268,9 @@ class TestAutoCreationEngineRollbackHelpers:
         asyncio.get_event_loop().run_until_complete(
             self.engine._rollback_created_entity(entity)
         )
+
+        # The delete was attempted — the swallow path was actually reached.
+        self.client.delete_channel.assert_called_once_with(1)
 
     def test_rollback_modified_channel(self):
         """Rollback modified channel by restoring state."""
@@ -1292,7 +1298,7 @@ class TestAutoCreationEngineRollbackHelpers:
         self.client.update_channel.assert_not_called()
 
     def test_rollback_modified_entity_api_error(self):
-        """Rollback handles API error gracefully."""
+        """Rollback handles API error gracefully — and actually attempted the update."""
         self.client.update_channel = AsyncMock(side_effect=Exception("API error"))
         entity = {
             "type": "channel",
@@ -1305,6 +1311,9 @@ class TestAutoCreationEngineRollbackHelpers:
         asyncio.get_event_loop().run_until_complete(
             self.engine._rollback_modified_entity(entity)
         )
+
+        # The update was attempted — the swallow path was actually reached.
+        self.client.update_channel.assert_called_once_with(1, {"logo_url": "old.png"})
 
 
 class TestAutoCreationEngineIntegration:

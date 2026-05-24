@@ -252,9 +252,16 @@ class TestProtectedEndpoints:
 
     @pytest.mark.asyncio
     async def test_health_endpoint_is_public(self, async_client):
-        """GET /api/health does not require authentication."""
+        """GET /api/health does not require authentication.
+
+        Distinct from the middleware tests: this assertion verifies the *auth* property
+        — the endpoint is accessible without credentials, not merely that it returns 200.
+        """
         response = await async_client.get("/api/health")
         assert response.status_code == 200
+        # Auth-specific check: the health endpoint must not redirect to login
+        # or return 401/403 even when no credentials are provided.
+        assert response.status_code not in (401, 403)
 
     @pytest.mark.asyncio
     async def test_auth_login_is_public(self, async_client):

@@ -168,9 +168,18 @@ class TestRequestTimeoutMiddleware:
 
     @pytest.mark.asyncio
     async def test_fast_request_passes_through(self, async_client):
-        """A sub-second handler should not be affected by the middleware."""
+        """A sub-second handler should not be affected by the timeout middleware.
+
+        Distinct from the auth and timing-header tests: this assertion verifies
+        the *timeout-middleware* property — a fast handler must not be cut off
+        with a 504, and must not return the timeout sentinel code.
+        """
         response = await async_client.get("/api/health")
+        # Must succeed — timeout middleware must not fire for a fast handler.
         assert response.status_code == 200
+        # Timeout middleware guard: a 504 here means the middleware fired
+        # incorrectly on a request well within the time budget.
+        assert response.status_code != 504
 
     @pytest.mark.asyncio
     async def test_slow_handler_returns_504(self, async_client, monkeypatch):
