@@ -4,7 +4,7 @@ Unit tests for the auto-creation executor service.
 Tests the ActionExecutor class which executes actions against channels, groups,
 and streams with proper rollback tracking.
 """
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
 
 from auto_creation_executor import (
@@ -2391,3 +2391,209 @@ class TestCreateChannelSuperscriptStripping:
         posted = client.create_channel.call_args[0][0]
         assert "²" not in posted["name"]  # ² stripped/converted
         assert posted["name"] == "ESPN2"
+
+
+class TestMergeJournalEntry:
+    """bd-0emgo.5: per-merge journal entry for lightweight recoverability.
+
+    Each LIVE merge in ``_add_stream_to_channel`` must write one
+    ``auto_creation``/``merge_stream`` journal entry tagged with
+    ``batch_id=str(execution_id)`` so an operator can later list every
+    ``(channel_id, stream_id)`` pair a run touched via
+    ``get_journal(batch_id=...)``. STREAM IDs ONLY in before/after — never
+    stream URLs/objects (they embed provider credentials). Dry-run writes
+    nothing.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        self.channels = [
+            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US",
+             "channel_number": 100, "streams": [101]},
+        ]
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="ESPN HD Backup",
+            stream_url="http://provider.example/secret-token/201.ts",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            tvg_id="ESPN.US",
+        )
+
+    def _run_live_merge(self, execution_id):
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=execution_id,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()  # dry_run defaults to False (live)
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+    def test_live_merge_writes_one_journal_entry(self):
+        """A live merge writes exactly one auto_creation/merge_stream entry."""
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            result = self._run_live_merge(execution_id=42)
+
+        assert result.success is True
+        assert result.modified is True
+        mock_log.assert_called_once()
+        kwargs = mock_log.call_args.kwargs
+        assert kwargs["category"] == "auto_creation"
+        assert kwargs["action_type"] == "merge_stream"
+        assert kwargs["entity_id"] == 1  # channel_id
+        assert kwargs["entity_name"] == "ESPN"
+        assert kwargs["user_initiated"] is False
+
+    def test_journal_batch_id_is_execution_id(self):
+        """batch_id carries the run's execution_id (as a string)."""
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            self._run_live_merge(execution_id=42)
+
+        kwargs = mock_log.call_args.kwargs
+        assert kwargs["batch_id"] == "42"
+
+    def test_journal_before_after_carry_stream_ids_only(self):
+        """before/after hold stream IDs only — never URLs/objects (creds)."""
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            self._run_live_merge(execution_id=42)
+
+        kwargs = mock_log.call_args.kwargs
+        before = kwargs["before_value"]
+        after = kwargs["after_value"]
+        assert before == {"stream_ids": [101]}
+        assert after == {"stream_ids": [101, 201]}
+        # Credential safety: the provider token must not leak anywhere.
+        serialized = repr(kwargs)
+        assert "secret-token" not in serialized
+        assert "http" not in serialized
+
+    def test_journal_round_trip_recovers_channel_stream_pair(self):
+        """The (channel_id, stream_id) pair is recoverable from the entry."""
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            self._run_live_merge(execution_id=42)
+
+        kwargs = mock_log.call_args.kwargs
+        channel_id = kwargs["entity_id"]
+        before_ids = set(kwargs["before_value"]["stream_ids"])
+        after_ids = set(kwargs["after_value"]["stream_ids"])
+        merged_stream_ids = after_ids - before_ids
+        assert channel_id == 1
+        assert merged_stream_ids == {201}
+
+    def test_dry_run_writes_no_journal_entry(self):
+        """A dry-run merge writes NOTHING to the journal."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=42,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext(dry_run=True)
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, self.stream_ctx, exec_ctx)
+            )
+
+        assert result.success is True
+        assert "Would add" in result.description
+        self.client.update_channel.assert_not_called()
+        mock_log.assert_not_called()
+
+    def test_multi_merge_run_writes_one_entry_per_merge(self):
+        """A run merging N streams writes N entries, all sharing batch_id."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=7,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        stream_ctxs = [
+            StreamContext(stream_id=sid, stream_name=f"S{sid}",
+                          m3u_account_id=1, tvg_id="ESPN.US")
+            for sid in (301, 302, 303)
+        ]
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            for sc in stream_ctxs:
+                asyncio.get_event_loop().run_until_complete(
+                    executor.execute(action, sc, exec_ctx)
+                )
+
+        assert mock_log.call_count == 3
+        batch_ids = {c.kwargs["batch_id"] for c in mock_log.call_args_list}
+        assert batch_ids == {"7"}
+
+    def test_no_execution_id_skips_journal(self):
+        """Without an execution_id (direct-construct callers) no entry is written.
+
+        execution_id is the audit-correlation primitive; entries without it
+        would be unrecoverable noise, so the executor skips the journal write
+        when no execution_id was threaded in (default None).
+        """
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+        )  # no execution_id
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, self.stream_ctx, exec_ctx)
+            )
+
+        assert result.success is True
+        mock_log.assert_not_called()
+
+    def test_already_present_stream_writes_no_journal_entry(self):
+        """Re-merging an already-present stream is a skip — no journal entry."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=42,
+        )
+        stream_ctx = StreamContext(
+            stream_id=101,  # already in channel 1
+            stream_name="ESPN",
+            m3u_account_id=1,
+            tvg_id="ESPN.US",
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, stream_ctx, exec_ctx)
+            )
+
+        assert result.success is True
+        assert result.skipped is True
+        self.client.update_channel.assert_not_called()
+        mock_log.assert_not_called()
