@@ -786,6 +786,16 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/backup/create",
     ),
+    # bd-0hjrk.5 — POST /api/backup/save PERSISTS the full backup ZIP to
+    # BACKUPS_DIR (unlike GET /create which only streams). No request body
+    # (admin-guarded; the backend builds the artifact). Returns
+    # {filename, size_bytes, created_at} — a bare dict (no response_model), so
+    # response_fields stays empty (the tool reads keys off the runtime dict).
+    "backup_save": Endpoint(
+        name="backup_save",
+        method="POST",
+        path="/api/backup/save",
+    ),
     "backup_export_sections": Endpoint(
         name="backup_export_sections",
         method="GET",
@@ -800,6 +810,16 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="backup_delete_saved",
         method="DELETE",
         path="/api/backup/saved/{filename}",
+    ),
+    # bd-0hjrk.5 — POST /api/backup/restore-saved restores from an on-disk saved
+    # ZIP (RestoreSavedRequest body = {"filename": ...}). The backend validates
+    # the filename via the strict regex + containment guard and reuses the same
+    # restore code path as the uploaded-ZIP POST /restore. Admin-guarded.
+    "backup_restore_saved": Endpoint(
+        name="backup_restore_saved",
+        method="POST",
+        path="/api/backup/restore-saved",
+        request_fields=frozenset({"filename"}),  # RestoreSavedRequest
     ),
     "journal_list": Endpoint(
         name="journal_list",

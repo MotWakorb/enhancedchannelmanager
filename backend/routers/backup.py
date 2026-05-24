@@ -63,7 +63,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports)
 
-APP_VERSION = "0.17.3-0004"
+APP_VERSION = "0.17.3-0005"
 
 REDACTED = "***REDACTED***"
 
@@ -1427,36 +1427,124 @@ _DISPATCHARR_RESTORERS = {
 # ---------------------------------------------------------------------------
 
 BACKUPS_DIR = CONFIG_DIR / "backups"
-_BACKUP_FILENAME_RE = re.compile(r"^ecm-backup-\d{4}-\d{2}-\d{2}_\d{6}\.yaml$")
+# Strict allowlist for the on-disk filename shape. ``.yaml`` = scheduled YAML
+# export; ``.zip`` = on-demand full backup persisted by POST /save (bd-0hjrk.5).
+# Both download_saved_backup and delete_saved_backup accept either extension;
+# restore-saved further restricts to ``.zip`` (the full-archive restore path).
+_BACKUP_FILENAME_RE = re.compile(r"^ecm-backup-\d{4}-\d{2}-\d{2}_\d{6}\.(yaml|zip)$")
+# Zip-only allowlist for the full-archive restore path (restore-saved) and the
+# on-demand save path. YAML section-import is a different path
+# (POST /restore-yaml) and out of scope here.
+_BACKUP_ZIP_FILENAME_RE = re.compile(r"^ecm-backup-\d{4}-\d{2}-\d{2}_\d{6}\.zip$")
+
+# SECURITY (CodeQL py/path-injection, CWE-22/23/36/73/99): the two-layer guard
+# (strict regex allowlist + canonicalize-and-verify containment under
+# BACKUPS_DIR) is INLINED at each filename-addressed endpoint below rather than
+# factored into a shared helper. CodeQL's dataflow tracker does NOT follow the
+# `relative_to` containment barrier across a function-return boundary, so a
+# helper that validates-then-returns a Path is still treated as user-tainted at
+# every downstream file-op sink. Keeping the barrier and the file op in the
+# SAME function body is the proven-passing pattern (matches origin/dev). The
+# allowlist uses re.fullmatch (not .match) so a trailing newline cannot slip
+# past the `$` anchor (SEC-1 hardening).
 
 
 @router.get("/saved")
 async def list_saved_backups(_admin=RequireAdminIfEnabled):
-    """List saved YAML backup files on disk, newest first."""
+    """List saved backup files on disk (YAML exports + on-demand ZIP archives),
+    newest first. Each entry carries a ``type`` field: "yaml" (scheduled YAML
+    export) or "zip" (full on-demand backup persisted by POST /save)."""
     if not BACKUPS_DIR.exists():
         return []
-    files = sorted(BACKUPS_DIR.glob("ecm-backup-*.yaml"), reverse=True)
+    files = sorted(
+        list(BACKUPS_DIR.glob("ecm-backup-*.yaml"))
+        + list(BACKUPS_DIR.glob("ecm-backup-*.zip")),
+        key=lambda f: f.name,
+        reverse=True,
+    )
     return [
         {
             "filename": f.name,
             "size_bytes": f.stat().st_size,
             "created_at": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat(),
+            "type": "zip" if f.suffix == ".zip" else "yaml",
         }
         for f in files
     ]
 
 
-@router.get("/saved/{filename}")
-async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
-    """Download a saved YAML backup file."""
-    # Layer 1 (defense in depth): strict regex allowlist on filename shape.
-    if not _BACKUP_FILENAME_RE.match(filename):
+@router.post("/save")
+async def save_backup(_admin=RequireAdminIfEnabled):
+    """Create a full backup ZIP and PERSIST it to BACKUPS_DIR. Admin only.
+
+    Unlike GET /create (which streams the ZIP to the HTTP client and persists
+    nothing), this writes the same ``_create_backup_zip()`` artifact to disk as
+    ``ecm-backup-<UTC ts>.zip`` so it is discoverable via GET /saved and
+    restorable via POST /restore-saved (bd-0hjrk.5). The persisted ZIP is the
+    same redacted artifact GET /create produces — redaction is unchanged.
+    """
+    logger.info("[BACKUP] Saving backup to disk")
+    try:
+        buf = _create_backup_zip()
+        data = buf.getvalue()
+        filename = _get_backup_filename()  # ecm-backup-<UTC ts>.zip
+        BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+        # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99
+        # — cross-function barrier not tracked; keep barrier+sink in one body).
+        # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch
+        # so a trailing newline cannot pass the anchor).
+        if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+        try:
+            safe_root = BACKUPS_DIR.resolve()
+            path = (BACKUPS_DIR / filename).resolve()
+            path.relative_to(safe_root)
+        except (ValueError, OSError):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        path.write_bytes(data)
+        logger.info("[BACKUP] Saved backup %s (%d bytes)", filename, len(data))
+        return {
+            "filename": filename,
+            "size_bytes": len(data),
+            "created_at": datetime.fromtimestamp(
+                path.stat().st_mtime, tz=timezone.utc
+            ).isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[BACKUP] Failed to save backup: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to save backup: %s" % str(e))
+
+
+class RestoreSavedRequest(BaseModel):
+    filename: str
+
+
+@router.post("/restore-saved")
+async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireAdminIfEnabled):
+    """Restore ECM configuration from an on-disk saved backup ZIP. Admin only.
+
+    Takes ``{"filename": "ecm-backup-<ts>.zip"}``, validates it through the
+    strict regex + containment guard (zip-only allowlist), then restores from
+    the on-disk archive reusing the EXACT same validate + restore code path as
+    the uploaded-ZIP POST /restore (``_validate_backup_zip`` +
+    ``_restore_from_zip``). YAML artifacts are rejected — section-import is a
+    different path (POST /restore-yaml), out of scope here (bd-0hjrk.5).
+
+    WARNING: this OVERWRITES current ECM state (settings, database, logos).
+    """
+    logger.info("[BACKUP] Restore-from-saved requested, filename=%s", req.filename)
+    filename = req.filename
+    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
+    # the containment barrier is not tracked across a function-return boundary,
+    # so the barrier and the read_bytes sink must live in this same function).
+    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch so a
+    # trailing newline cannot pass the anchor).
+    if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    # Layer 2: canonicalize and verify containment under BACKUPS_DIR.
-    # This closes CodeQL py/path-injection (CWE-22/23/36/73/99) by making
-    # containment explicit — the regex guard alone is not followed by
-    # CodeQL's dataflow tracker. Mirrors zip-restore hardening at lines
-    # 164-167 (commit a591105c).
+    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
     try:
         safe_root = BACKUPS_DIR.resolve()
         path = (BACKUPS_DIR / filename).resolve()
@@ -1465,6 +1553,54 @@ async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
         raise HTTPException(status_code=400, detail="Invalid filename")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Backup not found")
+
+    # Open + validate + restore via the SAME path the uploaded-ZIP restore uses.
+    try:
+        buf = io.BytesIO(path.read_bytes())
+        zf = zipfile.ZipFile(buf, "r")
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Saved file is not a valid zip archive")
+
+    with zf:
+        manifest = _validate_backup_zip(zf)
+        restored = _restore_from_zip(zf, manifest)
+
+    logger.info("[BACKUP] Restore-from-saved complete, %d files restored", len(restored))
+    return {
+        "status": "ok",
+        "filename": req.filename,
+        "backup_version": manifest.get("version", "unknown"),
+        "backup_date": manifest.get("created_at", "unknown"),
+        "restored_files": restored,
+    }
+
+
+@router.get("/saved/{filename}")
+async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
+    """Download a saved backup file (YAML export or ZIP archive)."""
+    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
+    # the containment barrier is not tracked across a function-return boundary,
+    # so the barrier and the read_bytes/read_text sinks must live in this same
+    # function). Mirrors origin/dev's proven-passing inline pattern.
+    # Layer 1 (defense in depth): strict regex allowlist (fullmatch so a trailing
+    # newline cannot pass the anchor).
+    if not _BACKUP_FILENAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+    try:
+        safe_root = BACKUPS_DIR.resolve()
+        path = (BACKUPS_DIR / filename).resolve()
+        path.relative_to(safe_root)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Backup not found")
+    if filename.endswith(".zip"):
+        return StreamingResponse(
+            io.BytesIO(path.read_bytes()),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
     content = path.read_text()
     return PlainTextResponse(
         content=content,
@@ -1475,13 +1611,16 @@ async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
 
 @router.delete("/saved/{filename}", status_code=200)
 async def delete_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
-    """Delete a saved YAML backup file."""
-    # Layer 1 (defense in depth): strict regex allowlist on filename shape.
-    if not _BACKUP_FILENAME_RE.match(filename):
+    """Delete a saved backup file (YAML export or ZIP archive)."""
+    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
+    # the containment barrier is not tracked across a function-return boundary,
+    # so the barrier and the unlink sink must live in this same function). See
+    # download_saved_backup above for the rationale.
+    # Layer 1 (defense in depth): strict regex allowlist (fullmatch so a trailing
+    # newline cannot pass the anchor).
+    if not _BACKUP_FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    # Layer 2: canonicalize and verify containment under BACKUPS_DIR.
-    # See download_saved_backup above for the rationale — this closes
-    # CodeQL py/path-injection findings that the regex alone cannot.
+    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
     try:
         safe_root = BACKUPS_DIR.resolve()
         path = (BACKUPS_DIR / filename).resolve()
