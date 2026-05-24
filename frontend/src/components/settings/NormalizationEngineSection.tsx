@@ -99,6 +99,8 @@ interface RuleEditorState {
   // Tag group condition settings
   tagGroupId: number | null;
   tagMatchPosition: TagMatchPosition;
+  // bd-0emgo.2: require a strong delimiter (not a bare space) for the tag match.
+  requireDelimiter: boolean;
   // Action settings
   actionType: NormalizationActionType;
   actionValue: string;
@@ -289,6 +291,7 @@ export function NormalizationEngineSection() {
     conditionLogic: 'AND',
     tagGroupId: null,
     tagMatchPosition: 'prefix',
+    requireDelimiter: false,
     actionType: 'strip_prefix',
     actionValue: '',
     stopProcessing: false,
@@ -535,6 +538,7 @@ export function NormalizationEngineSection() {
       conditionLogic: 'AND',
       tagGroupId: null,
       tagMatchPosition: 'prefix',
+      requireDelimiter: false,
       actionType: 'strip_prefix',
       actionValue: '',
       stopProcessing: false,
@@ -562,6 +566,7 @@ export function NormalizationEngineSection() {
       conditionLogic: rule.condition_logic || 'AND',
       tagGroupId: rule.tag_group_id || null,
       tagMatchPosition: rule.tag_match_position || 'prefix',
+      requireDelimiter: rule.require_delimiter ?? false,
       actionType: rule.action_type,
       actionValue: rule.action_value || '',
       stopProcessing: rule.stop_processing,
@@ -592,6 +597,9 @@ export function NormalizationEngineSection() {
       // Tag group fields (only when condition type is tag_group)
       const tagGroupId = ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagGroupId : null;
       const tagMatchPosition = ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagMatchPosition : null;
+      // require_delimiter only applies to tag_group prefix/suffix matches; send
+      // false for any non-tag_group rule so it never carries a stale flag.
+      const requireDelimiter = ruleEditor.conditionType === 'tag_group' ? ruleEditor.requireDelimiter : false;
 
       // Else branch fields (only when enabled)
       const elseActionType = ruleEditor.hasElseBranch ? ruleEditor.elseActionType : null;
@@ -609,6 +617,7 @@ export function NormalizationEngineSection() {
           condition_logic: conditionLogicData,
           tag_group_id: tagGroupId,
           tag_match_position: tagMatchPosition,
+          require_delimiter: requireDelimiter,
           action_type: ruleEditor.actionType,
           action_value: ruleEditor.actionValue || undefined,
           stop_processing: ruleEditor.stopProcessing,
@@ -628,6 +637,7 @@ export function NormalizationEngineSection() {
           condition_logic: conditionLogicData,
           tag_group_id: tagGroupId ?? undefined,
           tag_match_position: tagMatchPosition ?? undefined,
+          require_delimiter: requireDelimiter,
           action_type: ruleEditor.actionType,
           action_value: ruleEditor.actionValue || undefined,
           stop_processing: ruleEditor.stopProcessing,
@@ -741,6 +751,7 @@ export function NormalizationEngineSection() {
         condition_logic: ruleEditor.useCompoundConditions ? ruleEditor.conditionLogic : undefined,
         tag_group_id: ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagGroupId ?? undefined : undefined,
         tag_match_position: ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagMatchPosition : undefined,
+        require_delimiter: ruleEditor.conditionType === 'tag_group' ? ruleEditor.requireDelimiter : undefined,
         action_type: ruleEditor.actionType,
         action_value: ruleEditor.actionValue || undefined,
         else_action_type: ruleEditor.hasElseBranch ? ruleEditor.elseActionType : undefined,
@@ -758,7 +769,7 @@ export function NormalizationEngineSection() {
       const timer = setTimeout(updatePreview, 300);
       return () => clearTimeout(timer);
     }
-  }, [ruleEditor.isOpen, ruleEditor.conditionType, ruleEditor.conditionValue, ruleEditor.caseSensitive, ruleEditor.useCompoundConditions, ruleEditor.conditions, ruleEditor.conditionLogic, ruleEditor.tagGroupId, ruleEditor.tagMatchPosition, ruleEditor.actionType, ruleEditor.actionValue, ruleEditor.hasElseBranch, ruleEditor.elseActionType, ruleEditor.elseActionValue, updatePreview]);
+  }, [ruleEditor.isOpen, ruleEditor.conditionType, ruleEditor.conditionValue, ruleEditor.caseSensitive, ruleEditor.useCompoundConditions, ruleEditor.conditions, ruleEditor.conditionLogic, ruleEditor.tagGroupId, ruleEditor.tagMatchPosition, ruleEditor.requireDelimiter, ruleEditor.actionType, ruleEditor.actionValue, ruleEditor.hasElseBranch, ruleEditor.elseActionType, ruleEditor.elseActionValue, updatePreview]);
 
   // Export rules as YAML
   const handleExportRules = useCallback(async () => {
@@ -1594,6 +1605,24 @@ export function NormalizationEngineSection() {
                         </select>
                       </div>
                     </div>
+                  )}
+
+                  {/* Strong-delimiter requirement (bd-0emgo.2). Only meaningful
+                      for prefix/suffix matches — a 'contains' match already
+                      requires separators on both sides. */}
+                  {ruleEditor.conditionType === 'tag_group'
+                    && ruleEditor.tagMatchPosition !== 'contains' && (
+                    <label className="modal-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={ruleEditor.requireDelimiter}
+                        onChange={(e) => setRuleEditor((prev) => ({
+                          ...prev,
+                          requireDelimiter: e.target.checked,
+                        }))}
+                      />
+                      Only strip when followed by a delimiter (not a space)
+                    </label>
                   )}
                 </>
               )}
