@@ -14,14 +14,21 @@ from datetime import datetime
 from typing import List, Optional
 
 import journal
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
 
+from auth import RequireAdminIfEnabled
 from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
+from services.dedup_matcher import (
+    CONFIDENCE_FLOOR,
+    NameCleanMode,
+    is_admissible,
+    score_all,
+)
 from regex_lint import (
     lint_actions_json,
     lint_conditions_json,
@@ -1674,6 +1681,232 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
 # =============================================================================
 # Validation & Schema Endpoints
 # =============================================================================
+
+
+# =============================================================================
+# Component B — no-write scored fuzzy preview (enhancedchannelmanager-jnzst)
+# =============================================================================
+
+# DoS guard ceilings. The preview is an N×M scoring pass (every stream against
+# every channel in the scoped groups); without caps a broad group set could be
+# turned into a CPU-amplification vector. These bound the worst case.
+_PREVIEW_MAX_GROUPS = 25
+_PREVIEW_MAX_STREAMS = 2000
+_PREVIEW_MAX_CHANNELS = 2000
+_PREVIEW_FETCH_PAGE_SIZE = 500
+
+
+class ScoredTriple(BaseModel):
+    """One scored (stream, channel) pair surfaced by the preview."""
+
+    stream_id: int
+    stream_name: str
+    channel_id: str
+    channel_name: str
+    score: float
+    callsign_verdict: str  # "match" | "conflict" | "absent"
+    signal: str
+
+
+class FuzzyPreviewResponse(BaseModel):
+    """Paginated, write-free preview of scored fuzzy matches."""
+
+    triples: List[ScoredTriple]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    min_score: float
+    truncated: bool  # True when the candidate pool hit a DoS ceiling
+
+
+@router.get("/fuzzy-preview", response_model=FuzzyPreviewResponse)
+async def preview_fuzzy_matches(
+    group_ids: List[int] = Query(
+        ..., description="Channel-group IDs to scope the preview to (non-empty)"
+    ),
+    min_score: float = Query(
+        ..., ge=0.0, le=1.0,
+        description="Minimum score to include a triple. May be below the 0.60 "
+                    "confidence floor here — the preview deliberately exposes "
+                    "sub-floor scores for inspection (it never writes).",
+    ),
+    allow_no_callsign: bool = Query(
+        False,
+        description="Q1 opt-in. When True, a no-callsign ('absent') pair is "
+                    "admissible at score >= 0.90 (NO_CALLSIGN_FLOOR). Default "
+                    "False = require a parseable callsign on both sides. An M1 "
+                    "callsign 'conflict' is NEVER admissible regardless.",
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    _admin=RequireAdminIfEnabled,
+) -> FuzzyPreviewResponse:
+    """Score streams against channels in the given groups — ZERO writes.
+
+    This is the read-only sibling of the scored-fuzzy rule path: it runs the
+    SAME shared core (``services.dedup_matcher.score_all``) AND the SAME
+    admission policy (``services.dedup_matcher.is_admissible``) so operators can
+    inspect exactly what a rule WOULD do before committing. It never calls any
+    mutating Dispatcharr method.
+
+    Admission (FIX 2 — single source of truth). Returned triples are
+    ADMISSIBLE-only: an M1 callsign ``conflict`` is NEVER returned (even at
+    ``min_score == 0``), and a no-callsign ``absent`` pair is returned only when
+    ``allow_no_callsign`` is True and its score reaches ``NO_CALLSIGN_FLOOR``
+    (0.90). This is what makes the two MCP write tools (which assign purely on
+    ``score`` from these triples) inherit M1/M2 with no consumer-side policy —
+    they can only ever see admissible pairs.
+
+    The ``min_score`` floor clamp is deliberately NOT applied here (unlike the
+    dedup candidate lookup): a sub-0.60 ``min_score`` lets an operator see
+    borderline ``match``-verdict pairs. ``conflict``/``absent`` admission is
+    still governed by the shared policy, so sub-floor ``min_score`` cannot
+    re-admit an incident-class false positive.
+
+    Validation (DoS hardening): ``group_ids`` must be non-empty (an empty list
+    would mean "all groups" → an unbounded N×M scoring pass), free of
+    duplicates and negatives, and capped at ``_PREVIEW_MAX_GROUPS``. The fetched
+    stream and channel pools are each capped; hitting a cap sets ``truncated``.
+    """
+    # --- Validate group_ids (reject empty=all, dup, negative; cap count) ---
+    if not group_ids:
+        raise HTTPException(status_code=400, detail="group_ids must be non-empty")
+    if any(g < 0 for g in group_ids):
+        raise HTTPException(status_code=400, detail="group_ids must be non-negative")
+    if len(set(group_ids)) != len(group_ids):
+        raise HTTPException(status_code=400, detail="group_ids must not contain duplicates")
+    if len(group_ids) > _PREVIEW_MAX_GROUPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"group_ids exceeds the cap of {_PREVIEW_MAX_GROUPS}",
+        )
+
+    client = get_client()
+    allowed = set(group_ids)
+    truncated = False
+
+    # --- Fetch channels in the scoped groups (capped) ---
+    channels: list[dict] = []
+    try:
+        for gid in group_ids:
+            cpage = 1
+            while True:
+                resp = await client.get_channels(
+                    page=cpage, page_size=_PREVIEW_FETCH_PAGE_SIZE, channel_group=gid
+                )
+                batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
+                channels.extend(batch)
+                if len(channels) >= _PREVIEW_MAX_CHANNELS:
+                    channels = channels[:_PREVIEW_MAX_CHANNELS]
+                    truncated = True
+                    break
+                if not isinstance(resp, dict) or not resp.get("next"):
+                    break
+                cpage += 1
+            if truncated:
+                break
+    except Exception as e:
+        logger.warning("[AUTO-CREATE] fuzzy-preview channel fetch failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # --- Fetch streams in the scoped groups (capped) ---
+    streams: list[dict] = []
+    try:
+        group_names = [
+            await client._channel_group_name_for_id(gid) for gid in group_ids
+        ]
+        for gname in group_names:
+            if not gname or truncated:
+                continue
+            spage = 1
+            while True:
+                resp = await client.get_streams(
+                    page=spage, page_size=_PREVIEW_FETCH_PAGE_SIZE,
+                    channel_group_name=gname,
+                )
+                batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
+                streams.extend(batch)
+                if len(streams) >= _PREVIEW_MAX_STREAMS:
+                    streams = streams[:_PREVIEW_MAX_STREAMS]
+                    truncated = True
+                    break
+                if not isinstance(resp, dict) or not resp.get("next"):
+                    break
+                spage += 1
+    except Exception as e:
+        logger.warning("[AUTO-CREATE] fuzzy-preview stream fetch failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Build the candidate (channel) list scoped to the allowed groups and the
+    # per-candidate tvg_id map for the override rung.
+    candidates: list[tuple[str, str]] = []
+    cand_tvg: dict[str, str] = {}
+    for ch in channels:
+        if ch.get("channel_group_id") not in allowed:
+            continue
+        cid, cname = ch.get("id"), ch.get("name")
+        if cid is None or not cname:
+            continue
+        candidates.append((str(cid), cname))
+        if ch.get("tvg_id"):
+            cand_tvg[str(cid)] = ch["tvg_id"]
+
+    # Score every (stream, candidate) pair via the shared core. Offload the
+    # CPU-bound scoring off the event loop.
+    def _score_all_pairs() -> list[ScoredTriple]:
+        out: list[ScoredTriple] = []
+        for s in streams:
+            sid, sname = s.get("id"), s.get("name")
+            if sid is None or not sname:
+                continue
+            stvg = s.get("tvg_id")
+            for cid, cname, sm in score_all(
+                sname, candidates,
+                stream_tvg_id=stvg, candidate_tvg_ids=cand_tvg,
+                mode=NameCleanMode.LOCALS,
+            ):
+                # Shared admission policy — conflict never returned, absent only
+                # at >= NO_CALLSIGN_FLOOR when allow_no_callsign, match at
+                # >= min_score (FIX 2). The MCP write tools inherit M1/M2 here.
+                if not is_admissible(
+                    sm, min_score=min_score, allow_no_callsign=allow_no_callsign
+                ):
+                    continue
+                out.append(ScoredTriple(
+                    stream_id=int(sid), stream_name=sname,
+                    channel_id=cid, channel_name=cname,
+                    score=round(sm.score, 4),
+                    callsign_verdict=sm.callsign_verdict,
+                    signal=sm.signal,
+                ))
+        # Highest score first, deterministic tie-break on ids.
+        out.sort(key=lambda t: (-t.score, t.stream_id, t.channel_id))
+        return out
+
+    all_triples = await run_cpu_bound(_score_all_pairs)
+
+    # --- REAL pagination ---
+    total = len(all_triples)
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    start = (page - 1) * page_size
+    page_slice = all_triples[start:start + page_size]
+
+    logger.debug(
+        "[AUTO-CREATE] fuzzy-preview groups=%s streams=%d channels=%d "
+        "min_score=%.2f total=%d page=%d truncated=%s",
+        group_ids, len(streams), len(candidates), min_score, total, page, truncated,
+    )
+
+    return FuzzyPreviewResponse(
+        triples=page_slice,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        min_score=min_score,
+        truncated=truncated,
+    )
 
 
 @router.post("/validate")

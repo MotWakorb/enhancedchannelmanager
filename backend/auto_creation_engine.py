@@ -10,6 +10,7 @@ The main orchestrator for the auto-creation pipeline. Coordinates:
 - Conflict detection and resolution
 """
 import asyncio
+import json
 import logging
 import re
 from collections import defaultdict
@@ -17,6 +18,7 @@ from datetime import datetime
 from typing import Optional
 
 import safe_regex
+import journal
 from config import get_settings
 from database import get_session
 from models import (
@@ -322,17 +324,29 @@ class AutoCreationEngine:
             for entity in reversed(created):
                 await self._rollback_created_entity(entity)
 
-            # Restore modified entities in REVERSE order (bd-a7okb). Restore is
-            # last-write-wins: _rollback_modified_entity overwrites the channel
-            # from each entry's pre-change `previous` snapshot. When a run merged
-            # several streams into the SAME pre-existing channel, the snapshots
-            # are cumulative ([A] before B, [A,B] before C, ...). Forward order
-            # would apply the earliest (true original) first and let a later
-            # snapshot win, leaving all-but-the-last merged stream behind.
-            # Reversing makes the earliest snapshot win — restoring the original
-            # — exactly as created-entity teardown is reversed above.
-            for entity in reversed(modified):
-                await self._rollback_modified_entity(entity)
+            # jnzst Q4: prefer the SURGICAL journal-driven un-merge for stream
+            # merges — it removes ONLY the stream IDs this run added and
+            # preserves streams a concurrent edit added afterward. It is
+            # attempted first; if the run has merge_stream journal entries it
+            # handles all the stream-list changes and the snapshot restore below
+            # is SKIPPED (running it too would clobber the concurrent edits the
+            # surgical pass just preserved). When the journal has no merge
+            # entries for the batch (legacy runs), handled is False and we fall
+            # back to the snapshot restore.
+            handled, _surgical_touched = await self._journal_driven_unmerge(execution_id)
+
+            if not handled:
+                # Restore modified entities in REVERSE order (bd-a7okb). Restore is
+                # last-write-wins: _rollback_modified_entity overwrites the channel
+                # from each entry's pre-change `previous` snapshot. When a run merged
+                # several streams into the SAME pre-existing channel, the snapshots
+                # are cumulative ([A] before B, [A,B] before C, ...). Forward order
+                # would apply the earliest (true original) first and let a later
+                # snapshot win, leaving all-but-the-last merged stream behind.
+                # Reversing makes the earliest snapshot win — restoring the original
+                # — exactly as created-entity teardown is reversed above.
+                for entity in reversed(modified):
+                    await self._rollback_modified_entity(entity)
 
             # Mark execution as rolled back
             execution.status = "rolled_back"
@@ -1346,7 +1360,8 @@ class AutoCreationEngine:
                     action, stream, exec_ctx, winning_rule.target_group_id,
                     normalization_group_ids=winning_rule.get_normalization_group_ids(),
                     match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False)),
-                    rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None)
+                    rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None),
+                    rule_id=winning_rule.id,
                 )
 
                 action_entry = {
@@ -2429,7 +2444,14 @@ class AutoCreationEngine:
             logger.error("[AUTO-CREATE-ENGINE] Failed to rollback %s %s: %s", entity_type, entity_id, e)
 
     async def _rollback_modified_entity(self, entity: dict):
-        """Rollback a modified entity by restoring its previous state."""
+        """Rollback a modified entity by restoring its previous state.
+
+        WARNING: this is the SNAPSHOT-restore path — it overwrites the channel's
+        FULL stream list from the pre-change snapshot, clobbering any streams a
+        concurrent edit added after the merge. ``_journal_driven_unmerge``
+        (jnzst Q4) is the surgical alternative and is preferred when journal
+        provenance is available; this remains the fallback when it is not.
+        """
         entity_type = entity.get("type")
         entity_id = entity.get("id")
         previous = entity.get("previous", {})
@@ -2440,6 +2462,99 @@ class AutoCreationEngine:
                 logger.info("[AUTO-CREATE-ENGINE] Restored channel %s to previous state", entity_id)
         except Exception as e:
             logger.error("[AUTO-CREATE-ENGINE] Failed to restore %s %s: %s", entity_type, entity_id, e)
+
+    @staticmethod
+    def _added_stream_ids(before_value: dict | None, after_value: dict | None) -> list[int]:
+        """The stream IDs a single journaled merge ADDED (after - before).
+
+        Reads the ``{"stream_ids": [...]}`` lists ``_journal_merge`` wrote.
+        Order-preserving set difference so a re-add of an already-present id is
+        not double-counted. Returns [] when either side is missing/malformed.
+        """
+        try:
+            before = set(before_value.get("stream_ids", []) if before_value else [])
+            after = list(after_value.get("stream_ids", []) if after_value else [])
+        except (AttributeError, TypeError):
+            return []
+        return [sid for sid in after if sid not in before]
+
+    async def _journal_driven_unmerge(self, execution_id: int) -> tuple[bool, int]:
+        """Surgically un-merge a run's fuzzy stream merges (jnzst Q4).
+
+        Reads every ``merge_stream`` journal entry tagged
+        ``batch_id=str(execution_id)``, computes the stream IDs each merge
+        ADDED (after - before), and removes ONLY those from each channel's
+        CURRENT live stream list — preserving streams a concurrent edit added
+        after the merge. This is the un-clobbering alternative to the snapshot
+        restore in ``_rollback_modified_entity``.
+
+        Returns ``(handled, channels_touched)``. ``handled`` is False when no
+        merge journal entries exist for the batch (caller falls back to the
+        snapshot restore); the per-channel before/after lists are then missing,
+        so snapshot restore is the only option.
+        """
+        try:
+            page = journal.get_entries(
+                page=1, page_size=1000,
+                action_type="merge_stream",
+                batch_id=str(execution_id),
+            )
+        except Exception as e:
+            logger.warning(
+                "[AUTO-CREATE-ENGINE] Journal read failed for surgical unmerge "
+                "of execution %s: %s", execution_id, e,
+            )
+            return False, 0
+
+        entries = page.get("results", []) if isinstance(page, dict) else []
+        if not entries:
+            return False, 0
+
+        # Aggregate the stream IDs added per channel across all merges in the run.
+        added_by_channel: dict[int, set[int]] = defaultdict(set)
+        for entry in entries:
+            cid = entry.get("entity_id")
+            if cid is None:
+                continue
+            before = entry.get("before_value")
+            after = entry.get("after_value")
+            # journal.get_entries returns to_dict() form where before/after are
+            # already-parsed dicts; tolerate raw JSON strings defensively too.
+            if isinstance(before, str):
+                before = json.loads(before) if before else None
+            if isinstance(after, str):
+                after = json.loads(after) if after else None
+            for sid in self._added_stream_ids(before, after):
+                added_by_channel[cid].add(sid)
+
+        channels_touched = 0
+        for channel_id, added in added_by_channel.items():
+            if not added:
+                continue
+            try:
+                # Fetch the CURRENT live stream list (not the snapshot) so a
+                # concurrently-added stream survives.
+                channel = await self.client.get_channel(channel_id)
+                current = [
+                    s["id"] if isinstance(s, dict) else s
+                    for s in (channel.get("streams") or [])
+                ]
+                remaining = [sid for sid in current if sid not in added]
+                if remaining != current:
+                    await self.client.update_channel(channel_id, {"streams": remaining})
+                    channels_touched += 1
+                    logger.info(
+                        "[AUTO-CREATE-ENGINE] Surgical unmerge: removed %d stream(s) "
+                        "from channel %s, kept %d (concurrent edits preserved)",
+                        len(current) - len(remaining), channel_id, len(remaining),
+                    )
+            except Exception as e:
+                logger.error(
+                    "[AUTO-CREATE-ENGINE] Surgical unmerge failed for channel %s: %s",
+                    channel_id, e,
+                )
+
+        return True, channels_touched
 
 
 # =============================================================================
