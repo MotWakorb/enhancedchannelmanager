@@ -342,11 +342,6 @@ export function MCPSettingsSection({ isAdmin }: Props) {
         </div>
       )}
 
-      {/* Active Connections (OAuth grants) section REMOVED (bd-9axgc) — the MCP
-          OAuth offering was retired, so there are no OAuth grants to list or
-          revoke. The static ?api_key= path is managed via the API Key section
-          above (generate / regenerate / revoke). */}
-
       {/* Available Tools */}
       {keyConfigured && (
         <div className="settings-section">

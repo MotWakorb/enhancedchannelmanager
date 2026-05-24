@@ -103,7 +103,6 @@ tags_metadata = [
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
     {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
-    {"name": "OAuth", "description": "OAuth 2.1 + PKCE Authorization Server for the MCP integration — /authorize, /token, /revoke (ADR-009, bd-buiqr.3)"},
 ]
 
 app = FastAPI(
@@ -130,7 +129,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.3-0007",
+    version="0.17.3-0008",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -442,8 +441,6 @@ AUTH_EXEMPT_PATHS = {
     "/api/health/ready",
     # Schema version — public so DBAS restore/sync can gate on revision
     "/api/health/schema",
-    # NOTE (bd-9axgc): /api/health/oauth was REMOVED with the MCP OAuth
-    # offering. It is no longer registered and returns 404.
     # Build identity — public so operators can detect container drift from
     # origin/dev (bd-h0wfu) without authenticating. Echoes the same env
     # vars baked into the image at Docker build time. No subsystem access.
@@ -473,11 +470,6 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/providers",
     "/api/auth/dispatcharr/login",
     "/api/auth/admin/settings",
-    # NOTE (bd-9axgc): the MCP OAuth offering was retired. The OAuth token /
-    # revoke endpoints (/api/oauth/token, /api/oauth/revoke) and the OAuth
-    # discovery documents (/.well-known/oauth-authorization-server,
-    # /.well-known/oauth-protected-resource) are no longer registered and
-    # return 404. Their AUTH_EXEMPT entries were removed with the routers.
     # Initial setup (only works when no config exists)
     "/api/backup/restore-initial",
     # OpenAPI docs
@@ -706,14 +698,6 @@ async def startup_event():
 
     # Initialize journal database
     init_db()
-
-    # MCP OAuth offering RETIRED (bd-9axgc). The startup OAuth state-store seed
-    # (OAuthStore init + seed_oauth_clients), the dedicated signing-secret
-    # generation (get_or_create_oauth_signing_secret), and the OAuth discovery
-    # HTTP-posture WARN were REMOVED here because the OAuth Authorization Server
-    # is no longer offered (routers unregistered → /api/oauth/* + OAuth
-    # /.well-known/* return 404). The auth/oauth_* modules + config helper are
-    # kept dormant in-tree; re-add this seed block to re-enable the offering.
 
     # Seed the ecm_pending_merges_queue_depth gauge on startup (bd-wvr1d).
     # This ensures the gauge reflects the actual queue depth immediately
@@ -1193,32 +1177,13 @@ async def shutdown_event():
 ASSETS_CACHE_CONTROL = "public, max-age=31536000, immutable"
 INDEX_CACHE_CONTROL = "no-cache, must-revalidate"
 
-#: The frontend OAuth consent route (bead buiqr.7). The backend AS
-#: (/api/oauth/authorize) redirects here after validating the request; this is
-#: the page where the admin approves Claude Desktop's access. Kept in sync with
-#: routers/oauth_mcp.py CONSENT_ROUTE.
-CONSENT_FRONTEND_PATH = "oauth/consent"
-#: Modern anti-framing for the consent route — defends against clickjacking even
-#: on browsers that ignore the (already globally-set) X-Frame-Options: DENY
-#: header (bead buiqr.7, threat model CP1).
-CONSENT_CSP = "frame-ancestors 'none'"
-
 
 def spa_headers_for(full_path: str) -> dict[str, str]:
     """Build the response headers for an SPA (index.html) route.
 
-    Every SPA route gets the revalidate-always Cache-Control (bd-hl603). The
-    OAuth consent route additionally gets CSP ``frame-ancestors 'none'`` so the
-    consent screen can never be embedded in a frame (clickjacking — threat model
-    CP1). X-Frame-Options: DENY is already applied to every response by the
-    global ``security_headers_middleware``; this adds the CSP belt to that
-    suspenders. Scoped to the consent route so it doesn't constrain the rest of
-    the SPA.
+    Every SPA route gets the revalidate-always Cache-Control (bd-hl603).
     """
-    headers = {"Cache-Control": INDEX_CACHE_CONTROL}
-    if full_path.rstrip("/") == CONSENT_FRONTEND_PATH:
-        headers["Content-Security-Policy"] = CONSENT_CSP
-    return headers
+    return {"Cache-Control": INDEX_CACHE_CONTROL}
 
 
 class ImmutableStaticFiles(StaticFiles):
