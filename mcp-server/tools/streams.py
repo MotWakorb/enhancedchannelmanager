@@ -267,12 +267,18 @@ _fuzzy_helpers = {
 }
 
 
-def _stream_query(*, search=None, m3u_account=None, channel_group_name=None, page=None, page_size=None):
+def _stream_query(*, search=None, m3u_account=None, channel_group_name=None,
+                  page=None, page_size=None, include_assignment=None):
     """Build a query dict for ENDPOINTS["streams_list"], dropping None values.
 
     Note the param names match the backend (``m3u_account``, ``channel_group_name``)
     — the MCP tools used to send ``provider_id`` / ``group`` here, which the
     backend silently ignored (drift fixed in bd-vtghg Phase 2).
+
+    ``include_assignment`` asks the backend to annotate each stream with
+    channel-assignment status (has_channel / assigned_channel_ids). It is only
+    sent when truthy so the default list path keeps the backend on its cheap
+    no-channel-fetch path.
     """
     q = {
         "search": search,
@@ -280,8 +286,41 @@ def _stream_query(*, search=None, m3u_account=None, channel_group_name=None, pag
         "channel_group_name": channel_group_name,
         "page": page,
         "page_size": page_size,
+        "include_assignment": True if include_assignment else None,
     }
     return {k: v for k, v in q.items() if v is not None}
+
+
+def _filter_by_assigned(streams: list[dict], assigned: bool | None) -> list[dict]:
+    """Filter streams by channel-assignment status.
+
+    assigned=True  -> only streams in at least one channel (has_channel)
+    assigned=False -> only unassigned streams
+    assigned=None  -> no filtering (returned unchanged)
+    """
+    if assigned is None:
+        return streams
+    return [s for s in streams if bool(s.get("has_channel")) is assigned]
+
+
+def _stream_assignment_suffix(s: dict) -> str:
+    """Render the `` -> channel N`` / `` [unassigned]`` assignment suffix.
+
+    Only emitted when the stream dict carries assignment fields (i.e. the
+    backend was called with include_assignment). Returns "" otherwise so the
+    default rendering is unchanged.
+    """
+    if "has_channel" not in s:
+        return ""
+    if not s.get("has_channel"):
+        return " [unassigned]"
+    channel_ids = s.get("assigned_channel_ids") or []
+    if len(channel_ids) > 1:
+        return " -> channels " + ", ".join(str(c) for c in channel_ids)
+    cid = s.get("assigned_channel_id")
+    if cid is None and channel_ids:
+        cid = channel_ids[0]
+    return f" -> channel {cid}"
 
 
 async def _build_id_name_maps(client) -> tuple[dict, dict]:
@@ -349,6 +388,7 @@ def register(mcp: FastMCP):
         search: str | None = None,
         page: int = 1,
         page_size: int = 50,
+        assigned: bool | None = None,
     ) -> str:
         """List streams with optional filtering.
 
@@ -358,6 +398,11 @@ def register(mcp: FastMCP):
             search: Search streams by name
             page: Page number (default 1)
             page_size: Results per page (default 50, max 100)
+            assigned: Filter by channel-assignment status. True -> only streams
+                assigned to a channel; False -> only unassigned streams; None
+                (default) -> no filtering. When set, the backend is asked to
+                include assignment status (costs an extra cached channel fetch),
+                so leave it None unless you need it.
         """
         try:
             client = get_ecm_client()
@@ -366,6 +411,7 @@ def register(mcp: FastMCP):
                 query=_stream_query(
                     search=search, m3u_account=provider_id, channel_group_name=group,
                     page=page, page_size=min(page_size, 100),
+                    include_assignment=assigned is not None,
                 ),
             )
 
@@ -375,6 +421,8 @@ def register(mcp: FastMCP):
             else:
                 streams = result
                 total = len(streams)
+
+            streams = _filter_by_assigned(streams, assigned)
 
             if not streams:
                 return "No streams found."
@@ -387,6 +435,7 @@ def register(mcp: FastMCP):
                 provider = s.get("provider_name", "")
                 info = f" [{group_name}]" if group_name else ""
                 info += f" from {provider}" if provider else ""
+                info += _stream_assignment_suffix(s)
                 lines.append(f"  {name} (id={sid}){info}")
 
             return "\n".join(lines)
@@ -755,6 +804,7 @@ def register(mcp: FastMCP):
         query: str,
         provider_id: int | None = None,
         limit: int = 25,
+        assigned: bool | None = None,
     ) -> str:
         """Search for streams by name across all providers.
 
@@ -762,12 +812,19 @@ def register(mcp: FastMCP):
             query: Search term to match against stream names
             provider_id: Optional M3U provider ID to narrow the search
             limit: Maximum results to return (default 25)
+            assigned: Filter by channel-assignment status. True -> only assigned
+                streams; False -> only unassigned; None (default) -> no filter.
+                When set, the backend includes assignment status (extra cached
+                channel fetch), and filtering is applied client-side.
         """
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(
                 ENDPOINTS["streams_list"],
-                query=_stream_query(search=query, m3u_account=provider_id, page_size=min(limit, 100)),
+                query=_stream_query(
+                    search=query, m3u_account=provider_id, page_size=min(limit, 100),
+                    include_assignment=assigned is not None,
+                ),
             )
 
             if isinstance(result, dict):
@@ -775,6 +832,12 @@ def register(mcp: FastMCP):
                 total = result.get("count", len(streams))
             else:
                 streams = result
+                total = len(streams)
+
+            streams = _filter_by_assigned(streams, assigned)
+            # When an assignment filter narrows results client-side, the backend
+            # total no longer reflects what's shown; report the filtered count.
+            if assigned is not None:
                 total = len(streams)
 
             if not streams:
@@ -788,6 +851,7 @@ def register(mcp: FastMCP):
                 provider = s.get("provider_name", "")
                 info = f" [{group}]" if group else ""
                 info += f" from {provider}" if provider else ""
+                info += _stream_assignment_suffix(s)
                 lines.append(f"  {name} (id={sid}){info}")
 
             if total > limit:
@@ -799,15 +863,28 @@ def register(mcp: FastMCP):
             return f"Error searching streams: {e}"
 
     @mcp.tool()
-    async def get_streams_by_ids(stream_ids: list[int]) -> str:
+    async def get_streams_by_ids(stream_ids: list[int], include_assignment: bool = False) -> str:
         """Fetch detailed stream information for specific stream IDs.
+
+        Dispatcharr's stream payload carries no channel linkage, so assignment
+        status is derived backend-side from a reverse stream->channel index that
+        costs an extra (cached, ~45s TTL) channel fetch. It is therefore opt-in:
+        only set include_assignment=True when you need to know whether streams
+        are attached to a channel.
 
         Args:
             stream_ids: List of stream IDs to look up
+            include_assignment: When True, annotate each stream with its channel
+                assignment and render " -> channel N" (or " -> channels N, M" for
+                several) when assigned, or " [unassigned]" when not. Default
+                False leaves output unchanged and skips the channel fetch.
         """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["streams_by_ids"], body={"stream_ids": stream_ids})
+            body = {"stream_ids": stream_ids}
+            if include_assignment:
+                body["include_assignment"] = True
+            result = await client.call_endpoint(ENDPOINTS["streams_by_ids"], body=body)
 
             streams = result if isinstance(result, list) else result.get("streams", result.get("results", []))
 
@@ -821,6 +898,7 @@ def register(mcp: FastMCP):
                 name = s.get("name", "Unknown")
                 sid = s.get("id", "?")
                 info = _stream_group_provider_suffix(s, provider_map, group_map)
+                info += _stream_assignment_suffix(s)
                 lines.append(f"  {name} (id={sid}){info}")
 
             return "\n".join(lines)
