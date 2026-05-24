@@ -123,11 +123,12 @@ jobs:
           retention-days: 30
 
   # ─── MCP Server tests (bd-ak7xa) ──────────────────────────────────────
-  # Gates the mcp-server/tests/ suite (72 tests, 4 files, ~1.6k LOC) so
-  # new tests don't rot silently. This is a hard precondition for the
-  # OAuth 2.1 epic (bd-buiqr) — every OAuth abuse-case test we land
-  # rides on this gate. Mirrors the backend job structure (checkout +
-  # python setup + pip install + pytest with coverage + JUnit upload).
+  # Gates the mcp-server/tests/ suite so new tests don't rot silently. It
+  # guards the static-key auth path and the CD1 no-fail-cascade invariant
+  # (a JWT-shaped Bearer is rejected, never compared to the static key —
+  # the MCP OAuth offering was removed in bd-jir0m). Mirrors the backend job
+  # structure (checkout + python setup + pip install + pytest with coverage
+  # + JUnit upload).
   #
   # Coverage threshold: --cov-fail-under=26 (measured 28% on 2026-05-19
   # minus 2-point regression buffer, per the ratchet policy in

@@ -63,7 +63,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports)
 
-APP_VERSION = "0.17.3-0007"
+APP_VERSION = "0.17.3-0008"
 
 REDACTED = "***REDACTED***"
 
@@ -84,10 +84,6 @@ _SETTINGS_CREDENTIAL_FIELDS = (
     "smtp_password",
     "telegram_bot_token",
     "mcp_api_key",
-    # Dedicated OAuth token-signing secret (ADR-009 §3 / threat model ID5, SR1).
-    # Credential-class: a leaked backup must not expose the HS256 secret used to
-    # sign/verify MCP OAuth tokens. Added with bead buiqr.3 (dedicated-secret).
-    "mcp_oauth_signing_secret",
 )
 
 # Credential-class keys that may live inside alert_methods.config JSON. Matches

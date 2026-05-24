@@ -1,11 +1,8 @@
 /**
- * Shared MCP tool-category catalog (bead buiqr.7).
+ * Shared MCP tool-category catalog.
  *
- * Single source of truth for the "what Claude can do" grid, reused by both
- * MCPSettingsSection's "Available Tools" panel and the OAuth consent screen's
- * collapsible "See full access list". Keeping one array prevents the two
- * surfaces from drifting apart — the consent screen and the settings panel must
- * describe the SAME access.
+ * Single source of truth for the "what Claude can do" grid rendered by
+ * MCPSettingsSection's "Available Tools" panel.
  */
 export interface McpToolCategory {
   category: string;
