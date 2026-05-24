@@ -71,6 +71,18 @@ POLICY_VERSION_UNIFIED = "unified-v1"
 POLICY_VERSION_LEGACY = "legacy"
 
 
+# bd-0emgo.2: compiled separator classes for tag prefix/suffix matching, kept as
+# module-level constants authored from raw-string literals so the ReDoS lint
+# (no-bare-re-on-dynamic-pattern) sees a literal-authored compiled pattern rather
+# than a dynamic first argument. Lenient accepts a bare space (legacy); strict
+# requires a strong delimiter (optionally space-padded), so a brand like
+# "NFL RedZone" is preserved while a category column "NFL: X" / "NFL - X" strips.
+_PREFIX_SEP_LENIENT_RE = re.compile(r'^[\s:\-|/]')
+_PREFIX_SEP_STRICT_RE = re.compile(r'^\s*[:\-|/]')
+_SUFFIX_SEP_LENIENT_RE = re.compile(r'[\s:\-|/]$')
+_SUFFIX_SEP_STRICT_RE = re.compile(r'[:\-|/]\s*$')
+
+
 def _current_policy_version(policy_obj: "NormalizationPolicy") -> str:
     """Return the canonical policy-version tag for the decision log."""
     return POLICY_VERSION_UNIFIED if policy_obj.unified_enabled else POLICY_VERSION_LEGACY
@@ -972,12 +984,8 @@ class NormalizationEngine:
         # A bare space (no strong delimiter) does NOT match under strict, so a
         # brand like "NFL RedZone" / "NFL Network" is preserved while a category
         # column "NFL: X" / "NFL - X" / "NFL | X" still strips.
-        if require_delimiter:
-            prefix_sep = r'^\s*[:\-|/]'
-            suffix_sep = r'[:\-|/]\s*$'
-        else:
-            prefix_sep = r'^[\s:\-|/]'
-            suffix_sep = r'[\s:\-|/]$'
+        prefix_re = _PREFIX_SEP_STRICT_RE if require_delimiter else _PREFIX_SEP_LENIENT_RE
+        suffix_re = _SUFFIX_SEP_STRICT_RE if require_delimiter else _SUFFIX_SEP_LENIENT_RE
 
         for tag_value, case_sensitive in tags:
             match_text = text if case_sensitive else text.lower()
@@ -988,7 +996,7 @@ class NormalizationEngine:
                 # Requires something after the tag (don't match if tag IS the entire string)
                 if match_text.startswith(match_tag):
                     remaining = match_text[len(match_tag):]
-                    if remaining and re.match(prefix_sep, remaining):
+                    if remaining and prefix_re.match(remaining):
                         return RuleMatch(
                             matched=True,
                             match_start=0,
@@ -1001,7 +1009,7 @@ class NormalizationEngine:
                 # Requires something before the tag (don't match if tag IS the entire string)
                 if match_text.endswith(match_tag):
                     prefix_len = len(text) - len(tag_value)
-                    if prefix_len > 0 and re.search(suffix_sep, text[:prefix_len]):
+                    if prefix_len > 0 and suffix_re.search(text[:prefix_len]):
                         return RuleMatch(
                             matched=True,
                             match_start=prefix_len,
