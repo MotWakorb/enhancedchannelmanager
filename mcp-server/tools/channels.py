@@ -1045,16 +1045,18 @@ def register(mcp: FastMCP):
     async def build_channel_lineup(
         channels: list[dict],
         group_id: int,
-        provider_id: int | None = None,
-        market: str = "east",
     ) -> str:
         """Build a channel lineup: bulk-create channels, then fuzzy-match and assign streams.
+
+        Stream matching runs through the backend unified scoring core
+        (GET /api/auto-creation/fuzzy-preview), scoped to ``group_id``. The
+        former ``provider_id`` and ``market`` params were removed (jnzst FIX 5):
+        the repoint to the backend core made them dead — provider/market
+        selection is not part of the scored-fuzzy contract.
 
         Args:
             channels: List of dicts with 'name' (str) and 'number' (int/float) for each channel.
             group_id: Channel group ID to create channels in.
-            provider_id: Optional M3U provider ID to limit stream search.
-            market: Market preference for stream matching ('east' or 'west'). Default 'east'.
         """
         try:
             client = get_ecm_client()
@@ -1119,64 +1121,42 @@ def register(mcp: FastMCP):
                     if (ch.get("name"), ch.get("channel_number")) in requested_keys
                 ]
 
-            # Step 3: For each channel with 0 streams, fuzzy-match a stream
-            # Import shared fuzzy matching from streams module
-            from tools.streams import _fuzzy_helpers
-            _generate_variants = _fuzzy_helpers["generate_variants"]
-            _score_match = _fuzzy_helpers["score_match"]
+            # Step 3: Score streams against the created channels via the backend
+            # unified scoring core (jnzst). The MCP-local scorer is gone; we call
+            # GET /api/auto-creation/fuzzy-preview (group-scoped, write-free) and
+            # pick the best stream per created channel above the floor.
+            from tools.streams import _preview_triples
+
+            created_ids = {str(ch.get("id")) for ch in created_channels}
+            triples = await _preview_triples(client, [group_id], min_score=0.6)
+            best_by_channel: dict[str, dict] = {}
+            for t in triples:
+                cid = t["channel_id"]
+                if cid not in created_ids:
+                    continue
+                cur = best_by_channel.get(cid)
+                if cur is None or t["score"] > cur["score"]:
+                    best_by_channel[cid] = t
 
             matches = []
             unmatched = []
-
             for ch in created_channels:
                 if len(ch.get("streams", [])) > 0:
                     continue
-
-                ch_name = ch.get("name", "")
-                best_stream = None
-                best_score = -999
-
-                variants = _generate_variants(ch_name)
-                seen_streams = set()
-
-                for variant in variants:
-                    params = {"search": variant, "page_size": 10}
-                    if provider_id is not None:
-                        # Backend GET /api/streams filters by ``m3u_account``
-                        # (a bare ``provider_id`` was silently ignored — bd-vtghg).
-                        params["m3u_account"] = provider_id
-                    try:
-                        sr = await client.get("/api/streams", **params)  # contract-exempt: part of build_channel_lineup multi-step/cross-domain flow
-                        if isinstance(sr, dict):
-                            stream_list = sr.get("results", sr.get("streams", []))
-                        else:
-                            stream_list = sr
-                    except Exception:
-                        continue
-
-                    for s in stream_list:
-                        sid = s.get("id")
-                        if sid in seen_streams:
-                            continue
-                        seen_streams.add(sid)
-                        s_name = s.get("name", "")
-                        score = _score_match(ch_name, s_name, market)
-                        if score > best_score:
-                            best_score = score
-                            best_stream = s
-
-                if best_stream and best_score > 0:
-                    matches.append((ch, best_stream, best_score))
+                cid = str(ch.get("id"))
+                t = best_by_channel.get(cid)
+                if t:
+                    matches.append((ch, t))
                 else:
                     unmatched.append(ch)
 
             # Step 4: Assign matched streams
             assign_errors = 0
-            for ch, stream, _score in matches:
+            for ch, t in matches:
                 try:
                     await client.post(  # contract-exempt: see above
                         f"/api/channels/{ch['id']}/add-stream",
-                        json_data={"stream_id": stream["id"]},
+                        json_data={"stream_id": t["stream_id"]},
                     )
                 except Exception:
                     assign_errors += 1
@@ -1191,9 +1171,11 @@ def register(mcp: FastMCP):
 
             if matches:
                 lines.append("Matches:")
-                for ch, stream, score in matches[:30]:
-                    s_name = stream.get("name", "?")
-                    lines.append(f"  #{ch.get('channel_number', '?')} {ch.get('name')} -> {s_name} (score={score})")
+                for ch, t in matches[:30]:
+                    lines.append(
+                        f"  #{ch.get('channel_number', '?')} {ch.get('name')} -> "
+                        f"{t['stream_name']} (score={t['score']})"
+                    )
                 if len(matches) > 30:
                     lines.append(f"  ... and {len(matches) - 30} more")
 

@@ -1080,3 +1080,89 @@ class TestSafeRegexMigrationWriteTimeValidation:
         )
         errors = action.validate()
         assert errors == []
+
+
+class TestScoredFuzzyMergeStreams:
+    """enhancedchannelmanager-jnzst Component A — scored-fuzzy validation.
+
+    The new ``min_score`` lever upgrades loose_name_match to the unified
+    scoring core. The validation rules apply ONLY when min_score is present;
+    legacy loose rules (no min_score) keep validating unchanged.
+    """
+
+    def _scored(self, **overrides):
+        params = {
+            "target": "auto",
+            "loose_name_match": True,
+            "min_score": 0.7,
+            "target_channel_in_group": [42],
+        }
+        params.update(overrides)
+        return Action(type="merge_streams", params=params)
+
+    def test_valid_scored_fuzzy_rule(self):
+        errors = self._scored().validate()
+        assert errors == []
+
+    def test_legacy_loose_rule_without_min_score_still_valid(self):
+        # No min_score, no allowlist — the legacy cascade must keep working.
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True},
+        )
+        assert action.validate() == []
+
+    def test_scored_fuzzy_requires_allowlist(self):
+        errors = self._scored(target_channel_in_group=[]).validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_scored_fuzzy_requires_allowlist_when_absent(self):
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True, "min_score": 0.8},
+        )
+        errors = action.validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_scored_fuzzy_requires_loose_name_match(self):
+        errors = self._scored(loose_name_match=False).validate()
+        assert any("loose_name_match" in e for e in errors)
+
+    def test_min_score_below_floor_rejected(self):
+        errors = self._scored(min_score=0.5).validate()
+        assert any("floor" in e for e in errors)
+
+    def test_min_score_above_one_rejected(self):
+        errors = self._scored(min_score=1.5).validate()
+        assert any("min_score" in e for e in errors)
+
+    def test_min_score_at_floor_accepted(self):
+        assert self._scored(min_score=0.6).validate() == []
+
+    def test_min_score_at_one_accepted(self):
+        assert self._scored(min_score=1.0).validate() == []
+
+    def test_min_score_bool_rejected(self):
+        errors = self._scored(min_score=True).validate()
+        assert any("min_score" in e for e in errors)
+
+    def test_allow_no_callsign_must_be_bool(self):
+        errors = self._scored(allow_no_callsign="yes").validate()
+        assert any("allow_no_callsign" in e for e in errors)
+
+    def test_allow_no_callsign_opt_in_valid(self):
+        assert self._scored(allow_no_callsign=True).validate() == []
+
+    def test_tie_break_invalid_rejected(self):
+        errors = self._scored(tie_break="random").validate()
+        assert any("tie_break" in e for e in errors)
+
+    def test_tie_break_valid(self):
+        assert self._scored(tie_break="highest_score").validate() == []
+
+    def test_max_candidates_must_be_positive_int(self):
+        assert any("max_candidates" in e for e in self._scored(max_candidates=0).validate())
+        assert any("max_candidates" in e for e in self._scored(max_candidates=True).validate())
+
+    def test_max_candidates_valid(self):
+        assert self._scored(max_candidates=5).validate() == []

@@ -275,6 +275,17 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/auto-creation/run",
         request_fields=frozenset({"dry_run", "m3u_account_ids", "rule_ids"}),
     ),
+    # enhancedchannelmanager-jnzst Component B: no-write scored fuzzy preview.
+    # The MCP preview_fuzzy_matches tool + the dry-run path of
+    # match_streams_to_channels / fuzzy_match_stream read from here.
+    "ac_fuzzy_preview": Endpoint(
+        name="ac_fuzzy_preview",
+        method="GET",
+        path="/api/auto-creation/fuzzy-preview",
+        query_params=frozenset(
+            {"group_ids", "min_score", "allow_no_callsign", "page", "page_size"}
+        ),
+    ),
     "ac_list_executions": Endpoint(
         name="ac_list_executions",
         method="GET",

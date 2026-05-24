@@ -470,6 +470,18 @@ def register(mcp: FastMCP):
                                    stream merges into an existing channel only on EXACT normalized-
                                    name equality; set loose_name_match=true to restore the legacy
                                    fuzzy cascade (core-name/deparen/word-prefix/call-sign).
+                                   SCORED FUZZY (OTA/callsign locals): set loose_name_match=true AND
+                                   min_score (float, 0.60-1.00) to use the unified scoring core
+                                   instead of the legacy cascade. The scored path applies a callsign
+                                   HARD-REJECT (a WBAY stream never merges into a WGBA channel
+                                   regardless of name similarity), a tvg_id-callsign override, and a
+                                   Locals fuzzy fallback. A scored-fuzzy rule REQUIRES a non-empty
+                                   target_channel_in_group allowlist (it is refused otherwise) and,
+                                   by default, a parseable callsign on BOTH sides; set
+                                   allow_no_callsign=true to admit no-callsign pairs (only at
+                                   score>=0.90). Optional tie_break (lowest_id/highest_score) and
+                                   max_candidates. Per-merge score + provenance is written to the
+                                   journal. Legacy loose rules WITHOUT min_score are unchanged.
                                    NOTE: match_by is a DEPRECATED no-op (validated but never
                                    consumed at runtime) — use loose_name_match to control matching.
                                    target_channel_not_in_group (list[int], default absent) — TARGET-
@@ -597,7 +609,9 @@ def register(mcp: FastMCP):
             m3u_account_id: M3U account filter
             target_group_id: Target channel group ID
             conditions: Replacement conditions list (see create_auto_creation_rule for types)
-            actions: Replacement actions list (see create_auto_creation_rule for types)
+            actions: Replacement actions list (see create_auto_creation_rule for types,
+                including the merge_streams scored-fuzzy path: loose_name_match + min_score
+                + required target_channel_in_group allowlist + optional allow_no_callsign)
             run_on_refresh: Run automatically when M3U refreshes
             stop_on_first_match: Stop matching after first rule matches a stream
             sort_field: Field to sort channels by
