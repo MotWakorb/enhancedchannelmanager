@@ -192,7 +192,10 @@ class TestChannelNumberFormatting:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_channels", {})
         text = result[0][0].text
-        assert "#10440:" in text
+        # bd-0emgo.6: non-compact line now reads "#<num> (id=<cid>): <name>" so
+        # the channel number isn't mistaken for the API id. The float-suffix
+        # check (the point of this test) still holds on the channel number.
+        assert "#10440 (id=5):" in text
         assert "10440.0" not in text
 
     @pytest.mark.asyncio
