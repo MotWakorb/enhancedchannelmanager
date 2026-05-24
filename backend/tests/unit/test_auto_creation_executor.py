@@ -2258,6 +2258,172 @@ class TestMatchScopeGroupId:
         self.client.update_channel.assert_called()
 
 
+class TestMergeStreamsTargetChannelGroupFilter:
+    """bd-0emgo.3: target-channel group filter on the merge_streams action.
+
+    The ``*_in_group`` / ``normalized_name_not_in_group`` *conditions* are
+    stream-side — they only gate whether a rule FIRES, never which existing
+    channel merge_streams target=auto resolves to. This new action-level
+    filter is a post-resolution reject (mirroring the GH #298 scope-reject at
+    auto_creation_executor.py): after the target channel is resolved, the merge
+    is skipped if the resolved channel's ``channel_group_id`` is in
+    ``target_channel_not_in_group`` (or, for ``target_channel_in_group``, NOT
+    in the allow-list). Resolution itself is unchanged.
+
+    Two existing channels named "ESPN": one in group 1 (allowed), one in
+    group 567 (the excluded group from the production report). The filter is
+    applied AFTER resolution, so we vary which channel resolution returns by
+    pointing find_channel_value at the right name.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.create_channel = AsyncMock()
+        self.client.update_channel = AsyncMock()
+
+        # "Keep" lives in group 1; "Excluded" lives in group 567.
+        self.channels = [
+            {"id": 10, "name": "Keep", "channel_number": 100,
+             "channel_group_id": 1, "streams": [101]},
+            {"id": 20, "name": "Excluded", "channel_number": 200,
+             "channel_group_id": 567, "streams": [201]},
+        ]
+        self.groups = [
+            {"id": 1, "name": "ALLOWED"},
+            {"id": 567, "name": "EXCLUDED"},
+        ]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            existing_groups=self.groups,
+        )
+
+    def _stream(self, name):
+        return StreamContext(
+            stream_id=999,
+            stream_name=name,
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            group_name="whatever",
+        )
+
+    def _run(self, action, stream_name, **kwargs):
+        exec_ctx = ExecutionContext()
+        return asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self._stream(stream_name), exec_ctx, **kwargs)
+        )
+
+    # --- target_channel_not_in_group (primary: "merge anywhere EXCEPT X") ---
+
+    def test_not_in_group_skips_merge_into_excluded_group(self):
+        """Bug-1 reproduction: the resolved target is in the excluded group →
+        the merge is SKIPPED and the channel in that group receives nothing.
+        """
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",  # resolves to channel 20 (group 567)
+            "target_channel_not_in_group": [567],
+        }
+        result = self._run(action, "Excluded")
+        assert result.success is True
+        assert result.skipped is True
+        # The channel in the excluded group did NOT receive the merge.
+        self.client.update_channel.assert_not_called()
+
+    def test_not_in_group_merges_when_target_outside_excluded_group(self):
+        """A stream whose resolved target is NOT in the excluded group merges."""
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Keep",  # resolves to channel 10 (group 1)
+            "target_channel_not_in_group": [567],
+        }
+        result = self._run(action, "Keep")
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    # --- target_channel_in_group (complement: "only merge into X") ---
+
+    def test_in_group_merges_when_target_in_allowed_group(self):
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Keep",  # group 1 — in allow-list
+            "target_channel_in_group": [1],
+        }
+        result = self._run(action, "Keep")
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    def test_in_group_skips_when_target_outside_allowed_group(self):
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",  # group 567 — NOT in allow-list
+            "target_channel_in_group": [1],
+        }
+        result = self._run(action, "Excluded")
+        assert result.success is True
+        assert result.skipped is True
+        self.client.update_channel.assert_not_called()
+
+    # --- back-compat: no filter → unchanged ---
+
+    def test_no_filter_merges_into_any_group(self):
+        """No filter set → behavior unchanged; merges into group 567 freely."""
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",
+        }
+        result = self._run(action, "Excluded")
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    def test_empty_not_in_group_list_is_noop(self):
+        """An empty exclusion list excludes nothing — merge proceeds."""
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",
+            "target_channel_not_in_group": [],
+        }
+        result = self._run(action, "Excluded")
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    def test_not_in_group_composes_with_match_scope(self):
+        """The new filter is independent of GH #298 match_scope: with scope on
+        and pinned to group 567, the candidate is in scope, but the new
+        exclusion still rejects it.
+        """
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",
+            "target_channel_not_in_group": [567],
+        }
+        result = self._run(
+            action, "Excluded",
+            match_scope_target_group=True,
+            rule_scope_group_id=567,
+        )
+        assert result.success is True
+        assert result.skipped is True
+        self.client.update_channel.assert_not_called()
+
 
 class TestCreateChannelSuperscriptStripping:
     """

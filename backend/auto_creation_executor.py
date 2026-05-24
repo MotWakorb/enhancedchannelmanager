@@ -1175,6 +1175,17 @@ class ActionExecutor:
         # streams via the word-prefix step). Set loose_name_match=True on the
         # action to restore the legacy cascade.
         loose_name_match = params.get("loose_name_match", False) is True
+        # bd-0emgo.3: TARGET-CHANNEL group filter (post-resolution reject).
+        # Distinct from the stream-side normalized_name_[not_]in_group
+        # conditions (which only gate whether the rule FIRES). These constrain
+        # which existing channel the merge may land in, by the RESOLVED
+        # channel's channel_group_id. Absent/empty list = no filter (back-
+        # compat). target_channel_not_in_group = "merge anywhere EXCEPT these
+        # groups" (primary); target_channel_in_group = "only merge into these
+        # groups" (complement). Applied AFTER resolution, mirroring the GH #298
+        # scope reject below.
+        target_channel_not_in_group = params.get("target_channel_not_in_group") or []
+        target_channel_in_group = params.get("target_channel_in_group") or []
         # Effective scope group for merge lookups (GH #298). merge_streams has no
         # action group_id, so the explicit rule scope group is the only source.
         # None when scope is off or no explicit group is pinned — preserves the
@@ -1302,6 +1313,55 @@ class ActionExecutor:
                     channel.get('channel_group_id'), effective_scope_group_id
                 )
                 channel = None
+
+            # bd-0emgo.3: TARGET-CHANNEL group filter (post-resolution reject).
+            # Mirrors the GH #298 scope reject above, but instead of folding the
+            # rejected candidate into the generic "not found" path it returns an
+            # explicit skip with a clear reason so the operator sees WHY the
+            # merge was withheld. Whatever resolution path produced the
+            # candidate, if the resolved channel's group is excluded (or not in
+            # the allow-list), the merge is skipped — this is the guard the
+            # stream-side conditions could never provide.
+            if channel and (target_channel_not_in_group or target_channel_in_group):
+                resolved_group_id = channel.get("channel_group_id")
+                if target_channel_not_in_group and resolved_group_id in target_channel_not_in_group:
+                    logger.info(
+                        "[AUTO-CREATE-EXEC] Skipped stream '%s': resolved target "
+                        "channel '%s' (id=%s) is in excluded group %s "
+                        "(target_channel_not_in_group=%s)",
+                        stream_ctx.stream_name, channel.get('name'),
+                        channel.get('id'), resolved_group_id,
+                        target_channel_not_in_group
+                    )
+                    return ActionResult(
+                        success=True, action_type=action.type,
+                        description=(
+                            f"Skipped: target channel '{channel['name']}' is in "
+                            f"excluded group {resolved_group_id} "
+                            f"(target_channel_not_in_group)"
+                        ),
+                        entity_type="channel", entity_id=channel["id"],
+                        entity_name=channel["name"], skipped=True
+                    )
+                if target_channel_in_group and resolved_group_id not in target_channel_in_group:
+                    logger.info(
+                        "[AUTO-CREATE-EXEC] Skipped stream '%s': resolved target "
+                        "channel '%s' (id=%s) group %s is not in allowed groups "
+                        "%s (target_channel_in_group)",
+                        stream_ctx.stream_name, channel.get('name'),
+                        channel.get('id'), resolved_group_id,
+                        target_channel_in_group
+                    )
+                    return ActionResult(
+                        success=True, action_type=action.type,
+                        description=(
+                            f"Skipped: target channel '{channel['name']}' group "
+                            f"{resolved_group_id} is not in allowed groups "
+                            f"{target_channel_in_group} (target_channel_in_group)"
+                        ),
+                        entity_type="channel", entity_id=channel["id"],
+                        entity_name=channel["name"], skipped=True
+                    )
 
             if channel:
                 # Track merged stream IDs per channel for optional prune step.

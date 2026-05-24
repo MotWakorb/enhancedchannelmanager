@@ -446,7 +446,13 @@ def register(mcp: FastMCP):
                   has_channel — stream already assigned to a channel
                   channel_exists_with_name — exact channel name exists
                   channel_exists_matching — regex match on existing channels
-                  normalized_name_in_group / normalized_name_not_in_group
+                  normalized_name_in_group / normalized_name_not_in_group —
+                    STREAM-side: fire only when the triggering stream's
+                    normalized name IS (or is NOT) already present in group N.
+                    These gate whether the rule FIRES; they do NOT constrain
+                    which existing channel a merge_streams action targets. To
+                    keep merges OUT of a group, use the merge_streams action's
+                    target_channel_not_in_group param (see actions below).
                   normalized_name_exists / normalized_name_not_exists
                   always / never — always or never matches
                 Example: [{"type": "stream_group_contains", "value": "USA | Entertainment", "connector": "and"}]
@@ -464,6 +470,14 @@ def register(mcp: FastMCP):
                                    fuzzy cascade (core-name/deparen/word-prefix/call-sign).
                                    NOTE: match_by is a DEPRECATED no-op (validated but never
                                    consumed at runtime) — use loose_name_match to control matching.
+                                   target_channel_not_in_group (list[int], default absent) — TARGET-
+                                   channel group filter: after the merge target is resolved, SKIP
+                                   the merge if the resolved channel's group is in this list. This
+                                   is the "keep merges OUT of group N" guard (the stream-side
+                                   normalized_name_not_in_group condition cannot do this). Optional
+                                   complement target_channel_in_group (list[int]) only merges when
+                                   the resolved channel's group IS in the list. Both default to
+                                   absent (no filter); they ride inside the action dict.
                   assign_logo — params: value (URL or empty for stream logo)
                   assign_tvg_id — params: value
                   assign_epg — params: epg_id, set_tvg_id (bool)

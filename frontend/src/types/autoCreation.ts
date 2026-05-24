@@ -127,6 +127,20 @@ export interface Action {
    * (core-name / deparen / word-prefix containment / call-sign).
    */
   loose_name_match?: boolean;
+  /**
+   * merge_streams TARGET-channel group filter (bd-0emgo.3). After the merge
+   * target is resolved, the merge is SKIPPED if the resolved channel's group
+   * is in this list. This is the "keep merges OUT of group N" guard — distinct
+   * from the stream-side normalized_name_not_in_group *condition* (which only
+   * gates whether the rule fires). Absent/empty = no filter (back-compat).
+   */
+  target_channel_not_in_group?: number[];
+  /**
+   * merge_streams TARGET-channel group filter complement (bd-0emgo.3). When
+   * non-empty, only merges when the resolved channel's group IS in this list
+   * ("only merge into group N"). Absent/empty = no restriction.
+   */
+  target_channel_in_group?: number[];
   message?: string;
   // Name transform (for create_channel and create_group)
   name_transform_pattern?: string;
