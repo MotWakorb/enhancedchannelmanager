@@ -294,9 +294,17 @@ class AutoCreationEngine:
             for entity in reversed(created):
                 await self._rollback_created_entity(entity)
 
-            # Restore modified entities
+            # Restore modified entities in REVERSE order (bd-a7okb). Restore is
+            # last-write-wins: _rollback_modified_entity overwrites the channel
+            # from each entry's pre-change `previous` snapshot. When a run merged
+            # several streams into the SAME pre-existing channel, the snapshots
+            # are cumulative ([A] before B, [A,B] before C, ...). Forward order
+            # would apply the earliest (true original) first and let a later
+            # snapshot win, leaving all-but-the-last merged stream behind.
+            # Reversing makes the earliest snapshot win — restoring the original
+            # — exactly as created-entity teardown is reversed above.
             modified = execution.get_modified_entities()
-            for entity in modified:
+            for entity in reversed(modified):
                 await self._rollback_modified_entity(entity)
 
             # Mark execution as rolled back

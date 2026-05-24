@@ -479,6 +479,49 @@ class TestAutoCreationEngineRollback:
         # Should still succeed (errors are logged but don't fail rollback)
         assert result["success"] is True
 
+    @patch("auto_creation_engine.get_session")
+    def test_rollback_unmerge_multiple_into_same_channel_restores_original(self, mock_get_session):
+        """bd-a7okb: multiple merges into ONE pre-existing channel restore to the
+        true original stream list, not the second-to-last snapshot.
+
+        A run that merges streams 11, 12, 13 into a channel that already held
+        [10] records cumulative `previous` snapshots, one per merge:
+            before 11 -> [10]
+            before 12 -> [10, 11]
+            before 13 -> [10, 11, 12]
+        Restore is overwrite/last-write-wins. Applied FORWARD, the final state
+        would be [10, 11, 12] (only the last merge removed). Applied REVERSED,
+        the earliest snapshot [10] wins — the correct original. This asserts the
+        LAST update_channel call restores [10].
+        """
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
+        mock_execution = MagicMock()
+        mock_execution.status = "completed"
+        mock_execution.mode = "execute"
+        mock_execution.get_created_entities.return_value = []
+        mock_execution.get_modified_entities.return_value = [
+            {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10]}},
+            {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10, 11]}},
+            {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10, 11, 12]}},
+        ]
+        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.engine.rollback_execution(1)
+        )
+
+        assert result["success"] is True
+        assert result["entities_restored"] == 3
+        assert self.client.update_channel.call_count == 3
+        # The decisive assertion: the final write must restore the ORIGINAL list.
+        last_call = self.client.update_channel.call_args_list[-1]
+        assert last_call.args == (3, {"streams": [10]}), (
+            "rollback must end by restoring the pre-run streams [10]; "
+            f"last update_channel was {last_call.args} (forward-order bug leaves extra streams)"
+        )
+
 
 class TestAutoCreationEngineProcessStreams:
     """Tests for stream processing logic."""
