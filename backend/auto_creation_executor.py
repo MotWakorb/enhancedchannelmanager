@@ -14,6 +14,11 @@ import safe_regex
 import journal
 from auto_creation_schema import Action, ActionType, TemplateVariables
 from auto_creation_evaluator import StreamContext
+from services.dedup_matcher import (
+    NameCleanMode,
+    is_admissible,
+    score_one,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -316,7 +321,8 @@ class ActionExecutor:
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
                       normalization_group_ids: list[int] = None,
                       match_scope_target_group: bool = False,
-                      rule_scope_group_id: int = None) -> ActionResult:
+                      rule_scope_group_id: int = None,
+                      rule_id: int = None) -> ActionResult:
         """
         Execute a single action.
 
@@ -325,6 +331,9 @@ class ActionExecutor:
             stream_ctx: Stream context with stream data
             exec_ctx: Execution context for tracking results
             rule_target_group_id: Default target group from rule
+            rule_id: ID of the firing rule, threaded into scored-fuzzy merge
+                provenance for the journal (M7, jnzst FIX 4). None outside a
+                rule run.
             normalization_group_ids: List of normalization rule group IDs to apply (empty/None = disabled)
             match_scope_target_group: When True, restrict existing-channel name
                 lookups in create_channel to channels in the action's effective
@@ -382,7 +391,8 @@ class ActionExecutor:
             result = await self._execute_merge_streams(action, stream_ctx, exec_ctx, template_ctx,
                                                          normalization_group_ids=normalization_group_ids,
                                                          match_scope_target_group=match_scope_target_group,
-                                                         rule_scope_group_id=rule_scope_group_id)
+                                                         rule_scope_group_id=rule_scope_group_id,
+                                                         rule_id=rule_id)
         elif action_type == ActionType.ASSIGN_LOGO:
             result = await self._execute_assign_logo(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.ASSIGN_TVG_ID:
@@ -892,8 +902,15 @@ class ActionExecutor:
             logger.debug("[AUTO-CREATE-EXEC] Failed to fetch streams for channel %s: %s", channel_id, e)
 
     async def _add_stream_to_channel(self, channel: dict, stream_ctx: StreamContext,
-                                      exec_ctx: ExecutionContext) -> ActionResult:
-        """Add a stream to an existing channel (merge behavior)."""
+                                      exec_ctx: ExecutionContext,
+                                      merge_provenance: dict | None = None) -> ActionResult:
+        """Add a stream to an existing channel (merge behavior).
+
+        ``merge_provenance`` (enhancedchannelmanager-jnzst) carries the scored-
+        fuzzy provenance (score, effective threshold, signal, both parsed
+        callsigns, rule_id, allowlist) for the journal. None on the exact /
+        legacy paths so their journal entries are unchanged.
+        """
         channel_id = channel["id"]
         channel_name = channel["name"]
 
@@ -978,6 +995,7 @@ class ActionExecutor:
             self._journal_merge(
                 channel_id, channel_name, stream_ctx.stream_id,
                 current_streams, new_streams,
+                provenance=merge_provenance,
             )
 
             return ActionResult(
@@ -1001,7 +1019,8 @@ class ActionExecutor:
             )
 
     def _journal_merge(self, channel_id: int, channel_name: str, stream_id: int,
-                       before_ids: list, after_ids: list) -> None:
+                       before_ids: list, after_ids: list,
+                       provenance: dict | None = None) -> None:
         """Write a per-merge journal entry for an executed LIVE merge (bd-0emgo.5).
 
         Tags the entry with ``batch_id=str(execution_id)`` so an operator can
@@ -1011,11 +1030,22 @@ class ActionExecutor:
         journal write must never break the merge, so failures are logged and
         swallowed (``journal.log_entry`` already does this internally; this is
         defense-in-depth).
+
+        enhancedchannelmanager-jnzst: when a scored-fuzzy ``provenance`` dict is
+        supplied, it is folded into ``after_value`` alongside the stream IDs
+        (the free-form JSON escape hatch — no migration). It records the score,
+        effective threshold, signal fired, both parsed callsigns, rule_id and
+        allowlist so a bad scored merge is auditable.
         """
         if self._execution_id is None:
             # No execution_id threaded in (direct-construct callers): an
             # uncorrelatable entry would be recovery noise, so skip.
             return
+        after_value = {"stream_ids": list(after_ids)}
+        if provenance:
+            # Fold provenance into the after_value JSON. Keep stream_ids the
+            # leading key so existing batch-recovery readers are unaffected.
+            after_value["match"] = provenance
         try:
             journal.log_entry(
                 category="auto_creation",
@@ -1024,7 +1054,7 @@ class ActionExecutor:
                 entity_name=channel_name,
                 description="Merged stream %s into channel '%s'" % (stream_id, channel_name),
                 before_value={"stream_ids": list(before_ids)},
-                after_value={"stream_ids": list(after_ids)},
+                after_value=after_value,
                 user_initiated=False,
                 batch_id=str(self._execution_id),
             )
@@ -1187,7 +1217,8 @@ class ActionExecutor:
                                       exec_ctx: ExecutionContext, template_ctx: dict,
                                       normalization_group_ids: list[int] = None,
                                       match_scope_target_group: bool = False,
-                                      rule_scope_group_id: int = None) -> ActionResult:
+                                      rule_scope_group_id: int = None,
+                                      rule_id: int = None) -> ActionResult:
         """Execute merge_streams action.
 
         GH #298 (bd-kncun): when ``match_scope_target_group`` is on and the rule
@@ -1212,6 +1243,17 @@ class ActionExecutor:
         # streams via the word-prefix step). Set loose_name_match=True on the
         # action to restore the legacy cascade.
         loose_name_match = params.get("loose_name_match", False) is True
+        # enhancedchannelmanager-jnzst: SCORED-FUZZY path. When loose_name_match
+        # is on AND a min_score is configured, channel resolution runs through
+        # the unified scoring core (services.dedup_matcher.score_all) instead of
+        # the legacy core-name/deparen/word-prefix/callsign cascade. The schema
+        # has already enforced (Component A): min_score in [floor, 1.0],
+        # loose_name_match=True, and a non-empty target_channel_in_group
+        # allowlist. allow_no_callsign is the Q1 opt-in.
+        min_score = params.get("min_score")
+        scored_fuzzy = loose_name_match and min_score is not None
+        allow_no_callsign = params.get("allow_no_callsign", False) is True
+        tie_break = params.get("tie_break", "highest_score")
         # bd-0emgo.3: TARGET-CHANNEL group filter (post-resolution reject).
         # Distinct from the stream-side normalized_name_[not_]in_group
         # conditions (which only gate whether the rule FIRES). These constrain
@@ -1247,9 +1289,28 @@ class ActionExecutor:
             elif find_channel_by == "tvg_id":
                 channel = self._find_channel_by_tvg_id(find_channel_value or stream_ctx.tvg_id)
 
+            # enhancedchannelmanager-jnzst: SCORED-FUZZY resolution. When a
+            # min_score is configured, resolve through the unified scoring core
+            # against the allowlisted target groups — NOT the legacy cascade.
+            # The core enforces the M1 callsign hard-reject, the tvg_id
+            # override, and the Q1 no-callsign policy; provenance is captured
+            # for the journal. The schema guarantees target_channel_in_group is
+            # non-empty here.
+            scored_provenance = None
+            if scored_fuzzy and not channel and target in ("auto", "existing_channel"):
+                channel, scored_provenance = self._resolve_scored_fuzzy(
+                    stream_ctx,
+                    min_score=float(min_score),
+                    allowed_groups=target_channel_in_group,
+                    allow_no_callsign=allow_no_callsign,
+                    tie_break=tie_break,
+                    rule_id=rule_id,
+                )
+
             # Auto-fallback: if no find_channel_by was specified and target is "auto",
             # try to find by normalized stream name (strips prefixes, applies normalization)
-            if not channel and target == "auto" and not find_channel_by:
+            # Skipped on the scored-fuzzy path — the scored resolver above owns it.
+            if not scored_fuzzy and not channel and target == "auto" and not find_channel_by:
                 lookup_name = stream_ctx.normalized_name or stream_ctx.stream_name
                 # Also try running normalization engine if available
                 if self._normalization_engine and not stream_ctx.normalized_name:
@@ -1274,7 +1335,7 @@ class ActionExecutor:
             # + quality suffix, deparenthesize, and do word-prefix containment.
             # This is the over-matching cascade; gated behind loose_name_match so
             # the default (exact) merge does not run it.
-            if loose_name_match and not channel and normalization_group_ids and self._normalization_engine:
+            if loose_name_match and not scored_fuzzy and not channel and normalization_group_ids and self._normalization_engine:
                 try:
                     core_name = self._normalization_engine.extract_core_name(stream_ctx.stream_name)
                     if core_name:
@@ -1320,7 +1381,7 @@ class ActionExecutor:
             # affiliates by FCC call sign (W/K + 2-3 letters) extracted from both
             # stream and channel names. Gated behind loose_name_match so the
             # default (exact) merge does not run it.
-            if loose_name_match and not channel and normalization_group_ids and self._normalization_engine:
+            if loose_name_match and not scored_fuzzy and not channel and normalization_group_ids and self._normalization_engine:
                 try:
                     cs = self._normalization_engine.extract_call_sign(stream_ctx.stream_name)
                     if cs:
@@ -1434,7 +1495,10 @@ class ActionExecutor:
                             entity_type="channel", entity_id=channel["id"],
                             entity_name=channel["name"], skipped=True
                         )
-                return await self._add_stream_to_channel(channel, stream_ctx, exec_ctx)
+                return await self._add_stream_to_channel(
+                    channel, stream_ctx, exec_ctx,
+                    merge_provenance=scored_provenance,
+                )
             elif target == "existing_channel":
                 return ActionResult(
                     success=False,
@@ -2656,6 +2720,94 @@ class ActionExecutor:
             logger.info("[AUTO-CREATE-EXEC] Channel %s: %s", channel_id, desc)
             return desc
         return ""
+
+    def _resolve_scored_fuzzy(self, stream_ctx, min_score: float,
+                              allowed_groups: list[int], allow_no_callsign: bool,
+                              tie_break: str,
+                              rule_id: Optional[int] = None) -> tuple[Optional[dict], Optional[dict]]:
+        """Resolve a merge target via the unified scoring core (jnzst, Component A).
+
+        Scores the stream against every channel in the allowlisted target
+        groups using ``score_one`` (M1 callsign hard-reject → tvg_id override →
+        LOCALS fuzzy). Returns ``(channel, provenance)`` for the best admitted
+        candidate, or ``(None, None)`` when none clears the policy.
+
+        Admission is delegated to ``services.dedup_matcher.is_admissible`` —
+        the ONE shared admission policy (FIX 2). The preview endpoint and (via
+        it) the MCP write tools call the SAME helper, so the rule path and
+        every other consumer cannot drift:
+
+        * ``conflict`` verdict (M1 fired)          → never admitted.
+        * ``absent`` verdict (missing callsign)    → admitted ONLY if
+          ``allow_no_callsign`` and score ≥ NO_CALLSIGN_FLOOR (0.90). Default
+          policy REQUIRES a callsign on both sides (Q1).
+        * ``match`` verdict                        → admitted at score ≥
+          ``min_score`` (which the schema floored at CONFIDENCE_FLOOR).
+
+        ``allowed_groups`` is the same allowlist the post-resolution scope
+        reject re-checks; scoping the candidate pool here makes the resolution
+        itself group-bounded (Q2) rather than relying on a downstream reject.
+
+        ``rule_id`` is the firing rule's id (threaded from the engine via
+        ``execute``) so the journal provenance is complete (M7, FIX 4). ``None``
+        when called outside a rule run (e.g. a direct test harness).
+        """
+        allowed = set(allowed_groups or [])
+
+        stream_name = stream_ctx.stream_name
+        stream_tvg = getattr(stream_ctx, "tvg_id", None)
+
+        best_channel = None
+        best_match = None
+        for ch in self.existing_channels:
+            if ch.get("channel_group_id") not in allowed:
+                continue
+            cname = ch.get("name")
+            if not cname:
+                continue
+            sm = score_one(
+                stream_name,
+                cname,
+                stream_tvg_id=stream_tvg,
+                candidate_tvg_id=ch.get("tvg_id"),
+                mode=NameCleanMode.LOCALS,
+            )
+            # Shared admission policy (M1 conflict reject + Q1 no-callsign gate
+            # + min_score) — the single chokepoint every consumer shares.
+            if not is_admissible(
+                sm, min_score=min_score, allow_no_callsign=allow_no_callsign
+            ):
+                continue
+            # Admitted candidate — keep the best per tie_break.
+            if best_match is None:
+                best_channel, best_match = ch, sm
+            elif sm.score > best_match.score:
+                best_channel, best_match = ch, sm
+            elif sm.score == best_match.score and tie_break == "lowest_id" \
+                    and str(ch.get("id")) < str(best_channel.get("id")):
+                best_channel, best_match = ch, sm
+
+        if best_channel is None:
+            return None, None
+
+        provenance = {
+            "score": round(best_match.score, 4),
+            "effective_threshold": min_score,
+            "signal": best_match.signal,
+            "callsign_verdict": best_match.callsign_verdict,
+            "stream_callsign": best_match.stream_callsign,
+            "candidate_callsign": best_match.candidate_callsign,
+            "tvg_id_override": best_match.tvg_id_override,
+            "rule_id": rule_id,
+            "allowlist_groups": list(allowed_groups or []),
+        }
+        logger.info(
+            "[AUTO-CREATE-EXEC] Scored-fuzzy matched stream '%s' -> channel "
+            "'%s' (id=%s) score=%.3f signal=%s",
+            stream_name, best_channel.get("name"), best_channel.get("id"),
+            best_match.score, best_match.signal,
+        )
+        return best_channel, provenance
 
     def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None,
                               exact_only: bool = False) -> Optional[dict]:
