@@ -479,5 +479,5 @@ Interactive API docs are available at `/api/docs` (Swagger UI) and `/api/redoc`.
 - **v0.14.0** — Dummy EPG profiles, auto-creation pipeline, normalization engine
 - **v0.13.0** — Backend modularization (20+ routers), auth system, task engine
 
-### v0.18.0 — Next release
+### v0.17.3 — Next release
 See `CHANGELOG.md` `[Unreleased]` for the canonical list of fixes and features queued for the next cut.
