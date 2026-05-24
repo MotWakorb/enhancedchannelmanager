@@ -53,6 +53,44 @@ Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 - `test_router_registration.py` - Route uniqueness validation
 - `test_lifecycle.py` - App startup/shutdown lifecycle
 
+## Backend Test Layers: `integration/` vs `routers/`
+
+These two directories are distinct testing layers — they are not duplicates of each other.
+
+### `backend/tests/integration/` — Shallow, mock-DB layer
+
+Files named `test_api_<domain>.py` and other integration-scoped tests.
+
+- **Client**: `fastapi.testclient.TestClient` (synchronous)
+- **Database**: `MagicMock()` session injected via `patch("routers.<module>.get_session")`
+- **Depth**: Shallow — asserts API shapes, status codes, and routing without touching real SQL
+- **When to add tests here**: Verifying API contracts that can be fully expressed by mocking the DB query results; testing how the router reacts to DB-layer exceptions; lightweight smoke checks that don't require real ORM behaviour
+
+### `backend/tests/routers/` — Deep, real-DB layer
+
+Files named `test_<domain>.py`.
+
+- **Client**: `httpx.AsyncClient` via the `async_client` fixture in `conftest.py` (async)
+- **Database**: Real in-memory SQLite (`StaticPool`) via the `test_session` fixture — full ORM round-trips
+- **Depth**: Deep — inserts real rows, exercises ORM queries, validates constraints and model
+  relationships
+- **When to add tests here**: Verifying that endpoints interact correctly with actual database state;
+  testing model constraints, ordering, pagination, and FK relationships; any scenario where a
+  MagicMock DB session would hide a real ORM bug
+
+### Naming inversion note
+
+Despite the directory names, the `integration/` layer is the **shallower, more-mocked** layer and the `routers/` layer is the **deeper, less-mocked** layer.  This naming reflects historical test organisation rather than the standard "integration = real dependencies" convention.  New tests added here should follow the existing pattern in each directory rather than trying to reclassify tests based on name alone.
+
+### Acceptable duplication
+
+A handful of trivially simple cases — `GET /some/endpoint → 404 Not Found` — are
+intentionally present in both layers.  This is acceptable because each copy exercises
+different machinery (sync+mock-DB vs async+real-DB) and provides independent signal.
+Do not consolidate these just to reduce line count.
+
+---
+
 ## 2. Frontend Tests (Vitest)
 
 Located in `frontend/src/`, run with `cd frontend && npm test`

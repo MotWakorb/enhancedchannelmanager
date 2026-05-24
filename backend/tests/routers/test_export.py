@@ -551,6 +551,30 @@ class TestPrintGuideXSS:
 # =============================================================================
 
 
+def test_symlink_supported_in_this_environment(tmp_path):
+    """CI guard: assert that os.symlink works so symlink-escape security tests cannot silently skip.
+
+    The symlink-escape security tests in this file (test_download_m3u_rejects_symlink_escape,
+    test_download_xmltv_rejects_symlink_escape) contain a ``try/except (OSError,
+    NotImplementedError): pytest.skip(...)`` guard around os.symlink. On a CI
+    runner that cannot create symlinks, those tests would silently vanish and
+    the _safe_export_path containment check would go untested.
+
+    This meta-test catches that: if os.symlink fails here, *this* test fails
+    loudly rather than letting the security tests silently skip. Fix: ensure
+    the CI environment runs on a filesystem that supports symlinks (the standard
+    Linux runners all do).
+    """
+    import os
+
+    target = tmp_path / "target.txt"
+    target.write_text("meta")
+    link = tmp_path / "link.txt"
+    os.symlink(target, link)  # raises OSError on symlink-less runners — intentional
+    assert link.is_symlink()
+    assert link.read_text() == "meta"
+
+
 class TestExportPathInjection:
     """Path-injection regression tests for export download / cleanup paths.
 
