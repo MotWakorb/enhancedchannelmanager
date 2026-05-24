@@ -129,6 +129,53 @@ class TestJournalEnvelope:
             result = await mcp.call_tool("get_journal", {})
         assert "m3u/refresh: Prov" in result[0][0].text
 
+    @pytest.mark.asyncio
+    async def test_batch_id_passed_through_to_backend_query(self):
+        """bd-0emgo.5: get_journal(batch_id=...) filters by the run's
+        execution_id so an operator can recover a bad auto-creation merge."""
+        mcp = _register("system")
+        envelope = {
+            "count": 1,
+            "page": 1,
+            "page_size": 20,
+            "total_pages": 1,
+            "results": [
+                {
+                    "id": 9,
+                    "timestamp": "2026-05-22T12:00:00Z",
+                    "category": "auto_creation",
+                    "action_type": "merge_stream",
+                    "entity_id": 1,
+                    "entity_name": "ESPN",
+                    "description": "Merged stream 201 into channel 'ESPN'",
+                    "batch_id": "555",
+                },
+            ],
+        }
+        mock_client = _client(return_value=envelope)
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "get_journal", {"limit": 20, "batch_id": "555"}
+            )
+
+        # The batch_id must reach the backend journal_list query.
+        _, call_kwargs = mock_client.call_endpoint.call_args
+        assert call_kwargs["query"]["batch_id"] == "555"
+        # And the merge row renders.
+        text = result[0][0].text
+        assert "auto_creation/merge_stream: ESPN" in text
+
+    @pytest.mark.asyncio
+    async def test_batch_id_omitted_when_not_provided(self):
+        """No batch_id arg means no batch_id key in the backend query."""
+        mcp = _register("system")
+        mock_client = _client(return_value={"count": 0, "results": []})
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("get_journal", {"limit": 5})
+
+        _, call_kwargs = mock_client.call_endpoint.call_args
+        assert "batch_id" not in call_kwargs["query"]
+
 
 # ===========================================================================
 # lq38l.13 #1 — channel numbers render as ints (no trailing .0)

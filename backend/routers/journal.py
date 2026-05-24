@@ -27,7 +27,7 @@ async def get_journal_entries(
     user_initiated: Optional[bool] = None,
     batch_id: Optional[str] = Query(
         None,
-        description="Filter to a single bulk operation's journal rows (8-char batch_id from bulk handlers, e.g. POST /api/auto-creation/rules/bulk-update). Indexed lookup via idx_journal_batch_id.",
+        description="Filter to a single batched operation's journal rows. Either an 8-char batch_id from bulk handlers (e.g. POST /api/auto-creation/rules/bulk-update) or an auto-creation run's execution_id (as a string) for per-merge audit rows written by the executor (bd-0emgo.5). Indexed lookup via idx_journal_batch_id.",
     ),
 ):
     """Query journal entries with filtering and pagination."""

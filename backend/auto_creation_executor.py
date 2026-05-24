@@ -11,6 +11,7 @@ from typing import Any, Optional
 import re
 
 import safe_regex
+import journal
 from auto_creation_schema import Action, ActionType, TemplateVariables
 from auto_creation_evaluator import StreamContext
 
@@ -132,7 +133,7 @@ class ActionExecutor:
     def __init__(self, client, existing_channels: list = None, existing_groups: list = None,
                  normalization_engine=None, settings=None, all_profile_ids: list = None,
                  epg_data: list = None, epg_sources: list = None,
-                 triggered_by: str = "manual"):
+                 triggered_by: str = "manual", execution_id: int | None = None):
         """
         Initialize the executor.
 
@@ -152,6 +153,14 @@ class ActionExecutor:
                 per ADR-008 §D1. Defaults to "manual" so non-engine
                 callers (and existing tests that construct executors
                 directly) keep their pre-BD-F behaviour.
+            execution_id: The ``AutoCreationExecution.id`` for this run,
+                threaded from the engine. Used as the journal ``batch_id``
+                so an operator can list every ``(channel_id, stream_id)``
+                pair a run touched via ``get_journal(batch_id=...)`` and
+                recover from a bad merge (bd-0emgo.5). ``None`` (the default
+                for direct-construct callers/tests) disables the per-merge
+                journal write — entries without an execution_id would be
+                unrecoverable noise.
         """
         self.client = client
         self.existing_channels = existing_channels or []
@@ -160,6 +169,7 @@ class ActionExecutor:
         self._settings = settings
         self._all_profile_ids = all_profile_ids or []
         self._triggered_by = triggered_by
+        self._execution_id = execution_id
 
         # Build EPG data lookup: epg_source_id -> list of data entries
         self._epg_data_by_source: dict[int, list[dict]] = {}
@@ -919,6 +929,20 @@ class ActionExecutor:
             _track_m3u_count()
             exec_ctx.current_channel_id = channel_id
 
+            # bd-0emgo.5: per-merge journal entry for lightweight
+            # recoverability. Tagging each LIVE merge with
+            # batch_id=str(execution_id) lets an operator list every
+            # (channel_id, stream_id) pair a run touched via
+            # get_journal(batch_id=...) and revert a bad run. STREAM IDs
+            # ONLY in before/after — never URLs/objects (they embed
+            # provider credentials). Skipped when no execution_id was
+            # threaded in (direct-construct callers): such entries would
+            # be uncorrelatable noise. Dry-run never reaches here.
+            self._journal_merge(
+                channel_id, channel_name, stream_ctx.stream_id,
+                current_streams, new_streams,
+            )
+
             return ActionResult(
                 success=True,
                 action_type="merge_stream",
@@ -937,6 +961,40 @@ class ActionExecutor:
                 action_type="merge_stream",
                 description=f"Failed to add stream to channel",
                 error=str(e)
+            )
+
+    def _journal_merge(self, channel_id: int, channel_name: str, stream_id: int,
+                       before_ids: list, after_ids: list) -> None:
+        """Write a per-merge journal entry for an executed LIVE merge (bd-0emgo.5).
+
+        Tags the entry with ``batch_id=str(execution_id)`` so an operator can
+        list every ``(channel_id, stream_id)`` pair a run touched and recover
+        from a bad merge. ``before_value``/``after_value`` carry STREAM IDs
+        ONLY — never URLs/objects, which embed provider credentials. A failed
+        journal write must never break the merge, so failures are logged and
+        swallowed (``journal.log_entry`` already does this internally; this is
+        defense-in-depth).
+        """
+        if self._execution_id is None:
+            # No execution_id threaded in (direct-construct callers): an
+            # uncorrelatable entry would be recovery noise, so skip.
+            return
+        try:
+            journal.log_entry(
+                category="auto_creation",
+                action_type="merge_stream",
+                entity_id=channel_id,
+                entity_name=channel_name,
+                description="Merged stream %s into channel '%s'" % (stream_id, channel_name),
+                before_value={"stream_ids": list(before_ids)},
+                after_value={"stream_ids": list(after_ids)},
+                user_initiated=False,
+                batch_id=str(self._execution_id),
+            )
+        except Exception as e:
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Failed to journal merge of stream %s into channel '%s': %s",
+                stream_id, channel_name, e,
             )
 
     async def _update_channel(self, channel: dict, stream_ctx: StreamContext,
