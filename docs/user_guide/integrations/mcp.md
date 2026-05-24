@@ -414,6 +414,6 @@ unchanged.
 - **README**: [MCP Server (Claude Integration)](../../../README.md#mcp-server-claude-integration)
   — quick-start setup and the "choose your method" overview table.
 - **Retired OAuth offering**: [ADR-009 (Superseded)](../../adr/ADR-009-mcp-oauth-authorization-server-split.md)
-  and `docs/security/threat_model_mcp_oauth.md` (Superseded/dormant) — history of
-  the OAuth 2.1 "Custom Connector" offering that was retired (`bd-9axgc`); the
-  code is kept dormant in-tree for reversibility.
+  and `docs/security/threat_model_mcp_oauth.md` (Superseded) — history of
+  the OAuth 2.1 "Custom Connector" offering that was retired (`bd-9axgc`) and
+  whose code was removed from the tree in v0.17.3 (`bd-jir0m`).

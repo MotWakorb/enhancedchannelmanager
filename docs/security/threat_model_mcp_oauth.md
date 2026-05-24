@@ -1,10 +1,14 @@
-> **⚠️ SUPERSEDED / DORMANT — MCP OAuth disabled (bd-9axgc).** The MCP OAuth 2.1
+> **⚠️ SUPERSEDED — MCP OAuth removed (bd-9axgc, bd-jir0m).** The MCP OAuth 2.1
 > "Custom Connector" offering was retired by PO decision (`enhancedchannelmanager-9axgc`):
-> the OAuth Authorization Server endpoints are unregistered (404), the MCP
-> Resource Server rejects OAuth/JWT-shaped Bearer tokens, and the OAuth UI is
-> hidden. This threat model is **retained for history**; the OAuth **code remains
-> dormant in-tree** (not deleted) so the offering is reversible. The supported MCP
-> authentication method is the static `?api_key=` path. See ADR-009 (Superseded).
+> the OAuth Authorization Server endpoints were unregistered (404), the MCP
+> Resource Server rejected OAuth/JWT-shaped Bearer tokens, and the OAuth UI was
+> hidden. The OAuth code was then **fully removed from the codebase** in v0.17.3
+> (`enhancedchannelmanager-jir0m`) — the AS/provider/store modules, the RS verify
+> path, the OAuth config fields/helpers, the consent UI, and the OAuth-only tests
+> are gone. The `looks_like_jwt` no-fail-cascade guard was kept (JWT-shaped
+> Bearers are still rejected, never compared to the static key). This threat model
+> is **retained for security-audit history** only. The supported MCP authentication
+> method is the static `?api_key=` path. See ADR-009 (Superseded).
 
 # STRIDE Threat Model: MCP OAuth 2.1 (ECM as Authorization Server, MCP as Resource Server)
 

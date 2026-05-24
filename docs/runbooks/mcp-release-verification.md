@@ -8,11 +8,11 @@
 - **Last reviewed**: 2026-05-21
 - **Related beads**: `enhancedchannelmanager-9axgc` (retired the MCP OAuth offering)
 
-> **Note (bd-9axgc):** the MCP OAuth 2.1 "Custom Connector" offering was retired.
-> The supported MCP authentication method is the static `?api_key=` path. The
-> OAuth-flow / token-refresh / discovery verification steps were removed from
-> this checklist (the code is kept dormant in-tree; see
-> [ADR-009 (Superseded)](../adr/ADR-009-mcp-oauth-authorization-server-split.md)).
+> **Note (bd-9axgc, bd-jir0m):** the MCP OAuth 2.1 "Custom Connector" offering was
+> retired and its code removed from the tree in v0.17.3. The supported MCP
+> authentication method is the static `?api_key=` path. The OAuth-flow /
+> token-refresh / discovery verification steps were removed from this checklist
+> (see [ADR-009 (Superseded)](../adr/ADR-009-mcp-oauth-authorization-server-split.md)).
 
 ---
 
