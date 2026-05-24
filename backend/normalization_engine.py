@@ -944,7 +944,8 @@ class NormalizationEngine:
         self,
         text: str,
         tag_group_id: int,
-        position: str = "contains"
+        position: str = "contains",
+        require_delimiter: bool = False
     ) -> RuleMatch:
         """
         Check if text matches any tag from a tag group.
@@ -953,11 +954,30 @@ class NormalizationEngine:
             text: Text to match against
             tag_group_id: ID of the tag group
             position: 'prefix', 'suffix', or 'contains' (default)
+            require_delimiter: When True, a prefix/suffix match requires a
+                STRONG delimiter (':', '-', '|', '/' — surrounding spaces
+                allowed) adjacent to the tag, NOT a bare space (bd-0emgo.2).
+                Default False keeps the legacy behavior where a bare space is
+                an acceptable separator. Only the league-tag strip sets this
+                True; country/quality/etc. strips keep matching on bare space.
 
         Returns:
             RuleMatch with match details and matched_tag
         """
         tags = self._load_tag_group(tag_group_id)
+
+        # bd-0emgo.2: separator classes for prefix/suffix matching. The lenient
+        # class accepts a bare space (legacy). The strict class requires a
+        # strong delimiter, optionally padded by spaces (" - ", " : ", " | ").
+        # A bare space (no strong delimiter) does NOT match under strict, so a
+        # brand like "NFL RedZone" / "NFL Network" is preserved while a category
+        # column "NFL: X" / "NFL - X" / "NFL | X" still strips.
+        if require_delimiter:
+            prefix_sep = r'^\s*[:\-|/]'
+            suffix_sep = r'[:\-|/]\s*$'
+        else:
+            prefix_sep = r'^[\s:\-|/]'
+            suffix_sep = r'[\s:\-|/]$'
 
         for tag_value, case_sensitive in tags:
             match_text = text if case_sensitive else text.lower()
@@ -968,7 +988,7 @@ class NormalizationEngine:
                 # Requires something after the tag (don't match if tag IS the entire string)
                 if match_text.startswith(match_tag):
                     remaining = match_text[len(match_tag):]
-                    if remaining and re.match(r'^[\s:\-|/]', remaining):
+                    if remaining and re.match(prefix_sep, remaining):
                         return RuleMatch(
                             matched=True,
                             match_start=0,
@@ -981,7 +1001,7 @@ class NormalizationEngine:
                 # Requires something before the tag (don't match if tag IS the entire string)
                 if match_text.endswith(match_tag):
                     prefix_len = len(text) - len(tag_value)
-                    if prefix_len > 0 and re.search(r'[\s:\-|/]$', text[:prefix_len]):
+                    if prefix_len > 0 and re.search(suffix_sep, text[:prefix_len]):
                         return RuleMatch(
                             matched=True,
                             match_start=prefix_len,
@@ -1059,7 +1079,12 @@ class NormalizationEngine:
                 return self._match_tag_group(
                     text,
                     rule.tag_group_id,
-                    rule.tag_match_position or "contains"
+                    rule.tag_match_position or "contains",
+                    # bd-0emgo.2: only rules opting in (the league strip) demand
+                    # a strong delimiter; default False preserves bare-space
+                    # matching for country/quality/etc. strips. `getattr` keeps
+                    # synthetic test rules / older rows without the attribute safe.
+                    require_delimiter=bool(getattr(rule, "require_delimiter", False)),
                 )
             return RuleMatch(matched=False)
 
@@ -1714,7 +1739,8 @@ class NormalizationEngine:
         tag_group_id: Optional[int] = None,
         tag_match_position: str = "contains",
         else_action_type: Optional[str] = None,
-        else_action_value: Optional[str] = None
+        else_action_value: Optional[str] = None,
+        require_delimiter: bool = False
     ) -> dict:
         """
         Test a rule configuration against sample text without saving.
@@ -1732,6 +1758,8 @@ class NormalizationEngine:
             tag_match_position: Position for tag matching ('prefix', 'suffix', 'contains')
             else_action_type: Action to apply when condition doesn't match
             else_action_value: Value for else action
+            require_delimiter: Require a strong delimiter (bd-0emgo.2) rather
+                than a bare space for the tag prefix/suffix match
 
         Returns:
             Dict with matched, before, after, match_details
@@ -1748,6 +1776,7 @@ class NormalizationEngine:
             case_sensitive=case_sensitive,
             tag_group_id=tag_group_id,
             tag_match_position=tag_match_position,
+            require_delimiter=require_delimiter,
             action_type=action_type,
             action_value=action_value,
             else_action_type=else_action_type,

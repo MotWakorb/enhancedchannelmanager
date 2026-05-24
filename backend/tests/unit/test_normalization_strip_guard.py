@@ -324,3 +324,157 @@ class TestExtractCoreNameGuard:
         create_tag(test_session, group_id=country.id, value="UK")
 
         assert engine.extract_core_name("UK: Sky Sport Bundesliga") == "Sky Sport Bundesliga"
+
+
+# ---------------------------------------------------------------------------
+# require_delimiter (bd-0emgo.2 follow-up): the league strip must require a
+# STRONG delimiter (':', '-', '|', '/'), not a bare space. A bare space means
+# the league tag is part of a BRAND ("NFL RedZone", "NFL Network", "NFL Sunday
+# Ticket") and must be preserved; a strong delimiter means it's a category
+# column ("NFL: Buffalo Bills", "NFL | Sunday Ticket", "NFL - Replay") and must
+# be stripped.
+# ---------------------------------------------------------------------------
+
+class TestRequireDelimiterLeagueStrip:
+    @pytest.fixture
+    def league_setup(self, test_session):
+        """League Tags group + a strip_prefix rule with require_delimiter=True."""
+        league = create_tag_group(test_session, name="League Tags")
+        create_tag(test_session, group_id=league.id, value="NFL")
+
+        rule_group = create_normalization_rule_group(
+            test_session, name="Strip League Prefixes", enabled=True
+        )
+        rule = create_normalization_rule(
+            test_session,
+            group_id=rule_group.id,
+            name="Match League Tags",
+            condition_type="tag_group",
+            condition_value=None,
+            action_type="strip_prefix",
+            tag_group_id=league.id,
+            tag_match_position="prefix",
+            require_delimiter=True,
+        )
+        return rule_group, rule
+
+    # --- Bare space: NFL is part of the brand -> NOT stripped ---------------
+
+    def test_nfl_redzone_preserved(self, engine, league_setup):
+        """The headline brand: 'NFL RedZone' must stay 'NFL RedZone'.
+
+        On the pre-fix branch (no require_delimiter, bare space accepted as a
+        separator) this strips to 'RedZone'. With require_delimiter the bare
+        space no longer matches, so the brand is preserved.
+        """
+        rule_group, _ = league_setup
+        result = engine.normalize("NFL RedZone", group_ids=[rule_group.id]).normalized
+        assert result == "NFL RedZone"
+
+    def test_nfl_network_preserved_via_delimiter_not_generic_guard(self, engine, league_setup):
+        """'NFL Network' preserved by the DELIMITER rule (bare space)."""
+        rule_group, _ = league_setup
+        result = engine.normalize("NFL Network", group_ids=[rule_group.id]).normalized
+        assert result == "NFL Network"
+
+    def test_nfl_sunday_ticket_preserved(self, engine, league_setup):
+        """'NFL Sunday Ticket' is a brand on a bare space -> preserved.
+
+        Note: 'Sunday Ticket' is a multi-word remainder, so the generic-word
+        guard would NOT catch this — only the delimiter requirement does.
+        """
+        rule_group, _ = league_setup
+        result = engine.normalize("NFL Sunday Ticket", group_ids=[rule_group.id]).normalized
+        assert result == "NFL Sunday Ticket"
+
+    # --- Strong delimiter: NFL is a category column -> stripped -------------
+
+    def test_nfl_colon_buffalo_bills_strips(self, engine, league_setup):
+        """'NFL: Buffalo Bills' -> 'Buffalo Bills' (colon delimiter)."""
+        rule_group, _ = league_setup
+        result = engine.normalize("NFL: Buffalo Bills", group_ids=[rule_group.id]).normalized
+        assert result == "Buffalo Bills"
+
+    def test_nfl_pipe_sunday_ticket_strips(self, engine, league_setup):
+        """'NFL | Sunday Ticket' -> 'Sunday Ticket' (pipe delimiter)."""
+        rule_group, _ = league_setup
+        result = engine.normalize("NFL | Sunday Ticket", group_ids=[rule_group.id]).normalized
+        assert result == "Sunday Ticket"
+
+    def test_nfl_dash_replay_strips(self, engine, league_setup):
+        """'NFL - Replay' -> 'Replay' (space-padded dash delimiter)."""
+        rule_group, _ = league_setup
+        result = engine.normalize("NFL - Replay", group_ids=[rule_group.id]).normalized
+        assert result == "Replay"
+
+    def test_nfl_slash_redzone_strips(self, engine, league_setup):
+        """'NFL/RedZone' -> 'RedZone' (slash delimiter, no surrounding space)."""
+        rule_group, _ = league_setup
+        result = engine.normalize("NFL/RedZone", group_ids=[rule_group.id]).normalized
+        assert result == "RedZone"
+
+    def test_generic_guard_still_backstops_delimiter_case(self, engine, test_session):
+        """Generic-word guard remains a backstop on a delimiter case.
+
+        'MLB: Network' has a strong delimiter so the delimiter check passes,
+        but the remainder is the bare generic word 'Network' -> the generic
+        guard refuses the strip, keeping the name distinct (no cross-merge).
+        """
+        league = create_tag_group(test_session, name="League Tags")
+        create_tag(test_session, group_id=league.id, value="MLB")
+
+        rule_group = create_normalization_rule_group(
+            test_session, name="Strip League Prefixes", enabled=True
+        )
+        create_normalization_rule(
+            test_session,
+            group_id=rule_group.id,
+            name="Match League Tags",
+            condition_type="tag_group",
+            condition_value=None,
+            action_type="strip_prefix",
+            tag_group_id=league.id,
+            tag_match_position="prefix",
+            require_delimiter=True,
+        )
+        result = engine.normalize("MLB: Network", group_ids=[rule_group.id]).normalized
+        assert result != "Network"
+        assert result == "MLB: Network"
+
+
+class TestRequireDelimiterDefaultFalseRegression:
+    """Country/other strips MUST keep working on a bare space (require_delimiter
+    defaults to False). This is the critical scoping guard: the league fix must
+    not break country-prefix strips (country codes like US/UK/DE are never brand
+    components, so 'US ESPN' must still strip to 'ESPN')."""
+
+    @pytest.fixture
+    def country_setup(self, test_session):
+        country = create_tag_group(test_session, name="Country Tags")
+        create_tag(test_session, group_id=country.id, value="US")
+
+        rule_group = create_normalization_rule_group(
+            test_session, name="Strip Country Prefixes", enabled=True
+        )
+        # No require_delimiter -> defaults False -> bare space still strips.
+        create_normalization_rule(
+            test_session,
+            group_id=rule_group.id,
+            name="Match Country Tags",
+            condition_type="tag_group",
+            condition_value=None,
+            action_type="strip_prefix",
+            tag_group_id=country.id,
+            tag_match_position="prefix",
+        )
+        return rule_group
+
+    def test_country_bare_space_still_strips(self, engine, country_setup):
+        """'US ESPN' -> 'ESPN' (bare space, default require_delimiter=False)."""
+        result = engine.normalize("US ESPN", group_ids=[country_setup.id]).normalized
+        assert result == "ESPN"
+
+    def test_country_strong_delimiter_still_strips(self, engine, country_setup):
+        """'US: ESPN' -> 'ESPN' (strong delimiter also strips)."""
+        result = engine.normalize("US: ESPN", group_ids=[country_setup.id]).normalized
+        assert result == "ESPN"

@@ -817,6 +817,25 @@ async def startup_event():
     except Exception as e:
         logger.warning("[MAIN] Could not backfill tag_group rule ids: %s", e)
 
+    # Require a strong delimiter on the league strip rule (bd-0emgo.2) so brands
+    # like "NFL RedZone" / "NFL Network" are preserved while "NFL: Buffalo Bills"
+    # still strips. Idempotent and a no-op if the rule/group is absent.
+    try:
+        from normalization_migration import set_league_strip_require_delimiter
+        session = get_session()
+        try:
+            result = set_league_strip_require_delimiter(session)
+            if result.get("updated", 0) > 0:
+                logger.info(
+                    "[MAIN] Enabled strong-delimiter requirement on %s league "
+                    "strip rule(s)",
+                    result["updated"]
+                )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not set league strip require_delimiter: %s", e)
+
     # Ensure US/UK/EU are in Abbreviation Tags so Title Case preserves them
     # (otherwise US -> Us). Companion repair to the tag_group_id backfill.
     try:

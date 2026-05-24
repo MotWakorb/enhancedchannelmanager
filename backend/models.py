@@ -642,6 +642,16 @@ class NormalizationRule(Base):
     # Tag group condition (v0.8.7) - used when condition_type='tag_group'
     tag_group_id = Column(Integer, ForeignKey("tag_groups.id", ondelete="SET NULL"), nullable=True)
     tag_match_position = Column(String(20), nullable=True)  # 'prefix', 'suffix', or 'contains'
+    # When True, a tag_group prefix/suffix match requires a STRONG delimiter
+    # (':', '-', '|', '/' — surrounding spaces allowed) after/before the tag,
+    # NOT a bare space (bd-0emgo.2). This distinguishes a category column
+    # ("NFL: Buffalo Bills" -> strip) from a brand name ("NFL RedZone" -> keep).
+    # Default False preserves the legacy bare-space-accepting behavior.
+    # server_default="0" matches the Alembic 0020 add-column so ORM/migration
+    # agree (no schema drift) and the NOT NULL add succeeds on populated tables.
+    require_delimiter = Column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     # Compound conditions (new - takes precedence over legacy fields if set)
     conditions = Column(Text, nullable=True)  # JSON array of condition objects: [{type, value, negate, case_sensitive}]
     condition_logic = Column(String(3), default="AND", nullable=False)  # "AND" or "OR" for combining conditions
@@ -692,6 +702,7 @@ class NormalizationRule(Base):
             "case_sensitive": self.case_sensitive,
             "tag_group_id": self.tag_group_id,
             "tag_match_position": self.tag_match_position,
+            "require_delimiter": self.require_delimiter,
             "tag_group_name": self.tag_group.name if self.tag_group else None,
             "conditions": self.get_conditions(),
             "condition_logic": self.condition_logic,

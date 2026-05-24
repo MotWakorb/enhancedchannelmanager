@@ -62,6 +62,9 @@ class CreateRuleRequest(BaseModel):
     # Tag group condition (for condition_type='tag_group')
     tag_group_id: Optional[int] = None
     tag_match_position: Optional[str] = None  # 'prefix', 'suffix', or 'contains'
+    # bd-0emgo.2: require a strong delimiter (':', '-', '|', '/') adjacent to the
+    # matched tag rather than a bare space (only strip "NFL: X", keep "NFL X").
+    require_delimiter: bool = False
     # Compound conditions (takes precedence over legacy fields if set)
     conditions: Optional[List[dict]] = None  # [{type, value, negate, case_sensitive}]
     condition_logic: str = "AND"  # "AND" or "OR"
@@ -86,6 +89,8 @@ class UpdateRuleRequest(BaseModel):
     # Tag group condition
     tag_group_id: Optional[int] = None
     tag_match_position: Optional[str] = None
+    # bd-0emgo.2: per-rule strong-delimiter requirement (league strip).
+    require_delimiter: Optional[bool] = None
     # Compound conditions
     conditions: Optional[List[dict]] = None
     condition_logic: Optional[str] = None
@@ -106,6 +111,8 @@ class TestRuleRequest(BaseModel):
     # Tag group condition
     tag_group_id: Optional[int] = None
     tag_match_position: Optional[str] = None  # 'prefix', 'suffix', or 'contains'
+    # bd-0emgo.2: strong-delimiter requirement for the tag match.
+    require_delimiter: bool = False
     # Compound conditions (takes precedence if set)
     conditions: Optional[List[dict]] = None  # [{type, value, negate, case_sensitive}]
     condition_logic: str = "AND"  # "AND" or "OR"
@@ -418,6 +425,7 @@ async def create_normalization_rule(request: CreateRuleRequest):
                 case_sensitive=request.case_sensitive,
                 tag_group_id=request.tag_group_id,
                 tag_match_position=request.tag_match_position,
+                require_delimiter=request.require_delimiter,
                 conditions=conditions_json,
                 condition_logic=request.condition_logic,
                 action_type=request.action_type,
@@ -477,6 +485,8 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
                 rule.tag_group_id = request.tag_group_id
             if request.tag_match_position is not None:
                 rule.tag_match_position = request.tag_match_position
+            if request.require_delimiter is not None:
+                rule.require_delimiter = request.require_delimiter
             if request.conditions is not None:
                 rule.conditions = json.dumps(request.conditions) if request.conditions else None
             if request.condition_logic is not None:
@@ -578,6 +588,7 @@ async def test_normalization_rule(request: TestRuleRequest):
                 tag_match_position=request.tag_match_position or "contains",
                 else_action_type=request.else_action_type,
                 else_action_value=request.else_action_value,
+                require_delimiter=request.require_delimiter,
             )
             return result
         finally:
@@ -848,6 +859,9 @@ async def export_normalization_rules():
                         if tag_group:
                             rule_data["tag_group_name"] = tag_group.name
                         rule_data["tag_match_position"] = rule.tag_match_position
+                        # bd-0emgo.2: export the strong-delimiter flag so the
+                        # league-strip fix round-trips through export/import.
+                        rule_data["require_delimiter"] = rule.require_delimiter
 
                     # Include else action if present
                     if rule.else_action_type:
@@ -964,6 +978,7 @@ async def import_normalization_rules(request: ImportRulesRequest):
                         case_sensitive=rule_data.get("case_sensitive", False),
                         tag_group_id=tag_group_id,
                         tag_match_position=rule_data.get("tag_match_position"),
+                        require_delimiter=rule_data.get("require_delimiter", False),
                         conditions=conditions_json,
                         condition_logic=rule_data.get("condition_logic", "AND"),
                         action_type=rule_data.get("action_type", "remove"),

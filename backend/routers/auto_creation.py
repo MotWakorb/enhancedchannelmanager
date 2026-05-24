@@ -2236,6 +2236,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
                     "case_sensitive": r.case_sensitive,
                     "tag_group_id": r.tag_group_id,
                     "tag_match_position": r.tag_match_position,
+                    "require_delimiter": r.require_delimiter,
                     "tag_group_name": r.tag_group.name if r.tag_group else None,
                     "conditions": r.get_conditions(),
                     "condition_logic": r.condition_logic,
