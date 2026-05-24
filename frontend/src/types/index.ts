@@ -712,6 +712,10 @@ export interface NormalizationRule {
   // Tag group condition (for condition_type='tag_group')
   tag_group_id: number | null;
   tag_match_position: TagMatchPosition | null;
+  // Require a strong delimiter (':', '-', '|', '/') adjacent to the matched
+  // tag rather than a bare space (bd-0emgo.2). Keeps "NFL RedZone" intact while
+  // "NFL: Buffalo Bills" still strips.
+  require_delimiter: boolean;
   tag_group_name: string | null;  // Included in API response for display
   // Compound conditions (takes precedence if set)
   conditions: NormalizationCondition[] | null;
@@ -771,6 +775,7 @@ export interface CreateRuleRequest {
   // Tag group condition (for condition_type='tag_group')
   tag_group_id?: number;
   tag_match_position?: TagMatchPosition;
+  require_delimiter?: boolean;
   // Compound conditions (takes precedence if set)
   conditions?: NormalizationCondition[];
   condition_logic?: NormalizationConditionLogic;
@@ -796,6 +801,7 @@ export interface UpdateRuleRequest {
   // Tag group condition
   tag_group_id?: number | null;
   tag_match_position?: TagMatchPosition | null;
+  require_delimiter?: boolean;
   // Compound conditions
   conditions?: NormalizationCondition[] | null;  // null to clear compound conditions
   condition_logic?: NormalizationConditionLogic;
@@ -818,6 +824,7 @@ export interface TestRuleRequest {
   // Tag group condition
   tag_group_id?: number;
   tag_match_position?: TagMatchPosition;
+  require_delimiter?: boolean;
   // Compound conditions (takes precedence if set)
   conditions?: NormalizationCondition[];
   condition_logic?: NormalizationConditionLogic;
