@@ -100,7 +100,11 @@ class TestJournalEnvelope:
 
         text = result[0][0].text
         assert "No journal entries found." not in text
-        assert "Recent journal entries (2)" in text
+        # bd-0hjrk.1 reworded the header to "Journal entries (showing N of M
+        # total):" (M = envelope count) when pagination landed. The behaviour
+        # this test guards (results unwrapped, rows + names + descriptions
+        # rendered, None-safe) is unchanged.
+        assert "Journal entries (showing 2 of 2 total)" in text
         assert "ESPN" in text
         assert "Created channel ESPN" in text
         # entity_name is appended for usefulness
