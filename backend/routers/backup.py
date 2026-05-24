@@ -1432,35 +1432,21 @@ BACKUPS_DIR = CONFIG_DIR / "backups"
 # Both download_saved_backup and delete_saved_backup accept either extension;
 # restore-saved further restricts to ``.zip`` (the full-archive restore path).
 _BACKUP_FILENAME_RE = re.compile(r"^ecm-backup-\d{4}-\d{2}-\d{2}_\d{6}\.(yaml|zip)$")
-# Zip-only allowlist for the full-archive restore path (restore-saved). YAML
-# section-import is a different path (POST /restore-yaml) and out of scope here.
+# Zip-only allowlist for the full-archive restore path (restore-saved) and the
+# on-demand save path. YAML section-import is a different path
+# (POST /restore-yaml) and out of scope here.
 _BACKUP_ZIP_FILENAME_RE = re.compile(r"^ecm-backup-\d{4}-\d{2}-\d{2}_\d{6}\.zip$")
 
-
-def _validate_saved_filename(filename: str, pattern: re.Pattern = _BACKUP_FILENAME_RE) -> Path:
-    """Validate a saved-backup filename and return its canonical on-disk path.
-
-    Two-layer guard, identical to download_saved_backup / delete_saved_backup
-    (CodeQL py/path-injection, CWE-22/23/36/73/99):
-
-    * Layer 1 (defense in depth): strict regex allowlist on the filename shape.
-    * Layer 2: canonicalize and verify the resolved path stays contained under
-      BACKUPS_DIR — the regex alone is not followed by CodeQL's dataflow tracker,
-      so containment must be made explicit.
-
-    Raises HTTPException(400) on any traversal / absolute / non-matching name.
-    """
-    # Layer 1: strict regex allowlist.
-    if not pattern.match(filename):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
-    try:
-        safe_root = BACKUPS_DIR.resolve()
-        path = (BACKUPS_DIR / filename).resolve()
-        path.relative_to(safe_root)
-    except (ValueError, OSError):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    return path
+# SECURITY (CodeQL py/path-injection, CWE-22/23/36/73/99): the two-layer guard
+# (strict regex allowlist + canonicalize-and-verify containment under
+# BACKUPS_DIR) is INLINED at each filename-addressed endpoint below rather than
+# factored into a shared helper. CodeQL's dataflow tracker does NOT follow the
+# `relative_to` containment barrier across a function-return boundary, so a
+# helper that validates-then-returns a Path is still treated as user-tainted at
+# every downstream file-op sink. Keeping the barrier and the file op in the
+# SAME function body is the proven-passing pattern (matches origin/dev). The
+# allowlist uses re.fullmatch (not .match) so a trailing newline cannot slip
+# past the `$` anchor (SEC-1 hardening).
 
 
 @router.get("/saved")
@@ -1503,9 +1489,19 @@ async def save_backup(_admin=RequireAdminIfEnabled):
         data = buf.getvalue()
         filename = _get_backup_filename()  # ecm-backup-<UTC ts>.zip
         BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
-        # Validate the freshly-generated name through the same guard the
-        # filename-addressed endpoints use — belt-and-suspenders containment.
-        path = _validate_saved_filename(filename, _BACKUP_ZIP_FILENAME_RE)
+        # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99
+        # — cross-function barrier not tracked; keep barrier+sink in one body).
+        # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch
+        # so a trailing newline cannot pass the anchor).
+        if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+        try:
+            safe_root = BACKUPS_DIR.resolve()
+            path = (BACKUPS_DIR / filename).resolve()
+            path.relative_to(safe_root)
+        except (ValueError, OSError):
+            raise HTTPException(status_code=400, detail="Invalid filename")
         path.write_bytes(data)
         logger.info("[BACKUP] Saved backup %s (%d bytes)", filename, len(data))
         return {
@@ -1540,8 +1536,21 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireAdminIfEn
     WARNING: this OVERWRITES current ECM state (settings, database, logos).
     """
     logger.info("[BACKUP] Restore-from-saved requested, filename=%s", req.filename)
-    # Validate via the strict zip-only regex + containment guard.
-    path = _validate_saved_filename(req.filename, _BACKUP_ZIP_FILENAME_RE)
+    filename = req.filename
+    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
+    # the containment barrier is not tracked across a function-return boundary,
+    # so the barrier and the read_bytes sink must live in this same function).
+    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch so a
+    # trailing newline cannot pass the anchor).
+    if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+    try:
+        safe_root = BACKUPS_DIR.resolve()
+        path = (BACKUPS_DIR / filename).resolve()
+        path.relative_to(safe_root)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Backup not found")
 
@@ -1569,11 +1578,21 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireAdminIfEn
 @router.get("/saved/{filename}")
 async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
     """Download a saved backup file (YAML export or ZIP archive)."""
-    # Strict regex allowlist + canonicalize-and-verify containment under
-    # BACKUPS_DIR. This closes CodeQL py/path-injection (CWE-22/23/36/73/99) —
-    # the regex guard alone is not followed by CodeQL's dataflow tracker, so
-    # _validate_saved_filename makes containment explicit (the shared guard).
-    path = _validate_saved_filename(filename)
+    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
+    # the containment barrier is not tracked across a function-return boundary,
+    # so the barrier and the read_bytes/read_text sinks must live in this same
+    # function). Mirrors origin/dev's proven-passing inline pattern.
+    # Layer 1 (defense in depth): strict regex allowlist (fullmatch so a trailing
+    # newline cannot pass the anchor).
+    if not _BACKUP_FILENAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+    try:
+        safe_root = BACKUPS_DIR.resolve()
+        path = (BACKUPS_DIR / filename).resolve()
+        path.relative_to(safe_root)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Backup not found")
     if filename.endswith(".zip"):
@@ -1593,10 +1612,21 @@ async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
 @router.delete("/saved/{filename}", status_code=200)
 async def delete_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
     """Delete a saved backup file (YAML export or ZIP archive)."""
-    # Strict regex allowlist + canonicalize-and-verify containment under
-    # BACKUPS_DIR. See download_saved_backup / _validate_saved_filename for the
-    # rationale — closes CodeQL py/path-injection findings the regex alone cannot.
-    path = _validate_saved_filename(filename)
+    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
+    # the containment barrier is not tracked across a function-return boundary,
+    # so the barrier and the unlink sink must live in this same function). See
+    # download_saved_backup above for the rationale.
+    # Layer 1 (defense in depth): strict regex allowlist (fullmatch so a trailing
+    # newline cannot pass the anchor).
+    if not _BACKUP_FILENAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+    try:
+        safe_root = BACKUPS_DIR.resolve()
+        path = (BACKUPS_DIR / filename).resolve()
+        path.relative_to(safe_root)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Backup not found")
     path.unlink()

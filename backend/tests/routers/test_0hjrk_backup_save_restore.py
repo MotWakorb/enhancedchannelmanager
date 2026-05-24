@@ -25,7 +25,7 @@ import json
 import zipfile
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 def _make_backup_zip() -> bytes:
