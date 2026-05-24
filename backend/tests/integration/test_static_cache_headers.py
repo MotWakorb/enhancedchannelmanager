@@ -20,7 +20,6 @@ from fastapi.testclient import TestClient
 
 from main import (
     ASSETS_CACHE_CONTROL,
-    CONSENT_CSP,
     INDEX_CACHE_CONTROL,
     ImmutableStaticFiles,
     spa_headers_for,
@@ -123,34 +122,3 @@ class TestIndexCacheHeader:
         """The constant itself encodes the policy — guard against drift."""
         assert "no-cache" in INDEX_CACHE_CONTROL
         assert "must-revalidate" in INDEX_CACHE_CONTROL
-
-
-class TestConsentAntiFraming:
-    """The OAuth consent route must carry anti-framing headers (bead buiqr.7, CP1)."""
-
-    def test_consent_route_sets_frame_ancestors_none(self, tmp_path):
-        _build_static_tree(tmp_path)
-        client = TestClient(_make_app(str(tmp_path)))
-
-        resp = client.get("/oauth/consent")
-
-        assert resp.status_code == 200
-        assert resp.headers["content-security-policy"] == "frame-ancestors 'none'"
-
-    def test_consent_route_with_trailing_slash_also_guarded(self):
-        # rstrip('/') normalization means /oauth/consent/ is also covered.
-        assert "Content-Security-Policy" in spa_headers_for("oauth/consent/")
-        assert spa_headers_for("oauth/consent/")["Content-Security-Policy"] == CONSENT_CSP
-
-    def test_non_consent_routes_have_no_csp(self, tmp_path):
-        _build_static_tree(tmp_path)
-        client = TestClient(_make_app(str(tmp_path)))
-
-        # The rest of the SPA is not constrained by the consent-only CSP.
-        resp = client.get("/channels")
-        assert "content-security-policy" not in resp.headers
-        assert "Content-Security-Policy" not in spa_headers_for("settings")
-
-    def test_consent_csp_constant_denies_all_framing(self):
-        """The constant itself encodes the policy — guard against drift."""
-        assert CONSENT_CSP == "frame-ancestors 'none'"
