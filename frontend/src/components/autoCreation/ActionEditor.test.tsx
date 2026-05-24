@@ -207,6 +207,50 @@ describe('ActionEditor', () => {
 
       expect(screen.getByLabelText(/find.*value/i)).toHaveValue('ESPN');
     });
+
+    it('renders the loose name matching checkbox, unchecked by default', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const checkbox = screen.getByLabelText(/loose name matching/i);
+      expect(checkbox).toBeInTheDocument();
+      expect(checkbox).not.toBeChecked();
+    });
+
+    it('reflects loose_name_match=true as a checked checkbox', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto', loose_name_match: true }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/loose name matching/i)).toBeChecked();
+    });
+
+    it('includes loose_name_match in the payload when toggled on', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByLabelText(/loose name matching/i));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'merge_streams', loose_name_match: true })
+      );
+    });
   });
 
   describe('assign_logo action', () => {

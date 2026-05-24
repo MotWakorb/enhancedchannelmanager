@@ -1781,7 +1781,8 @@ async def get_auto_creation_action_schema():
             "description": "Merge multiple streams into one channel",
             "params": {
                 "target": {"type": "string", "enum": ["new_channel", "existing_channel", "auto"], "default": "auto"},
-                "match_by": {"type": "string", "enum": ["tvg_id", "normalized_name", "stream_group"], "default": "tvg_id"},
+                "match_by": {"type": "string", "enum": ["tvg_id", "normalized_name", "stream_group"], "default": "tvg_id", "description": "DEPRECATED no-op (bd-0emgo.1): validated but never consumed at runtime. Use loose_name_match to control fuzzy vs exact matching."},
+                "loose_name_match": {"type": "boolean", "default": False, "description": "When false (default), target=auto merges only on EXACT normalized-name equality. When true, restores the legacy fuzzy cascade (core-name/deparen/word-prefix/call-sign)."},
                 "find_channel_by": {"type": "string", "enum": ["name_exact", "name_regex", "tvg_id"], "optional": True},
                 "find_channel_value": {"type": "string", "optional": True},
                 "quality_preference": {"type": "array", "default": [1080, 720, 480], "description": "Quality order preference"},

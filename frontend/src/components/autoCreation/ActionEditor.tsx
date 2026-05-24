@@ -878,6 +878,22 @@ export function ActionEditor({
                 When enabled, the target channel is kept in sync: after this run, it will keep only the streams that were merged into that channel during this run (removing stale streams that no longer match).
               </span>
             </div>
+
+            <div className="action-field">
+              <label className="transform-toggle">
+                <input
+                  type="checkbox"
+                  checked={!!action.loose_name_match}
+                  onChange={e => onChange({ ...action, loose_name_match: e.target.checked })}
+                  disabled={readonly}
+                  aria-label="Loose name matching (legacy fuzzy)"
+                />
+                Loose name matching (legacy fuzzy)
+              </label>
+              <span className="field-hint">
+                Off (default): a stream merges into an existing channel only when its normalized name exactly matches. On: restores the older fuzzy matching (core-name, parentheses, word-prefix, call-sign) — this can over-match unrelated streams.
+              </span>
+            </div>
           </>
         )}
 

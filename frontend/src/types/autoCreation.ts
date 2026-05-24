@@ -120,6 +120,13 @@ export interface Action {
   max_streams_per_channel?: number;
   /** When true, remove streams from the target channel that no longer match this rule run. */
   remove_non_matching?: boolean;
+  /**
+   * merge_streams target=auto matching mode (bd-0emgo.1). When false/undefined
+   * (default), the stream merges into an existing channel only on EXACT
+   * normalized-name equality. When true, restores the legacy fuzzy cascade
+   * (core-name / deparen / word-prefix containment / call-sign).
+   */
+  loose_name_match?: boolean;
   message?: string;
   // Name transform (for create_channel and create_group)
   name_transform_pattern?: string;

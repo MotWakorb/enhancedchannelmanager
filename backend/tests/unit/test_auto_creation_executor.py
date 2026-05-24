@@ -952,6 +952,119 @@ class TestActionExecutorMergeStreams:
         assert any("Would remove" in r.get("action", "") for r in results["dry_run_results"])
 
 
+class TestMergeStreamsExactDefaultMatch:
+    """Regression tests for bd-0emgo.1: merge_streams target=auto must default
+    to EXACT normalized-name equality and must NOT run the legacy fuzzy cascade
+    (core-name / deparen / word-prefix containment / call-sign) unless the
+    ``loose_name_match`` action flag is True.
+
+    Reproduces the production failure: a "SKY Sport 4K" channel (core name
+    "sky sport" because "4K" is stripped as a quality suffix) over-matched 75
+    unrelated streams ("Sky Sport Bundesliga", "SKY SPORT TENNIS", ...) because
+    "sky sport" is a leading word-prefix of all of them.
+    """
+
+    def _make_engine(self, core_map):
+        """Fake normalization engine.
+
+        ``core_map`` maps a raw name -> its core name (lowercased core used by
+        the executor's _core_name_to_channel index and the word-prefix step).
+        normalize() returns the core as the normalized form so the exact-key
+        indices (_normalized_name_to_channel) are keyed under the core too.
+        """
+        engine = MagicMock()
+
+        def _normalize(name, *args, **kwargs):
+            result = MagicMock()
+            result.normalized = core_map.get(name, name)
+            result.transformations = []
+            return result
+
+        engine.normalize.side_effect = _normalize
+        engine.extract_core_name.side_effect = lambda n: core_map.get(n, n)
+        engine.extract_call_sign.return_value = None
+        return engine
+
+    def _build(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        # Existing channel "SKY Sport 4K" — its core/normalized form is
+        # "sky sport" ("4K" stripped as a quality suffix).
+        existing = [{"id": 50, "name": "SKY Sport 4K", "streams": [],
+                     "channel_group_id": 9}]
+        core_map = {
+            "SKY Sport 4K": "sky sport",
+            # Unrelated streams that share the "sky sport" leading prefix.
+            "Sky Sport Bundesliga": "sky sport bundesliga",
+            "SKY SPORT TENNIS": "sky sport tennis",
+            "SKY SPORT 251": "sky sport 251",
+            # A genuinely-matching stream whose core equals the channel core.
+            "SKY Sport 4K UHD": "sky sport",
+        }
+        engine = self._make_engine(core_map)
+        executor = ActionExecutor(client, existing_channels=existing,
+                                  normalization_engine=engine)
+        return client, executor
+
+    def _stream(self, sid, name):
+        return StreamContext(
+            stream_id=sid,
+            stream_name=name,
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="Sports",
+            tvg_id=None,
+        )
+
+    def _merge(self, executor, stream_ctx, loose=False):
+        action = {"type": "merge_streams", "target": "auto"}
+        if loose:
+            action["loose_name_match"] = True
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             normalization_group_ids=[1])
+        )
+
+    def test_default_does_not_overmatch_via_word_prefix(self):
+        """DEFAULT (exact-only): a 'Sky Sport Bundesliga' stream must NOT merge
+        into 'SKY Sport 4K' — the word-prefix containment cascade is disabled.
+        """
+        client, executor = self._build()
+        result = self._merge(executor, self._stream(201, "Sky Sport Bundesliga"))
+        # Skipped — no exact-name channel for "sky sport bundesliga".
+        assert result.skipped is True
+        client.update_channel.assert_not_called()
+
+    def test_default_does_not_overmatch_multiple_unrelated_streams(self):
+        """DEFAULT: none of the unrelated 'SKY SPORT *' streams merge."""
+        client, executor = self._build()
+        for sid, name in [(301, "SKY SPORT TENNIS"), (302, "SKY SPORT 251")]:
+            result = self._merge(executor, self._stream(sid, name))
+            assert result.skipped is True, f"{name} should not merge by default"
+        client.update_channel.assert_not_called()
+
+    def test_loose_flag_restores_word_prefix_match(self):
+        """loose_name_match=True restores the legacy fuzzy cascade: the
+        'Sky Sport Bundesliga' stream merges into 'SKY Sport 4K' (id=50).
+        """
+        client, executor = self._build()
+        result = self._merge(executor, self._stream(201, "Sky Sport Bundesliga"),
+                             loose=True)
+        assert result.success is True
+        client.update_channel.assert_called()
+        assert client.update_channel.call_args[0][0] == 50
+
+    def test_exact_normalized_name_merges_by_default(self):
+        """DEFAULT: a stream whose normalized/core name EXACTLY equals the
+        channel's ('sky sport') DOES merge into 'SKY Sport 4K'.
+        """
+        client, executor = self._build()
+        result = self._merge(executor, self._stream(401, "SKY Sport 4K UHD"))
+        assert result.success is True
+        client.update_channel.assert_called()
+        assert client.update_channel.call_args[0][0] == 50
+
+
 class TestActionExecutorPropertyActions:
     """Tests for property assignment actions."""
 
