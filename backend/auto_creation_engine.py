@@ -289,8 +289,36 @@ class AutoCreationEngine:
 
             logger.info("[AUTO-CREATE-ENGINE] Rolling back execution %s", execution_id)
 
-            # Rollback created entities (in reverse order)
             created = execution.get_created_entities()
+            modified = execution.get_modified_entities()
+
+            # Refuse (rather than silently no-op) when there is nothing to undo.
+            # An execution with ZERO created AND ZERO modified entities has no
+            # recorded restore data — either it predates entity tracking (a
+            # legacy run) or it genuinely changed nothing. Marking such a run
+            # "rolled_back" with entities_removed=0/entities_restored=0 LOOKS
+            # like a clean rollback but guarantees nothing. Leave status
+            # untouched and tell the caller why. Runs that created OR modified
+            # anything fall through and roll back normally (only the both-empty
+            # case refuses); the already-rolled-back and dry-run guards above
+            # still take precedence.
+            if not created and not modified:
+                logger.warning(
+                    "[AUTO-CREATE-ENGINE] Refusing rollback of execution %s: "
+                    "no recorded created or modified entities",
+                    execution_id,
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        f"No recorded created or modified entities for execution "
+                        f"{execution_id}; cannot guarantee a rollback (the run "
+                        f"predates entity tracking or made no changes). Refusing "
+                        f"to mark it rolled_back."
+                    ),
+                }
+
+            # Rollback created entities (in reverse order)
             for entity in reversed(created):
                 await self._rollback_created_entity(entity)
 
@@ -303,7 +331,6 @@ class AutoCreationEngine:
             # snapshot win, leaving all-but-the-last merged stream behind.
             # Reversing makes the earliest snapshot win — restoring the original
             # — exactly as created-entity teardown is reversed above.
-            modified = execution.get_modified_entities()
             for entity in reversed(modified):
                 await self._rollback_modified_entity(entity)
 
