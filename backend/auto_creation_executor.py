@@ -1110,6 +1110,13 @@ class ActionExecutor:
         max_streams = params.get("max_streams_per_channel", 0)  # 0 = unlimited
         find_channel_value = params.get("find_channel_value")
         remove_non_matching = params.get("remove_non_matching", False) is True
+        # bd-0emgo.1: merge_streams target=auto defaults to EXACT normalized-name
+        # equality. The legacy fuzzy cascade (core-name / deparen / word-prefix
+        # containment / call-sign) caused production over-matching (a "SKY Sport
+        # 4K" channel — core "sky sport" — absorbed 75 unrelated "Sky Sport *"
+        # streams via the word-prefix step). Set loose_name_match=True on the
+        # action to restore the legacy cascade.
+        loose_name_match = params.get("loose_name_match", False) is True
         # Effective scope group for merge lookups (GH #298). merge_streams has no
         # action group_id, so the explicit rule scope group is the only source.
         # None when scope is off or no explicit group is pinned — preserves the
@@ -1147,11 +1154,21 @@ class ActionExecutor:
                     except Exception as e:
                         logger.warning("[AUTO-CREATE-EXEC] Normalization failed for stream '%s': %s", stream_ctx.stream_name, e)
                 logger.debug("[AUTO-CREATE-EXEC] Auto-lookup by normalized name: '%s'", lookup_name)
-                channel = self._find_channel_by_name(lookup_name, scope_group_id=effective_scope_group_id)
+                # bd-0emgo.1: default to exact normalized-name equality. With
+                # exact_only=True the GH-104 re-normalize/core-name fuzzy
+                # fallbacks inside _find_channel_by_name are skipped; only the
+                # exact-key indices are consulted. loose_name_match=True restores
+                # the legacy fuzzy lookup.
+                channel = self._find_channel_by_name(
+                    lookup_name, scope_group_id=effective_scope_group_id,
+                    exact_only=not loose_name_match
+                )
 
-            # Core-name fallback: strip country prefix + quality suffix using
-            # tag groups directly (works even when normalization rules are disabled)
-            if not channel and normalization_group_ids and self._normalization_engine:
+            # Core-name fallback (LEGACY FUZZY — bd-0emgo.1): strip country prefix
+            # + quality suffix, deparenthesize, and do word-prefix containment.
+            # This is the over-matching cascade; gated behind loose_name_match so
+            # the default (exact) merge does not run it.
+            if loose_name_match and not channel and normalization_group_ids and self._normalization_engine:
                 try:
                     core_name = self._normalization_engine.extract_core_name(stream_ctx.stream_name)
                     if core_name:
@@ -1193,9 +1210,11 @@ class ActionExecutor:
                 except Exception as e:
                     logger.debug("[AUTO-CREATE-EXEC] Core name fallback failed: %s", e)
 
-            # Call-sign fallback: match local affiliates by FCC call sign
-            # (W/K + 2-3 letters) extracted from both stream and channel names
-            if not channel and normalization_group_ids and self._normalization_engine:
+            # Call-sign fallback (LEGACY FUZZY — bd-0emgo.1): match local
+            # affiliates by FCC call sign (W/K + 2-3 letters) extracted from both
+            # stream and channel names. Gated behind loose_name_match so the
+            # default (exact) merge does not run it.
+            if loose_name_match and not channel and normalization_group_ids and self._normalization_engine:
                 try:
                     cs = self._normalization_engine.extract_call_sign(stream_ctx.stream_name)
                     if cs:
@@ -2483,7 +2502,8 @@ class ActionExecutor:
             return desc
         return ""
 
-    def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None) -> Optional[dict]:
+    def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None,
+                              exact_only: bool = False) -> Optional[dict]:
         """Find channel by exact name (case-insensitive).
 
         Also checks the base-name mapping so that a lookup for "USA Network"
@@ -2504,6 +2524,13 @@ class ActionExecutor:
         will create a new channel in the desired group instead of merging
         across groups. Passing ``None`` (default) preserves the prior
         group-agnostic behavior.
+
+        When ``exact_only`` is True (bd-0emgo.1), only the exact-key indices are
+        consulted (created/base-name/by-name/normalized-name maps); the
+        re-normalize and core-name *fuzzy* fallbacks below are SKIPPED. This is
+        used by merge_streams target=auto to default to exact normalized-name
+        equality. ``exact_only=False`` (default) preserves the GH-104
+        duplicate-prevention fallbacks for channel CREATION.
         """
         def _in_scope(c: Optional[dict]) -> bool:
             if c is None:
@@ -2541,7 +2568,11 @@ class ActionExecutor:
         # equals the normalized form (e.g., stored "RTL", searching for
         # "RTL ᴿᴬᵂ") — symmetric to the normalized-name map above which
         # handles the opposite direction.
-        if self._normalization_engine is not None:
+        #
+        # bd-0emgo.1: skipped when exact_only=True (merge_streams target=auto
+        # default). These fuzzy fallbacks remain active for channel CREATION
+        # (exact_only=False) where they prevent duplicate channels (GH-104).
+        if not exact_only and self._normalization_engine is not None:
             try:
                 norm = self._normalization_engine.normalize(name)
                 norm_lower = (norm.normalized or "").strip().lower()

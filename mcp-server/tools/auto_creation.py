@@ -455,7 +455,15 @@ def register(mcp: FastMCP):
                   create_group — params: name_template, if_exists (skip/use_existing)
                   create_channel — params: name_template, if_exists (skip/merge/merge_only/update),
                                    channel_number (e.g. "800-99999" for range)
-                  merge_streams — params: name_template, match_by (tvg_id/normalized_name/stream_group)
+                  merge_streams — params: target (auto/existing_channel/new_channel),
+                                   find_channel_by (name_exact/name_regex/tvg_id) + find_channel_value,
+                                   max_streams_per_channel, remove_non_matching (bool),
+                                   loose_name_match (bool, default false). With target=auto the
+                                   stream merges into an existing channel only on EXACT normalized-
+                                   name equality; set loose_name_match=true to restore the legacy
+                                   fuzzy cascade (core-name/deparen/word-prefix/call-sign).
+                                   NOTE: match_by is a DEPRECATED no-op (validated but never
+                                   consumed at runtime) — use loose_name_match to control matching.
                   assign_logo — params: value (URL or empty for stream logo)
                   assign_tvg_id — params: value
                   assign_epg — params: epg_id, set_tvg_id (bool)
