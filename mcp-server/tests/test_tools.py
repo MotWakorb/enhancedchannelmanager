@@ -709,7 +709,13 @@ class TestPhase2Migration:
 
     @pytest.mark.asyncio
     async def test_get_journal_sends_page_size_not_limit(self):
-        """Backend /api/journal paginates via page_size (drift fixed in bd-vtghg)."""
+        """Backend /api/journal paginates via page_size (drift fixed in bd-vtghg).
+
+        bd-0hjrk.1: ``limit`` is now honored by CLIENT-SIDE pagination, so the
+        query carries the page cap (page_size=200) plus a ``page`` cursor rather
+        than the raw ``limit``. The contract this test guards — the backend gets
+        ``page_size``/``category`` and NEVER a bare ``limit`` key — still holds.
+        """
         from tools.system import register
         from mcp.server.fastmcp import FastMCP
         from _endpoint_contracts import ENDPOINTS
@@ -722,7 +728,7 @@ class TestPhase2Migration:
         call = mock_client.call_endpoint.call_args
         assert call.args[0] is ENDPOINTS["journal_list"]
         q = call.kwargs["query"]
-        assert q == {"page_size": 5, "category": "channels"}
+        assert q == {"page_size": 200, "category": "channels", "page": 1}
         assert "limit" not in q
 
 
