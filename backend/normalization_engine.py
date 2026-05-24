@@ -498,11 +498,29 @@ _DEFAULT_SMALL_WORDS = {
     'en', 'de', 'el', 'la', 'le', 'du', 'des', 'les', 'dos', 'das',
 }
 
+# Generic words that, when a strip leaves them ALONE as the sole remaining
+# token, indicate the strip has destroyed the discriminating part of the name
+# (bd-0emgo.2). Stripping a league prefix off "NFL Network" / "MLB Network" /
+# "NHL Network" would leave the bare common word "Network" for all three,
+# collapsing distinct channels onto one core name -> cross-merge. Kept NARROW
+# on purpose: only words that are generic enough to be shared across many
+# otherwise-distinct channels. A single non-generic token (e.g. "ESPN") is
+# still a legitimate strip result and is NOT in this set.
+# Operator-tunable: a "Generic Word Tags" tag group, if present, REPLACES this
+# fallback (mirrors the Small Word Tags / Abbreviation Tags pattern).
+_DEFAULT_GENERIC_WORDS = {
+    'network', 'tv', 'channel', 'channels',
+    'sports', 'sport', 'news', 'the', 'plus', 'hd', 'uhd',
+}
+
 # Cache for small word tags loaded from the database
 _small_words_cache: set[str] | None = None
 
 # Cache for abbreviation tags loaded from the database
 _abbreviation_tags_cache: set[str] | None = None
+
+# Cache for generic word tags loaded from the database (bd-0emgo.2)
+_generic_words_cache: set[str] | None = None
 
 
 def _load_abbreviation_tags() -> set[str]:
@@ -559,11 +577,67 @@ def _load_small_words() -> set[str]:
     return _small_words_cache
 
 
+def _load_generic_words() -> set[str]:
+    """Load generic words from the 'Generic Word Tags' tag group (bd-0emgo.2).
+
+    Returns lowercase tokens. If the operator has defined a "Generic Word
+    Tags" group it REPLACES the hardcoded fallback (same contract as
+    _load_small_words). Falls back to _DEFAULT_GENERIC_WORDS when the group
+    is absent or the lookup fails.
+    """
+    global _generic_words_cache
+    if _generic_words_cache is not None:
+        return _generic_words_cache
+
+    try:
+        from database import get_session
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.name == "Generic Word Tags").first()
+            if group:
+                tags = session.query(Tag).filter(
+                    Tag.group_id == group.id, Tag.enabled == True
+                ).all()
+                _generic_words_cache = {t.value.lower() for t in tags}
+            else:
+                _generic_words_cache = _DEFAULT_GENERIC_WORDS
+        finally:
+            session.close()
+    except Exception:
+        _generic_words_cache = _DEFAULT_GENERIC_WORDS
+
+    return _generic_words_cache
+
+
+def _would_collapse_to_generic(result: str) -> bool:
+    """Return True if `result` is a SINGLE generic token (bd-0emgo.2).
+
+    A strip that leaves only one generic word ("Network", "TV", "Channel",
+    ...) has destroyed the discriminating part of the name, which causes
+    otherwise-distinct channels to collapse onto one core name and
+    cross-merge. Such a strip is refused by the callers (they return the
+    ORIGINAL text instead).
+
+    Allowed (returns False):
+      - A single NON-generic token ("ESPN") — a legitimate strip result.
+      - ANY multi-word remainder ("Sky Sport Bundesliga") — even if it
+        contains a generic word.
+      - Empty / whitespace-only — not a "single generic word"; the empty
+        remainder is handled by each caller's own guard.
+    """
+    tokens = result.split()
+    if len(tokens) != 1:
+        return False
+    return tokens[0].lower() in _load_generic_words()
+
+
 def clear_abbreviation_cache():
     """Clear all title-case related caches (call when tags are modified)."""
-    global _abbreviation_tags_cache, _small_words_cache
+    global _abbreviation_tags_cache, _small_words_cache, _generic_words_cache
     _abbreviation_tags_cache = None
     _small_words_cache = None
+    _generic_words_cache = None
 
 
 def _is_abbreviation(word: str) -> bool:
@@ -1093,7 +1167,14 @@ class NormalizationEngine:
                 result = text[match.match_end:]
                 # Also strip common separators that might follow
                 result = re.sub(r'^[\s:\-|/]+', '', result)
-                return result.strip()
+                result = result.strip()
+                # bd-0emgo.2: refuse a strip that leaves a single generic word
+                # (e.g. "NFL Network" -> "Network"), which would collapse
+                # distinct channels onto one core name and cross-merge. Return
+                # the ORIGINAL text so this pass is a no-op (loop terminates).
+                if _would_collapse_to_generic(result):
+                    return text
+                return result
             return text
 
         elif action_type == "strip_suffix":
@@ -1103,7 +1184,12 @@ class NormalizationEngine:
                 result = text[:match.match_start]
                 # Also strip common separators that might precede
                 result = result.rstrip(' \t\n\r:-|/')
-                return result.strip()
+                result = result.strip()
+                # bd-0emgo.2: refuse a strip that leaves a single generic word.
+                # Return the ORIGINAL text so the pass is a no-op.
+                if _would_collapse_to_generic(result):
+                    return text
+                return result
             return text
 
         elif action_type == "normalize_prefix":
@@ -1515,7 +1601,11 @@ class NormalizationEngine:
                 if match.matched and match.match_start == 0:
                     result = current[match.match_end:]
                     result = re.sub(r'^[\s:\-|/]+', '', result).strip()
-                    if result:
+                    # bd-0emgo.2: keep the un-stripped name if the strip would
+                    # leave a single generic word (e.g. "NFL Network" ->
+                    # "Network"); otherwise the merge core-name path collapses
+                    # distinct channels and cross-merges.
+                    if result and not _would_collapse_to_generic(result):
                         current = result
 
             # Strip quality suffix
@@ -1525,7 +1615,8 @@ class NormalizationEngine:
                     if match.match_end == len(current) or match.match_end == len(current.rstrip()):
                         result = current[:match.match_start]
                         result = re.sub(r'[\s:|\-/]+$', '',result).strip()
-                        if result:
+                        # bd-0emgo.2: same single-generic-word guard.
+                        if result and not _would_collapse_to_generic(result):
                             current = result
 
             # Normalize whitespace between passes
