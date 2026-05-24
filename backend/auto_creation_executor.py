@@ -60,6 +60,17 @@ class ExecutionContext:
     streams_skipped: int = 0
     streams_removed: int = 0
 
+    # Distinct channel IDs that received at least one *merge* (a stream added,
+    # or would-be-added in dry-run) during THIS stream's action execution.
+    # Populated in add_result() — the SAME chokepoint that counts streams_merged
+    # — so no merge return point can be missed (merge_streams action AND
+    # create_channel if_exists=merge AND any future merge path all funnel through
+    # add_result). The engine unions these per-stream sets across the run to
+    # derive channels_touched (bd-0emgo.4: a live dry-run reported
+    # streams_merged=26 but channels_touched=0 when the count was derived from a
+    # scattered call-site dict instead of this chokepoint).
+    merged_channel_ids: set = field(default_factory=set)
+
     # Current state (updated during execution)
     current_channel_id: Optional[int] = None  # Channel created/selected for this stream
     current_group_id: Optional[int] = None  # Group created/selected
@@ -106,7 +117,22 @@ class ExecutionContext:
 
         if result.modified:
             if result.entity_type == "channel":
-                self.channels_updated += 1
+                # merge_stream results (action_type "merge_stream") count as
+                # stream merges, not channel property updates.  All other
+                # channel modifications (assign_logo, assign_tvg_id,
+                # assign_epg, update_channel, set_channel_number, etc.) are
+                # genuine property updates and increment channels_updated.
+                if result.action_type == "merge_stream":
+                    self.streams_merged += 1
+                    # Record the touched channel at the SAME chokepoint that
+                    # counts the merge, so channels_touched can never drift from
+                    # streams_merged regardless of which path produced the merge
+                    # (bd-0emgo.4). The set de-dupes channels merged into more
+                    # than once; the engine unions these across streams.
+                    if result.entity_id is not None:
+                        self.merged_channel_ids.add(result.entity_id)
+                else:
+                    self.channels_updated += 1
             elif result.entity_type == "stream" and result.action_type == "remove_from_channel":
                 self.streams_removed += 1
             self.modified_entities.append({
@@ -211,6 +237,13 @@ class ActionExecutor:
 
         # merge_streams reconciliation: for actions with remove_non_matching=True,
         # we accumulate the desired stream IDs per channel and prune later.
+        # NOTE: this dict is for PRUNE accounting only — do NOT derive
+        # channels_touched from it. It is populated at scattered call sites
+        # (_execute_merge_streams, _execute_create_channel if_exists=merge) and
+        # historically missed merge paths, producing channels_touched=0 while
+        # streams_merged>0 (bd-0emgo.4). channels_touched is now derived in the
+        # engine by unioning exec_ctx.merged_channel_ids, populated at the
+        # add_result chokepoint — see ExecutionContext.merged_channel_ids.
         self._merge_streams_added_by_channel: dict[int, set[int]] = {}
         self._merge_prune_enabled_channels: set[int] = set()
 
@@ -646,7 +679,11 @@ class ActionExecutor:
                     details=action_details
                 )
             elif if_exists in ("merge", "merge_only"):
-                # Add stream to existing channel
+                # channels_touched accounting now happens at the chokepoint
+                # _add_stream_to_channel (bd-0emgo.4), so this path does NOT
+                # write _merge_streams_added_by_channel — that dict is reserved
+                # for merge_streams prune accounting, which create_channel does
+                # not enable. Add stream to existing channel:
                 result = await self._add_stream_to_channel(existing, stream_ctx, exec_ctx)
                 result.details = action_details + result.details
                 return result

@@ -215,6 +215,8 @@ def register(mcp: FastMCP):
                 f"  Channels {'would be ' if dry_run else ''}created: "
                 f"{result.get('channels_created', 0)}"
             )
+            lines.append(f"  Stream merges: {result.get('streams_merged', 0)}")
+            lines.append(f"  Channels touched: {result.get('channels_touched', 0)}")
             lines.append(f"  Channels updated: {result.get('channels_updated', 0)}")
             lines.append(f"  Groups created: {result.get('groups_created', 0)}")
             lines.append(f"  Streams skipped: {result.get('streams_skipped', 0)}")

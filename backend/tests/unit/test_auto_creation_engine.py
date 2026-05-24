@@ -1821,3 +1821,153 @@ class TestSmartSortCustomStreams:
             f"Expected custom stream (priority 50) to lead over M3U stream "
             f"(priority 10) within the deprioritized bucket, got {result}"
         )
+
+
+class TestRunPipelineCreateChannelMergeChannelsTouched:
+    """bd-0emgo.4 real-path regression: create_channel + if_exists=merge dry-run.
+
+    A live dry-run of a ``create_channel`` rule with ``if_exists=merge`` reported
+    ``streams_merged=26`` but ``channels_touched=0`` — inconsistent. Two earlier
+    fix attempts populated the per-channel tracking dict at specific CALL SITES
+    (``_execute_merge_streams`` and the ``_execute_create_channel`` if_exists=merge
+    branch), and their tests pre-seeded ``existing_channels`` so the FIRST stream
+    of each name already merged. But the real run created the channel for the
+    first stream and merged the 2nd+ streams into the *would-be-created* channel —
+    a path that, depending on lookup/normalization, the call-site additions did
+    not reliably cover.
+
+    These tests drive the REAL pipeline (``run_pipeline`` -> ``_process_streams``
+    -> ``executor.execute`` -> ``_execute_create_channel`` -> ``_add_stream_to_channel``)
+    with channels that do NOT pre-exist, so the merges flow through the create
+    path exactly as in the live run. They assert ``channels_touched`` is the
+    distinct count of channels that received a merged stream — and is NOT 0.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        # No pre-existing channels: every channel is created during the run,
+        # so 2nd+ same-name streams merge into a would-be-created channel.
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_channel_groups = AsyncMock(return_value=[])
+        self.client.update_channel = AsyncMock()
+        # create_channel is only called in LIVE mode; dry-run never hits it.
+        self._next_live_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_live_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        self.engine = AutoCreationEngine(self.client)
+
+    def _make_rule(self, if_exists="merge"):
+        """A real (unpersisted) AutoCreationRule: create_channel + if_exists=merge.
+
+        Using a real model instance (not a MagicMock) keeps sort_field=None,
+        get_managed_channel_ids()=[], get_normalization_group_ids()=[], etc., so
+        the pipeline's sort/renumber passes stay inert and the merge path is the
+        only thing exercised.
+        """
+        from models import AutoCreationRule
+
+        rule = AutoCreationRule()
+        rule.id = 1
+        rule.name = "Create+Merge Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([{
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": if_exists,
+        }])
+        return rule
+
+    def _make_streams(self, names_to_ids):
+        """Build StreamContexts. names_to_ids: list of (name, stream_id)."""
+        return [
+            StreamContext(stream_id=sid, stream_name=name, m3u_account_id=1)
+            for name, sid in names_to_ids
+        ]
+
+    def _run(self, rule, streams, dry_run):
+        """Drive the REAL pipeline with the rule/streams, stubbing only the
+        DB/IO lifecycle boundaries (rules load, stream fetch, execution
+        persistence). _process_streams and the whole executor chain run for real.
+        """
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.engine._create_execution = AsyncMock(return_value=MagicMock(id=1, mode=None))
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+
+        with patch("auto_creation_engine.get_session") as mock_get_session:
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_dry_run_create_channel_merge_channels_touched_not_zero(self):
+        """DRY-RUN: streams_merged>=1 AND channels_touched == distinct merged-into
+        channels (NOT 0) — the exact live inconsistency.
+
+        Inputs share names so 2nd+ streams merge into would-be-created channels:
+          ESPN x3 -> 1 created + 2 merged
+          CNN  x2 -> 1 created + 1 merged
+          FOX  x1 -> 1 created + 0 merged (not "touched by a merge")
+        => streams_merged == 3, channels_touched == 2 (ESPN, CNN).
+        """
+        rule = self._make_rule(if_exists="merge")
+        streams = self._make_streams([
+            ("ESPN", 601), ("ESPN", 602), ("ESPN", 603),
+            ("CNN", 701), ("CNN", 702),
+            ("FOX", 801),
+        ])
+
+        result = self._run(rule, streams, dry_run=True)
+
+        assert result["streams_merged"] == 3, (
+            f"expected 3 merges (2 ESPN + 1 CNN), got {result['streams_merged']}"
+        )
+        # The bug: channels_touched stays 0 even though merges happened.
+        assert result["channels_touched"] != 0, (
+            f"channels_touched must not be 0 when streams_merged="
+            f"{result['streams_merged']} (live create_channel+merge dry-run bug)"
+        )
+        assert result["channels_touched"] == 2, (
+            f"expected 2 distinct channels touched by merges (ESPN, CNN), "
+            f"got {result['channels_touched']} "
+            f"(streams_merged={result['streams_merged']})"
+        )
+
+    def test_live_create_channel_merge_channels_touched_consistent(self):
+        """LIVE: same scenario through the real create_channel API path.
+
+        channels_touched must still equal the distinct merged-into channel count.
+        """
+        rule = self._make_rule(if_exists="merge")
+        streams = self._make_streams([
+            ("ESPN", 901), ("ESPN", 902), ("ESPN", 903),
+            ("CNN", 911), ("CNN", 912),
+            ("FOX", 921),
+        ])
+
+        with patch("auto_creation_executor.journal.log_entry"):
+            result = self._run(rule, streams, dry_run=False)
+
+        assert result["streams_merged"] == 3, (
+            f"expected 3 merges, got {result['streams_merged']}"
+        )
+        assert result["channels_touched"] == 2, (
+            f"expected 2 distinct channels touched by merges, "
+            f"got {result['channels_touched']}"
+        )
