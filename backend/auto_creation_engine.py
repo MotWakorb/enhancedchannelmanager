@@ -1007,6 +1007,11 @@ class AutoCreationEngine:
             # the bulk-M3U dedup hook in _execute_create_channel only
             # fires for the M3U-refresh path per ADR-008 §D1.
             triggered_by=triggered_by,
+            # bd-0emgo.5: thread the execution_id so each LIVE merge writes
+            # a journal entry tagged batch_id=str(execution_id), giving an
+            # operator a queryable (channel_id, stream_id) audit trail to
+            # recover from a bad run via get_journal(batch_id=...).
+            execution_id=execution.id,
         )
 
         # Results tracking

@@ -127,12 +127,18 @@ def register(mcp: FastMCP):
     async def get_journal(
         limit: int = 20,
         category: str | None = None,
+        batch_id: str | None = None,
     ) -> str:
         """Get recent entries from the ECM activity journal/audit log.
 
         Args:
             limit: Number of entries to return (default 20)
             category: Filter by category (e.g., 'channels', 'm3u', 'epg', 'settings')
+            batch_id: Filter to a single batched operation's rows. For an
+                auto-creation run this is the run's execution_id (as a string),
+                so an operator recovering from a bad merge can list every
+                (channel_id, stream_id) pair the run touched (bd-0emgo.5).
+                Also matches the 8-char batch_id from bulk handlers.
         """
         try:
             client = get_ecm_client()
@@ -142,6 +148,10 @@ def register(mcp: FastMCP):
             query = {"page_size": limit}
             if category:
                 query["category"] = category
+            if batch_id:
+                # Indexed filter (idx_journal_batch_id) — passed through to the
+                # backend journal_list endpoint's batch_id query param.
+                query["batch_id"] = batch_id
             entries = await client.call_endpoint(ENDPOINTS["journal_list"], query=query)
 
             # Backend GET /api/journal returns a paginated envelope
