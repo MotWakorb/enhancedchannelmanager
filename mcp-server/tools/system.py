@@ -2,11 +2,9 @@
 import logging
 import re
 
-import httpx
 from mcp.server.fastmcp import FastMCP
 
 from _endpoint_contracts import ENDPOINTS
-from config import ECM_URL, get_mcp_api_key
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -116,21 +114,26 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def create_backup() -> str:
-        """Create a backup of all ECM configuration (settings, database, logos)."""
+        """Create and PERSIST a full backup of all ECM configuration (settings,
+        database, logos) to the server.
+
+        Unlike a plain download, this saves the backup on the server with a
+        stable timestamped filename so it is discoverable via
+        ``list_saved_backups`` and restorable via ``restore_backup``. Returns
+        that filename — use it to drive the list/restore workflow.
+        """
         try:
-            # /api/backup/create streams a binary ZIP — reading it via the shared
-            # ECMClient would call r.json() on binary bytes and crash with a
-            # UnicodeDecodeError (lq38l.10).  Use a short-lived httpx client to
-            # consume the raw bytes instead.
-            url = f"{ECM_URL.rstrip('/')}/api/backup/create"
-            headers = {"Authorization": f"Bearer {get_mcp_api_key()}"}
-            async with httpx.AsyncClient(timeout=60.0) as http:
-                r = await http.get(url, headers=headers)
-                r.raise_for_status()
-                size_kb = len(r.content) / 1024
+            # POST /api/backup/save persists the ZIP server-side and returns
+            # JSON metadata ({filename, size_bytes, created_at}). The legacy GET
+            # /create still streams a binary ZIP for the UI download and is
+            # unchanged (bd-0hjrk.5).
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["backup_save"], timeout=120.0)
+            filename = result.get("filename", "?") if isinstance(result, dict) else "?"
+            size_kb = (result.get("size_bytes", 0) / 1024) if isinstance(result, dict) else 0
             return (
-                f"Backup created successfully ({size_kb:.1f} KB). "
-                "Download it from the ECM Settings page."
+                f"Backup saved: {filename} ({size_kb:.0f} KB). "
+                "List with list_saved_backups, restore with restore_backup."
             )
         except Exception as e:
             logger.error("[MCP] create_backup failed: %s", e)
@@ -154,7 +157,13 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def list_saved_backups() -> str:
-        """List saved YAML backup files on the server (created by scheduled backup task)."""
+        """List saved backup files on the server, newest first.
+
+        Includes both full on-demand ZIP archives (type=zip, created by
+        create_backup) and scheduled YAML exports (type=yaml). The filename is
+        the stable id — pass a type=zip filename to restore_backup, or any to
+        delete_saved_backup.
+        """
         try:
             client = get_ecm_client()
             backups = await client.call_endpoint(ENDPOINTS["backup_list_saved"])
@@ -163,7 +172,10 @@ def register(mcp: FastMCP):
             lines = [f"Saved backups ({len(backups)}):"]
             for b in backups:
                 size_kb = b.get("size_bytes", 0) / 1024
-                lines.append(f"  {b['filename']} — {size_kb:.1f} KB ({b.get('created_at', '?')})")
+                btype = b.get("type", "?")
+                lines.append(
+                    f"  [{btype}] {b['filename']} — {size_kb:.1f} KB ({b.get('created_at', '?')})"
+                )
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] list_saved_backups failed: %s", e)
@@ -193,6 +205,45 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] delete_saved_backup failed: %s", e)
             return f"Error: {e}"
+
+    @mcp.tool()
+    async def restore_backup(filename: str) -> str:
+        """Restore ECM configuration from a saved backup ZIP on the server.
+
+        WARNING: this OVERWRITES the current ECM state — settings, the journal
+        database, and logos are all replaced with the contents of the backup.
+        This is destructive and cannot be undone except by restoring another
+        backup. Confirm with the operator before calling.
+
+        Only full ZIP archives (type=zip from list_saved_backups, created by
+        create_backup) can be restored here; scheduled YAML exports use a
+        different selective-restore path and are rejected.
+
+        Args:
+            filename: The saved ZIP backup filename, e.g.
+                ecm-backup-2026-05-24_120000.zip (from list_saved_backups).
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["backup_restore_saved"],
+                body={"filename": filename},
+                timeout=120.0,
+            )
+            if isinstance(result, dict):
+                restored = result.get("restored_files", [])
+                version = result.get("backup_version", "unknown")
+                return (
+                    f"Restored {filename} (backup version {version}): "
+                    f"{len(restored)} file(s) restored — {', '.join(restored)}. "
+                    "ECM state was overwritten from the backup."
+                )
+            return f"Restored {filename}."
+        except Exception as e:
+            # Surface backend validation errors (e.g. HTTP 400 Invalid filename)
+            # verbatim so the operator sees WHY a restore was rejected.
+            logger.error("[MCP] restore_backup failed: %s", e)
+            return f"Error restoring backup: {e}"
 
     @mcp.tool()
     async def get_journal(
