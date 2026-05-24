@@ -399,6 +399,12 @@ class Action:
             if target not in ("new_channel", "existing_channel", "auto"):
                 errors.append(f"merge_streams.target must be 'new_channel', 'existing_channel', or 'auto'")
 
+            # NOTE (bd-0emgo.1): match_by is validated here and surfaced in the
+            # OpenAPI enum but is a runtime NO-OP — it is never consumed by the
+            # executor. It is retained for backward compatibility of stored
+            # rules. The control that actually selects fuzzy vs exact matching
+            # for merge_streams target=auto is the ``loose_name_match`` boolean
+            # below. Do not rely on match_by to change matching behavior.
             match_by = self.params.get("match_by", "tvg_id")
             if match_by not in ("tvg_id", "normalized_name", "stream_group"):
                 errors.append(f"merge_streams.match_by must be 'tvg_id', 'normalized_name', or 'stream_group'")
@@ -415,6 +421,16 @@ class Action:
                 errors.append("merge_streams.remove_non_matching must be a boolean")
             if "remove_non_matching" not in self.params:
                 self.params["remove_non_matching"] = False
+
+            # bd-0emgo.1: opt-in loose (legacy fuzzy) matching for target=auto.
+            # Default False — merge into existing channel uses EXACT normalized-
+            # name equality. True restores the legacy core-name / deparen /
+            # word-prefix / call-sign cascade.
+            loose_name_match = self.params.get("loose_name_match", False)
+            if loose_name_match is not None and not isinstance(loose_name_match, bool):
+                errors.append("merge_streams.loose_name_match must be a boolean")
+            if "loose_name_match" not in self.params:
+                self.params["loose_name_match"] = False
 
         # Validate assign_logo
         elif action_type == ActionType.ASSIGN_LOGO:

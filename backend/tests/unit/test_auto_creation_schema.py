@@ -355,6 +355,32 @@ class TestActionValidation:
         assert len(errors) > 0
         assert "find_channel_by" in errors[0]
 
+    def test_merge_streams_loose_name_match_defaults_false(self):
+        """bd-0emgo.1: loose_name_match defaults to False when omitted."""
+        action = Action(type="merge_streams", params={"target": "auto"})
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["loose_name_match"] is False
+
+    def test_merge_streams_loose_name_match_accepts_bool(self):
+        """bd-0emgo.1: loose_name_match accepts an explicit boolean."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["loose_name_match"] is True
+
+    def test_merge_streams_loose_name_match_rejects_non_bool(self):
+        """bd-0emgo.1: loose_name_match must be a boolean."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": "yes"},
+        )
+        errors = action.validate()
+        assert any("loose_name_match" in e for e in errors)
+
     def test_valid_assign_logo(self):
         """Validates assign_logo action."""
         action = Action(
