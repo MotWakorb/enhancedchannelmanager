@@ -1191,10 +1191,14 @@ class TestGetAutoCreatedGroupsEnvelopeUnwrap:
             result = await mcp.call_tool("get_auto_created_groups", {})
 
         text = result[0][0].text
-        assert "2 auto-created" in text
+        # Both groups in the envelope are rendered (unwrap worked).
+        assert "Found 2 groups" in text
         assert "Sports AC" in text
         assert "News AC" in text
         assert "id=20" in text
+        # Per-group auto-created subset counts are rendered (bd-0hjrk.3).
+        assert "5 auto-created" in text
+        assert "3 auto-created" in text
         assert "has no attribute" not in text
 
     @pytest.mark.asyncio

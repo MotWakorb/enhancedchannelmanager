@@ -661,6 +661,12 @@ async def get_groups_with_auto_created_channels():
             groups_with_auto_created.append({
                 "id": group_id,
                 "name": group_info.get("name", f"Unknown Group {group_id}"),
+                # Total membership of the group, straight from the Dispatcharr
+                # group object (same ``channel_count`` field that the plain
+                # /channel-groups list surfaces). This is NOT the auto-created
+                # subset — a group can have 170 channels of which only 12 were
+                # auto-created (bd-0hjrk.3).
+                "channel_count": group_info.get("channel_count", 0),
                 "auto_created_count": len(channels),
                 "sample_channels": channels[:5],  # First 5 as samples
             })
