@@ -191,6 +191,11 @@ class AutoCreationEngine:
         execution.channels_updated = results["channels_updated"]
         execution.groups_created = results["groups_created"]
         execution.streams_merged = results["streams_merged"]
+        # bd-0emgo.4: persist distinct-channels-merged so the polled execution
+        # record (what the MCP/API surface read) reports it. Without a column it
+        # was computed in-memory but dropped on save, so a dry-run reported
+        # streams_merged=26 but channels_touched=0.
+        execution.channels_touched = results.get("channels_touched", 0)
         execution.streams_skipped = results["streams_skipped"]
         execution.streams_excluded = results.get("streams_excluded", 0)
         execution.set_created_entities(results["created_entities"])
@@ -1022,6 +1027,10 @@ class AutoCreationEngine:
             "channels_updated": 0,
             "groups_created": 0,
             "streams_merged": 0,
+            # Count of distinct channels that received at least one merge this
+            # run. Set after Pass 2 from len(channels_touched_ids), unioned from
+            # the add_result chokepoint (exec_ctx.merged_channel_ids).
+            "channels_touched": 0,
             "streams_skipped": 0,
             "streams_removed": 0,
             "channels_removed": 0,
@@ -1244,6 +1253,11 @@ class AutoCreationEngine:
         # Pass 2: Execute actions on sorted matches
         # =====================================================================
         logger.debug("[AUTO-CREATE-ENGINE] Executing actions for %s matched streams", len(sorted_entries))
+        # Distinct channels merged into across the whole run. Unioned from each
+        # stream's exec_ctx.merged_channel_ids (populated at the add_result
+        # chokepoint), so it stays consistent with streams_merged no matter which
+        # path produced the merge (bd-0emgo.4).
+        channels_touched_ids: set = set()
         for stream, winning_rule, losing_rules, stream_rules_log in sorted_entries:
             # Skip struck-out streams if the winning rule has skip_struck_streams enabled
             if getattr(winning_rule, 'skip_struck_streams', False) and stream.stream_id in self._struck_stream_ids:
@@ -1354,6 +1368,9 @@ class AutoCreationEngine:
             results["streams_merged"] += exec_ctx.streams_merged
             results["streams_skipped"] += exec_ctx.streams_skipped
             results["streams_removed"] += exec_ctx.streams_removed
+            # Union this stream's merged-into channels into the run-wide set
+            # (bd-0emgo.4); len() becomes channels_touched after the loop.
+            channels_touched_ids.update(exec_ctx.merged_channel_ids)
             # BD-F (bd-a5lb2): aggregate per-stream pending-merge enqueues
             # so the pipeline result surfaces a total the M3U-refresh
             # response can pass to BD-J's toast handler. Includes both
@@ -1444,6 +1461,19 @@ class AutoCreationEngine:
         # Pass 2.75: Merge reconciliation — prune non-matching streams (optional)
         # =====================================================================
         await executor.prune_merge_streams(results, dry_run)
+
+        # Distinct-channel count: how many channels had at least one stream
+        # merged into them this run. Unioned across streams from the add_result
+        # chokepoint (exec_ctx.merged_channel_ids), which fires for EVERY
+        # merge_stream result — merge_streams action AND create_channel
+        # if_exists=merge AND any future merge path — so it can never drift from
+        # streams_merged (bd-0emgo.4: a live dry-run reported streams_merged=26
+        # but channels_touched=0 when the count was derived from a scattered
+        # call-site dict that the create_channel merge path missed). This is the
+        # honest label for "Channels touched by merges" as opposed to
+        # channels_updated, which counts only genuine property updates
+        # (logo/tvg/epg/number/etc.).
+        results["channels_touched"] = len(channels_touched_ids)
 
         # =====================================================================
         # Pass 3: Re-sort existing channels for rules with sort_field

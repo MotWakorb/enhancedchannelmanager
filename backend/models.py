@@ -2097,6 +2097,12 @@ class AutoCreationExecution(Base):
     channels_updated = Column(Integer, default=0, nullable=False)
     groups_created = Column(Integer, default=0, nullable=False)
     streams_merged = Column(Integer, default=0, nullable=False)
+    # Distinct channels that received at least one stream merge this run
+    # (bd-0emgo.4). Counts target channels, not merge operations — so it reads
+    # honestly even when many streams merge into a handful of channels.
+    # server_default="0" matches the Alembic 0021 add-column so an existing-row
+    # NOT NULL add succeeds and ORM/migration stay drift-free.
+    channels_touched = Column(Integer, nullable=False, server_default="0", default=0)
     streams_skipped = Column(Integer, default=0, nullable=False)
     streams_excluded = Column(Integer, default=0, nullable=False)
 
@@ -2223,6 +2229,7 @@ class AutoCreationExecution(Base):
             "channels_updated": self.channels_updated,
             "groups_created": self.groups_created,
             "streams_merged": self.streams_merged,
+            "channels_touched": self.channels_touched,
             "streams_skipped": self.streams_skipped,
             "streams_excluded": self.streams_excluded,
             "rolled_back_at": self.rolled_back_at.isoformat() + "Z" if self.rolled_back_at else None,
