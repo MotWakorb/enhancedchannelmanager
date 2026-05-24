@@ -10,7 +10,7 @@ lq38l.10 — create_backup routed through ECMClient.get() which called r.json()
             raw bytes and never calls .json().
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -172,95 +172,54 @@ class TestPathArgsForwarded:
 # ---------------------------------------------------------------------------
 
 class TestCreateBackupBinaryHandling:
-    """Asserts that create_backup handles a binary ZIP response correctly."""
+    """create_backup behaviour.
+
+    History: lq38l.10 fixed a UnicodeDecodeError by having create_backup read
+    the streamed binary ZIP via a short-lived httpx client (never .json()).
+    bd-0hjrk.5 then REPLACED the stream-and-discard flow with POST
+    /api/backup/save, which PERSISTS the backup server-side and returns JSON
+    metadata. The binary-decode concern is therefore moot — the tool no longer
+    downloads the ZIP at all — so these tests now assert the JSON-metadata path
+    (full coverage of the new surface lives in test_0hjrk_backups.py)."""
 
     @pytest.mark.asyncio
-    async def test_create_backup_returns_success_with_size(self):
-        """create_backup reports KB size from binary content and returns success."""
+    async def test_create_backup_returns_success_with_filename_and_size(self):
+        """create_backup reports the persisted filename + KB size from the
+        backup_save JSON response."""
         from mcp.server.fastmcp import FastMCP
 
         mcp = FastMCP("test")
         _register_system(mcp)
 
-        # Simulate a 2 048-byte binary response (e.g. a small ZIP stub)
-        fake_zip_bytes = b"PK\x03\x04" + b"\xb7" * 2044  # starts with PK magic + binary bytes
-
-        mock_response = MagicMock()
-        mock_response.content = fake_zip_bytes
-        mock_response.raise_for_status = MagicMock()  # no-op — 200 OK
-
-        # The fix uses a short-lived httpx.AsyncClient as an async context manager.
-        mock_http = AsyncMock()
-        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_http.__aexit__ = AsyncMock(return_value=False)
-        mock_http.get = AsyncMock(return_value=mock_response)
-
-        with (
-            patch("tools.system.httpx.AsyncClient", return_value=mock_http),
-            patch("tools.system.ECM_URL", "http://ecm:6100"),
-            patch("tools.system.get_mcp_api_key", return_value="test-key"),
-        ):
+        mock_client = _make_call_endpoint_spy(
+            {
+                "filename": "ecm-backup-2026-05-24_120000.zip",
+                "size_bytes": 2048,
+                "created_at": "2026-05-24T12:00:00+00:00",
+            }
+        )
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("create_backup", {})
 
         text = result[0][0].text
-        assert "successfully" in text.lower(), f"Expected success message, got: {text!r}"
-        # Size should appear (2048 bytes → 2.0 KB)
-        assert "2.0 KB" in text, f"Expected size in output, got: {text!r}"
-        # Must not contain an error
+        assert "ecm-backup-2026-05-24_120000.zip" in text
+        assert "2 KB" in text, f"Expected size in output, got: {text!r}"
         assert "Error" not in text, f"Got an error response: {text!r}"
-
-    @pytest.mark.asyncio
-    async def test_create_backup_never_calls_json_on_response(self):
-        """create_backup must not call .json() on the binary response."""
-        from mcp.server.fastmcp import FastMCP
-
-        mcp = FastMCP("test")
-        _register_system(mcp)
-
-        fake_zip_bytes = b"PK\x03\x04" + b"\xb7" * 100
-
-        mock_response = MagicMock()
-        mock_response.content = fake_zip_bytes
-        mock_response.raise_for_status = MagicMock()
-        # .json() is present on the mock but must never be called
-        mock_response.json = MagicMock(side_effect=AssertionError(".json() must not be called on binary ZIP"))
-
-        mock_http = AsyncMock()
-        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_http.__aexit__ = AsyncMock(return_value=False)
-        mock_http.get = AsyncMock(return_value=mock_response)
-
-        with (
-            patch("tools.system.httpx.AsyncClient", return_value=mock_http),
-            patch("tools.system.ECM_URL", "http://ecm:6100"),
-            patch("tools.system.get_mcp_api_key", return_value="test-key"),
-        ):
-            result = await mcp.call_tool("create_backup", {})
-
-        # .json() was not called — if it had been, the side_effect would have raised
-        mock_response.json.assert_not_called()
-
-        text = result[0][0].text
-        assert "Error" not in text
+        # Routed through the backup_save contract endpoint (POST /api/backup/save).
+        ep = mock_client.call_endpoint.call_args.args[0]
+        assert ep.name == "backup_save" and ep.method == "POST"
 
     @pytest.mark.asyncio
     async def test_create_backup_returns_error_on_http_failure(self):
-        """create_backup wraps HTTP errors and returns a clean error message."""
+        """create_backup wraps backend errors and returns a clean message."""
         from mcp.server.fastmcp import FastMCP
 
         mcp = FastMCP("test")
         _register_system(mcp)
 
-        mock_http = AsyncMock()
-        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_http.__aexit__ = AsyncMock(return_value=False)
-        mock_http.get = AsyncMock(side_effect=RuntimeError("connection refused"))
-
-        with (
-            patch("tools.system.httpx.AsyncClient", return_value=mock_http),
-            patch("tools.system.ECM_URL", "http://ecm:6100"),
-            patch("tools.system.get_mcp_api_key", return_value="test-key"),
-        ):
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = RuntimeError("connection refused")
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("create_backup", {})
 
         text = result[0][0].text
