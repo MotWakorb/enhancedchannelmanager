@@ -672,7 +672,25 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def rollback_auto_creation(execution_id: int) -> str:
-        """Rollback an auto-creation execution, deleting all channels it created.
+        """Rollback an auto-creation execution.
+
+        Undoes everything the run did:
+          - DELETES every channel (and group) the run created.
+          - UN-MERGES streams the run added to PRE-EXISTING channels — each
+            touched channel is restored to its exact pre-run stream set. If the
+            run merged several streams into the same channel, the cumulative
+            snapshots are replayed in reverse so the ORIGINAL stream list wins
+            (bd-a7okb), not an intermediate state.
+
+        Guarantee: a successful rollback returns the affected channels to their
+        pre-run state — created channels gone, merged streams removed.
+
+        Caveat — no restore data: an execution that recorded NEITHER created NOR
+        modified entities (a legacy run from before entity tracking, or a run
+        that changed nothing) cannot be guaranteed reversible. Rather than mark
+        it rolled_back and report a phantom clean rollback, the engine REFUSES
+        and this tool surfaces the refusal. The execution's status is left
+        unchanged.
 
         Args:
             execution_id: The execution ID to rollback
@@ -682,18 +700,35 @@ def register(mcp: FastMCP):
             result = await client.call_endpoint(
                 ENDPOINTS["ac_rollback"], path_args={"execution_id": execution_id}, timeout=300.0,
             )
+            # Defensive: if the engine refusal (or any failure) reaches us as a
+            # dict (success False / error) instead of an HTTP error, surface it
+            # rather than printing a phantom clean-rollback line. (The live
+            # backend turns engine refusals into HTTP 400, which arrives via the
+            # except branch below — this guards direct/changed call paths.)
+            if isinstance(result, dict) and (result.get("success") is False or result.get("error")):
+                return (
+                    f"Cannot roll back execution {execution_id}: "
+                    f"{result.get('error', 'rollback refused')}"
+                )
             # Engine returns entities_removed (channels deleted) and
-            # entities_restored (streams/entities un-merged). Neither
-            # "deleted" nor "channels_deleted" exists in the response shape
-            # — reading those keys always produced 0 (bd-1wq7z.5).
-            removed = result.get("entities_removed", 0)
-            restored = result.get("entities_restored", 0)
+            # entities_restored (channels whose pre-run stream set was put back,
+            # i.e. streams un-merged). Neither "deleted" nor "channels_deleted"
+            # exists in the response shape — reading those keys always produced
+            # 0 (bd-1wq7z.5).
+            removed = result.get("entities_removed", 0) if isinstance(result, dict) else 0
+            restored = result.get("entities_restored", 0) if isinstance(result, dict) else 0
             msg = f"Execution {execution_id} rolled back. {removed} channel(s) deleted"
             if restored:
-                msg += f", {restored} entit{'y' if restored == 1 else 'ies'} restored"
+                msg += (
+                    f", {restored} channel(s) restored to their pre-run stream "
+                    f"sets (streams un-merged)"
+                )
             msg += "."
             return msg
         except Exception as e:
+            # The backend converts the engine's no-restore-data refusal into an
+            # HTTP 400 whose detail is the refusal message; call_endpoint raises
+            # it here. Surface it clearly so the user sees WHY nothing changed.
             logger.error("[MCP] rollback_auto_creation failed: %s", e)
             return f"Error rolling back execution {execution_id}: {e}"
 
