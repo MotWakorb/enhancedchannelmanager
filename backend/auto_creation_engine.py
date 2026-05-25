@@ -747,7 +747,8 @@ class AutoCreationEngine:
         results: dict,
         dry_run: bool,
         settings=None,
-        stream_m3u_map: dict = None
+        stream_m3u_map: dict = None,
+        custom_stream_ids: set[int] | None = None,
     ):
         """
         Pass 3.5: Reorder streams within channels using smart sort.
@@ -758,6 +759,8 @@ class AutoCreationEngine:
         """
         if stream_m3u_map is None:
             stream_m3u_map = {}
+        if custom_stream_ids is None:
+            custom_stream_ids = set()
 
         for rule in rules:
             if not rule.stream_sort_field:
@@ -829,6 +832,7 @@ class AutoCreationEngine:
                     stream_m3u_map,
                     channel_name,
                     settings,
+                    custom_stream_ids=custom_stream_ids,
                 )
 
                 # Skip if order didn't change
@@ -1045,10 +1049,15 @@ class AutoCreationEngine:
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG sources: %s", e)
 
-        # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups
+        # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups,
+        # and a set of operator-added custom stream IDs (Dispatcharr is_custom) for
+        # the "custom_streams" Smart Sort criterion (bead ap1ud / GH #244).
         stream_m3u_map = {}
+        custom_stream_ids: set[int] = set()
         for s in streams:
             stream_m3u_map[s.stream_id] = s.m3u_account_id
+            if getattr(s, "is_custom", False):
+                custom_stream_ids.add(s.stream_id)
 
         executor = ActionExecutor(
             self.client, self._existing_channels, self._existing_groups,
@@ -1600,7 +1609,8 @@ class AutoCreationEngine:
         logger.debug("[AUTO-CREATE-ENGINE] Starting stream reorder within channels")
         await self._reorder_channel_streams(
             rules, rule_channel_order_streams, results, dry_run,
-            settings=settings, stream_m3u_map=stream_m3u_map
+            settings=settings, stream_m3u_map=stream_m3u_map,
+            custom_stream_ids=custom_stream_ids,
         )
 
         # =====================================================================
@@ -2566,7 +2576,8 @@ def _smart_sort_streams(
     stats_cache: dict,
     stream_m3u_map: dict,
     channel_name: str = "unknown",
-    settings=None
+    settings=None,
+    custom_stream_ids: set[int] | None = None,
 ) -> list[int]:
     """
     Sort stream IDs using smart sort logic (mirrors stream_prober._smart_sort_streams).
@@ -2580,7 +2591,12 @@ def _smart_sort_streams(
         stream_m3u_map: stream_id -> m3u_account_id
         channel_name: For logging
         settings: DispatcharrSettings instance
+        custom_stream_ids: Set of operator-added custom stream IDs (Dispatcharr
+            is_custom). Drives the ``custom_streams`` criterion. When None/omitted
+            the criterion is inert (scores 0 everywhere) so callers degrade gracefully.
     """
+    if custom_stream_ids is None:
+        custom_stream_ids = set()
     if settings is None:
         # Fallback: resolution-only sort (descending)
         def fallback_key(sid):
@@ -2654,15 +2670,16 @@ def _smart_sort_streams(
             elif criterion == "m3u_priority":
                 # m3u_priority does NOT require a successful probe — it comes
                 # from the m3u account map, so it's always meaningful.
-                # bd-sgtmx / GH #244: custom streams (no m3u_account_id) fall
-                # back to the "custom" key in m3u_priorities so operators can
-                # assign an explicit priority to operator-added streams.
+                # Streams with no M3U account (m3u_account_id is None) use the
+                # "custom" key in m3u_priorities as a defensive fallback. Operator-added
+                # custom streams carry the real "custom" M3U account id and are ranked
+                # by the dedicated "custom_streams" criterion instead (bead ap1ud / GH #244).
                 m3u_priority_value = 0
                 m3u_account_id = stream_m3u_map.get(sid)
                 if m3u_account_id is not None:
                     m3u_priority_value = m3u_priorities.get(str(m3u_account_id), 0)
                 else:
-                    # Custom stream — not backed by an M3U account.
+                    # Account-less stream — defensive "custom" fallback.
                     m3u_priority_value = m3u_priorities.get("custom", 0)
                 values.append(-m3u_priority_value)
 
@@ -2674,6 +2691,13 @@ def _smart_sort_streams(
                 from stream_prober import get_codec_rank
                 codec_value = get_codec_rank(stats.get("video_codec")) if stats else 0
                 values.append(-codec_value)
+
+            elif criterion == "custom_streams":
+                # Binary criterion: 1 if the stream is an operator-added custom
+                # stream (Dispatcharr is_custom), else 0. Negate so custom streams
+                # sort first when ranked highest. Inert if custom_stream_ids not supplied.
+                custom_value = 1 if sid in custom_stream_ids else 0
+                values.append(-custom_value)
 
         return values
 
@@ -2700,7 +2724,15 @@ def _smart_sort_streams(
             return (1, rank) + tuple(compute_criteria_values(stats, sid))
 
         if not stats or stats.get("probe_status") != "success":
-            return (0, 0) + tuple(0 for _ in active_criteria)
+            # custom_streams is a binary criterion that does not require a probe,
+            # so compute it even for unprobed streams (mirrors the prober's
+            # unprobed-stream path). m3u_priority behaviour here is intentionally
+            # left as-is (zeroed when unprobed and deprioritize_failed is off).
+            unprobed_values = [
+                -(1 if sid in custom_stream_ids else 0) if criterion == "custom_streams" else 0
+                for criterion in active_criteria
+            ]
+            return (0, 0) + tuple(unprobed_values)
 
         sort_values = [0, 0]  # 0 = successful stream, 0 = sub-rank (unused)
         sort_values.extend(compute_criteria_values(stats, sid))
@@ -2744,10 +2776,13 @@ def _m3u_account_priority_value(
 ) -> int:
     """Numeric ECM M3U priority for *sid* (0 when unknown).
 
-    Custom streams (operator-added, not from any M3U account) fall back to
-    ``m3u_account_priorities["custom"]`` so the same key used by Smart Sort's
-    ``compute_criteria_values`` applies uniformly across provider-order and
-    quality-tie-break paths that consume this helper (bd-sgtmx, GH #244).
+    Streams with no M3U account (m3u_account_id is None) fall back to the
+    ``m3u_account_priorities["custom"]`` key — a vestigial defensive fallback
+    for account-less streams. Operator-added custom streams belong to the real
+    Dispatcharr "custom" M3U account and are ranked by the dedicated
+    "custom_streams" Smart Sort criterion (bead ap1ud / GH #244), not by this
+    helper. The same key is consumed by Smart Sort's ``compute_criteria_values``
+    and the provider-order / quality-tie-break paths for consistency.
     """
     pri_map = getattr(settings, "m3u_account_priorities", None) or {} if settings is not None else {}
     aid = (stream_m3u_map or {}).get(sid)
@@ -2920,6 +2955,7 @@ def _reorder_streams_for_rule(
     stream_m3u_map: dict,
     channel_name: str,
     settings,
+    custom_stream_ids: set[int] | None = None,
 ) -> list[int]:
     """Dispatch stream reordering based on rule.stream_sort_field."""
     field = (getattr(rule, "stream_sort_field", None) or "").strip()
@@ -2943,7 +2979,8 @@ def _reorder_streams_for_rule(
 
     if not field or field == "smart_sort":
         return _smart_sort_streams(
-            stream_ids, stats_cache, stream_m3u_map, channel_name, settings
+            stream_ids, stats_cache, stream_m3u_map, channel_name, settings,
+            custom_stream_ids=custom_stream_ids,
         )
 
     if field == "provider_order":
@@ -2979,7 +3016,8 @@ def _reorder_streams_for_rule(
         channel_name, field,
     )
     return _smart_sort_streams(
-        stream_ids, stats_cache, stream_m3u_map, channel_name, settings
+        stream_ids, stats_cache, stream_m3u_map, channel_name, settings,
+        custom_stream_ids=custom_stream_ids,
     )
 
 

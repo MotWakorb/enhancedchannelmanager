@@ -171,7 +171,7 @@ const settingsBase = {
   probe_retry_delay: 2,
   stream_fetch_page_limit: 200,
   stream_sort_priority: ['resolution', 'bitrate', 'framerate'] as api.SortCriterion[],
-  stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false } as api.SortEnabledMap,
+  stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false } as api.SortEnabledMap,
   m3u_account_priorities: {},
   black_screen_detection_enabled: false,
   black_screen_sample_duration: 5,
