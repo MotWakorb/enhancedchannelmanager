@@ -588,20 +588,12 @@ def init_db() -> None:
         # Run migrations for existing tables (add new columns if missing)
         _run_migrations(_engine)
 
-        # bd-qxi02 (SRE recommendation from bd-p5b8i spike): publish the
-        # task_schedules.next_run_at-IS-NULL count onto the Prometheus
-        # gauge before TaskRegistry.sync_from_database runs (which
-        # re-emits the same gauge after its own bookkeeping). Establishes
-        # the boot-time value so SRE sees the pre-heal count in the
-        # /metrics scrape captured right after container start —
-        # important for triaging "did Bundle H's heal actually fire?"
-        # without having to correlate a scrape against the registry
-        # sync log line.
-        try:
-            from observability import update_task_schedule_null_count
-            update_task_schedule_null_count()
-        except Exception as obs_err:  # pragma: no cover — best-effort
-            logger.debug("[DATABASE] task_schedule null-count publish failed: %s", obs_err)
+        # NOTE: the boot-time task_schedules null-count gauge publish lives in
+        # main.py's startup_event (right after init_db()) rather than here, so
+        # database.py does not import observability — that database→observability
+        # edge closed the observability↔database static import cycle (bd-0nabr).
+        # main.py is the only init_db() caller that runs with the metrics server
+        # up; the alembic/backup-restore init_db() paths don't publish gauges.
 
         # Create demo normalization rule groups if none exist
         _create_demo_normalization_rules()
@@ -2379,16 +2371,11 @@ def _perform_maintenance(engine) -> None:
         except Exception as e:
             logger.exception("[DATABASE] Database maintenance failed: %s", e)
 
-    # bd-ygoqr: publish the post-maintenance file size onto the
-    # ecm_database_size_bytes / ecm_database_wal_size_bytes gauges so
-    # operators see a value as soon as /metrics is scraped, even before
-    # the first weekly cleanup runs. Outside the connect() block so a
-    # failure here can't poison the connection state.
-    try:
-        from observability import update_database_size_metrics
-        update_database_size_metrics()
-    except Exception as exc:  # pragma: no cover — observability is best-effort
-        logger.debug("[DATABASE] DB size metric publish failed: %s", exc)
+    # NOTE: the post-init DB-size gauge publish (ecm_database_size_bytes /
+    # ecm_database_wal_size_bytes) lives in main.py's startup_event rather
+    # than here, so database.py does not import observability — that
+    # database→observability edge closed the observability↔database static
+    # import cycle (bd-0nabr). See the matching note in init_db().
 
 
 def close_db() -> None:

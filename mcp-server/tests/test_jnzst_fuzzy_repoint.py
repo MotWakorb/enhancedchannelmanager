@@ -28,23 +28,23 @@ def _make_mcp_and_register():
 
 class TestLocalScorerDeleted:
     def test_score_match_gone(self):
-        import tools.streams as s
+        from tools import streams as s
         assert not hasattr(s, "_score_match")
 
     def test_generate_variants_gone(self):
-        import tools.streams as s
+        from tools import streams as s
         assert not hasattr(s, "_generate_variants")
 
     def test_normalize_channel_gone(self):
-        import tools.streams as s
+        from tools import streams as s
         assert not hasattr(s, "_normalize_channel")
 
     def test_strip_stream_prefix_gone(self):
-        import tools.streams as s
+        from tools import streams as s
         assert not hasattr(s, "_strip_stream_prefix")
 
     def test_fuzzy_helpers_export_gone(self):
-        import tools.streams as s
+        from tools import streams as s
         assert not hasattr(s, "_fuzzy_helpers")
 
     def test_channels_does_not_import_fuzzy_helpers(self):

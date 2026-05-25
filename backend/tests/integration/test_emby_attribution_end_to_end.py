@@ -48,7 +48,7 @@ import pytest
 
 import observability
 from services import emby_cache, emby_resolver
-from services.emby_resolver import EmbyAttribution, resolve_emby_user, resolve_emby_users
+from services.emby_resolver import resolve_emby_user, resolve_emby_users
 
 
 # ---------------------------------------------------------------------------

@@ -16,8 +16,9 @@ ADR-008 §D2 contract (paraphrased):
     not an offer-merge prompt.
 
 The floor is the load-bearing enforcement. The settings-side validator
-(BD-B) is the early-rejection courtesy. Both layers import
-``CONFIDENCE_FLOOR`` from this module so the two cannot drift.
+(BD-B) is the early-rejection courtesy. Both layers read the single
+``CONFIDENCE_FLOOR`` defined in the ``confidence_constants`` leaf module
+so the two cannot drift; this module re-exports it for back-compat.
 
 Normalization policy (matcher-side fallback). The matcher applies a
 universal NFC + lowercase + whitespace-strip normalization to *both*
@@ -52,6 +53,14 @@ from enum import Enum
 
 from rapidfuzz import fuzz
 
+# Single source of truth for the hard confidence floor lives in the leaf
+# module ``confidence_constants`` so the settings validator in ``config`` can
+# import it without forming the config↔dedup_matcher↔normalization_engine↔
+# database import cycle (bead enhancedchannelmanager-0nabr). Re-exported below
+# so existing ``from services.dedup_matcher import CONFIDENCE_FLOOR`` call
+# sites keep working and the matcher/validator cannot drift.
+from confidence_constants import CONFIDENCE_FLOOR
+
 # Reuse the DB-free normalization helpers rather than re-implementing them
 # (engineering-discipline: reuse before creating). ``convert_superscripts``
 # (ᴿᴬᵂ→RAW) and ``extract_call_sign`` (WBAY/WGBA) are both verified DB-free
@@ -68,12 +77,6 @@ logger = logging.getLogger(__name__)
 # Anchored at the start and requires the number+pipe so a legitimate
 # interior ``|`` (e.g. ``HBO | East``) is never touched.
 _CHANNEL_NUMBER_PREFIX_RE = re.compile(r"^\s*\d+\s*\|\s*")
-
-# Hard confidence floor — defense-in-depth integrity constraint per ADR-008
-# §D2. Module-level constant so the settings validator (BD-B) can import the
-# same value and the two layers cannot drift. Changing this is an ADR
-# addendum, not a runtime config change — see ADR-008 §D2 final paragraph.
-CONFIDENCE_FLOOR: float = 0.60
 
 # Score a no-callsign fuzzy match must reach before it can be admitted via the
 # explicit opt-in flag (enhancedchannelmanager-jnzst Q1). The default policy is
