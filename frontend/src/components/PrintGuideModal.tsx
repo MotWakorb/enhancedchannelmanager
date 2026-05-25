@@ -42,7 +42,18 @@ export interface GroupPrintSettings {
   groupId: number;
   selected: boolean;
   mode: 'detailed' | 'summary';
+  /** Per-group range From (raw string for controlled input) */
+  fromRaw: string;
+  /** Per-group range To (raw string for controlled input) */
+  toRaw: string;
 }
+
+/**
+ * Per-group numeric range map consumed by generatePrintHtml.
+ * Key: group id; value: { from, to } inclusive channel-number bounds.
+ * Exported for unit testing.
+ */
+export type GroupRangeMap = Record<number, { from: number; to: number }>;
 
 // Maximum empty-slot placeholders rendered per group to prevent runaway output
 // (e.g. operator sets 1–9999 with only one real channel).
@@ -66,34 +77,9 @@ function PrintGuideModalInner({
   channels,
   title = 'TV Channel Guide',
 }: Omit<PrintGuideModalProps, 'isOpen'>) {
-  // Compute global min/max channel numbers across all channels that have a number
-  const { globalMin, globalMax } = useMemo(() => {
-    const nums = channels
-      .map(ch => ch.channel_number)
-      .filter((n): n is number => n !== null);
-    if (nums.length === 0) return { globalMin: 1, globalMax: 9999 };
-    return { globalMin: Math.min(...nums), globalMax: Math.max(...nums) };
-  }, [channels]);
-
-  // Range filter state — raw string values for controlled inputs
-  const [fromRaw, setFromRaw] = useState<string>(() => String(globalMin));
-  const [toRaw, setToRaw] = useState<string>(() => String(globalMax));
-
   // Empty-slot placeholder toggle — on by default so the printed guide shows
   // the full intended channel-number layout (bd-w532y).
   const [showEmptySlots, setShowEmptySlots] = useState(true);
-
-  // Track whether a clamp hint should be shown (cleared on next manual change)
-  const [clampHint, setClampHint] = useState<string | null>(null);
-
-  // Parsed numeric values (used for filtering)
-  const fromNum = parseInt(fromRaw, 10);
-  const toNum = parseInt(toRaw, 10);
-
-  const rangeError =
-    !Number.isNaN(fromNum) && !Number.isNaN(toNum) && fromNum > toNum
-      ? '"From" must be less than or equal to "To"'
-      : null;
 
   // Sort groups by first channel number in each group
   const sortedGroups = useMemo(() => {
@@ -116,42 +102,52 @@ function PrintGuideModalInner({
       });
   }, [channelGroups, channels]);
 
-  // Groups whose channels overlap with the current range — this is what the
-  // operator sees in the list and what gets passed to the print function.
-  const rangeFilteredGroups = useMemo(() => {
-    if (rangeError || Number.isNaN(fromNum) || Number.isNaN(toNum)) {
-      // Keep showing groups even during an error so the operator can see what
-      // was previously visible, but Print will be blocked by the error.
-      return sortedGroups;
-    }
-    return sortedGroups.filter(g =>
-      channels.some(
-        ch =>
-          ch.channel_group_id === g.id &&
-          ch.channel_number !== null &&
-          ch.channel_number >= fromNum &&
-          ch.channel_number <= toNum
-      )
-    );
-  }, [sortedGroups, channels, fromNum, toNum, rangeError]);
+  // Compute per-group min/max from the channels data.
+  // Returns { min, max } for each group id that has numbered channels.
+  const groupMinMax = useMemo(() => {
+    const result = new Map<number, { min: number; max: number }>();
+    channels.forEach(ch => {
+      if (ch.channel_number !== null && ch.channel_group_id !== null) {
+        const existing = result.get(ch.channel_group_id);
+        if (existing === undefined) {
+          result.set(ch.channel_group_id, { min: ch.channel_number, max: ch.channel_number });
+        } else {
+          if (ch.channel_number < existing.min) existing.min = ch.channel_number;
+          if (ch.channel_number > existing.max) existing.max = ch.channel_number;
+        }
+      }
+    });
+    return result;
+  }, [channels]);
 
-  // Initialize group settings - all selected, detailed mode by default. Since
-  // this component remounts on each open (via outer wrapper), we can seed
-  // directly from the first sorted list with a useState initializer.
+  // Initialize group settings — all selected, detailed mode, per-group From/To
+  // defaulting to each group's min/max used channel number. Since this component
+  // remounts on each open (via outer wrapper), we can seed directly from the
+  // first sorted list with a useState initializer.
   const [groupSettings, setGroupSettings] = useState<GroupPrintSettings[]>(() =>
-    sortedGroups.map(g => ({
-      groupId: g.id,
-      selected: true,
-      mode: 'detailed',
-    }))
+    sortedGroups.map(g => {
+      const mm = groupMinMax.get(g.id);
+      const groupMin = mm?.min ?? 1;
+      const groupMax = mm?.max ?? 9999;
+      return {
+        groupId: g.id,
+        selected: true,
+        mode: 'detailed',
+        fromRaw: String(groupMin),
+        toRaw: String(groupMax),
+      };
+    })
   );
 
   // Get settings for a specific group
   const getGroupSettings = (groupId: number): GroupPrintSettings => {
+    const mm = groupMinMax.get(groupId);
     return groupSettings.find(s => s.groupId === groupId) ?? {
       groupId,
       selected: true,
       mode: 'detailed',
+      fromRaw: String(mm?.min ?? 1),
+      toRaw: String(mm?.max ?? 9999),
     };
   };
 
@@ -173,97 +169,99 @@ function PrintGuideModalInner({
     );
   }, []);
 
-  // Select/deselect all (operates on currently visible range-filtered groups)
-  const toggleAll = useCallback(() => {
-    const visibleIds = new Set(rangeFilteredGroups.map(g => g.id));
-    const allSelected = groupSettings
-      .filter(s => visibleIds.has(s.groupId))
-      .every(s => s.selected);
+  // Update per-group From raw value
+  const setGroupFrom = useCallback((groupId: number, value: string) => {
     setGroupSettings(prev =>
-      prev.map(s =>
-        visibleIds.has(s.groupId) ? { ...s, selected: !allSelected } : s
-      )
+      prev.map(s => s.groupId === groupId ? { ...s, fromRaw: value } : s)
     );
-  }, [groupSettings, rangeFilteredGroups]);
+  }, []);
 
-  // Label for the toggleAll button — scoped to visible (range-filtered) groups
-  // so the label matches the toggleAll behaviour. An operator who deselects an
-  // out-of-range group and narrows the range should still see "Deselect All"
-  // when every visible group is selected. (bd-9q9z0 reviewer Warn-1 fix-forward.)
-  const allVisibleSelected = useMemo(() => {
-    const visibleIds = new Set(rangeFilteredGroups.map(g => g.id));
-    return groupSettings
-      .filter(s => visibleIds.has(s.groupId))
-      .every(s => s.selected);
-  }, [groupSettings, rangeFilteredGroups]);
+  // Update per-group To raw value
+  const setGroupTo = useCallback((groupId: number, value: string) => {
+    setGroupSettings(prev =>
+      prev.map(s => s.groupId === groupId ? { ...s, toRaw: value } : s)
+    );
+  }, []);
 
-  // Clamp a value to [globalMin, globalMax] and return the clamped value plus
-  // whether clamping actually occurred.
-  const clamp = useCallback((val: number): { clamped: number; didClamp: boolean } => {
-    if (val < globalMin) return { clamped: globalMin, didClamp: true };
-    if (val > globalMax) return { clamped: globalMax, didClamp: true };
-    return { clamped: val, didClamp: false };
-  }, [globalMin, globalMax]);
+  // Select/deselect all (operates on all groups)
+  const toggleAll = useCallback(() => {
+    const allSelected = groupSettings.every(s => s.selected);
+    setGroupSettings(prev =>
+      prev.map(s => ({ ...s, selected: !allSelected }))
+    );
+  }, [groupSettings]);
 
-  // Handle blur on From/To to apply clamping
-  const handleFromBlur = useCallback(() => {
-    const parsed = parseInt(fromRaw, 10);
-    if (Number.isNaN(parsed)) {
-      setFromRaw(String(globalMin));
-      setClampHint(`Adjusted to ${globalMin}–${toRaw}`);
-      return;
-    }
-    const { clamped, didClamp } = clamp(parsed);
-    if (didClamp) {
-      setFromRaw(String(clamped));
-      setClampHint(`Adjusted to ${clamped}–${toRaw}`);
-    }
-  }, [fromRaw, toRaw, globalMin, clamp]);
+  const allSelected = useMemo(
+    () => groupSettings.every(s => s.selected),
+    [groupSettings]
+  );
 
-  const handleToBlur = useCallback(() => {
-    const parsed = parseInt(toRaw, 10);
-    if (Number.isNaN(parsed)) {
-      setToRaw(String(globalMax));
-      setClampHint(`Adjusted to ${fromRaw}–${globalMax}`);
-      return;
-    }
-    const { clamped, didClamp } = clamp(parsed);
-    if (didClamp) {
-      setToRaw(String(clamped));
-      setClampHint(`Adjusted to ${fromRaw}–${clamped}`);
-    }
-  }, [toRaw, fromRaw, globalMax, clamp]);
-
-  // Get channel count and range for a group, limited to the selected range
+  // Get channel count and range for a group within its current per-group range
   const getGroupInfo = useCallback((groupId: number) => {
-    const rangeFrom = !rangeError && !Number.isNaN(fromNum) ? fromNum : globalMin;
-    const rangeTo = !rangeError && !Number.isNaN(toNum) ? toNum : globalMax;
+    const settings = getGroupSettings(groupId);
+    const fromNum = parseInt(settings.fromRaw, 10);
+    const toNum = parseInt(settings.toRaw, 10);
+    const rangeValid = !Number.isNaN(fromNum) && !Number.isNaN(toNum) && fromNum <= toNum;
+
+    if (!rangeValid) return { count: 0, first: null, last: null, rangeError: true };
+
     const groupChannels = channels
       .filter(
         ch =>
           ch.channel_group_id === groupId &&
           ch.channel_number !== null &&
-          ch.channel_number >= rangeFrom &&
-          ch.channel_number <= rangeTo
+          ch.channel_number >= fromNum &&
+          ch.channel_number <= toNum
       )
       .sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
 
     if (groupChannels.length === 0) {
-      return { count: 0, first: null, last: null };
+      return { count: 0, first: null, last: null, rangeError: false };
     }
 
     return {
       count: groupChannels.length,
       first: groupChannels[0].channel_number,
       last: groupChannels[groupChannels.length - 1].channel_number,
+      rangeError: false,
     };
-  }, [channels, fromNum, toNum, rangeError, globalMin, globalMax]);
+  }, [channels, groupSettings]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Format channel number (remove .0 for whole numbers)
   const formatChannelNumber = (num: number | null): string => {
     if (num === null) return 'N/A';
     return Number.isInteger(num) ? String(num) : String(num);
   };
+
+  // Build the GroupRangeMap for generatePrintHtml — use valid per-group ranges,
+  // fall back to group min/max for invalid inputs.
+  const buildRangeMap = useCallback((): GroupRangeMap => {
+    const map: GroupRangeMap = {};
+    groupSettings.forEach(s => {
+      const fromNum = parseInt(s.fromRaw, 10);
+      const toNum = parseInt(s.toRaw, 10);
+      const mm = groupMinMax.get(s.groupId);
+      if (!Number.isNaN(fromNum) && !Number.isNaN(toNum) && fromNum <= toNum) {
+        map[s.groupId] = { from: fromNum, to: toNum };
+      } else {
+        // Invalid input: fall back to group min/max so the print still works
+        map[s.groupId] = { from: mm?.min ?? 1, to: mm?.max ?? 9999 };
+      }
+    });
+    return map;
+  }, [groupSettings, groupMinMax]);
+
+  // Whether any selected group has a valid range (for Print button)
+  const anySelectedGroupPrintable = useMemo(() => {
+    return groupSettings.some(s => {
+      if (!s.selected) return false;
+      const fromNum = parseInt(s.fromRaw, 10);
+      const toNum = parseInt(s.toRaw, 10);
+      if (Number.isNaN(fromNum) || Number.isNaN(toNum) || fromNum > toNum) return false;
+      // Check at least one channel exists for this group (even without range filter)
+      return channels.some(ch => ch.channel_group_id === s.groupId && ch.channel_number !== null);
+    });
+  }, [groupSettings, channels]);
 
   // Generate and open print window
   const handlePrint = useCallback(() => {
@@ -276,17 +274,15 @@ function PrintGuideModalInner({
       return;
     }
 
-    const rangeFrom = !rangeError && !Number.isNaN(fromNum) ? fromNum : globalMin;
-    const rangeTo = !rangeError && !Number.isNaN(toNum) ? toNum : globalMax;
+    const rangeMap = buildRangeMap();
 
     // Build HTML content for the print window
     const printHtml = generatePrintHtml(
       channels,
-      rangeFilteredGroups,
+      sortedGroups,
       groupSettings,
       title,
-      rangeFrom,
-      rangeTo,
+      rangeMap,
       showEmptySlots,
     );
 
@@ -298,7 +294,7 @@ function PrintGuideModalInner({
     }
 
     onClose();
-  }, [channels, rangeFilteredGroups, groupSettings, title, onClose, rangeError, fromNum, toNum, globalMin, globalMax, showEmptySlots]);
+  }, [channels, sortedGroups, groupSettings, title, onClose, buildRangeMap, showEmptySlots]);
 
   // isOpen gating handled by outer wrapper.
 
@@ -314,50 +310,8 @@ function PrintGuideModalInner({
 
         <div className="modal-body">
           <p className="print-guide-description">
-            Select channel groups to include and choose detailed (all channels) or summary (channel range) for each.
+            Select channel groups to include and choose detailed (all channels) or summary (channel range) for each. Set each group's From/To to control its printed range.
           </p>
-
-          {/* Channel number range filter */}
-          <div className="print-guide-range-row">
-            <div className="modal-form-group print-guide-range-field">
-              <label htmlFor="pgm-from">From channel #</label>
-              <input
-                id="pgm-from"
-                type="number"
-                min={globalMin}
-                max={globalMax}
-                value={fromRaw}
-                onChange={e => {
-                  setFromRaw(e.target.value);
-                  setClampHint(null);
-                }}
-                onBlur={handleFromBlur}
-                aria-label="From channel"
-              />
-            </div>
-            <div className="modal-form-group print-guide-range-field">
-              <label htmlFor="pgm-to">To channel #</label>
-              <input
-                id="pgm-to"
-                type="number"
-                min={globalMin}
-                max={globalMax}
-                value={toRaw}
-                onChange={e => {
-                  setToRaw(e.target.value);
-                  setClampHint(null);
-                }}
-                onBlur={handleToBlur}
-                aria-label="To channel"
-              />
-            </div>
-          </div>
-          {rangeError && (
-            <div className="field-error" role="alert">{rangeError}</div>
-          )}
-          {clampHint && !rangeError && (
-            <p className="form-hint print-guide-clamp-hint">{clampHint}</p>
-          )}
 
           {/* Empty-slot placeholder toggle (bd-w532y) */}
           <div className="print-guide-empty-slots-row">
@@ -371,23 +325,30 @@ function PrintGuideModalInner({
               <span>Show empty slots</span>
             </label>
             <span className="print-guide-empty-slots-hint">
-              Fills missing channel numbers in the range with placeholder rows
+              Fills missing channel numbers in each group's range with placeholder rows
             </span>
           </div>
 
-          {/* Empty state when range has no channels */}
-          {!rangeError && rangeFilteredGroups.length === 0 && (
+          {/* Empty state when no groups */}
+          {sortedGroups.length === 0 && (
             <div className="print-guide-empty-range">
               <span className="material-icons">search_off</span>
-              <p>No channels in range {fromRaw}–{toRaw}</p>
+              <p>No channel groups with numbered channels</p>
             </div>
           )}
 
           <div className="group-list">
-            {rangeFilteredGroups.map((group, index) => {
+            {sortedGroups.map((group, index) => {
               const settings = getGroupSettings(group.id);
               const info = getGroupInfo(group.id);
               const color = GROUP_COLORS[index % GROUP_COLORS.length];
+              const fromNum = parseInt(settings.fromRaw, 10);
+              const toNum = parseInt(settings.toRaw, 10);
+              const rangeError =
+                !Number.isNaN(fromNum) && !Number.isNaN(toNum) && fromNum > toNum
+                  ? '"From" must be ≤ "To"'
+                  : null;
+              const mm = groupMinMax.get(group.id);
 
               return (
                 <div
@@ -408,28 +369,68 @@ function PrintGuideModalInner({
                     <div className="group-info">
                       <span className="group-name">{group.name}</span>
                       <span className="group-details">
-                        {info.count > 0
-                          ? `${formatChannelNumber(info.first)}-${formatChannelNumber(info.last)} (${info.count} channels)`
-                          : 'No channels'}
+                        {info.rangeError
+                          ? 'Invalid range'
+                          : info.count > 0
+                            ? `${formatChannelNumber(info.first)}-${formatChannelNumber(info.last)} (${info.count} channels)`
+                            : 'No channels in range'}
                       </span>
                     </div>
                   </div>
 
-                  <div className="mode-toggle">
-                    <button
-                      className={`mode-btn ${settings.mode === 'detailed' ? 'active' : ''}`}
-                      onClick={() => setGroupMode(group.id, 'detailed')}
-                      title="Show all channels with name"
-                    >
-                      Detailed
-                    </button>
-                    <button
-                      className={`mode-btn summary ${settings.mode === 'summary' ? 'active' : ''}`}
-                      onClick={() => setGroupMode(group.id, 'summary')}
-                      title="Show only channel range"
-                    >
-                      Summary
-                    </button>
+                  <div className="group-item-controls">
+                    {/* Per-group From/To range inputs */}
+                    <div className="print-guide-group-range">
+                      <div className="print-guide-group-range-field">
+                        <label htmlFor={`pgm-from-${group.id}`}>From</label>
+                        <input
+                          id={`pgm-from-${group.id}`}
+                          type="number"
+                          min={mm?.min}
+                          max={mm?.max}
+                          value={settings.fromRaw}
+                          aria-label={`From channel for ${group.name}`}
+                          onChange={e => setGroupFrom(group.id, e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                        />
+                      </div>
+                      <div className="print-guide-group-range-field">
+                        <label htmlFor={`pgm-to-${group.id}`}>To</label>
+                        <input
+                          id={`pgm-to-${group.id}`}
+                          type="number"
+                          min={mm?.min}
+                          max={mm?.max}
+                          value={settings.toRaw}
+                          aria-label={`To channel for ${group.name}`}
+                          onChange={e => setGroupTo(group.id, e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                        />
+                      </div>
+                    </div>
+
+                    {rangeError && (
+                      <div className="field-error print-guide-group-range-error" role="alert">
+                        {rangeError}
+                      </div>
+                    )}
+
+                    <div className="mode-toggle">
+                      <button
+                        className={`mode-btn ${settings.mode === 'detailed' ? 'active' : ''}`}
+                        onClick={() => setGroupMode(group.id, 'detailed')}
+                        title="Show all channels with name"
+                      >
+                        Detailed
+                      </button>
+                      <button
+                        className={`mode-btn summary ${settings.mode === 'summary' ? 'active' : ''}`}
+                        onClick={() => setGroupMode(group.id, 'summary')}
+                        title="Show only channel range"
+                      >
+                        Summary
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -439,16 +440,12 @@ function PrintGuideModalInner({
 
         <div className="modal-footer">
           <button className="modal-btn modal-btn-secondary" onClick={toggleAll}>
-            {allVisibleSelected ? 'Deselect All' : 'Select All'}
+            {allSelected ? 'Deselect All' : 'Select All'}
           </button>
           <button
             className="modal-btn modal-btn-primary"
             onClick={handlePrint}
-            disabled={
-              !!rangeError ||
-              rangeFilteredGroups.length === 0 ||
-              !groupSettings.some(s => s.selected && rangeFilteredGroups.some(g => g.id === s.groupId))
-            }
+            disabled={!anySelectedGroupPrintable}
           >
             <span className="material-icons">print</span>
             Print Selected
@@ -475,14 +472,13 @@ export const PrintGuideModal = memo(function PrintGuideModal(
 
 // Generate the complete HTML for the print window.
 // Exported for unit testing; not part of the public component API.
-// eslint-disable-next-line react-refresh/only-export-components -- pure function exported for unit testing; HMR handles the component export fine
+// eslint-disable-next-line react-refresh/only-export-components -- pure functions exported for unit testing; HMR handles the component export fine
 export function generatePrintHtml(
   channels: Channel[],
   sortedGroups: ChannelGroup[],
   groupSettings: GroupPrintSettings[],
   title: string,
-  rangeFrom: number,
-  rangeTo: number,
+  groupRangeMap: GroupRangeMap,
   showEmptySlots: boolean = false,
 ): string {
   const selectedGroupIds = new Set(
@@ -503,7 +499,12 @@ export function generatePrintHtml(
     const color = GROUP_COLORS[colorIndex % GROUP_COLORS.length];
     colorIndex++;
 
-    // Apply channel-number range filter before rendering
+    // Resolve per-group range
+    const groupRange = groupRangeMap[group.id];
+    const rangeFrom = groupRange?.from ?? 1;
+    const rangeTo = groupRange?.to ?? 9999;
+
+    // Apply per-group channel-number range filter before rendering
     const groupChannels = channels
       .filter(
         ch =>
@@ -535,13 +536,8 @@ export function generatePrintHtml(
       // Detailed mode: show all channels, with optional empty-slot placeholders.
       //
       // When showEmptySlots is true we walk every integer channel number from
-      // the group's first real channel to the rangeTo bound (inclusive) and
-      // emit a placeholder row for any number that has no real channel.
-      //
-      // Scope: placeholders are bounded by [group's first real ch, rangeTo] so
-      // that numbers before the group's lowest real channel aren't attributed to
-      // this group (they may belong to a different group or be genuinely empty).
-      // rangeFrom already ensures groupChannels only contains in-range channels.
+      // the group's rangeFrom to rangeTo (inclusive) and emit a placeholder row
+      // for any number that has no real channel.
       //
       // Performance cap: if the slot count exceeds MAX_EMPTY_SLOTS_PER_GROUP we
       // truncate and append a warning row rather than silently producing massive
@@ -549,7 +545,7 @@ export function generatePrintHtml(
       let channelsHtml = '';
 
       if (showEmptySlots && groupChannels.length > 0) {
-        const firstNum = groupChannels[0].channel_number!;
+        const slotStart = rangeFrom;
         const slotEnd = rangeTo;
         const realByNum = new Map(
           groupChannels
@@ -560,7 +556,7 @@ export function generatePrintHtml(
         let emptyCount = 0;
         let truncated = false;
 
-        for (let n = firstNum; n <= slotEnd; n++) {
+        for (let n = slotStart; n <= slotEnd; n++) {
           const ch = realByNum.get(n);
           if (ch) {
             const num = Number.isInteger(ch.channel_number!) ? String(ch.channel_number!) : String(ch.channel_number!);
@@ -599,13 +595,14 @@ export function generatePrintHtml(
     }
   }
 
-  // Count total channels — respects both group selection and range filter
-  const totalChannels = channels.filter(ch =>
-    selectedGroupIds.has(ch.channel_group_id ?? -1) &&
-    ch.channel_number !== null &&
-    ch.channel_number >= rangeFrom &&
-    ch.channel_number <= rangeTo
-  ).length;
+  // Count total channels — respects both group selection and per-group range filter
+  const totalChannels = channels.filter(ch => {
+    if (!selectedGroupIds.has(ch.channel_group_id ?? -1)) return false;
+    if (ch.channel_number === null) return false;
+    const groupRange = groupRangeMap[ch.channel_group_id!];
+    if (!groupRange) return false;
+    return ch.channel_number >= groupRange.from && ch.channel_number <= groupRange.to;
+  }).length;
 
   // Generate complete HTML - using same approach as Guidearr
   return `<!DOCTYPE html>
