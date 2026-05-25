@@ -8,6 +8,10 @@
   padding: 1rem 1.5rem;
   overflow: hidden;
   box-sizing: border-box;
+  /* Prevent scroll events from leaking out when stats-content is at its
+   * scroll boundary — belt-and-suspenders alongside index.css overflow:hidden
+   * (bd-tkcmu). */
+  overscroll-behavior: contain;
 }
 
 .stats-header {
@@ -120,6 +124,9 @@
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  /* Prevent wheel events from chaining to the document when the stats
+   * list is scrolled to its top/bottom boundary (bd-tkcmu). */
+  overscroll-behavior: contain;
 }
 
 /* No Streams State */

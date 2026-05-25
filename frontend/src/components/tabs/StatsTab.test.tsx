@@ -1488,3 +1488,60 @@ describe('StatsTab — real client device IP field (bd-7ncci)', () => {
     );
   });
 });
+
+// bd-tkcmu: scroll-containment regression lock.
+//
+// Scrolling over the footer while on the Stats tab used to scroll the
+// ENTIRE page off the viewport.  The fix is two-part:
+//   1. index.css sets overflow:hidden on html/body/#root so the document
+//      can never be a scroll container (app-shell defence, not testable
+//      here — JSDOM doesn't honour CSS files).
+//   2. .stats-tab sets overscroll-behavior:contain so wheel events don't
+//      chain out of the component even when the inner .stats-content is
+//      at a scroll boundary (belt-and-suspenders).
+//
+// This test is a structural assertion: it verifies that
+//   • .stats-tab is the component root (the element that carries the CSS)
+//   • .stats-content is its scroll-container child (the element with the
+//     scroll containment rule)
+// If either class is removed or renamed the test will fail, surfacing a
+// regression at the layout level before a browser is involved.
+//
+// Manual repro (without the fix): open the Stats tab in any browser,
+// scroll the page so the footer is visible, hover the mouse over the
+// footer "API: Healthy" bar, then wheel-scroll — the entire UI scrolls
+// off the page.  With the fix the page stays locked; only the
+// .stats-content area scrolls.
+
+describe('StatsTab — scroll-containment DOM structure (bd-tkcmu)', () => {
+  beforeEach(() => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 0,
+      channels: [],
+    } as unknown as ChannelStatsResponse);
+  });
+
+  it('renders .stats-tab as the root element and .stats-content as a descendant once loaded', async () => {
+    const { container } = render(<StatsTab />);
+
+    // Wait for the loading state to clear (all API calls must resolve).
+    // The component shows .tab-loading while loading; once done it
+    // renders .stats-content inside .stats-tab.
+    await waitFor(() => {
+      expect(container.querySelector('.stats-content')).toBeInTheDocument();
+    });
+
+    // The component root must carry the .stats-tab class (which owns
+    // overflow:hidden + overscroll-behavior:contain in the CSS).
+    const statsTab = container.querySelector('.stats-tab');
+    expect(statsTab).toBeInTheDocument();
+
+    // .stats-content must be inside .stats-tab (not at the same level or
+    // outside) so the CSS containment chain is intact.
+    const statsContent = statsTab?.querySelector('.stats-content');
+    expect(statsContent).not.toBeNull();
+
+    // Sanity-check: .stats-content must not be the stats-tab root itself.
+    expect(statsTab).not.toBe(statsContent);
+  });
+});
