@@ -25,6 +25,7 @@ from models import (
     AutoCreationRule,
     AutoCreationExecution,
     AutoCreationConflict,
+    AutoCreationSnapshot,
     StreamStats
 )
 from auto_creation_schema import (
@@ -172,6 +173,17 @@ class AutoCreationEngine:
                 mode="dry_run" if dry_run else "execute",
                 triggered_by=triggered_by
             )
+
+        # ADR-010 §D2: capture a pre-run snapshot of the manual
+        # (non-Dispatcharr-auto-created) channel<->stream state BEFORE any
+        # mutation, so a full whole-run revert is possible. Gated on
+        # ``not dry_run`` (mode=="execute") — a dry run mutates nothing, so
+        # there is nothing to revert and a snapshot would only consume
+        # storage. This runs AFTER _load_existing_data (the in-memory channel
+        # list is already populated — no N+1) and BEFORE _process_streams
+        # (the single call that performs all mutation).
+        if not dry_run:
+            await self._capture_snapshot(execution.id)
 
         # Process streams through rules
         results = await self._process_streams(
@@ -2392,6 +2404,78 @@ class AutoCreationEngine:
             session.commit()
         finally:
             session.close()
+
+    async def _capture_snapshot(self, execution_id: int) -> None:
+        """Persist a pre-run AutoCreationSnapshot for ``execution_id`` (ADR-010).
+
+        Serializes the manual (non-Dispatcharr-auto-created) channel<->stream
+        state from the already-loaded in-memory ``self._existing_channels`` —
+        no per-channel API call, no N+1 (ADR-010 §D2). One row per execution,
+        linked 1:1 via FK.
+
+        Per-channel payload (STREAM IDS ONLY — never URLs, §D1):
+        ``{id, name, channel_group_id, epg_data_id, tvg_id, stream_ids:[int]}``
+
+        Channels where ``auto_created`` is truthy are EXCLUDED (§D3) — they are
+        Dispatcharr-owned, regenerable state that Dispatcharr re-derives on
+        every refresh; restoring them would fight Dispatcharr's own sync and
+        bloat the snapshot. The filter mirrors ``channels.py:614``'s
+        ``not ch.get("auto_created", False)``.
+
+        Capture-failure policy (ADR-010 §D2, uc51o.2 v1 default):
+        LOG-AND-PROCEED. A capture failure must NOT abort the mutating run —
+        it logs a WARNING and the run continues with NO snapshot (the run is
+        still revertible via the legacy entity-rollback). It does NOT raise.
+        """
+        try:
+            channels = []
+            for ch in (self._existing_channels or []):
+                # §D3: exclude Dispatcharr-auto-created-from-groups channels.
+                if ch.get("auto_created", False):
+                    continue
+                # §D1: stream IDs only. Match the executor's own coercion
+                # (executor.py:918) — Dispatcharr embeds streams as a list of
+                # IDs (or, defensively, dicts carrying an "id").
+                stream_ids = [
+                    s["id"] if isinstance(s, dict) else s
+                    for s in ch.get("streams", [])
+                ]
+                channels.append({
+                    "id": ch.get("id"),
+                    "name": ch.get("name"),
+                    "channel_group_id": ch.get("channel_group_id"),
+                    "epg_data_id": ch.get("epg_data_id"),
+                    "tvg_id": ch.get("tvg_id"),
+                    "stream_ids": stream_ids,
+                })
+
+            session = get_session()
+            try:
+                snapshot = AutoCreationSnapshot(
+                    execution_id=execution_id,
+                    snapshot_time=datetime.utcnow(),
+                    channel_count=len(channels),
+                )
+                snapshot.set_channels_data({"channels": channels})
+                session.add(snapshot)
+                session.commit()
+                logger.info(
+                    "[AUTO-CREATE-ENGINE] Captured pre-run snapshot for "
+                    "execution_id=%s (%s manual channels)",
+                    execution_id, len(channels),
+                )
+            finally:
+                session.close()
+        except Exception as e:
+            # Log-and-proceed: never abort the mutating run on a capture
+            # failure. The run remains revertible via the legacy
+            # entity-rollback; the execution simply has no snapshot.
+            logger.warning(
+                "[AUTO-CREATE-ENGINE] Failed to capture pre-run snapshot for "
+                "execution_id=%s; run proceeds WITHOUT a snapshot (legacy "
+                "rollback still available): %s",
+                execution_id, e,
+            )
 
     async def _record_conflict(
         self,
