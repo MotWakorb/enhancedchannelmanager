@@ -490,16 +490,48 @@ describe('UserStatsPanel — date label helpers (bd-1qxo9)', () => {
 });
 
 describe('UserStatsPanel — chart data-table labels & in-progress marker (bd-1qxo9)', () => {
+  // Minimal typed view of the node `TZ` env var. The frontend tsconfig has
+  // no @types/node (it's a browser bundle), so we reach `process.env.TZ`
+  // through globalThis with a narrow local type rather than pulling the
+  // whole node global surface into browser-targeted code.
+  const nodeEnv = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env;
+  // Saved host TZ so we can restore it after the block (bd-lfrgf).
+  let savedTz: string | undefined;
+
   beforeEach(() => {
-    // Pin system time to 2026-05-14 14:00 UTC so the daily response's last
-    // row ("2026-05-14") is "today" regardless of CI tz. Only fake Date —
-    // leaving timers real lets React effects & promises resolve normally.
+    // Pin BOTH the instant and the timezone (bd-lfrgf flake fix).
+    //
+    // The component decides which row is "today" via isTodayInLocalTz(day,
+    // now) with NO timeZone argument — i.e. it resolves "today" in the
+    // *host* timezone. Pinning only the instant (2026-05-14 14:00 UTC) is
+    // therefore NOT tz-independent: on a runner east of UTC, 14:00Z is
+    // already the next local day, so the "2026-05-14" UTC bucket no longer
+    // resolves to local-today and the chart-data-row-today marker is never
+    // rendered. That made this test pass on UTC/US-tz boxes (local dev,
+    // isolation runs) but fail on east-of-UTC runners — surfacing as a
+    // "full-suite-only" flake purely because the failing environment
+    // happened to run the whole suite. Pin TZ to UTC so the pinned UTC
+    // instant and the UTC-bucketed day strings resolve consistently, which
+    // also matches the backend's UTC day-bucketing semantics.
+    if (nodeEnv) {
+      savedTz = nodeEnv.TZ;
+      nodeEnv.TZ = 'UTC';
+    }
+    // Only fake Date — leaving timers real lets React effects & promises
+    // resolve normally (waitFor relies on real setTimeout).
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-05-14T14:00:00Z'));
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    if (nodeEnv) {
+      if (savedTz === undefined) {
+        delete nodeEnv.TZ;
+      } else {
+        nodeEnv.TZ = savedTz;
+      }
+    }
   });
 
   it('renders localized "MMM D" labels in the chart data-table fallback (not raw YYYY-MM-DD)', async () => {
