@@ -97,7 +97,16 @@ def _assigned_names(result) -> dict[str, str | None]:
 
 
 class TestUrlIdentityDiscriminator:
-    """The discriminator that replaces the IP gate (brief test #5)."""
+    """The original (now DORMANT) URL-identity discriminator (brief test #5).
+
+    RETAINED-BUT-NOT-WIRED (bd-spzeu): ``url_embeds_username`` and the
+    ``has_url_identity`` eligibility branch are production-dead — both
+    reconciler call sites hardcode ``has_url_identity=False`` and the live
+    discriminator is ``has_account_identity``. These tests pin the dormant
+    scaffolding so it stays correct for the day a per-client credentialed-URL
+    signal surfaces; they do NOT exercise a live production path. See
+    ``services.attribution_reconciler.url_embeds_username`` for the rationale.
+    """
 
     @pytest.mark.parametrize(
         "url",
@@ -129,7 +138,12 @@ class TestUrlIdentityDiscriminator:
 
 class TestEligibility:
     def test_url_identity_connections_excluded(self):
-        """Connections with an embedded URL username are not reconciled."""
+        """Connections with an embedded URL username are not reconciled.
+
+        Pins the DORMANT ``has_url_identity`` eligibility branch (bd-spzeu:
+        RETAINED-BUT-NOT-WIRED — always ``False`` in production). Kept correct
+        for a future per-client credentialed-URL signal.
+        """
         conns = [
             _conn("c1", ip="172.18.0.1"),
             _conn("c2", ip="10.0.0.5", url_identity=True),
@@ -138,7 +152,11 @@ class TestEligibility:
         assert [c.client_id for c in eligible] == ["c1"]
 
     def test_url_identity_connection_never_gets_a_user(self):
-        """A direct-IPTV client is excluded even when users are available."""
+        """A direct-IPTV client is excluded even when users are available.
+
+        Also pins the DORMANT ``has_url_identity`` branch (bd-spzeu). See
+        :meth:`test_url_identity_connections_excluded`.
+        """
         conns = [_conn("xc1", ip="10.0.0.5", url_identity=True)]
         users = [_user("alice")]
         result = reconcile_channel(conns, users)
@@ -714,6 +732,113 @@ class TestServerProxyBranch:
         # Second proxy → User #0 (no double-count).
         assert by_id["proxy2"].user is None
         assert not by_id["proxy2"].is_proxy_multi
+
+
+# ---------------------------------------------------------------------------
+# bd-spzeu — ACCEPTED LIMITATION boundary pin (mixed media-server + anonymous
+# direct-IPTV/XC on one channel, only the media-server user matched)
+# ---------------------------------------------------------------------------
+
+
+class TestAcceptedMixedDirectBoundary:
+    """Pin the ACCEPTED current outcome of the mixed media-server + genuine
+    direct-IPTV/XC same-channel case (bd-spzeu, follow-up to bd-4w9w6).
+
+    THIS IS NOT A BUG TO FIX. It is the residual, PO-accepted limitation that
+    bd-4w9w6 / bd-rools left in place, pinned here so it cannot silently drift
+    and so it serves as the target if a per-client identity signal ever
+    surfaces.
+
+    The discriminator that distinguishes a genuine direct-IPTV subscriber from
+    an anonymous media-server pull is a per-client identity signal:
+    ``has_account_identity`` (a positive Dispatcharr ``user_id``) or
+    ``has_url_identity`` (per-client credentialed URL). When the direct-IPTV/XC
+    client carries EITHER signal it is correctly excluded — that path is the
+    happy case and is pinned by
+    :class:`TestEligibility.test_account_identity_connection_never_absorbs_media_server_user`.
+
+    The accepted limitation lives in the gap WHERE NO SUCH SIGNAL EXISTS: a
+    genuine direct-IPTV/XC client that is ANONYMOUS to Dispatcharr
+    (``user_id == "0"`` / ``0`` / ``None``, no per-client credentialed URL —
+    exactly what Dispatcharr ``/proxy/ts/status`` surfaces for many real direct
+    clients) is INDISTINGUISHABLE from the anonymous media-server pull. Both
+    reach the reconciler as plain eligible connections with no identity. Source
+    IP only RANKS (soft hint), it never identifies. So when only the
+    media-server user matched, the reconciler may pin that user's name to the
+    direct-IPTV connection (the wrong one) and drop the real media-server pull
+    to User #0 — depending purely on tie-break order.
+
+    Net-positive vs. the prior all-User#0 state (the media-server name DOES
+    surface on the channel; it is the per-connection ROW that can be wrong),
+    which is why this is accepted, not blocked. Would change if a per-client
+    identity signal ever surfaces on the anonymous direct connection.
+    """
+
+    def test_anonymous_direct_iptv_may_take_media_server_name_when_ranked_first(self):
+        """ACCEPTED LIMITATION: an anonymous genuine direct-IPTV/XC client that
+        ranks ahead of the anonymous media-server pull takes the media-server
+        user's name, dropping the real pull to User #0.
+
+        No per-client identity signal exists to tell the two anonymous
+        connections apart, so the mis-pin is structural, not a logic error.
+        Pinned here so it cannot silently drift; the assertions describe
+        TODAY'S behavior, not a desired one. If a per-client identity signal
+        surfaces (e.g. the direct client gains a Dispatcharr account id), this
+        scenario moves to the happy path and this test would be updated to
+        assert the direct client is excluded instead.
+        """
+        # Genuine direct-IPTV/XC viewer, anonymous to Dispatcharr (no account
+        # identity, no per-client URL identity), connected earlier so it sorts
+        # ahead of the media-server pull in the shared UNKNOWN IP-priority
+        # bucket. There is NO signal that marks it as a direct client.
+        direct_xc = _conn("xc_client", ip="203.0.113.50", connected_at=1.0)
+        # The anonymous media-server pull (later connected_at → sorts second).
+        media_pull = _conn("media_pull", ip="172.18.0.1", connected_at=2.0)
+        # Only the media-server user matched on this channel.
+        users = [
+            _user("MotWakorb", user_id="uid-mw", last_activity="2026-05-20T12:00:00Z")
+        ]
+
+        result = reconcile_channel([direct_xc, media_pull], users)
+        names = _assigned_names(result)
+
+        # ACCEPTED current outcome: the media-server name lands on the WRONG
+        # connection (the direct-IPTV client), because nothing distinguishes
+        # the two anonymous connections except rank order.
+        assert names["xc_client"] == "MotWakorb"
+        # The real media-server pull is left at User #0.
+        assert names["media_pull"] is None
+        # Neither is a rollup — only one candidate user, so no Option-B group.
+        by_id = {a.client_id: a for a in result.assignments}
+        assert not by_id["xc_client"].is_rollup
+        assert not by_id["media_pull"].is_rollup
+        # Net-positive invariant that MUST hold: the media-server user still
+        # surfaces somewhere on the channel (not the prior all-User#0 state).
+        assert "MotWakorb" in {u.user_name for u in result.channel_viewers}
+
+    def test_account_identity_direct_client_does_not_trip_the_limitation(self):
+        """Companion to the limitation: the moment the direct-IPTV client DOES
+        carry a per-client identity signal (a Dispatcharr account id), the
+        limitation disappears — it is excluded and the media-server user pairs
+        to the real anonymous pull. This is the target state the limitation
+        would reach if such a signal ever surfaces on the anonymous case.
+        """
+        # Same topology, but now the direct client carries an account identity.
+        direct_xc = _conn(
+            "xc_client", ip="203.0.113.50", connected_at=1.0, account_identity=True
+        )
+        media_pull = _conn("media_pull", ip="172.18.0.1", connected_at=2.0)
+        users = [
+            _user("MotWakorb", user_id="uid-mw", last_activity="2026-05-20T12:00:00Z")
+        ]
+
+        result = reconcile_channel([direct_xc, media_pull], users)
+        names = _assigned_names(result)
+
+        # The identified direct client is excluded entirely (no assignment).
+        assert "xc_client" not in names
+        # The media-server user correctly pairs to the real anonymous pull.
+        assert names["media_pull"] == "MotWakorb"
 
 
 # ---------------------------------------------------------------------------
