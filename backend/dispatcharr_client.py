@@ -290,7 +290,7 @@ class DispatcharrClient:
         params = {"page": page, "page_size": page_size}
         if search:
             params["search"] = search
-        if channel_group:
+        if channel_group is not None:
             group_name = await self._channel_group_name_for_id(channel_group)
             if group_name is None:
                 logger.warning(
