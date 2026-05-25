@@ -1525,11 +1525,14 @@ class TestBulkMergeChannelsStaleSourceIds:
 # off). Here we override the prebuilt dependency to simulate auth-enabled
 # non-admin (403) and auth-enabled admin (pass-through).
 #
-# Single-resource CRUD (create/update/delete channel, add/remove/reorder a
-# single stream, logo CRUD) is intentionally NOT gated here — a non-admin
-# Dispatcharr principal may legitimately perform routine per-resource edits,
-# and over-gating those would regress normal flows. Only the destructive /
-# bulk operator-op class is gated, matching bd-757hc's scope.
+# bd-v7n9f overturns the original assumption: ECM is OPERATOR-ONLY (federated
+# Dispatcharr users default is_admin=False), so ALL channel-config writes now
+# require admin — single-resource CRUD (create/update/delete channel, add/
+# add-streams/remove/reorder a single channel's streams, logo CRUD incl. upload)
+# is gated alongside the destructive/bulk class um30y already covered. Only
+# read-only GETs and the preview/validation scan endpoints (preview-csv,
+# normalize-preview-batch, find-duplicates) stay ungated — the global auth
+# middleware already requires authentication for those.
 # ---------------------------------------------------------------------------
 
 # (path, http_method, request_kwargs) for every channels endpoint now admin-gated.
@@ -1547,6 +1550,20 @@ _GATED_CHANNEL_ENDPOINTS = [
      {"json": {"merges": [{"target_channel_id": 1, "source_channel_ids": [2]}]}}),
     ("/api/channels/import-csv", "post",
      {"files": {"file": ("channels.csv", b"name\nESPN\n", "text/csv")}}),
+    # bd-v7n9f: routine single-resource channel-config writes, now also gated.
+    ("/api/channels", "post", {"json": {"name": "ESPN"}}),
+    ("/api/channels/1", "patch", {"json": {"name": "ESPN HD"}}),
+    ("/api/channels/1", "delete", {}),
+    ("/api/channels/1/add-stream", "post", {"json": {"stream_id": 7}}),
+    ("/api/channels/1/add-streams", "post", {"json": {"stream_ids": [7, 8]}}),
+    ("/api/channels/1/remove-stream", "post", {"json": {"stream_id": 7}}),
+    ("/api/channels/1/reorder-streams", "post", {"json": {"stream_ids": [8, 7]}}),
+    ("/api/channels/logos", "post",
+     {"json": {"name": "ESPN", "url": "http://x/logo.png"}}),
+    ("/api/channels/logos/upload", "post",
+     {"files": {"file": ("logo.png", b"\x89PNG", "image/png")}}),
+    ("/api/channels/logos/1", "patch", {"json": {"name": "ESPN HD"}}),
+    ("/api/channels/logos/1", "delete", {}),
 ]
 
 
@@ -1651,12 +1668,71 @@ class TestChannelsAdminGating:
         mock_client.update_channel.assert_called()
 
     @pytest.mark.asyncio
-    async def test_routine_and_read_endpoints_not_admin_gated(self, async_client):
-        """Routine single-resource mutations and read-only endpoints stay
+    @pytest.mark.parametrize(
+        "path, method, kwargs",
+        [
+            ("/api/channels", "post", {"json": {"name": "ESPN"}}),
+            ("/api/channels/1", "delete", {}),
+            ("/api/channels/1/add-stream", "post", {"json": {"stream_id": 7}}),
+        ],
+    )
+    async def test_admin_principal_can_perform_routine_writes_when_auth_enabled(
+        self, async_client, path, method, kwargs
+    ):
+        """Auth enabled + admin principal → the bd-v7n9f gate passes through and
+        the newly-gated routine writes (create + delete + add-stream) execute
+        normally."""
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _allow_admin():
+            return MagicMock(is_admin=True, username="admin")
+
+        mock_client = AsyncMock()
+        mock_client.create_channel.return_value = {"id": 1, "name": "ESPN"}
+        mock_client.get_channel.return_value = {
+            "id": 1, "name": "ESPN", "channel_number": 5, "streams": [],
+        }
+        mock_client.delete_channel.return_value = None
+        mock_client.update_channel.return_value = {"id": 1, "streams": [7]}
+
+        app.dependency_overrides[_prebuilt.dependency] = _allow_admin
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels.journal"):
+                response = await getattr(async_client, method)(path, **kwargs)
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 200, (
+            f"{method.upper()} {path} should succeed for admin but returned "
+            f"{response.status_code}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_channel_allowed_when_auth_disabled(self, async_client):
+        """Auth disabled (default async_client) → RequireAdminIfEnabled is a
+        no-op and a representative newly-gated write (create channel) behaves
+        exactly as before the bd-v7n9f gate was added."""
+        mock_client = AsyncMock()
+        mock_client.create_channel.return_value = {"id": 1, "name": "ESPN"}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels", json={"name": "ESPN"}
+            )
+
+        assert response.status_code == 200
+        mock_client.create_channel.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_read_and_preview_endpoints_not_admin_gated(self, async_client):
+        """Read-only GETs and the preview/validation scan endpoints stay
         reachable for a non-admin principal even when auth is enabled — only
-        the destructive/bulk class is gated. We override the admin dependency
-        to reject; these endpoints don't depend on it, so they must still
-        succeed (not 403)."""
+        state-mutating writes are gated (bd-v7n9f). We override the admin
+        dependency to reject; these endpoints don't depend on it, so they must
+        still succeed (not 403)."""
         from fastapi import HTTPException, status
         from main import app
         from auth import RequireAdminIfEnabled as _prebuilt
@@ -1669,20 +1745,17 @@ class TestChannelsAdminGating:
 
         mock_client = AsyncMock()
         mock_client.get_channels.return_value = {"results": [], "count": 0}
-        mock_client.create_channel.return_value = {"id": 1, "name": "ESPN"}
 
         app.dependency_overrides[_prebuilt.dependency] = _reject
         try:
             with patch("routers.channels.get_client", return_value=mock_client), \
                  patch("routers.channels.journal"):
                 list_resp = await async_client.get("/api/channels")
-                create_resp = await async_client.post(
-                    "/api/channels", json={"name": "ESPN"}
-                )
+                dup_resp = await async_client.post("/api/channels/find-duplicates")
         finally:
             app.dependency_overrides.pop(_prebuilt.dependency, None)
 
-        # Read endpoint and routine single-resource create are NOT admin-gated,
+        # Read endpoint and the read-only duplicate scan are NOT admin-gated,
         # so the reject override must not turn them into 403s.
         assert list_resp.status_code == 200
-        assert create_resp.status_code != 403
+        assert dup_resp.status_code != 403
