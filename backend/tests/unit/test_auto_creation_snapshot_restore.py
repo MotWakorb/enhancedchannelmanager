@@ -339,3 +339,169 @@ class TestRestoreGuards:
         assert result["success"] is False
         assert "already reverted" in result["error"].lower()
         client.update_channel.assert_not_called()
+
+
+class TestUnifiedRollback:
+    """uc51o.5 — ``rollback_execution`` unifies on the snapshot when present.
+
+    * Snapshot present + confirm → delegates to the FULL snapshot-restore.
+    * Snapshot present + NO confirm → refused with ``requires_confirm`` (the
+      blast-radius guard; the router maps this to 409). NOT a silent overwrite.
+    * NO snapshot → the legacy delete-created-only path, BYTE-COMPATIBLE: no
+      confirm needed, ``entities_removed`` / ``entities_restored`` shape, no
+      full-replace PATCHes.
+    """
+
+    def test_snapshot_present_with_confirm_does_full_restore(self, db_session_factory):
+        """A snapshotted run + confirm=True runs the full restore: created
+        channels deleted, every snapshot channel's streams full-replaced."""
+        channels = [
+            {"id": 10, "name": "ESPN", "channel_group_id": 1,
+             "epg_data_id": 99, "tvg_id": "espn.us", "stream_ids": [501, 502]},
+            {"id": 11, "name": "CNN", "stream_ids": [601]},
+        ]
+        created = [{"type": "channel", "id": 500, "name": "New Sports"}]
+        execution_id = _seed_execution_and_snapshot(
+            db_session_factory, created_entities=created, channels=channels,
+        )
+
+        engine, client = _make_engine_with_client()
+        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+            result = _run(engine.rollback_execution(execution_id, confirm=True))
+
+        # Restore-shaped result (not the legacy entities_* shape).
+        assert result["success"] is True
+        assert result["restored_channels"] == 2
+        assert result["removed_channels"] == 1
+        assert "entities_removed" not in result
+        # Full-replace PATCHes were issued — the snapshot-restore path ran.
+        assert client.update_channel.await_count == 2
+        client.delete_channel.assert_awaited_once_with(500)
+        # Terminal state set (shared rolled_back).
+        session = db_session_factory()
+        try:
+            ex = session.query(AutoCreationExecution).filter(
+                AutoCreationExecution.id == execution_id
+            ).first()
+            assert ex.status == "rolled_back"
+            assert ex.rolled_back_by == "api" or ex.rolled_back_by == "manual"
+        finally:
+            session.close()
+
+    def test_snapshot_present_passes_rolled_back_by_through(self, db_session_factory):
+        """The unified rollback threads rolled_back_by into restore's
+        restored_by so the audit row records the real initiator."""
+        channels = [{"id": 10, "name": "ESPN", "stream_ids": [501]}]
+        execution_id = _seed_execution_and_snapshot(
+            db_session_factory, channels=channels,
+        )
+        engine, _client = _make_engine_with_client()
+        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+            _run(engine.rollback_execution(
+                execution_id, rolled_back_by="api", confirm=True,
+            ))
+        session = db_session_factory()
+        try:
+            ex = session.query(AutoCreationExecution).filter(
+                AutoCreationExecution.id == execution_id
+            ).first()
+            assert ex.rolled_back_by == "api"
+        finally:
+            session.close()
+
+    def test_snapshot_present_without_confirm_is_refused(self, db_session_factory):
+        """A snapshotted run with NO confirm must NOT silently overwrite — it is
+        refused with requires_confirm/has_snapshot flags and mutates nothing."""
+        channels = [{"id": 10, "name": "ESPN", "stream_ids": [501]}]
+        created = [{"type": "channel", "id": 500, "name": "New Sports"}]
+        execution_id = _seed_execution_and_snapshot(
+            db_session_factory, created_entities=created, channels=channels,
+        )
+
+        engine, client = _make_engine_with_client()
+        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+            result = _run(engine.rollback_execution(execution_id))  # confirm defaults False
+
+        assert result["success"] is False
+        assert result["requires_confirm"] is True
+        assert result["has_snapshot"] is True
+        assert "confirm" in result["error"].lower()
+        # Nothing was mutated — no delete, no PATCH.
+        client.update_channel.assert_not_called()
+        client.delete_channel.assert_not_called()
+        # Execution NOT marked terminal.
+        session = db_session_factory()
+        try:
+            ex = session.query(AutoCreationExecution).filter(
+                AutoCreationExecution.id == execution_id
+            ).first()
+            assert ex.status == "completed"
+        finally:
+            session.close()
+
+    def test_no_snapshot_runs_legacy_path_without_confirm(self, db_session_factory):
+        """A run with NO snapshot keeps the legacy delete-created-only behaviour,
+        BYTE-COMPATIBLE: works without confirm, returns entities_* counts, and
+        does NOT issue full-replace restore PATCHes (no snapshot to replace
+        from). This is the true backward-compat path."""
+        created = [
+            {"type": "channel", "id": 500, "name": "New Sports"},
+            {"type": "group", "id": 77, "name": "New Group"},
+        ]
+        execution_id = _seed_execution_and_snapshot(
+            db_session_factory, created_entities=created, with_snapshot=False,
+        )
+
+        engine, client = _make_engine_with_client()
+        # No merge journal entries → surgical unmerge returns (False, 0); with no
+        # modified entities the legacy path simply deletes created entities.
+        with patch("auto_creation_engine.get_session", side_effect=db_session_factory), \
+             patch.object(engine, "_journal_driven_unmerge",
+                          new=AsyncMock(return_value=(False, 0))):
+            result = _run(engine.rollback_execution(execution_id))  # NO confirm
+
+        # Legacy shape — NOT the restore shape.
+        assert result["success"] is True
+        assert result["entities_removed"] == 2
+        assert "restored_channels" not in result
+        # Created entities deleted; no full-replace restore PATCH.
+        client.delete_channel.assert_awaited_once_with(500)
+        client.delete_channel_group.assert_awaited_once_with(77)
+        client.update_channel.assert_not_called()
+        # Terminal state set via the legacy path.
+        session = db_session_factory()
+        try:
+            ex = session.query(AutoCreationExecution).filter(
+                AutoCreationExecution.id == execution_id
+            ).first()
+            assert ex.status == "rolled_back"
+        finally:
+            session.close()
+
+    def test_no_snapshot_confirm_ignored(self, db_session_factory):
+        """On the no-snapshot path the confirm flag is irrelevant — passing it
+        (or not) yields the identical legacy result."""
+        created = [{"type": "channel", "id": 500, "name": "New Sports"}]
+        execution_id = _seed_execution_and_snapshot(
+            db_session_factory, created_entities=created, with_snapshot=False,
+        )
+        engine, client = _make_engine_with_client()
+        with patch("auto_creation_engine.get_session", side_effect=db_session_factory), \
+             patch.object(engine, "_journal_driven_unmerge",
+                          new=AsyncMock(return_value=(False, 0))):
+            result = _run(engine.rollback_execution(execution_id, confirm=True))
+        assert result["success"] is True
+        assert result["entities_removed"] == 1
+        assert "requires_confirm" not in result
+
+    def test_no_snapshot_guards_unchanged(self, db_session_factory):
+        """The legacy refuse-when-nothing-to-undo guard still fires on a
+        no-snapshot run with zero created AND zero modified entities."""
+        execution_id = _seed_execution_and_snapshot(
+            db_session_factory, created_entities=[], with_snapshot=False,
+        )
+        engine, _client = _make_engine_with_client()
+        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+            result = _run(engine.rollback_execution(execution_id))
+        assert result["success"] is False
+        assert "no recorded" in result["error"].lower()

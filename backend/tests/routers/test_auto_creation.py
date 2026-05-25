@@ -1328,6 +1328,83 @@ class TestGetExecutions:
         assert data["total"] == 5
         assert len(data["executions"]) == 2
 
+    @pytest.mark.asyncio
+    async def test_has_snapshot_flag(self, async_client, test_session):
+        """Each execution carries a derived has_snapshot boolean (ADR-010 §D6):
+        true for executions that have an AutoCreationSnapshot row, false
+        otherwise. uc51o.6/.7 gate the snapshot-restore affordance on it."""
+        from models import AutoCreationSnapshot
+
+        with_snap = _create_execution(test_session, rule_name="HasSnap")
+        without_snap = _create_execution(test_session, rule_name="NoSnap")
+
+        snapshot = AutoCreationSnapshot(
+            execution_id=with_snap.id,
+            snapshot_time=datetime.utcnow(),
+            channel_count=1,
+        )
+        snapshot.set_channels_data({"channels": [
+            {"id": 10, "name": "ESPN", "stream_ids": [501]},
+        ]})
+        test_session.add(snapshot)
+        test_session.commit()
+
+        response = await async_client.get("/api/auto-creation/executions")
+        assert response.status_code == 200
+        flags = {e["id"]: e["has_snapshot"] for e in response.json()["executions"]}
+        assert flags[with_snap.id] is True
+        assert flags[without_snap.id] is False
+
+    @pytest.mark.asyncio
+    async def test_has_snapshot_no_n_plus_one(self, async_client, test_session):
+        """has_snapshot is resolved with a SINGLE existence query over the page's
+        ids, not one query per execution. Asserts the snapshot table is hit at
+        most once regardless of page size (no N+1)."""
+        from models import AutoCreationSnapshot
+
+        execs = [_create_execution(test_session, rule_name=f"E{i}") for i in range(5)]
+        # Snapshot a couple of them.
+        for ex in execs[:2]:
+            snap = AutoCreationSnapshot(
+                execution_id=ex.id, snapshot_time=datetime.utcnow(), channel_count=0,
+            )
+            snap.set_channels_data({"channels": []})
+            test_session.add(snap)
+        test_session.commit()
+
+        # Count how many times the AutoCreationSnapshot table is queried while
+        # building the list response. A per-execution lookup would be 5 (N);
+        # the batched IN query is exactly 1. We wrap Session.query and inspect
+        # its args (the snapshot probe is session.query(AutoCreationSnapshot
+        # .execution_id) — a column attribute owned by AutoCreationSnapshot).
+        from sqlalchemy.orm import Session
+
+        snapshot_query_count = 0
+        orig_query = Session.query
+
+        def _is_snapshot_arg(a):
+            return (
+                a is AutoCreationSnapshot
+                or getattr(a, "class_", None) is AutoCreationSnapshot
+            )
+
+        def counting_query(self, *args, **kwargs):
+            nonlocal snapshot_query_count
+            if any(_is_snapshot_arg(a) for a in args):
+                snapshot_query_count += 1
+            return orig_query(self, *args, **kwargs)
+
+        with patch.object(Session, "query", counting_query):
+            response = await async_client.get("/api/auto-creation/executions")
+
+        assert response.status_code == 200
+        assert len(response.json()["executions"]) == 5
+        # Exactly one query against the snapshot table — never one per execution.
+        assert snapshot_query_count == 1, (
+            f"expected 1 snapshot query (batched IN), got {snapshot_query_count} "
+            "— likely an N+1"
+        )
+
 
 class TestGetExecution:
     """Tests for GET /api/auto-creation/executions/{execution_id}."""
@@ -1443,6 +1520,92 @@ class TestRollbackExecution:
             response = await async_client.post("/api/auto-creation/executions/1/rollback")
 
         assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_legacy_path_needs_no_confirm(self, async_client):
+        """uc51o.5: a no-snapshot run is rolled back without confirm (byte-compat).
+        The endpoint passes confirm=False through to the engine."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": True,
+            "rule_name": "Sports Rule",
+            "entities_removed": 3,
+            "entities_restored": 0,
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/executions/1/rollback")
+        assert response.status_code == 200
+        # confirm defaulted to False and was threaded to the engine.
+        _, kwargs = mock_engine.rollback_execution.call_args
+        assert kwargs.get("confirm") is False
+
+    @pytest.mark.asyncio
+    async def test_snapshot_present_without_confirm_returns_409(self, async_client):
+        """uc51o.5: a snapshotted run rolled back WITHOUT confirm → 409 (the
+        overwrite acknowledgement is required). The engine signals this with
+        requires_confirm."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": False,
+            "has_snapshot": True,
+            "requires_confirm": True,
+            "error": (
+                "Execution 1 has a pre-run snapshot, so rollback performs a "
+                "FULL restore that overwrites ... confirm=true."
+            ),
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post("/api/auto-creation/executions/1/rollback")
+        assert response.status_code == 409
+        assert "confirm" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_present_with_confirm_does_full_restore(self, async_client):
+        """uc51o.5: confirm=true on a snapshotted run runs the full restore and
+        returns the restore-shaped result (restored_channels)."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": True,
+            "rule_name": "Sports Rule",
+            "removed_channels": 1,
+            "restored_channels": 5,
+            "failed_channels": [],
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/rollback?confirm=true"
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["restored_channels"] == 5
+        _, kwargs = mock_engine.rollback_execution.call_args
+        assert kwargs.get("confirm") is True
+
+    @pytest.mark.asyncio
+    async def test_snapshot_partial_failure_is_200_with_failures(self, async_client):
+        """uc51o.5: a partial restore via /rollback returns 200 success=False
+        with failures surfaced — never a blanket 500."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": False,
+            "rule_name": "Sports Rule",
+            "removed_channels": 0,
+            "restored_channels": 4,
+            "failed_channels": [{"id": 11, "name": "GONE", "error": "404"}],
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/rollback?confirm=true"
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert data["restored_channels"] == 4
+        assert len(data["failed_channels"]) == 1
 
 
 class TestRestoreSnapshot:
