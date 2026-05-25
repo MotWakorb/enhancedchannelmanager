@@ -37,11 +37,17 @@ const GROUP_COLORS = [
   { header: '#8E44AD', bg: '#F5EEF8' },  // Violet
 ];
 
-interface GroupPrintSettings {
+// Exported for unit testing of generatePrintHtml.
+export interface GroupPrintSettings {
   groupId: number;
   selected: boolean;
   mode: 'detailed' | 'summary';
 }
+
+// Maximum empty-slot placeholders rendered per group to prevent runaway output
+// (e.g. operator sets 1–9999 with only one real channel).
+// Exported for unit testing.
+export const MAX_EMPTY_SLOTS_PER_GROUP = 500;
 
 interface PrintGuideModalProps {
   isOpen: boolean;
@@ -72,6 +78,10 @@ function PrintGuideModalInner({
   // Range filter state — raw string values for controlled inputs
   const [fromRaw, setFromRaw] = useState<string>(() => String(globalMin));
   const [toRaw, setToRaw] = useState<string>(() => String(globalMax));
+
+  // Empty-slot placeholder toggle — on by default so the printed guide shows
+  // the full intended channel-number layout (bd-w532y).
+  const [showEmptySlots, setShowEmptySlots] = useState(true);
 
   // Track whether a clamp hint should be shown (cleared on next manual change)
   const [clampHint, setClampHint] = useState<string | null>(null);
@@ -276,7 +286,8 @@ function PrintGuideModalInner({
       groupSettings,
       title,
       rangeFrom,
-      rangeTo
+      rangeTo,
+      showEmptySlots,
     );
 
     // Open new window and write content
@@ -287,7 +298,7 @@ function PrintGuideModalInner({
     }
 
     onClose();
-  }, [channels, rangeFilteredGroups, groupSettings, title, onClose, rangeError, fromNum, toNum, globalMin, globalMax]);
+  }, [channels, rangeFilteredGroups, groupSettings, title, onClose, rangeError, fromNum, toNum, globalMin, globalMax, showEmptySlots]);
 
   // isOpen gating handled by outer wrapper.
 
@@ -347,6 +358,22 @@ function PrintGuideModalInner({
           {clampHint && !rangeError && (
             <p className="form-hint print-guide-clamp-hint">{clampHint}</p>
           )}
+
+          {/* Empty-slot placeholder toggle (bd-w532y) */}
+          <div className="print-guide-empty-slots-row">
+            <label className="print-guide-empty-slots-label">
+              <input
+                type="checkbox"
+                checked={showEmptySlots}
+                onChange={e => setShowEmptySlots(e.target.checked)}
+                aria-label="Show empty slots"
+              />
+              <span>Show empty slots</span>
+            </label>
+            <span className="print-guide-empty-slots-hint">
+              Fills missing channel numbers in the range with placeholder rows
+            </span>
+          </div>
 
           {/* Empty state when range has no channels */}
           {!rangeError && rangeFilteredGroups.length === 0 && (
@@ -446,14 +473,17 @@ export const PrintGuideModal = memo(function PrintGuideModal(
   );
 });
 
-// Generate the complete HTML for the print window
-function generatePrintHtml(
+// Generate the complete HTML for the print window.
+// Exported for unit testing; not part of the public component API.
+// eslint-disable-next-line react-refresh/only-export-components -- pure function exported for unit testing; HMR handles the component export fine
+export function generatePrintHtml(
   channels: Channel[],
   sortedGroups: ChannelGroup[],
   groupSettings: GroupPrintSettings[],
   title: string,
   rangeFrom: number,
-  rangeTo: number
+  rangeTo: number,
+  showEmptySlots: boolean = false,
 ): string {
   const selectedGroupIds = new Set(
     groupSettings.filter(s => s.selected).map(s => s.groupId)
@@ -502,12 +532,60 @@ function generatePrintHtml(
         </div>
       `;
     } else {
-      // Detailed mode: show all channels
+      // Detailed mode: show all channels, with optional empty-slot placeholders.
+      //
+      // When showEmptySlots is true we walk every integer channel number from
+      // the group's first real channel to the rangeTo bound (inclusive) and
+      // emit a placeholder row for any number that has no real channel.
+      //
+      // Scope: placeholders are bounded by [group's first real ch, rangeTo] so
+      // that numbers before the group's lowest real channel aren't attributed to
+      // this group (they may belong to a different group or be genuinely empty).
+      // rangeFrom already ensures groupChannels only contains in-range channels.
+      //
+      // Performance cap: if the slot count exceeds MAX_EMPTY_SLOTS_PER_GROUP we
+      // truncate and append a warning row rather than silently producing massive
+      // output.
       let channelsHtml = '';
-      for (const ch of groupChannels) {
-        const num = ch.channel_number === null ? 'N/A' : (Number.isInteger(ch.channel_number) ? String(ch.channel_number) : String(ch.channel_number));
-        const displayName = cleanChannelName(ch.name, ch.channel_number);
-        channelsHtml += `<div class="channel-line"><span class="ch-num">${num}</span> ${escapeHtml(displayName)}</div>\n`;
+
+      if (showEmptySlots && groupChannels.length > 0) {
+        const firstNum = groupChannels[0].channel_number!;
+        const slotEnd = rangeTo;
+        const realByNum = new Map(
+          groupChannels
+            .filter(ch => ch.channel_number !== null)
+            .map(ch => [ch.channel_number!, ch])
+        );
+
+        let emptyCount = 0;
+        let truncated = false;
+
+        for (let n = firstNum; n <= slotEnd; n++) {
+          const ch = realByNum.get(n);
+          if (ch) {
+            const num = Number.isInteger(ch.channel_number!) ? String(ch.channel_number!) : String(ch.channel_number!);
+            const displayName = cleanChannelName(ch.name, ch.channel_number);
+            channelsHtml += `<div class="channel-line"><span class="ch-num">${num}</span> ${escapeHtml(displayName)}</div>\n`;
+          } else {
+            if (emptyCount >= MAX_EMPTY_SLOTS_PER_GROUP) {
+              truncated = true;
+              break;
+            }
+            channelsHtml += `<div class="channel-line channel-line-empty"><span class="ch-num ch-num-empty">${n}</span> <span class="ch-slot-label">—</span></div>\n`;
+            emptyCount++;
+          }
+        }
+
+        if (truncated) {
+          channelsHtml += `<div class="channel-line channel-line-truncated">… (empty-slot limit reached — narrow the range)</div>\n`;
+        }
+      } else {
+        // No empty slots — render only real channels
+        for (const ch of groupChannels) {
+          const num = ch.channel_number === null ? 'N/A' : (Number.isInteger(ch.channel_number) ? String(ch.channel_number) : String(ch.channel_number));
+          const displayName = cleanChannelName(ch.name, ch.channel_number);
+          channelsHtml += `<div class="channel-line"><span class="ch-num">${num}</span> ${escapeHtml(displayName)}</div>\n`;
+        }
       }
 
       groupsHtml += `
@@ -630,6 +708,26 @@ function generatePrintHtml(
 
     .summary-mode .channel-line {
       font-style: italic;
+    }
+
+    .channel-line-empty {
+      opacity: 0.45;
+    }
+
+    .ch-num-empty {
+      color: #999;
+      font-weight: normal;
+    }
+
+    .ch-slot-label {
+      color: #aaa;
+    }
+
+    .channel-line-truncated {
+      font-style: italic;
+      color: #c00;
+      font-size: 5.5pt;
+      margin-top: 1px;
     }
 
     .content {
