@@ -149,6 +149,38 @@
   margin-bottom: 0.5rem;
 }
 
+/* Empty-slots toggle row (bd-w532y) */
+.print-guide-empty-slots-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.75rem;
+}
+
+.print-guide-empty-slots-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  user-select: none;
+}
+
+.print-guide-empty-slots-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.print-guide-empty-slots-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding-left: 1.6rem;
+}
+
 /* Empty-range state */
 .print-guide-empty-range {
   display: flex;

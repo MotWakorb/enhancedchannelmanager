@@ -49,6 +49,9 @@ usernames instead of raw IP addresses. Also covers the full MCP / Claude AI
 connection reference — the mcp-remote bridge (Claude Desktop) and the Claude
 Code `.mcp.json` path, both using the static `?api_key=` authentication method.
 
+- **[Emby Integration](integrations/emby.md)** — full Emby walkthrough:
+  prerequisites, getting a server-local API key, configuration, what
+  attribution looks like in Stats, network requirements, and troubleshooting.
 - **[MCP Integration](integrations/mcp.md)** — step-by-step mcp-remote bridge
   setup, Claude Code `.mcp.json`, key rotation, and troubleshooting.
 
