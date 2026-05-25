@@ -32,6 +32,11 @@ enabled, it shows usernames (e.g., `Alice via Emby`).
 5. Click "Test Connection" to verify
 6. Save
 
+> For the full Emby walkthrough — prerequisites, the server-local token
+> model, what attribution looks like in Stats, network requirements, and
+> per-failure-mode troubleshooting — see the **[Emby Integration
+> reference](emby.md)**.
+
 ## Setup — Plex
 
 1. In ECM: Settings → Integrations → Plex
