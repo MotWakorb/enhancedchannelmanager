@@ -676,6 +676,17 @@ export function M3UManagerTab({
       });
   }, [accounts, filterServerGroup]);
 
+  // Resolve the hidden Dispatcharr "custom" account dynamically (case-insensitive,
+  // mirroring filteredAccounts above). Operator-added custom streams belong to this
+  // real M3U account, so they carry m3u_account_id = customAccount.id — the backend
+  // Smart Sort already ranks them via m3u_account_priorities[str(id)]. We surface a
+  // dedicated "Custom streams" priority control (NOT a full account row) keyed on that
+  // same id so the operator can rank them without exposing the account itself.
+  const customAccount = useMemo(
+    () => accounts.find(a => a.name.toLowerCase() === 'custom'),
+    [accounts],
+  );
+
   if (loading) {
     return (
       <div className="m3u-manager-tab">
@@ -746,7 +757,7 @@ export function M3UManagerTab({
         </div>
       </div>
 
-      {filteredAccounts.length === 0 ? (
+      {filteredAccounts.length === 0 && !customAccount ? (
         <div className="empty-state">
           <span className="material-icons">playlist_play</span>
           <h3>No M3U Accounts</h3>
@@ -787,6 +798,49 @@ export function M3UManagerTab({
                 isBeingRefreshed={refreshingAccounts.has(account.id)}
               />
             ))}
+
+            {/* Dedicated "Custom streams" priority control. Rendered only when the
+                hidden "custom" M3U account exists. It writes under the SAME key the
+                backend reads — String(customAccount.id) — via the existing
+                handlePriorityChange/handleSavePriorities flow. It is intentionally a
+                slim row (name + helper + priority input only), NOT a full
+                M3UAccountRow with status/groups/actions, so the operator never sees
+                the hidden account as an account. */}
+            {customAccount && (
+              <div className="custom-streams-row" data-testid="custom-streams-row">
+                <div className="custom-streams-info">
+                  <span className="material-icons custom-streams-icon">tune</span>
+                  <div className="custom-streams-text">
+                    <span className="custom-streams-name">Custom streams</span>
+                    <span
+                      className="custom-streams-hint"
+                      title="Operator-added streams not from any M3U provider"
+                    >
+                      Operator-added streams not from any M3U provider
+                    </span>
+                  </div>
+                </div>
+                <div className="custom-streams-priority">
+                  <input
+                    type="text"
+                    className="priority-input"
+                    aria-label="Custom streams priority"
+                    value={pendingPriorities[String(customAccount.id)] || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      // Allow empty or numbers only — mirror M3UAccountRow semantics.
+                      if (val === '' || /^\d+$/.test(val)) {
+                        const num = parseInt(val) || 0;
+                        // Clamp to 1-100 range (0 means not set).
+                        handlePriorityChange(customAccount.id, Math.min(100, Math.max(0, num)));
+                      }
+                    }}
+                    placeholder="-"
+                    title="Sort priority (1-100, higher = better)"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
