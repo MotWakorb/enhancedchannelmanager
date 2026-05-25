@@ -3,9 +3,11 @@ Settings router — Dispatcharr connection, preferences, and service management 
 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
+import ipaddress
 import logging
 import re
 import secrets
+import socket
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -1135,10 +1137,89 @@ async def test_telegram_bot(request: TelegramTestRequest):
         return {"success": False, "message": "Unexpected error during Telegram test"}
 
 
+def _ip_is_blocked(ip: ipaddress._BaseAddress) -> bool:
+    """Return True if ``ip`` is loopback or link-local (the SSRF denylist).
+
+    Denylist (bd-fbc50 — SSRF hardening, security finding SEC-2 follow-up):
+
+    * **Loopback** — ``127.0.0.0/8`` (IPv4) and ``::1`` (IPv6). Blocks
+      Test Connection from probing services bound to the ECM host itself.
+    * **Link-local** — ``169.254.0.0/16`` (IPv4) and ``fe80::/10`` (IPv6).
+      The IPv4 link-local range contains the cloud instance-metadata
+      endpoint ``169.254.169.254`` (AWS/GCP/Azure IMDS), the canonical
+      SSRF-to-credential-theft pivot.
+
+    We DELIBERATELY do NOT block RFC1918 private ranges (``10.0.0.0/8``,
+    ``172.16.0.0/12``, ``192.168.0.0/16``) or IPv6 ULA (``fc00::/7``):
+    Plex / Emby / Jellyfin legitimately run on the operator's LAN, so
+    blocking those would break the primary use case. The bead allowed
+    an "optionally RFC1918-aware" denylist; the right call here is to
+    leave private LAN ranges reachable. ``ipaddress`` stdlib is used for
+    all range checks (no regex — ReDoS-safe by construction).
+    """
+    if ip.is_loopback:
+        # 127.0.0.0/8 and ::1
+        return True
+    if ip.is_link_local:
+        # 169.254.0.0/16 (incl. 169.254.169.254 metadata) and fe80::/10
+        return True
+    # IPv4-mapped IPv6 (e.g. ``::ffff:127.0.0.1``) reports neither
+    # is_loopback nor is_link_local on the mapped form — unwrap it and
+    # re-check so the v6 spelling of a blocked v4 address can't slip past.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        return mapped.is_loopback or mapped.is_link_local
+    return False
+
+
+def _host_is_blocked(hostname: str) -> bool:
+    """Return True if ``hostname`` resolves to / is a denylisted address.
+
+    Handles three cases (bd-fbc50):
+
+    1. ``hostname`` is a literal IP (v4 or v6) — check it directly.
+    2. ``hostname`` is the literal name ``localhost`` (any case) — block
+       it without resolving; it is the most common loopback alias and we
+       never want a DNS quirk to make it reachable.
+    3. ``hostname`` is some other name — resolve it (best-effort) and
+       block if ANY resolved address is loopback/link-local. This defends
+       against attacker-controlled DNS that points an innocuous-looking
+       name at ``127.0.0.1`` / ``169.254.169.254`` (DNS-rebinding-style
+       names). Resolution failures are NOT treated as blocks — an
+       unresolvable host simply fails later at the HTTP probe with a
+       normal connection error; failing closed here would reject
+       legitimate-but-currently-offline LAN servers.
+    """
+    name = hostname.strip().rstrip(".")
+    # Case 1: literal IP address.
+    try:
+        return _ip_is_blocked(ipaddress.ip_address(name))
+    except ValueError:
+        pass
+    # Case 2: localhost alias — block without resolving.
+    if name.lower() == "localhost":
+        return True
+    # Case 3: resolve the name and check every returned address.
+    try:
+        infos = socket.getaddrinfo(name, None)
+    except (socket.gaierror, UnicodeError, OSError):
+        # Best-effort: don't block on resolution failure (see docstring).
+        return False
+    for info in infos:
+        sockaddr = info[4]
+        try:
+            if _ip_is_blocked(ipaddress.ip_address(sockaddr[0])):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
     """Sanitize an operator-supplied base URL for media-server test endpoints.
 
-    SSRF mitigation (security finding SEC-2 — bd-r5f0c.4 backfill).
+    SSRF mitigation (security finding SEC-2 — bd-r5f0c.4 backfill,
+    extended in bd-fbc50 with a loopback/link-local host denylist).
     Mirrors the Dispatcharr ``/test`` endpoint pattern (routers.settings.
     test_connection, around the ``urlparse`` + scheme allowlist +
     ``urlunparse((scheme, netloc, '', '', '', ''))`` reconstruction):
@@ -1150,7 +1231,14 @@ def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
     2. Reject when no hostname is present — without a hostname the
        client would either bind to a default loopback or raise late;
        fail-closed at the entry edge instead.
-    3. Reconstruct the URL from scheme + netloc ONLY, stripping any
+    3. Reject loopback / link-local hosts (bd-fbc50). An admin could
+       otherwise point Test Connection at ``127.0.0.1`` / ``::1`` /
+       ``localhost`` (services on the ECM host) or at the cloud
+       instance-metadata IP ``169.254.169.254`` (credential theft).
+       RFC1918 LAN ranges are intentionally LEFT reachable — see
+       :func:`_ip_is_blocked`. Hostnames are resolved where feasible so a
+       name pointing at a blocked IP is also caught.
+    4. Reconstruct the URL from scheme + netloc ONLY, stripping any
        path / params / query / fragment the operator typed (or an
        attacker tried to embed). The downstream client builds its own
        paths off the base URL — preserving the operator's path would
@@ -1173,6 +1261,11 @@ def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
         return None, "Invalid URL scheme — must be http or https"
     if not parsed.hostname:
         return None, "Invalid base URL — no hostname provided"
+    if _host_is_blocked(parsed.hostname):
+        return None, (
+            "Invalid host — loopback and link-local addresses are not "
+            "allowed (e.g. localhost, 127.0.0.1, ::1, 169.254.169.254)"
+        )
     # Reconstruct from (scheme, netloc, path='', params='', query='',
     # fragment=''). netloc carries hostname + optional port + optional
     # userinfo — the operator's port stays attached, but everything past
