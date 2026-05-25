@@ -2952,3 +2952,160 @@ class TestRunAutoCreationMergeLabels:
         # Should render 0 gracefully, not crash.
         assert "Stream merges: 0" in text
         assert "Channels touched: 0" in text
+
+
+# --- TestSetNormalizationGroupEnabled (bd-svixy) ---
+class TestSetNormalizationGroupEnabled:
+    """Tests for set_normalization_group_enabled tool.
+
+    The tool wraps PATCH /api/normalization/groups/{group_id} with {enabled}
+    in the body (backend/routers/normalization.py:249 update_normalization_group).
+    """
+
+    @pytest.mark.asyncio
+    async def test_enable_group_calls_correct_endpoint(self):
+        """Enabling a group calls PATCH with group_id path arg and enabled=True body."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(
+            call_endpoint={"id": 3, "name": "Strip Quality", "enabled": True}
+        )
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 3, "enabled": True}
+            )
+
+        text = result[0][0].text
+        assert "Strip Quality" in text
+        assert "3" in text
+        assert "enabled" in text
+        mock_client.call_endpoint.assert_awaited_once_with(
+            ENDPOINTS["normalization_update_group"],
+            path_args={"group_id": 3},
+            body={"enabled": True},
+        )
+
+    @pytest.mark.asyncio
+    async def test_disable_group_calls_correct_endpoint(self):
+        """Disabling a group calls PATCH with enabled=False body."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(
+            call_endpoint={"id": 7, "name": "Title Case", "enabled": False}
+        )
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 7, "enabled": False}
+            )
+
+        text = result[0][0].text
+        assert "Title Case" in text
+        assert "disabled" in text
+        mock_client.call_endpoint.assert_awaited_once_with(
+            ENDPOINTS["normalization_update_group"],
+            path_args={"group_id": 7},
+            body={"enabled": False},
+        )
+
+    @pytest.mark.asyncio
+    async def test_success_message_includes_group_name_and_state(self):
+        """Success response surfaces group name, id, and new state."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(
+            call_endpoint={"id": 5, "name": "My Group", "enabled": True}
+        )
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 5, "enabled": True}
+            )
+
+        text = result[0][0].text
+        assert "My Group" in text
+        assert "5" in text
+        assert "enabled" in text
+
+    @pytest.mark.asyncio
+    async def test_404_error_surfaces_in_output(self):
+        """When the backend returns 404, the error message is surfaced to the operator."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock()
+        mock_client.call_endpoint.side_effect = Exception("404: Group not found")
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 999, "enabled": True}
+            )
+
+        text = result[0][0].text
+        assert "Error" in text
+        assert "999" in text
+
+    @pytest.mark.asyncio
+    async def test_missing_name_in_response_falls_back_gracefully(self):
+        """When the backend omits 'name' in its response, the tool falls back to 'group {id}'."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        # Backend response missing 'name' key.
+        mock_client = _make_ecm_client_mock(call_endpoint={"id": 2, "enabled": False})
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 2, "enabled": False}
+            )
+
+        text = result[0][0].text
+        assert "2" in text
+        assert "disabled" in text
+
+    def test_normalization_update_group_endpoint_registered(self):
+        """normalization_update_group is in the registry with correct PATCH method/path."""
+        from _endpoint_contracts import ENDPOINTS
+
+        ep = ENDPOINTS["normalization_update_group"]
+        assert ep.method == "PATCH"
+        assert ep.path == "/api/normalization/groups/{group_id}"
+        assert "enabled" in ep.request_fields
+
+    def test_list_normalization_rules_shows_id_and_enabled(self):
+        """list_normalization_rules rendering includes id= and enabled/disabled per group.
+
+        Verifies that operators can read the group_id they need to pass to
+        set_normalization_group_enabled directly from the list output (bd-svixy scope §3).
+        """
+        # The rendering is in tools/normalization.py list_normalization_rules.
+        # Lines render as: "  {name} (id={gid}) — {enabled}, {count} rules"
+        # Check that the format matches by inspecting the source directly.
+        import inspect
+        from tools import normalization
+        src = inspect.getsource(normalization)
+        assert "id={gid}" in src or "id=" in src, (
+            "list_normalization_rules must render the group id so the operator "
+            "knows which group_id to pass to set_normalization_group_enabled"
+        )

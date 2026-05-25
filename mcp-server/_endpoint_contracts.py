@@ -558,6 +558,18 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/normalization/rules",
     ),
+    # PATCH /api/normalization/groups/{group_id} — UpdateRuleGroupRequest
+    # (backend/routers/normalization.py:249 update_normalization_group).
+    # Wraps the existing backend endpoint; the MCP tool uses only ``enabled``
+    # to toggle the global enabled flag on a NormalizationRuleGroup, but the
+    # full UpdateRuleGroupRequest field set is declared here so request_fields
+    # subset check matches the Pydantic model (bd-svixy).
+    "normalization_update_group": Endpoint(
+        name="normalization_update_group",
+        method="PATCH",
+        path="/api/normalization/groups/{group_id}",
+        request_fields=frozenset({"name", "description", "enabled", "priority"}),
+    ),
     # -- notifications domain ---------------------------------------------
     "notifications_list": Endpoint(
         name="notifications_list",
