@@ -1,6 +1,6 @@
 # ADR-004: Release-Cut Promotion Discipline (dev → main Merge Strategy)
 
-- **Status**: Accepted
+- **Status**: Accepted (amended 2026-05-25 — see Addendum A)
 - **Date**: 2026-04-21 (proposed) / 2026-04-21 (accepted)
 - **Author**: IT Architect persona (on behalf of PO)
 - **Bead**: `enhancedchannelmanager-4lk1q`
@@ -125,6 +125,8 @@ This ADR governs how code and docs flow from `dev` to `main`. It explicitly does
 ## Cut Mechanics (Step-by-Step)
 
 For reference — this goes into `shipping.md` on acceptance.
+
+> **Amended (Addendum A, 2026-05-25):** Steps 8–10 below predate `dev` branch protection and are **superseded** — a direct `git push origin dev` is now rejected (`GH006`), so the post-cut dev update is delivered via a PR. See **Addendum A** at the end of this ADR; `docs/shipping.md` carries the corrected, living version.
 
 ```bash
 # 0. Pre-flight — gate items G1a, G1b, G7 (human checks)
@@ -286,6 +288,25 @@ No infrastructure to tear down; no vendor relationship to unwind. All exit paths
 2. **How is G1a (zero open P0/P1) verified mechanically?** **Resolved: Phase 1 is human-verified** via the PR description checklist; **Phase 2 (tracked as a follow-on bead) automates both G1a and G1b in CI**. G1b automates more easily today (`gh api .../code-scanning/alerts` is available in CI without extra tooling); G1a requires `bd` to be runnable from CI, which is a small infrastructure lift. Phase 2 work is not blocking for ADR-004 to take effect.
 3. **Do documentation-only PRs to `dev` need to wait for the next release to reach `main`?** **Resolved: yes, with one narrow exception.** Doc-only hotfixes are bounded to the specific runbook or ADR file actively being referenced during a live incident — they do not cover general doc typos, broken links, or updates to unrelated guides. General doc fixes always wait for the next cut. This keeps the hotfix path from normalizing as "any small change to main" and ties doc-hotfixes to an auditable incident trigger.
 4. **When does a hotfix warrant back-merging to `dev`?** **Resolved: within 24 hours, manual**, via a standard `dev`-targeting PR that merges the hotfix branch. A follow-on bead files to automate via GitHub Action if hotfixes become more than occasional; for now the manual path preserves reviewer visibility on back-merges.
+
+## Addendum A — Post-cut dev update goes via PR (dev branch protection)
+
+- **Date**: 2026-05-25
+- **Bead**: `enhancedchannelmanager-u0roq` (doc fix: `enhancedchannelmanager-5s1vd` / PR #459; first observed during the v0.17.3 cut, `enhancedchannelmanager-3j2wg`)
+
+**What changed.** Cut Mechanics steps 8 (back-merge to `dev`) and 10 (re-open the build counter) end with `git push origin dev`. Since this ADR was accepted, `dev`'s branch protection requires all status checks to pass via a PR, so a direct push is rejected:
+
+```
+remote: error: GH006: Protected branch update failed for refs/heads/dev.
+remote: - N of N required status checks are expected.
+```
+
+**Correction (now authoritative; carried in `docs/shipping.md`):**
+
+1. The post-cut `dev` update — the back-merge (CHANGELOG promotion + version, plus any stabilization fixes, all now on `main`) **and** the re-opened build counter — is delivered as a **single `dev`-targeting PR**, not a direct push. Branch off `dev`, `git merge origin/main --no-edit`, bump the counter, open the PR, let the required checks pass, then `gh pr merge --merge --delete-branch`. The original steps 8 and 10 collapse into one PR-based step.
+2. The counter re-open must bump **all three** version touchpoints — `frontend/package.json` (`"version"`), `backend/main.py` (`FastAPI(version=…)`), and `backend/routers/backup.py` (`APP_VERSION`) — not just `frontend/package.json` as the original step 10 showed; the `Version Consistency` check requires all three to agree.
+
+**Scope.** This amends only the mechanical post-cut sequence. The ADR's decision — short-lived release branch + merge-commit release-cut PR + pre-cut gate + non-release-PR ban — is unchanged. Per ADR convention the original Cut Mechanics block above is left intact as the decision-time record; `docs/shipping.md` is the living runbook.
 
 ## References
 
