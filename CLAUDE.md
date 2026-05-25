@@ -49,6 +49,22 @@ The canonical pattern is documented in `~/.claude/skills/spike/SKILL.md` (Step 3
 
 For multi-persona workflows (team-plan, team-review, spike, grooming, standup, retro, onboard), invoke the orchestrating skill via the Skill tool — it handles the fan-out itself.
 
+## Worktree & Agent Isolation (this environment)
+
+The Claude Code worktree mechanism is unreliable here. Two harness-level bugs — NOT fixable in-repo (see bd-j8osn):
+
+- **cwd-trap:** a worktree-spawned agent's Bash cwd resets to the MAIN checkout between calls, while Read/Edit act on the literal absolute path given. An agent that doesn't make EVERY path worktree-absolute ends up editing `dev` directly — silently polluting the main checkout.
+- **Lock accumulation:** a finished agent's worktree stays locked and is never auto-cleaned; `git worktree remove` then needs `-f -f`.
+
+Standing defaults (these OVERRIDE the global "worktree-isolate every write agent" rule, which assumes a working mechanism):
+
+1. **Default: non-worktree, sequential engineers.** For typical small / single-domain changes, spawn the engineer WITHOUT `isolation: "worktree"` and brief it to work on a branch in the main checkout (do NOT create a worktree). No second tree ⇒ no cwd-trap, nothing left locked.
+2. **Worktrees only for genuinely parallel, independent write agents.** When used: brief the cwd-trap hard (every Read/Edit/Bash path worktree-absolute; verify `git -C <wt> branch --show-current` before any commit), and on return verify each agent's gates AND that the main checkout is clean (`git status` shows none of the agent's files).
+3. **Clean up on merge, every time.** `git worktree remove -f -f <path>` is part of the PR-merge step — never defer to a later sweep. Skip and flag any worktree with uncommitted tracked changes instead of force-removing it.
+4. **Trust nothing unverified.** Independently re-run the agent's claimed gates before merging — the agent's report is not the gate.
+
+Frontend tooling in a worktree (writable `.vite-temp`) is fixed in `scripts/worktree-bootstrap.sh`; full caveats in `docs/shipping.md` → "Worktree quirks".
+
 ## Sizing Vocabulary — No Calendar Estimates
 
 Size work as **Small / Medium / Large / Epic — needs decomposition** (per `~/.claude/skills/grooming/SKILL.md`). Do NOT give the PO calendar estimates in hours/days/weeks/months. Calendar estimates invite commitment theater and are almost always wrong.
