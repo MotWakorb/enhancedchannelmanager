@@ -356,8 +356,8 @@ async def get_channels(
 
 
 @router.post("")
-async def create_channel(request: CreateChannelRequest):
-    """Create a new channel."""
+async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEnabled):
+    """Create a new channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] POST /channels - name=%s number=%s normalize=%s", request.name, request.channel_number, request.normalize)
     client = get_client()
     try:
@@ -484,8 +484,8 @@ async def get_logo(logo_id: int):
 
 
 @router.post("/logos")
-async def create_logo(request: CreateLogoRequest):
-    """Create a logo from a URL."""
+async def create_logo(request: CreateLogoRequest, _admin=RequireAdminIfEnabled):
+    """Create a logo from a URL. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] POST /channels/logos - name=%s", request.name)
     client = get_client()
     try:
@@ -512,8 +512,8 @@ async def create_logo(request: CreateLogoRequest):
 
 
 @router.post("/logos/upload")
-async def upload_logo(request: Request, file: UploadFile = File(...)):
-    """Upload a logo image file directly to Dispatcharr."""
+async def upload_logo(request: Request, file: UploadFile = File(...), _admin=RequireAdminIfEnabled):
+    """Upload a logo image file directly to Dispatcharr. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] POST /channels/logos/upload - filename=%s", file.filename)
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
@@ -538,8 +538,8 @@ async def upload_logo(request: Request, file: UploadFile = File(...)):
 
 
 @router.patch("/logos/{logo_id}")
-async def update_logo(logo_id: int, data: dict):
-    """Update a logo."""
+async def update_logo(logo_id: int, data: dict, _admin=RequireAdminIfEnabled):
+    """Update a logo. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] PATCH /channels/logos/%s", logo_id)
     client = get_client()
     try:
@@ -554,8 +554,8 @@ async def update_logo(logo_id: int, data: dict):
 
 
 @router.delete("/logos/{logo_id}")
-async def delete_logo(logo_id: int):
-    """Delete a logo."""
+async def delete_logo(logo_id: int, _admin=RequireAdminIfEnabled):
+    """Delete a logo. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] DELETE /channels/logos/%s", logo_id)
     client = get_client()
     try:
@@ -1981,8 +1981,8 @@ async def get_channel_streams(channel_id: int):
 
 
 @router.patch("/{channel_id}")
-async def update_channel(channel_id: int, data: dict):
-    """Update a channel."""
+async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabled):
+    """Update a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] PATCH /channels/%s - data=%s", channel_id, data)
     client = get_client()
     try:
@@ -2189,8 +2189,8 @@ async def merge_channels(request: "MergeChannelsRequest", _admin=RequireAdminIfE
 
 
 @router.delete("/{channel_id}")
-async def delete_channel(channel_id: int):
-    """Delete a channel."""
+async def delete_channel(channel_id: int, _admin=RequireAdminIfEnabled):
+    """Delete a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] DELETE /channels/%s", channel_id)
     client = get_client()
     try:
@@ -2229,8 +2229,8 @@ async def delete_channel(channel_id: int):
 
 
 @router.post("/{channel_id}/add-stream")
-async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
-    """Add a stream to a channel."""
+async def add_stream_to_channel(channel_id: int, request: AddStreamRequest, _admin=RequireAdminIfEnabled):
+    """Add a stream to a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] POST /channels/%s/add-stream - stream_id=%s", channel_id, request.stream_id)
     client = get_client()
     try:
@@ -2277,8 +2277,10 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
 
 
 @router.post("/{channel_id}/add-streams")
-async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest):
+async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest, _admin=RequireAdminIfEnabled):
     """Add multiple streams to a channel in a single Dispatcharr roundtrip.
+
+    Admin only (operator-only write, bd-v7n9f).
 
     Mirrors the single-add semantics (dedup against streams already on the
     channel, append in request order) but fetches the channel once and PUTs
@@ -2341,8 +2343,8 @@ async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest):
 
 
 @router.post("/{channel_id}/remove-stream")
-async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest):
-    """Remove a stream from a channel."""
+async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest, _admin=RequireAdminIfEnabled):
+    """Remove a stream from a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] POST /channels/%s/remove-stream - stream_id=%s", channel_id, request.stream_id)
     client = get_client()
     try:
@@ -2389,8 +2391,10 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
 
 
 @router.post("/{channel_id}/reorder-streams")
-async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
+async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest, _admin=RequireAdminIfEnabled):
     """Reorder streams within a channel.
+
+    Admin only (operator-only write, bd-v7n9f).
 
     This endpoint REPLACES the channel's stream set with the supplied list, so
     the list must be a true reorder — a permutation of the channel's *current*
