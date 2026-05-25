@@ -1384,3 +1384,120 @@ class TestBulkMergeChannelsStaleSourceIds:
         assert item["success"] is False
         # The upstream detail (not "HTTPStatusError") is surfaced.
         assert "does not exist" in item["error"]
+
+    @pytest.mark.asyncio
+    async def test_returns_422_when_target_id_no_longer_exists(self, async_client):
+        """Stale TARGET ID in bulk merge returns 422 with refresh hint, matching the
+        source-ID path — not a generic per-item failure (bd-4xxax)."""
+        mock_client = AsyncMock()
+        not_found_response = MagicMock(spec=httpx.Response)
+        not_found_response.status_code = 404
+        not_found_response.text = "Not found"
+        not_found_request = MagicMock(spec=httpx.Request)
+        stale_target = 777
+        mock_client.get_channel.side_effect = [
+            httpx.HTTPStatusError(  # target gone
+                "404 Not Found",
+                request=not_found_request,
+                response=not_found_response,
+            ),
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/bulk-merge",
+                json={
+                    "merges": [
+                        {
+                            "target_channel_id": stale_target,
+                            "source_channel_ids": [2],
+                        }
+                    ]
+                },
+            )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert str(stale_target) in detail
+        assert "no longer exists" in detail
+        assert "refresh the channels list and try again" in detail
+        # Did not proceed to mutate or delete anything.
+        mock_client.update_channel.assert_not_called()
+        mock_client.delete_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_404_source_error_reraises_not_swallowed_as_422(self, async_client):
+        """A non-404 HTTPStatusError fetching a SOURCE (e.g. 410 Gone) must propagate
+        to the per-item catch-all, NOT be misclassified as a stale-ID 422 (bd-4xxax)."""
+        mock_client = AsyncMock()
+        gone_response = MagicMock(spec=httpx.Response)
+        gone_response.status_code = 410
+        gone_response.text = "Gone"
+        gone_request = MagicMock(spec=httpx.Request)
+        mock_client.get_channel.side_effect = [
+            {"id": 1, "name": "Target", "streams": [10]},  # target OK
+            httpx.HTTPStatusError(  # source 410 Gone — not a 404
+                "410 Gone",
+                request=gone_request,
+                response=gone_response,
+            ),
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/bulk-merge",
+                json={
+                    "merges": [
+                        {"target_channel_id": 1, "source_channel_ids": [2]},
+                    ]
+                },
+            )
+
+        # Partial-success contract: HTTP 200 with the item marked failed.
+        assert response.status_code == 200
+        body = response.json()
+        assert body["failed"] == 1
+        item = body["results"][0]
+        assert item["success"] is False
+        # Crucially NOT a 422 stale-ID rejection.
+        assert response.status_code != 422
+        # Never reached the delete loop.
+        mock_client.delete_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_404_target_error_reraises_not_swallowed_as_422(self, async_client):
+        """A non-404 HTTPStatusError fetching the TARGET (e.g. 500) must propagate to
+        the per-item catch-all, NOT be misclassified as a stale-ID 422 (bd-4xxax)."""
+        mock_client = AsyncMock()
+        server_error_response = MagicMock(spec=httpx.Response)
+        server_error_response.status_code = 500
+        server_error_response.text = "Server error"
+        server_error_request = MagicMock(spec=httpx.Request)
+        mock_client.get_channel.side_effect = [
+            httpx.HTTPStatusError(  # target 500 — not a 404
+                "500 Server Error",
+                request=server_error_request,
+                response=server_error_response,
+            ),
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/bulk-merge",
+                json={
+                    "merges": [
+                        {"target_channel_id": 1, "source_channel_ids": [2]},
+                    ]
+                },
+            )
+
+        # Partial-success contract: HTTP 200, item failed, NOT a 422.
+        assert response.status_code == 200
+        body = response.json()
+        assert body["failed"] == 1
+        item = body["results"][0]
+        assert item["success"] is False
+        mock_client.delete_channel.assert_not_called()
