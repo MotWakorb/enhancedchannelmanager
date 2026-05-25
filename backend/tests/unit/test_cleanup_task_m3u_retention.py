@@ -401,8 +401,8 @@ class TestM3UPruneConfigDefaults:
         Base.metadata.create_all(engine)
         session, task = _make_session_and_task(engine)
 
-        old_snap = _add_snapshot(session, age_days=100)
-        old_log = _add_change_log(session, age_days=100)
+        _add_snapshot(session, age_days=100)
+        _add_change_log(session, age_days=100)
 
         # Empty-ish stub — the new steps use getattr(_, ..., 90) so absent knobs
         # are fine.  Include snapshot knobs so step 7 doesn't error.
@@ -413,7 +413,7 @@ class TestM3UPruneConfigDefaults:
         )
         with patch("tasks.cleanup.get_session", return_value=session), \
              patch("config.get_settings", return_value=stub):
-            result = await task.execute()
+            await task.execute()
 
         SessionLocal = sessionmaker(bind=engine)
         verify = SessionLocal()

@@ -8,10 +8,7 @@ M1 callsign hard-reject and Q1 no-callsign policy, scopes to the allowlist
 from __future__ import annotations
 
 import asyncio
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from auto_creation_executor import ActionExecutor, ExecutionContext
 from auto_creation_evaluator import StreamContext
