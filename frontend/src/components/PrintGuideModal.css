@@ -86,7 +86,6 @@
   display: flex;
   gap: 4px;
   flex-shrink: 0;
-  margin-left: 0.75rem;
 }
 
 .mode-toggle .mode-btn {
@@ -128,25 +127,48 @@
   color: var(--error-color, #ef4444);
 }
 
-/* Channel number range filter row */
-.print-guide-range-row {
+/* Per-group controls area — wraps range inputs + mode toggle */
+.group-item-controls {
   display: flex;
-  gap: 1rem;
-  margin-bottom: 0.5rem;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  margin-left: 0.75rem;
 }
 
-.print-guide-range-field {
-  flex: 1;
-  min-width: 0;
+/* Per-group From/To range inputs */
+.print-guide-group-range {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }
 
-.print-guide-range-field input[type="number"] {
-  width: 100%;
+.print-guide-group-range-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
 
-/* Clamp hint */
-.print-guide-clamp-hint {
-  margin-bottom: 0.5rem;
+.print-guide-group-range-field label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.print-guide-group-range-field input[type="number"] {
+  width: 72px;
+  padding: 0.2rem 0.35rem;
+  font-size: 0.8rem;
+}
+
+/* Per-group range error */
+.print-guide-group-range-error {
+  margin-top: 0;
+  margin-bottom: 0;
+  font-size: 0.75rem;
 }
 
 /* Empty-slots toggle row (bd-w532y) */
