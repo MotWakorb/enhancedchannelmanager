@@ -101,14 +101,23 @@ and therefore absent in every fresh worktree. The agent harness does not run
 `npm install` on spawn, and the subagent shell does not inherit the parent session's
 `fnm`/`nvm` init.
 
+**Why a plain symlink is not enough:** the main checkout's `node_modules` is installed
+inside the container as root, so `node_modules/.vite-temp` and `node_modules/.vite`
+are owned by root:root (0755). Vite's config-loader writes per-run `.mjs` timestamp
+files into `.vite-temp`; the dep-optimizer writes its cache into `.vite`. Both
+EACCES immediately in a non-root worktree even though a `mkdir(.vite-temp, {recursive:true})`
+returns success (the dir already exists).
+
 **Fix:** run the bootstrap script once from the worktree root:
 
 ```bash
 bash scripts/worktree-bootstrap.sh
 ```
 
-The script symlinks the main checkout's `frontend/node_modules` into the worktree and
-prints the `PATH` export line needed to put `node` and the `.bin` tools in scope.
+The script creates a **real, writable `frontend/node_modules` directory** in the
+worktree (replacing any old plain symlink). Inside it, `.vite-temp/` and `.vite/`
+are local writable directories owned by the agent user. Every package and `.bin` is
+symlinked from the main checkout's `node_modules` so no disk duplication occurs.
 
 After bootstrapping, invoke frontend tooling via the `.bin` wrappers directly instead
 of `npm run`:
@@ -120,14 +129,48 @@ of `npm run`:
 ./frontend/node_modules/.bin/vite build
 ```
 
-You also need `node` on `PATH`. Add it with fnm (adjust the version as needed):
+You also need `node` on `PATH`. The correct fnm path on this system is:
 
 ```bash
-export PATH="$HOME/.fnm/node-versions/v24.13.0/installation/bin:./frontend/node_modules/.bin:$PATH"
+export PATH="$HOME/.local/share/fnm/node-versions/v24.13.0/installation/bin:./frontend/node_modules/.bin:$PATH"
 ```
+
+Note: the fnm root is `$HOME/.local/share/fnm/` (NOT `$HOME/.fnm/` — the latter does
+not exist on this host). The `fnm` binary itself lives at
+`$HOME/.local/share/fnm/fnm`; node versions are under
+`$HOME/.local/share/fnm/node-versions/`.
 
 See `frontend/CLAUDE.md` → "Worktree workaround" for a quick-reference version of
 these steps.
+
+### Worktree quirks: harness-level caveats (not fixable in this repo)
+
+These two behaviors are Claude Code harness behaviors. They cannot be fixed by
+in-repo changes; document them here so agents know the mitigations.
+
+**cwd-trap:** The Bash tool's working directory resets to the **main checkout** root
+between tool calls, not to the worktree root. A stale `cd <worktree>` from a prior
+turn does not persist. Mitigation: always use **absolute paths** for every Read,
+Edit, and Bash call. Use `pwd && git branch --show-current` to verify context before
+any destructive git operation.
+
+**Locked-worktree accumulation:** Terminated or crashed agents sometimes leave their
+worktree directories with a lock file, preventing `git worktree remove`. To clear:
+
+```bash
+# List all worktrees
+git worktree list
+
+# Force-remove a stale worktree (safe when no uncommitted changes)
+git worktree remove -f /path/to/.claude/worktrees/agent-<id>
+
+# If the lock file blocks even --force, remove it manually first:
+rm /path/to/.claude/worktrees/agent-<id>/.git/worktree-lock   # or similar path
+git worktree prune
+```
+
+Skip any worktree that shows uncommitted changes in `git -C <path> status` — those
+may be in-flight agent work, not orphans.
 
 ## Critical Shipping Rules
 

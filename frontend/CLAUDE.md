@@ -8,12 +8,17 @@
 
 ## Worktree workaround
 
-Agents spawned into `.claude/worktrees/agent-*/` find `frontend/node_modules` empty
-and `npm` unavailable. Fix it in one step from the worktree root:
+Agents spawned into `.claude/worktrees/agent-*/` find `frontend/node_modules` absent
+and `npm`/`node` unavailable. Fix it in one step from the worktree root:
 
 ```bash
 bash scripts/worktree-bootstrap.sh
 ```
+
+The script creates a writable `frontend/node_modules` directory with local `.vite-temp`
+and `.vite` dirs (prevents EACCES from root-owned main checkout), symlinking all
+packages and `.bin` from the main checkout. Plain-symlink bootstrap is NOT sufficient
+— see `docs/shipping.md` → "Worktree quirks" for why.
 
 Then invoke tooling via `.bin` directly (no `npm run`):
 
@@ -24,11 +29,14 @@ Then invoke tooling via `.bin` directly (no `npm run`):
 ./frontend/node_modules/.bin/vite build
 ```
 
-Also add `node` to `PATH` (fnm — adjust version if needed):
+Add `node` to `PATH`. The correct fnm path on this host:
 
 ```bash
-export PATH="$HOME/.fnm/node-versions/v24.13.0/installation/bin:./frontend/node_modules/.bin:$PATH"
+export PATH="$HOME/.local/share/fnm/node-versions/v24.13.0/installation/bin:./frontend/node_modules/.bin:$PATH"
 ```
+
+Note: fnm root is `$HOME/.local/share/fnm/` — NOT `$HOME/.fnm/` (that path does not
+exist on this host).
 
 Full explanation and root cause: `docs/shipping.md` → "Worktree quirks".
 
