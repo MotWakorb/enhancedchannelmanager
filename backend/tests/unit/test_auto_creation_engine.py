@@ -1877,6 +1877,119 @@ class TestSmartSortCustomStreams:
         )
 
 
+class TestSmartSortCustomStreamsCriterion:
+    """bead ap1ud / GH #244: the dedicated ``custom_streams`` Smart Sort criterion.
+
+    Binary criterion — a stream scores 1 if its id is in ``custom_stream_ids``
+    (Dispatcharr is_custom), else 0. When ranked as the top active criterion,
+    custom streams sort to the top; ties fall through to the next criterion.
+    Mirrors the prober's TestSmartSortCustomStreamsCriterion.
+    """
+
+    def test_custom_stream_sorts_first_when_top_criterion(self):
+        """With custom_streams as the sole/top criterion, the custom stream leads."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams"],
+            stream_sort_enabled={"custom_streams": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, stream_name="M3U Stream"),
+            20: _success_stats_dict(20, stream_name="Custom Stream"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={10: 1, 20: 2},
+            channel_name="ap1ud-custom-first", settings=settings,
+            custom_stream_ids={20},
+        )
+        assert result == [20, 10], (
+            f"Expected custom stream (id=20) to sort first, got {result}"
+        )
+
+    def test_custom_streams_disabled_has_no_effect(self):
+        """When custom_streams is disabled, it does not influence ordering."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": False, "resolution": True},
+        )
+        # id=10 is custom but lower resolution; id=20 is M3U but higher resolution.
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1280x720", stream_name="Custom"),
+            20: _success_stats_dict(20, resolution="1920x1080", stream_name="M3U"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={20: 1},
+            channel_name="ap1ud-custom-disabled", settings=settings,
+            custom_stream_ids={10},
+        )
+        # Sorted by resolution only — higher res (id=20) first.
+        assert result == [20, 10], (
+            f"Expected resolution-only ordering [20, 10] with custom_streams "
+            f"disabled, got {result}"
+        )
+
+    def test_pure_m3u_channel_unaffected(self):
+        """A channel with no custom streams is unaffected by the criterion."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1920x1080", stream_name="M3U Hi"),
+            20: _success_stats_dict(20, resolution="1280x720", stream_name="M3U Lo"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={10: 1, 20: 2},
+            channel_name="ap1ud-pure-m3u", settings=settings,
+            custom_stream_ids=set(),  # no custom streams
+        )
+        # No custom streams → custom_streams criterion is a constant 0; falls
+        # through to resolution: higher res (id=10) first.
+        assert result == [10, 20], (
+            f"Expected resolution ordering [10, 20] for pure-M3U channel, got {result}"
+        )
+
+    def test_criterion_inert_when_custom_stream_ids_not_supplied(self):
+        """When custom_stream_ids is omitted, custom_streams scores 0 everywhere
+        and the next criterion (resolution) decides — graceful degradation."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1920x1080", stream_name="Hi"),
+            20: _success_stats_dict(20, resolution="1280x720", stream_name="Lo"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={10: 1, 20: 2},
+            channel_name="ap1ud-inert", settings=settings,
+            # custom_stream_ids intentionally omitted
+        )
+        assert result == [10, 20], (
+            f"Expected resolution ordering [10, 20] when custom_stream_ids "
+            f"omitted, got {result}"
+        )
+
+    def test_custom_tie_falls_through_to_next_criterion(self):
+        """Two custom streams tie on custom_streams; resolution breaks the tie."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1280x720", stream_name="Custom Lo"),
+            20: _success_stats_dict(20, resolution="1920x1080", stream_name="Custom Hi"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={},
+            channel_name="ap1ud-custom-tie", settings=settings,
+            custom_stream_ids={10, 20},  # both custom
+        )
+        # Both custom (tie); resolution breaks tie → higher res (id=20) first.
+        assert result == [20, 10], (
+            f"Expected resolution tiebreak [20, 10] among custom streams, got {result}"
+        )
+
+
 class TestRunPipelineCreateChannelMergeChannelsTouched:
     """bd-0emgo.4 real-path regression: create_channel + if_exists=merge dry-run.
 

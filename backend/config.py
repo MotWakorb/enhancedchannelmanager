@@ -132,17 +132,19 @@ class DispatcharrSettings(BaseModel):
     stream_fetch_page_limit: int = 200
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
-    # Valid values: "resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"]
+    # Valid values: "resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"]
     # Which sort criteria are enabled (users can disable criteria they don't want to use)
     # Only enabled criteria appear in sort dropdown and are used by Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False}
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False}
     # M3U account priorities for sorting - maps M3U account ID (as string) to priority value
     # Higher priority value = preferred (sorted first). Accounts not in this map get priority 0.
     # Example: {"1": 100, "2": 50} means M3U account 1 is preferred over account 2
-    # Special key "custom": priority assigned to operator-added (non-M3U) custom streams
-    # when the m3u_priority sort criterion is active (bd-sgtmx / GH #244).
-    # Example: {"1": 100, "custom": 200} places custom streams above M3U account 1.
+    # Special key "custom": a vestigial defensive fallback applied by the m3u_priority
+    # criterion to streams that carry NO M3U account (m3u_account_id is None). Operator-added
+    # custom streams belong to the real Dispatcharr "custom" M3U account and are now ranked
+    # by the dedicated "custom_streams" Smart Sort criterion (bead ap1ud / GH #244), not by
+    # this key. Example: {"1": 100, "custom": 200} only affects account-less streams.
     m3u_account_priorities: dict[str, int] = {}
     # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
     # Black screen detection - run ffmpeg blackdetect after successful probe
