@@ -20,9 +20,29 @@ def mock_db_session():
 
 @pytest.fixture
 def test_client():
-    """Create test client."""
+    """Create test client.
+
+    The mutating auto-creation endpoints now carry RequireAdminIfEnabled
+    (bd-757hc). Its underlying dependency declares ``session=Depends(get_session)``,
+    which FastAPI resolves against the REAL database — these integration tests
+    only patch ``routers.auto_creation.get_session`` for the handler body, not
+    the auth subsystem's session, and they never call init_db(). Override the
+    admin dependency with an auth-disabled passthrough (returns None, exactly
+    what RequireAdminIfEnabled does when auth is off) so the gate doesn't touch
+    the uninitialized DB. Admin-enforcement itself is covered by
+    tests/routers/test_auto_creation.py::TestAutoCreationAdminGating.
+    """
     from main import app
-    return TestClient(app)
+    from auth import RequireAdminIfEnabled as _prebuilt
+
+    async def _allow_no_auth():
+        return None
+
+    app.dependency_overrides[_prebuilt.dependency] = _allow_no_auth
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(_prebuilt.dependency, None)
 
 
 class TestAutoCreationRulesAPI:

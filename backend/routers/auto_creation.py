@@ -550,8 +550,8 @@ def _lint_auto_creation_rule_request(
 
 
 @router.post("/rules")
-async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
-    """Create a new auto-creation rule."""
+async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest, _admin=RequireAdminIfEnabled):
+    """Create a new auto-creation rule. Admin only."""
     try:
         from models import AutoCreationRule
         from auto_creation_schema import validate_rule
@@ -639,8 +639,8 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
 
 
 @router.put("/rules/{rule_id}")
-async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRuleRequest):
-    """Update an auto-creation rule."""
+async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRuleRequest, _admin=RequireAdminIfEnabled):
+    """Update an auto-creation rule. Admin only."""
     try:
         from models import AutoCreationRule
         from auto_creation_schema import validate_rule
@@ -717,8 +717,8 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
 
 
 @router.post("/rules/bulk-update")
-async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRequest):
-    """Apply the same field changes to many rules. Omitted fields are left unchanged."""
+async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRequest, _admin=RequireAdminIfEnabled):
+    """Apply the same field changes to many rules. Omitted fields are left unchanged. Admin only."""
     from models import AutoCreationRule
     from auto_creation_schema import validate_rule
 
@@ -872,8 +872,8 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
 
 
 @router.delete("/rules/{rule_id}")
-async def delete_auto_creation_rule(rule_id: int):
-    """Delete an auto-creation rule."""
+async def delete_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnabled):
+    """Delete an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] DELETE /rules/%s", rule_id)
     try:
         from models import AutoCreationRule
@@ -910,8 +910,8 @@ async def delete_auto_creation_rule(rule_id: int):
 
 
 @router.post("/rules/reorder")
-async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...)):
-    """Reorder auto-creation rules by setting priorities based on array order."""
+async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...), _admin=RequireAdminIfEnabled):
+    """Reorder auto-creation rules by setting priorities based on array order. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/reorder - %d rules", len(rule_ids))
     try:
         from models import AutoCreationRule
@@ -933,8 +933,8 @@ async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...)):
 
 
 @router.post("/rules/{rule_id}/toggle")
-async def toggle_auto_creation_rule(rule_id: int):
-    """Toggle the enabled state of an auto-creation rule."""
+async def toggle_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnabled):
+    """Toggle the enabled state of an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/%s/toggle", rule_id)
     try:
         from models import AutoCreationRule
@@ -961,8 +961,8 @@ async def toggle_auto_creation_rule(rule_id: int):
 
 
 @router.post("/rules/{rule_id}/duplicate")
-async def duplicate_auto_creation_rule(rule_id: int):
-    """Duplicate an auto-creation rule."""
+async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnabled):
+    """Duplicate an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/%s/duplicate", rule_id)
     try:
         from models import AutoCreationRule
@@ -1123,7 +1123,7 @@ def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> as
 
 
 @router.post("/run", status_code=202)
-async def run_auto_creation_pipeline(request: RunPipelineRequest):
+async def run_auto_creation_pipeline(request: RunPipelineRequest, _admin=RequireAdminIfEnabled):
     """Enqueue an auto-creation pipeline run and return immediately (bd-enfsy).
 
     Pipeline runs on large catalogs can take minutes — running them inside the
@@ -1168,7 +1168,7 @@ async def run_auto_creation_pipeline(request: RunPipelineRequest):
 
 
 @router.post("/rules/{rule_id}/run", status_code=202)
-async def run_auto_creation_rule(rule_id: int, dry_run: bool = False):
+async def run_auto_creation_rule(rule_id: int, dry_run: bool = False, _admin=RequireAdminIfEnabled):
     """Enqueue a single-rule auto-creation run and return immediately (bd-enfsy).
 
     See ``run_auto_creation_pipeline`` for the 202 + poll contract.
@@ -1296,8 +1296,8 @@ async def get_auto_creation_execution(execution_id: int, include_entities: bool 
 
 
 @router.post("/executions/{execution_id}/rollback")
-async def rollback_auto_creation_execution(execution_id: int):
-    """Rollback an auto-creation execution."""
+async def rollback_auto_creation_execution(execution_id: int, _admin=RequireAdminIfEnabled):
+    """Rollback an auto-creation execution. Admin only."""
     logger.debug("[AUTO-CREATE] POST /executions/%s/rollback", execution_id)
     try:
         from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
@@ -1453,7 +1453,7 @@ async def export_auto_creation_rules_yaml():
 
 
 @router.post("/import/yaml")
-async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
+async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=RequireAdminIfEnabled):
     """Import auto-creation rules from YAML.
 
     Supports portable name fields: if group_name/target_group_name/m3u_account_name
