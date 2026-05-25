@@ -1501,3 +1501,188 @@ class TestBulkMergeChannelsStaleSourceIds:
         item = body["results"][0]
         assert item["success"] is False
         mock_client.delete_channel.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Admin gating (bd-um30y) — destructive / bulk operator-level channel
+# endpoints carry RequireAdminIfEnabled, matching the bd-757hc gate on
+# auto_creation.py and backup.py's create_backup / restore_backup.
+#
+# SECURITY FINDING: POST /api/channels/clear-auto-created (and its
+# destructive/bulk siblings) were only authenticated via the global
+# middleware but NOT authorized to admin. ECM has a real non-admin
+# authenticated role (Dispatcharr-federated users are created with
+# is_admin=False — auth/routes.py), so an authenticated NON-admin principal
+# (or a narrowly-scoped MCP static-key session) could invoke destructive
+# bulk ops (clear-auto-created, merge/bulk-merge that delete channels,
+# bulk-commit, assign-numbers, import-csv). These tests prove the gate is
+# now in place.
+#
+# Pattern mirrors test_auto_creation.py::TestAutoCreationAdminGating: the
+# default `async_client` fixture runs with auth DISABLED (so
+# RequireAdminIfEnabled is a no-op → returns None, and the existing
+# happy-path tests above already prove behavior is unchanged when auth is
+# off). Here we override the prebuilt dependency to simulate auth-enabled
+# non-admin (403) and auth-enabled admin (pass-through).
+#
+# Single-resource CRUD (create/update/delete channel, add/remove/reorder a
+# single stream, logo CRUD) is intentionally NOT gated here — a non-admin
+# Dispatcharr principal may legitimately perform routine per-resource edits,
+# and over-gating those would regress normal flows. Only the destructive /
+# bulk operator-op class is gated, matching bd-757hc's scope.
+# ---------------------------------------------------------------------------
+
+# (path, http_method, request_kwargs) for every channels endpoint now admin-gated.
+# Bodies are well-formed enough to pass FastAPI request parsing — the admin
+# dependency raises BEFORE the handler runs, so handler internals are never
+# reached when the gate rejects.
+_GATED_CHANNEL_ENDPOINTS = [
+    ("/api/channels/clear-auto-created", "post", {"json": {"group_ids": [1]}}),
+    ("/api/channels/assign-numbers", "post",
+     {"json": {"channel_ids": [1, 2], "starting_number": 100}}),
+    ("/api/channels/bulk-commit", "post", {"json": {"operations": []}}),
+    ("/api/channels/merge", "post",
+     {"json": {"source_channel_ids": [1, 2], "target_name": "Merged"}}),
+    ("/api/channels/bulk-merge", "post",
+     {"json": {"merges": [{"target_channel_id": 1, "source_channel_ids": [2]}]}}),
+    ("/api/channels/import-csv", "post",
+     {"files": {"file": ("channels.csv", b"name\nESPN\n", "text/csv")}}),
+]
+
+
+class TestChannelsAdminGating:
+    """Destructive / bulk channel endpoints require admin when auth is enabled;
+    read endpoints and routine single-resource mutations stay reachable.
+    Mirrors test_auto_creation.py::TestAutoCreationAdminGating."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path, method, kwargs", _GATED_CHANNEL_ENDPOINTS)
+    async def test_non_admin_is_forbidden_when_auth_enabled(
+        self, async_client, path, method, kwargs
+    ):
+        """Auth enabled + non-admin principal → 403 on every gated endpoint.
+
+        Overriding RequireAdminIfEnabled.dependency to raise 403 simulates an
+        authenticated-but-non-admin caller regardless of the test's auth state."""
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _reject() -> None:
+            # Parameterless so FastAPI's DI introspection doesn't pull query args.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        app.dependency_overrides[_prebuilt.dependency] = _reject
+        try:
+            response = await getattr(async_client, method)(path, **kwargs)
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 403, (
+            f"{method.upper()} {path} should be admin-gated but returned "
+            f"{response.status_code}"
+        )
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_admin_principal_can_clear_auto_created_when_auth_enabled(
+        self, async_client
+    ):
+        """Auth enabled + admin principal → the gate passes through and the
+        destructive clear-auto-created (the headline finding) executes
+        normally."""
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _allow_admin():
+            # Stand in for an authenticated admin User; the handler ignores the
+            # returned value (param is the unused `_admin`).
+            return MagicMock(is_admin=True, username="admin")
+
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 5, "name": "Auto ESPN", "channel_number": 5,
+                 "channel_group_id": 1, "auto_created": True},
+            ],
+            "next": None,
+        }
+        mock_client.update_channel.return_value = {"id": 5, "auto_created": False}
+
+        app.dependency_overrides[_prebuilt.dependency] = _allow_admin
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels.journal"):
+                response = await async_client.post(
+                    "/api/channels/clear-auto-created",
+                    json={"group_ids": [1]},
+                )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 200
+        mock_client.update_channel.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_clear_auto_created_allowed_when_auth_disabled(self, async_client):
+        """Auth disabled (default async_client) → RequireAdminIfEnabled is a
+        no-op and the endpoint behaves exactly as before the gate was added."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 5, "name": "Auto ESPN", "channel_number": 5,
+                 "channel_group_id": 1, "auto_created": True},
+            ],
+            "next": None,
+        }
+        mock_client.update_channel.return_value = {"id": 5, "auto_created": False}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/clear-auto-created",
+                json={"group_ids": [1]},
+            )
+
+        assert response.status_code == 200
+        mock_client.update_channel.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_routine_and_read_endpoints_not_admin_gated(self, async_client):
+        """Routine single-resource mutations and read-only endpoints stay
+        reachable for a non-admin principal even when auth is enabled — only
+        the destructive/bulk class is gated. We override the admin dependency
+        to reject; these endpoints don't depend on it, so they must still
+        succeed (not 403)."""
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _reject() -> None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0}
+        mock_client.create_channel.return_value = {"id": 1, "name": "ESPN"}
+
+        app.dependency_overrides[_prebuilt.dependency] = _reject
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels.journal"):
+                list_resp = await async_client.get("/api/channels")
+                create_resp = await async_client.post(
+                    "/api/channels", json={"name": "ESPN"}
+                )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        # Read endpoint and routine single-resource create are NOT admin-gated,
+        # so the reject override must not turn them into 403s.
+        assert list_resp.status_code == 200
+        assert create_resp.status_code != 403

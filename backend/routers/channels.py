@@ -16,6 +16,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
 from pydantic import BaseModel
 
+from auth import RequireAdminIfEnabled
 from concurrency import run_cpu_bound
 from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
@@ -672,8 +673,8 @@ async def export_channels_csv():
 
 
 @router.post("/import-csv")
-async def import_channels_csv(file: UploadFile = File(...)):
-    """Import channels from CSV file."""
+async def import_channels_csv(file: UploadFile = File(...), _admin=RequireAdminIfEnabled):
+    """Import channels from CSV file. Admin only (bulk operator op, bd-um30y)."""
     logger.debug("[CHANNELS-CSV] POST /channels/import-csv - filename=%s", file.filename)
     client = get_client()
 
@@ -927,8 +928,8 @@ async def preview_csv(data: dict):
 # ---------------------------------------------------------------------------
 
 @router.post("/assign-numbers")
-async def assign_channel_numbers(request: AssignNumbersRequest):
-    """Bulk assign channel numbers."""
+async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAdminIfEnabled):
+    """Bulk assign channel numbers. Admin only (bulk operator op, bd-um30y)."""
     logger.debug("[CHANNELS] POST /channels/assign-numbers - %s channels starting_number=%s", len(request.channel_ids), request.starting_number)
     client = get_client()
     settings = get_settings()
@@ -1118,9 +1119,10 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
 
 
 @router.post("/bulk-commit")
-async def bulk_commit_operations(request: BulkCommitRequest):
+async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdminIfEnabled):
     """
-    Process multiple channel operations in a single request.
+    Process multiple channel operations in a single request. Admin only
+    (bulk operator op, bd-um30y).
 
     This endpoint is optimized for bulk changes (1000+ operations) by:
     - Processing all operations in a single HTTP request
@@ -1779,11 +1781,13 @@ async def normalize_preview_batch(request: NormalizePreviewBatchRequest):
 
 
 @router.post("/clear-auto-created")
-async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
+async def clear_auto_created_flag(request: ClearAutoCreatedRequest, _admin=RequireAdminIfEnabled):
     """Clear the auto_created flag from all channels in the specified groups.
 
     This converts auto_created channels to manual channels by setting
     auto_created=False and auto_created_by=None.
+
+    Admin only (destructive bulk operator op, bd-um30y).
     """
     logger.debug("[CHANNELS] POST /channels/clear-auto-created - group_ids=%s", request.group_ids)
     client = get_client()
@@ -2054,12 +2058,14 @@ async def update_channel(channel_id: int, data: dict):
 
 
 @router.post("/merge")
-async def merge_channels(request: "MergeChannelsRequest"):
+async def merge_channels(request: "MergeChannelsRequest", _admin=RequireAdminIfEnabled):
     """Merge multiple channels into a single new channel.
 
     Creates a new channel with the specified metadata, moves all streams
     from the source channels into it (preserving order, deduplicating),
     then deletes the source channels.
+
+    Admin only (destructive operator op — deletes channels, bd-um30y).
     """
     logger.debug("[CHANNELS] POST /channels/merge - sources=%s target_name=%s",
                  request.source_channel_ids, request.target_name)
@@ -2561,11 +2567,13 @@ async def find_duplicate_channels():
 
 
 @router.post("/bulk-merge")
-async def bulk_merge_channels(request: BulkMergeRequest):
+async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEnabled):
     """Merge multiple groups of duplicate channels.
 
     For each merge item, keeps the target channel and moves all streams
     from source channels into it, then deletes the sources.
+
+    Admin only (destructive bulk operator op — deletes channels, bd-um30y).
     """
     logger.debug("[CHANNELS] POST /channels/bulk-merge - %d merge groups", len(request.merges))
 
