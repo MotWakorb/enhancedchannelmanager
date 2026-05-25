@@ -609,6 +609,15 @@ export function StatsTab() {
   //      payload where the backend resolver didn't populate the field.
   //   3. Otherwise → "Unknown" bucket.
   const m3uConnectionStats = (() => {
+    // Predicate: an M3U account that should appear as its own badge.
+    // Active accounts with the name "custom" are provider-internal
+    // pseudo-accounts that should never surface to the operator as a
+    // first-class capacity badge. Extracting the predicate once prevents
+    // silent divergence between the displayedAccountIds set and the
+    // result filter below (bd-ib3c9).
+    const isDisplayedAccount = (a: { is_active: boolean; name: string }) =>
+      a.is_active && a.name.toLowerCase() !== 'custom';
+
     // Build a map of profile ID -> account ID for the legacy fallback.
     const profileToAccountMap = new Map<number, number>();
     for (const account of m3uAccounts) {
@@ -623,7 +632,7 @@ export function StatsTab() {
     // is_active=false) or hasn't been side-loaded yet.
     const displayedAccountIds = new Set<number>(
       m3uAccounts
-        .filter(a => a.is_active && a.name.toLowerCase() !== 'custom')
+        .filter(isDisplayedAccount)
         .map(a => a.id),
     );
 
@@ -661,9 +670,14 @@ export function StatsTab() {
     // If profiles exist, use sum of active profile max_streams (profiles include the base account)
     // Otherwise use account.max_streams directly.
     logger.debug(`Stats Tab M3U Debug: Processing ${m3uAccounts.length} M3U accounts`);
-    const result = m3uAccounts
+    // bd-gcuk8: explicit row shape so `max` is typed as `number | null`.
+    // The Unknown bucket sentinel uses `null` (no upstream capacity is
+    // knowable); widening the type here lets the type-checker enforce
+    // null-guards at every render site instead of hiding the nullability
+    // behind an `as unknown as number` cast.
+    const result: { id: number; name: string; current: number; max: number | null }[] = m3uAccounts
       .filter(account => {
-        const include = account.is_active && account.name.toLowerCase() !== 'custom';
+        const include = isDisplayedAccount(account);
         if (!include) {
           logger.debug(`Stats Tab M3U Debug: Excluding M3U account "${account.name}" (id=${account.id}) - is_active: ${account.is_active}, name check: ${account.name.toLowerCase() !== 'custom'}`);
         }
@@ -703,7 +717,7 @@ export function StatsTab() {
         id: -1,
         name: 'Unknown',
         current: unknownCount,
-        max: null as unknown as number,
+        max: null,
       });
       logger.debug(`Stats Tab M3U Debug: Added Unknown bucket with ${unknownCount} unattributed channels`);
     }

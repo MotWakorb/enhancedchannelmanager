@@ -3113,3 +3113,116 @@ async def test_write_path_stream_id_without_name_when_stream_response_lacks_name
     assert all(r.stream_id == stream_id for r in rows)
     assert all(r.stream_name is None for r in rows)
     assert all(r.provider_id == 7 for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# dispatcharr_username write path (bd-gsn3r / bd-qgafp)
+# ---------------------------------------------------------------------------
+#
+# The per-poll ``get_users()`` call populates a ``dispatcharr_user_map``
+# (str(user_id) → username) that ``_write_session_telemetry`` uses to stamp
+# ``dispatcharr_username`` at write time.  Existing tests hold
+# ``client.get_users = AsyncMock(return_value=[])`` so the map is always
+# empty and the column always writes NULL.  These tests exercise the two
+# non-trivial paths:
+#
+# 1. Non-empty map → username lands in ``dispatcharr_username``.
+# 2. Empty-string username coerced to NULL (``... or None`` at the
+#    call site in bandwidth_tracker).
+
+
+@pytest.mark.asyncio
+async def test_dispatcharr_username_populated_from_user_map(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """When ``get_users()`` returns a non-empty list that includes the
+    viewer's Dispatcharr user_id, ``_write_session_telemetry`` writes the
+    corresponding username into ``session_telemetry.dispatcharr_username``.
+
+    Setup mirrors the bead spec:
+    - ``mock_client.get_users`` returns ``[{'id': 42, 'username': 'alice'}]``
+    - Channel payload carries ``client_user_ids={'10.0.0.1': 42}``
+    - Asserts ``rows[0].dispatcharr_username == 'alice'``
+
+    ``seed_synthetic_user`` inserts ECM User(id=42) so the FK constraint on
+    ``session_telemetry.user_id`` is satisfied.
+    """
+    mock_client.get_users = AsyncMock(
+        return_value=[{"id": 42, "username": "alice"}]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},  # seed_synthetic_user == 42
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+
+    assert len(rows) == 2, f"expected 2 rows, got {len(rows)}"
+    assert rows[0].dispatcharr_username == "alice", (
+        f"expected 'alice', got {rows[0].dispatcharr_username!r}"
+    )
+    assert rows[1].dispatcharr_username == "alice"
+
+
+@pytest.mark.asyncio
+async def test_dispatcharr_username_empty_string_coerced_to_null(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """When ``get_users()`` returns a user whose ``username`` is an empty
+    string, the ``... or None`` coercion in ``_write_session_telemetry``
+    must land the column as NULL — not as an empty string.
+
+    Empty-string usernames are valid Dispatcharr API responses for
+    partially-configured accounts; writing ``''`` to the column would break
+    the UI's "Unknown viewer" fallback which gates on ``IS NULL``.
+    """
+    mock_client.get_users = AsyncMock(
+        return_value=[{"id": 42, "username": ""}]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+
+    assert len(rows) == 2, f"expected 2 rows, got {len(rows)}"
+    assert rows[0].dispatcharr_username is None, (
+        f"expected NULL (empty string coerced), "
+        f"got {rows[0].dispatcharr_username!r}"
+    )
+    assert rows[1].dispatcharr_username is None
