@@ -212,7 +212,7 @@ Non-release PRs to `main` are forbidden — documentation, dep bumps, config twe
 
 ### Cut Mechanics (Step-by-Step)
 
-Copied verbatim from ADR-004 §"Cut Mechanics". Steps 0 and 5 are load-bearing discipline; steps 1–4 and 6–10 are mechanical.
+Adapted from ADR-004 §"Cut Mechanics", with the post-cut dev update (step 8) corrected for `dev` branch protection: the ADR's original `git push origin dev` is rejected by the required-status-check rule, so the back-merge + counter-reopen are delivered via a PR (bd-5s1vd). ADR-004's mechanics predate that protection and should get a matching addendum. Steps 0 and 5 are load-bearing discipline; steps 1–4 and 6–9 are mechanical.
 
 ```bash
 # 0. Pre-flight — gate items G1a, G1b, G7 (human checks)
@@ -278,27 +278,35 @@ git push origin v0.17.0
 gh release create v0.17.0 --target main --title "v0.17.0" \
   --notes-file <(gh pr view "$PR_NUM" --json body -q .body)
 
-# 8. Back-merge release branch into dev (catches CHANGELOG/version bump)
-# Expected to be conflict-free if only version + CHANGELOG changed on the release branch.
-# If stabilization fixes landed on the release branch, resolve any dev conflicts here.
-git checkout dev
-git pull
-git merge release/v0.17.0 --no-edit
-git push origin dev
+# 8. Back-sync dev AND re-open the build counter — via a PR.
+# `dev` is a protected branch: a direct `git push origin dev` is rejected with
+# "GH006: Protected branch update failed ... N of N required status checks are expected".
+# So the post-cut dev update is delivered as ONE dev-targeting PR that folds together
+# the back-merge (CHANGELOG promotion + version, plus any stabilization fixes that landed
+# on the release branch — all now on `main`) and the reopened build counter.
+git checkout dev && git pull
+git checkout -b chore/post-release-v0.17.0
+git merge origin/main --no-edit          # fast-forwards to the released state (dev is an ancestor of main)
+# Re-open the dev build counter: bump ALL THREE version touchpoints from "0.17.0"
+# (no suffix, inherited from main) to the next build-numbered version "0.17.1-0000"
+# (or the next planned minor's -0000). The Version Consistency check requires all three:
+#   - frontend/package.json        "version"
+#   - backend/main.py              FastAPI(version=...)
+#   - backend/routers/backup.py    APP_VERSION
+python3 scripts/check_version_consistency.py    # must report all 3 agree
+git add frontend/package.json backend/main.py backend/routers/backup.py
+git commit -m "Post-release: back-sync dev + reopen build counter to 0.17.1-0000"
+git push -u origin chore/post-release-v0.17.0
+POST_PR_URL=$(gh pr create --base dev --head chore/post-release-v0.17.0 \
+  --title "Post-release: back-sync dev + reopen counter (0.17.1-0000)" \
+  --body "Back-syncs \`dev\` after the v0.17.0 cut (CHANGELOG already promoted on main) and reopens the build counter to 0.17.1-0000. Delivered via PR because \`dev\` is protected.")
+# Wait for the required checks to pass, then merge (merge commit, per ADR-004):
+gh pr merge "${POST_PR_URL##*/}" --merge --delete-branch
 
-# 9. Delete the release branch
-git branch -d release/v0.17.0
-git push origin --delete release/v0.17.0
-
-# 10. Re-open the dev build counter
-# After step 8, dev's frontend/package.json is at "0.17.0" (no suffix). Next dev push would
-# violate shipping.md:28 convention. Bump dev to the next build-numbered version:
-# Edit frontend/package.json: "version": "0.17.1-0000" (or next planned minor's -0000)
-cd frontend && npm run build
-cd ..
-git add frontend/package.json
-git commit -m "Bump dev to 0.17.1-0000"
-git push origin dev
+# 9. Delete the release branch — already done by `--delete-branch` in step 6 (both local
+# and remote). Verify nothing lingers, then return the root checkout to dev:
+git branch -a | grep "release/v0.17.0" || echo "release branch fully removed"
+git checkout dev && git pull
 ```
 
 **Root checkout MUST stay on `dev`** throughout — never leave it on `main`.
