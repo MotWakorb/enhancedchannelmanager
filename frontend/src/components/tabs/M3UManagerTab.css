@@ -293,59 +293,6 @@
   -moz-appearance: textfield;
 }
 
-/* Custom Streams Priority Row
-   A dedicated, visually-distinct control for ranking operator-added "custom"
-   streams in Smart Sort. NOT an M3U account row — it deliberately omits
-   status/groups/settings/actions and shows only a label, helper text, and the
-   shared .priority-input. The dashed top border separates it from the account
-   rows above so operators read it as a special control rather than an account. */
-.custom-streams-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem;
-  border-top: 1px dashed var(--border-secondary);
-  background-color: var(--bg-tertiary);
-}
-
-.custom-streams-info {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  min-width: 0;
-}
-
-.custom-streams-icon {
-  font-size: 20px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.custom-streams-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  min-width: 0;
-}
-
-.custom-streams-name {
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.custom-streams-hint {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
-
-.custom-streams-priority {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
 /* Account Updated */
 .account-updated {
   display: flex;
