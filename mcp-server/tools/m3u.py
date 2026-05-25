@@ -36,7 +36,7 @@ def register(mcp: FastMCP):
                         stream_count = sc_resp.get("count", 0) if isinstance(sc_resp, dict) else 0
                         stream_count_str = f"{stream_count} streams, "
                     except Exception:
-                        pass
+                        pass  # Stream count is supplementary display info; degrade gracefully.
                 status = p.get("status", p.get("is_active", "unknown"))
                 lines.append(f"  {name} (id={pid}) — {stream_count_str}status: {status}")
 
@@ -100,7 +100,7 @@ def register(mcp: FastMCP):
                     )
                     stream_count = sc_resp.get("count", 0) if isinstance(sc_resp, dict) else 0
                 except Exception:
-                    pass
+                    pass  # Stream count is supplementary display info; degrade gracefully.
             lines = [
                 f"M3U Account: {a.get('name', 'Unknown')}",
                 f"  ID: {aid}",

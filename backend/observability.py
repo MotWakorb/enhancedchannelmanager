@@ -1022,6 +1022,32 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             ["source"],
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # SLO-8 dashboard signal — Unknown-bucket channel count (bd-w89ox)
+        #
+        # Incremented once per /api/stats/channels response for EACH channel
+        # whose m3u_account_id is None after the live stream-identity resolver
+        # runs. A non-zero rate indicates that some active channels cannot be
+        # attributed to an M3U provider — the "Unknown" bucket in the Providers
+        # panel. This counter lets SRE build ratio panels against the total
+        # active-channel count (ecm_http_requests_total is not suitable for
+        # this ratio — use the Dispatcharr-reported channel count from
+        # /api/stats/channels as the denominator in dashboards).
+        #
+        # Cardinality: label-free counter. One counter process-wide. No
+        # per-channel, per-provider, or per-user labels — those belong in
+        # structured logs ("[STATS] unknown_provider channel_id=... url=...").
+        # ----------------------------------------------------------------
+        "stats_active_channels_unknown_provider_total": Counter(
+            "ecm_stats_active_channels_unknown_provider_total",
+            "Count of /api/stats/channels response entries where "
+            "m3u_account_id is None (provider attribution could not be "
+            "resolved for the active stream). Incremented once per "
+            "unattributed channel per /api/stats/channels call. "
+            "Use as numerator against total active channels for the "
+            "Unknown-bucket rate on SLO-8 dashboards. bd-w89ox.",
+            registry=registry,
+        ),
     }
 
 
