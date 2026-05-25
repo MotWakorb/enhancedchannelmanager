@@ -679,6 +679,83 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `POST /api/auto-creation/rules/analyze/from-bundle` | Run the analyzer over `rules.yaml` inside an uploaded debug-bundle `tar.gz`; never touches the DB, so it is safe for support diagnosis of any user's bundle. See `docs/auto_creation_rule_analyzer.md` |
 | `POST /api/auto-creation/debug-bundle` | Start a diagnostic-bundle build; returns `{job_id, status: "running"}` immediately and dispatches a supervised background task |
 | `GET /api/auto-creation/debug-bundle/{job_id}` | Poll a bundle build: JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). Job is evicted on successful read; abandoned jobs pruned after 30 min |
+| `GET /api/auto-creation/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
+
+---
+
+### `GET /api/auto-creation/fuzzy-preview`
+
+Returns scored `(stream, channel)` pairs for the given channel groups using the same backend scoring core and admission policy used by `merge_streams` rules with `loose_name_match + min_score`. Zero writes — inspection only.
+
+**Authentication:** `RequireAdminIfEnabled` (admin token required when auth is enabled).
+
+**Query parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-|-|-|-|-|
+| `group_ids` | list of integers | Yes | — | Channel-group IDs to scope the preview to. Non-empty; no duplicates; no negatives; max 25 groups. An empty list is rejected (`400`). |
+| `min_score` | float [0.0–1.0] | Yes | — | Minimum score to include a triple. May be below the `CONFIDENCE_FLOOR` (0.60) — the preview deliberately exposes sub-floor scores for inspection. An M1 callsign `conflict` is never returned regardless of `min_score`. |
+| `allow_no_callsign` | boolean | No | `false` | Q1 opt-in. When `true`, a no-callsign (`"absent"`) pair is admissible at score ≥ 0.90 (`NO_CALLSIGN_FLOOR`). Default `false` requires a parseable callsign on both sides. |
+| `page` | integer ≥ 1 | No | `1` | Page number. |
+| `page_size` | integer 1–200 | No | `50` | Results per page. |
+
+**DoS ceilings:** the N×M scoring pass is bounded. The endpoint processes at most 2,000 streams and 2,000 channels total across all requested groups. When a ceiling is hit the response includes `"truncated": true`.
+
+**Response: `200 OK`**
+
+```json
+{
+  "triples": [
+    {
+      "stream_id": 1042,
+      "stream_name": "WI | WBAY CBS Green Bay HD",
+      "channel_id": "a1b2c3d4-e5f6-...",
+      "channel_name": "WBAY",
+      "score": 0.9412,
+      "callsign_verdict": "match",
+      "signal": "fuzzy-with-callsign"
+    }
+  ],
+  "total": 47,
+  "page": 1,
+  "page_size": 50,
+  "total_pages": 1,
+  "min_score": 0.7,
+  "truncated": false
+}
+```
+
+Each `triples` entry is a `ScoredTriple`:
+
+| Field | Type | Description |
+|-|-|-|
+| `stream_id` | integer | ECM stream ID |
+| `stream_name` | string | Raw stream name (not the LOCALS-cleaned form) |
+| `channel_id` | string | Dispatcharr channel UUID |
+| `channel_name` | string | Raw channel name (not the cleaned form) |
+| `score` | float | Normalized score in [0.0, 1.0], rounded to 4 decimal places |
+| `callsign_verdict` | string | `"match"` — both sides parsed a callsign and they agree; `"absent"` — at least one side had no parseable callsign |
+| `signal` | string | Which scoring rung produced the score: `"callsign-exact"`, `"tvg_id-override"`, `"fuzzy-with-callsign"`, or `"fuzzy-no-callsign-floor"` |
+
+Triples are sorted highest score first; ties break on `stream_id` then `channel_id` (deterministic).
+
+**Admission policy.** The endpoint applies the shared `is_admissible` policy from `services.dedup_matcher`:
+
+- `"conflict"` verdict (M1 callsign hard-reject) — never returned, even at `min_score == 0`.
+- `"absent"` verdict — returned only when `allow_no_callsign=true` and `score >= 0.90`.
+- `"match"` verdict — returned when `score >= min_score`.
+
+This is the same policy the `merge_streams` rule executor applies, so the preview shows exactly what a rule would do.
+
+**Example:**
+
+```bash
+curl -X GET \
+  "http://localhost:6100/api/auto-creation/fuzzy-preview?group_ids=14&group_ids=22&min_score=0.7&allow_no_callsign=false&page=1&page_size=50" \
+  -H "Authorization: Bearer TOKEN"
+```
+
+---
 
 `POST /api/auto-creation/rules/bulk-update` applies the same partial update to every rule in `rule_ids` in a single transaction. Send only the fields you want to change; omitted fields are left as-is per rule.
 
