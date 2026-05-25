@@ -383,6 +383,191 @@ class AutoCreationEngine:
         finally:
             session.close()
 
+    async def restore_snapshot(self, execution_id: int, restored_by: str = "manual") -> dict:
+        """Whole-run revert via the pre-run AutoCreationSnapshot (ADR-010 §D8).
+
+        SAFETY-CRITICAL: this mutates live Dispatcharr channels. It performs an
+        OPTIMISTIC OVERWRITE (ADR-010 §D5) — it unconditionally writes the
+        snapshot's stream-set + key metadata back to each channel, clobbering
+        ANY changes made (manual edits, Dispatcharr drift) AFTER the run but
+        BEFORE this revert. The caller MUST surface the §D5 pre-revert warning;
+        the endpoint requires an explicit ``confirm=true`` so a raw API call
+        cannot skip the acknowledgement.
+
+        Algorithm (ADR-010 §D8):
+          1. Load the snapshot for ``execution_id`` (404-equivalent — returns
+             ``{"success": False, "error": ...}`` with a ``no_snapshot`` flag so
+             the router can map to 404 and tell the caller to use /rollback).
+             Refuse a dry-run execution or one already in a terminal revert
+             state, mirroring the rollback guards.
+          2. Delete run-CREATED channels/groups first (via the existing
+             ``_rollback_created_entity`` path) so channels that did not exist
+             at snapshot time do not survive as orphans.
+          3. For each snapshot channel, full-REPLACE its stream set
+             (``update_channel(streams=[ids])`` — the §D1 IDs-only primitive)
+             and restore key metadata (name, channel_group_id, epg_data_id,
+             tvg_id) in one PATCH.
+          4. Idempotent: re-running re-issues the same PATCHes / deletes →
+             same end state. A second call after a clean first call finds the
+             created channels already gone (delete 404 swallowed by
+             ``_rollback_created_entity``) and re-writes the same stream-sets.
+          5. Partial failures are COLLECTED and SURFACED, never silent and
+             never fatal mid-run: a snapshot channel that 404s in Dispatcharr
+             (deleted since the run) or a metadata/stream write that fails is
+             recorded in ``failed_channels`` and the loop CONTINUES. The result
+             reports ``restored_channels`` / ``removed_channels`` counts plus
+             the per-item ``failed_channels`` list. ``success`` is True only
+             when nothing failed; a run that failed on some items returns
+             ``success=False`` (success-with-warnings) carrying the failures —
+             NEVER a blanket success that hides them.
+
+        Args:
+            execution_id: ID of the execution whose pre-run state to restore.
+            restored_by: Who/what initiated the restore (recorded on the row).
+
+        Returns:
+            On no-snapshot / guard failure: ``{"success": False, "error": ...,
+            "no_snapshot": bool}``. On a restore attempt: ``{"success": bool,
+            "execution_id", "rule_name", "removed_channels", "restored_channels",
+            "failed_channels": [{"id", "name", "error"}]}``.
+        """
+        session = get_session()
+        try:
+            execution = session.query(AutoCreationExecution).filter(
+                AutoCreationExecution.id == execution_id
+            ).first()
+
+            if not execution:
+                return {"success": False, "error": "Execution not found"}
+
+            if execution.mode == "dry_run":
+                # A dry run mutates nothing and has no snapshot anyway.
+                return {
+                    "success": False,
+                    "error": "Cannot restore a dry-run execution",
+                }
+
+            if execution.status == "rolled_back":
+                return {
+                    "success": False,
+                    "error": "Execution already reverted",
+                }
+
+            snapshot = session.query(AutoCreationSnapshot).filter(
+                AutoCreationSnapshot.execution_id == execution_id
+            ).first()
+
+            if not snapshot:
+                # No snapshot to restore from — the caller should use the legacy
+                # /rollback path (delete-created-only) instead. Flagged so the
+                # router can map to 404 with that guidance.
+                return {
+                    "success": False,
+                    "no_snapshot": True,
+                    "error": (
+                        f"No snapshot for execution {execution_id}; use "
+                        f"/rollback instead (this run predates snapshotting, "
+                        f"was a dry-run, or its capture failed)."
+                    ),
+                }
+
+            logger.info(
+                "[AUTO-CREATE-ENGINE] Restoring snapshot for execution %s "
+                "(OPTIMISTIC OVERWRITE — post-run edits will be lost)",
+                execution_id,
+            )
+
+            # --- Step 2: delete run-created channels/groups first -------------
+            # Reuse the rollback's created-entity teardown verbatim so a
+            # channel that did NOT exist at snapshot time (and therefore is not
+            # in the snapshot) is removed rather than left as an orphan. Deletes
+            # in reverse order, mirroring rollback. _rollback_created_entity
+            # swallows a 404 (already-deleted) so a SECOND restore is safe.
+            created = execution.get_created_entities()
+            removed_channels = 0
+            for entity in reversed(created):
+                await self._rollback_created_entity(entity)
+                if entity.get("type") == "channel":
+                    removed_channels += 1
+
+            # --- Step 3-5: full-replace each snapshot channel -----------------
+            channels = snapshot.get_channels_data().get("channels", [])
+            restored_channels = 0
+            failed_channels: list[dict] = []
+
+            for ch in channels:
+                channel_id = ch.get("id")
+                channel_name = ch.get("name")
+                try:
+                    # Full-REPLACE primitive (§D1 IDs-only) + key metadata in
+                    # one PATCH. Including ``streams`` makes update_channel
+                    # overwrite the entire stream set to the snapshot order;
+                    # the metadata keys restore drift on name / group / epg /
+                    # tvg.
+                    payload = {
+                        "streams": list(ch.get("stream_ids") or []),
+                        "name": channel_name,
+                        "channel_group_id": ch.get("channel_group_id"),
+                        "epg_data_id": ch.get("epg_data_id"),
+                        "tvg_id": ch.get("tvg_id"),
+                    }
+                    await self.client.update_channel(channel_id, payload)
+                    restored_channels += 1
+                except Exception as e:
+                    # Collect-and-continue: a deleted channel (404), a
+                    # vanished referenced stream id (IDs-only can't recreate a
+                    # deleted stream — ADR-010 negative consequence #2), or any
+                    # write error is recorded and the loop proceeds. NEVER
+                    # abort on the first failure; NEVER report blanket success.
+                    logger.warning(
+                        "[AUTO-CREATE-ENGINE] Restore failed for channel %s (%s): %s",
+                        channel_id, channel_name, e,
+                    )
+                    failed_channels.append({
+                        "id": channel_id,
+                        "name": channel_name,
+                        "error": str(e),
+                    })
+
+            # --- Step 7: mark terminal state + return -------------------------
+            # Share the ``rolled_back`` terminal state with the legacy rollback
+            # (ADR-010 §D8 step 7 leaves the exact name to this bead; reusing
+            # the existing state keeps the idempotency guard — already-reverted
+            # → refuse — consistent across both revert surfaces). Only mark
+            # terminal when NOTHING failed, so a partial restore stays
+            # re-runnable (idempotent retry after a partial failure, §D5).
+            if not failed_channels:
+                execution.status = "rolled_back"
+                execution.rolled_back_at = datetime.utcnow()
+                execution.rolled_back_by = restored_by
+            session.commit()
+
+            logger.info(
+                "[AUTO-CREATE-ENGINE] Restore complete for execution %s: "
+                "%s created channel(s) removed, %s channel(s) restored, "
+                "%s failed",
+                execution_id, removed_channels, restored_channels,
+                len(failed_channels),
+            )
+
+            return {
+                # success-with-warnings: False when any item failed so the
+                # caller never mistakes a partial restore for a clean one.
+                "success": not failed_channels,
+                "execution_id": execution_id,
+                "rule_name": execution.rule_name or f"Execution {execution_id}",
+                "removed_channels": removed_channels,
+                "restored_channels": restored_channels,
+                "failed_channels": failed_channels,
+            }
+
+        except Exception as e:
+            session.rollback()
+            logger.error("[AUTO-CREATE-ENGINE] Restore failed: %s", e)
+            return {"success": False, "error": str(e)}
+        finally:
+            session.close()
+
     # =========================================================================
     # Data Loading
     # =========================================================================
