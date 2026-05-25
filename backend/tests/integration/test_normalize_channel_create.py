@@ -9,34 +9,83 @@ Tests the normalize flag functionality in:
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
+import config
+
+
+@pytest.fixture
+def isolated_settings_file():
+    """Isolate the persisted settings file for a single test.
+
+    The two settings tests below exercise the *real* settings round-trip
+    (GET /api/settings → POST /api/settings → GET /api/settings) without
+    mocking ``get_settings``/``save_settings``. Both therefore read and
+    mutate the shared on-disk settings file (``config.CONFIG_FILE``, i.e.
+    ``$CONFIG_DIR/settings.json``).
+
+    Without isolation these tests are order-dependent (bead
+    enhancedchannelmanager-o076m):
+
+    - ``test_get_settings_includes_normalize_on_channel_create`` asserts the
+      default is ``False``, but fails in full-suite runs where an earlier
+      test left ``normalize_on_channel_create: True`` in the file.
+    - ``test_update_settings_with_normalize_on_channel_create`` failed in
+      isolation because, starting from the empty default URL/username, any
+      earlier-leftover state changed whether the auth guard demanded a
+      password.
+
+    This fixture stashes the existing file, removes it (so the test starts
+    from a known-clean default), clears the settings cache, and restores the
+    original file + cache afterwards so the test neither depends on nor
+    pollutes shared state.
+    """
+    config_file = config.CONFIG_FILE
+    backup = config_file.read_bytes() if config_file.exists() else None
+    if config_file.exists():
+        config_file.unlink()
+    config.clear_settings_cache()
+    try:
+        yield
+    finally:
+        if backup is not None:
+            config_file.write_bytes(backup)
+        elif config_file.exists():
+            config_file.unlink()
+        config.clear_settings_cache()
+
 
 class TestNormalizeOnChannelCreateSetting:
     """Tests for the normalize_on_channel_create setting."""
 
     @pytest.mark.asyncio
-    async def test_get_settings_includes_normalize_on_channel_create(self, async_client):
+    async def test_get_settings_includes_normalize_on_channel_create(
+        self, async_client, isolated_settings_file
+    ):
         """GET /api/settings returns normalize_on_channel_create field."""
         response = await async_client.get("/api/settings")
         assert response.status_code == 200
 
         data = response.json()
         assert "normalize_on_channel_create" in data
-        # Default should be False
+        # Default should be False on a clean install.
         assert data["normalize_on_channel_create"] is False
 
     @pytest.mark.asyncio
-    async def test_update_settings_with_normalize_on_channel_create(self, async_client):
+    async def test_update_settings_with_normalize_on_channel_create(
+        self, async_client, isolated_settings_file
+    ):
         """POST /api/settings can update normalize_on_channel_create."""
-        # First get current settings to have valid base
-        get_response = await async_client.get("/api/settings")
-        current = get_response.json()
-
-        # Update with normalize_on_channel_create = True
+        # Starting from a clean settings file, GET returns the defaults
+        # (empty url/username). Send a complete, valid auth payload —
+        # including a password — because the settings endpoint correctly
+        # rejects a URL/username change in password mode without one
+        # ("password required when changing auth mode, URL or username").
         response = await async_client.post(
             "/api/settings",
             json={
-                "url": current.get("url") or "http://localhost:8090",
-                "username": current.get("username") or "admin",
+                "url": "http://localhost:8090",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "test-password",
                 "normalize_on_channel_create": True,
             },
         )
