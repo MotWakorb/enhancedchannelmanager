@@ -228,7 +228,7 @@ async def compute_sort(request: ComputeSortRequest):
     settings = get_settings()
 
     # Determine sort priority based on mode
-    valid_criteria = {"resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"}
+    valid_criteria = {"resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"}
     if request.mode == "smart":
         sort_priority = [c for c in settings.stream_sort_priority if settings.stream_sort_enabled.get(c, False)]
         sort_enabled = {c: True for c in sort_priority}
@@ -260,25 +260,33 @@ async def compute_sort(request: ComputeSortRequest):
     finally:
         session.close()
 
-    # Build M3U account map if needed
+    # Build M3U account map (m3u_priority) and custom-stream ID set (custom_streams)
+    # from a single stream-data fetch. The fetch is gated to only run when at least
+    # one of those account-derived criteria is active (generalizes the original
+    # m3u_priority-only gate so custom_streams gets its data too — bead ap1ud / GH #244).
     stream_m3u_map = {}
+    custom_stream_ids: set[int] = set()
     needs_m3u = "m3u_priority" in sort_priority
-    if needs_m3u:
+    needs_custom = "custom_streams" in sort_priority
+    if needs_m3u or needs_custom:
         try:
             client = get_client()
             start_fetch = time.time()
             streams_data = await client.get_streams_by_ids(all_stream_ids)
             elapsed_ms = (time.time() - start_fetch) * 1000
-            logger.debug("[STREAM-STATS-SORT] Fetched %s streams for M3U priority in %.1fms", len(streams_data), elapsed_ms)
+            logger.debug("[STREAM-STATS-SORT] Fetched %s streams for sort criteria in %.1fms", len(streams_data), elapsed_ms)
             for s in streams_data:
                 # Dispatcharr has historically returned either "id" or "stream_id" as the identifier.
-                # Be tolerant so M3U priority sorting doesn't silently no-op.
+                # Be tolerant so M3U priority / custom-stream sorting doesn't silently no-op.
                 stream_id = s.get("id", s.get("stream_id"))
                 if stream_id is None:
                     continue
-                stream_m3u_map[int(stream_id)] = extract_m3u_account_id(s.get("m3u_account"))
+                if needs_m3u:
+                    stream_m3u_map[int(stream_id)] = extract_m3u_account_id(s.get("m3u_account"))
+                if needs_custom and s.get("is_custom"):
+                    custom_stream_ids.add(int(stream_id))
         except Exception as e:
-            logger.warning("[STREAM-STATS-SORT] Failed to fetch M3U data: %s", e)
+            logger.warning("[STREAM-STATS-SORT] Failed to fetch stream data for sort: %s", e)
 
     # Sort each channel
     results = []
@@ -300,6 +308,7 @@ async def compute_sort(request: ComputeSortRequest):
             deprioritize_low_fps=getattr(settings, 'deprioritize_low_fps', True),
             failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
             channel_name=f"channel-{ch.channel_id}",
+            custom_stream_ids=custom_stream_ids,
         )
         changed = sorted_ids != ch.stream_ids
         results.append(ChannelSortResult(

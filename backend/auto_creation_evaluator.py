@@ -39,6 +39,9 @@ class StreamContext:
     # Provider info
     m3u_account_id: Optional[int] = None
     m3u_account_name: Optional[str] = None
+    # Whether this is an operator-added custom stream (Dispatcharr is_custom).
+    # Drives the "custom_streams" Smart Sort criterion (bead ap1ud / GH #244).
+    is_custom: bool = False
 
     # Quality info (from StreamStats if probed)
     resolution: Optional[str] = None  # e.g., "1920x1080"
@@ -94,6 +97,7 @@ class StreamContext:
             logo_url=stream.get("logo_url") or stream.get("tvg_logo"),
             m3u_account_id=m3u_account_id,
             m3u_account_name=m3u_account_name,
+            is_custom=bool(stream.get("is_custom")),
             channel_id=stream.get("channel_id") or stream.get("channel"),
             channel_name=stream.get("channel_name"),
             resolution=stream_stats.get("resolution") if stream_stats else None,
