@@ -2576,7 +2576,28 @@ async def bulk_merge_channels(request: BulkMergeRequest):
 
     for item in request.merges:
         try:
-            target = await client.get_channel(item.target_channel_id)
+            # Pre-validate the target ID the same way source IDs are validated
+            # below: if the target no longer exists upstream (e.g., a stale
+            # reference after a previous merge), surface 422 with the same
+            # refresh hint instead of falling through to the per-item catch-all
+            # (which returns 200 + a failed count). Consistent with the
+            # source-ID path added in bd-ozhkf (bd-4xxax).
+            try:
+                target = await client.get_channel(item.target_channel_id)
+            except httpx.HTTPStatusError as fetch_err:
+                if fetch_err.response.status_code == 404:
+                    logger.warning(
+                        "[CHANNELS] bulk-merge: rejected — stale target ID %s no longer exists",
+                        item.target_channel_id,
+                    )
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Target channel {item.target_channel_id} no longer exists — "
+                            "refresh the channels list and try again"
+                        ),
+                    )
+                raise
             target_name = target.get("name", f"Channel {item.target_channel_id}")
 
             # Collect all streams from target + sources (deduplicated, target first).
@@ -2606,6 +2627,13 @@ async def bulk_merge_channels(request: BulkMergeRequest):
                 except httpx.HTTPStatusError as fetch_err:
                     if fetch_err.response.status_code == 404:
                         missing_ids.append(src_id)
+                        # Keep source_names complete — one entry per requested
+                        # source ID, in order. Harmless today because the 422
+                        # branch below raises before the journal entry is
+                        # written, but prevents a silently misaligned audit
+                        # record if this ever becomes a partial-success batch
+                        # (bd-4xxax).
+                        source_names.append(f"Channel {src_id}")
                     else:
                         raise
 
