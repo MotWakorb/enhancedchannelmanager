@@ -129,7 +129,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.3-0026",
+    version="0.17.3-0027",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -698,6 +698,30 @@ async def startup_event():
 
     # Initialize journal database
     init_db()
+
+    # Boot-time gauge publishes relocated out of database.init_db() so
+    # database.py no longer imports observability — closing the
+    # observability↔database static import cycle (bd-0nabr). These run right
+    # after init_db() to preserve the original boot ordering and remain
+    # best-effort: a failure is logged at DEBUG and never aborts startup.
+    #
+    # bd-qxi02: publish the task_schedules.next_run_at-IS-NULL count onto the
+    # Prometheus gauge so SRE sees the pre-heal boot-time value in the first
+    # /metrics scrape after container start.
+    try:
+        from observability import update_task_schedule_null_count
+        update_task_schedule_null_count()
+    except Exception as _null_count_err:  # pragma: no cover — best-effort
+        logger.debug("[MAIN] task_schedule null-count publish failed: %s", _null_count_err)
+
+    # bd-ygoqr: publish the DB file size onto the ecm_database_size_bytes /
+    # ecm_database_wal_size_bytes gauges so operators see a value as soon as
+    # /metrics is scraped, before the first weekly cleanup runs.
+    try:
+        from observability import update_database_size_metrics
+        update_database_size_metrics()
+    except Exception as _db_size_err:  # pragma: no cover — best-effort
+        logger.debug("[MAIN] DB size metric publish failed: %s", _db_size_err)
 
     # Seed the ecm_pending_merges_queue_depth gauge on startup (bd-wvr1d).
     # This ensures the gauge reflects the actual queue depth immediately
