@@ -10,6 +10,8 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.conftest import closing_create_task_mock
+
 
 class TestCreateNotificationInternal:
     """Tests for create_notification_internal()."""
@@ -110,7 +112,7 @@ class TestCreateNotificationInternal:
         """When send_alerts=True (default), dispatches to alert channels."""
         with patch("services.notification_service.get_session", return_value=test_session), \
              patch("services.notification_service._dispatch_to_alert_channels", new_callable=AsyncMock) as mock_dispatch, \
-             patch("asyncio.create_task") as mock_create_task:
+             patch("asyncio.create_task", new=closing_create_task_mock()) as mock_create_task:
             from services.notification_service import create_notification_internal
 
             await create_notification_internal(

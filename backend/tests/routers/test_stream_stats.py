@@ -10,6 +10,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from models import StreamStats
+from tests.conftest import closing_create_task_mock
 
 
 def _create_stream_stats(session, stream_id, **overrides):
@@ -278,7 +279,7 @@ class TestProbeBulkStreams:
         mock_prober._probing_in_progress = False
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
-             patch("asyncio.create_task") as mock_create_task:
+             patch("asyncio.create_task", new=closing_create_task_mock()) as mock_create_task:
             response = await async_client.post(
                 "/api/stream-stats/probe/bulk",
                 json={"stream_ids": [10, 11, 12]},
@@ -364,7 +365,7 @@ class TestProbeAllStreams:
         mock_prober._probing_in_progress = False
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
-             patch("asyncio.create_task"):
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             response = await async_client.post("/api/stream-stats/probe/all")
 
         assert response.status_code == 200
@@ -377,7 +378,7 @@ class TestProbeAllStreams:
         mock_prober._probing_in_progress = True
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
-             patch("asyncio.create_task"):
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             response = await async_client.post("/api/stream-stats/probe/all")
 
         assert response.status_code == 200

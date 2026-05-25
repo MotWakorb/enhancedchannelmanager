@@ -9,6 +9,8 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from tests.conftest import closing_create_task_mock
+
 
 def _upstream_404(method="GET", path="http://disp/api/m3u/accounts/999/"):
     """Build an httpx.HTTPStatusError mirroring a Dispatcharr 404 (raise_for_status)."""
@@ -326,7 +328,7 @@ class TestRefreshSingle:
         mock_client.refresh_m3u_account.return_value = {"status": "refreshing"}
 
         with patch("routers.m3u.get_client", return_value=mock_client), \
-             patch("asyncio.create_task"):
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             response = await async_client.post("/api/m3u/refresh/1")
 
         assert response.status_code == 200
