@@ -470,13 +470,14 @@ Interactive API docs are available at `/api/docs` (Swagger UI) and `/api/redoc`.
 
 ### Completed
 
+- **v0.17.2** — Full Stats v2 MCP coverage (8 new tools: provider stats, per-user watch time, trending, activity, channel bandwidth; media-server attribution now queryable via Claude); 30+ MCP correctness fixes from a live sweep of all tools; MCP API-key timing-attack hardening
+- **v0.17.1** — Plex + Jellyfin user attribution and multi-viewer display; real client IP threading through the attribution pipeline; SSRF hardening on media-server test-connection endpoints
+- **v0.17.0** — Stats v2 foundation: `session_telemetry` table, per-user watch-time API, Alembic schema migration system, Prometheus `/metrics`, structured JSON logging with trace IDs; ghost-source-channel fix after merge in edit mode
+- **v0.16.0** — MCP server for natural language channel management via Claude (124 tools, 14 domains, Streamable HTTP transport); auto-creation rule analyzer; Alembic migrations; structured logging; per-rule normalization and sort options _(an earlier 0.16.0 build was rolled back on 2026-04-20 before any external consumer pulled it; this is the shipping release, cut 2026-05-12)_
 - **v0.15.1** — OWASP hardening (security headers, CORS, rate limiting, NIST password policy, log redaction, path validation)
 - **v0.15.0** — Server-side EPG matching, stream normalization, PUID/PGID support, low FPS detection, export/publish pipeline
 - **v0.14.0** — Dummy EPG profiles, auto-creation pipeline, normalization engine
 - **v0.13.0** — Backend modularization (20+ routers), auth system, task engine
 
-### v0.16.0 — MCP Server & Claude Integration (Current)
-MCP server for natural language channel management via Claude. 124 tools across 14 domains, Streamable HTTP transport with API key auth, separate Docker container, frontend settings UI with connection status. Per-rule normalization group selection, video codec as smart sort criterion, configurable deprioritized stream ordering, diagnostic debug bundles, user identification in watch history and stats, and settings persistence hardening.
-
-### v0.17.0 — Dashboard & Analytics
-Enhanced dashboard with real-time stream monitoring, historical analytics, and customizable widgets.
+### v0.17.3 — Next release
+See `CHANGELOG.md` `[Unreleased]` for the canonical list of fixes and features queued for the next cut.

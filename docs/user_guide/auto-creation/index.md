@@ -25,6 +25,7 @@ End users do not read this section.
 | `test-a-rule.md` | The dry-run / preview workflow. What's safe to test against production data and what isn't. |
 | `bulk-operations.md` | Running rules across an entire source, the cost of a large run, and the bulk-amplification cautions an operator should know about. |
 | [`debugging-rules.md`](debugging-rules.md) | "My rule didn't fire" — the diagnostic flow using the rule analyzer: the 7 finding codes in plain language with worked examples, how to run the analyzer (API direct call, debug-bundle upload, `/analyze-rules` agent command), and when to use the analyzer vs. the per-rule dry-run preview. |
+| [`fuzzy-locals-matching.md`](fuzzy-locals-matching.md) | Scored fuzzy matching for OTA / Local channels: when to use it, how to preview before writing, the callsign safety gate, and the dry-run / rollback guarantees (v0.17.3-0006). |
 | `clone-and-reuse.md` | Duplicating a rule as a starting point, sharing a normalization group across rules. |
 
 ## Going deeper (for now)

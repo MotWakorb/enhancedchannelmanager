@@ -4,7 +4,7 @@ Unit tests for the auto-creation executor service.
 Tests the ActionExecutor class which executes actions against channels, groups,
 and streams with proper rollback tracking.
 """
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
 
 from auto_creation_executor import (
@@ -125,8 +125,8 @@ class TestExecutionContext:
         assert ctx.groups_created == 1
         assert ctx.created_entities[0]["type"] == "group"
 
-    def test_add_result_channel_modified(self):
-        """add_result tracks modified channels."""
+    def test_add_result_merge_stream_increments_streams_merged_not_channels_updated(self):
+        """merge_stream results count as streams_merged, NOT channels_updated (bd-0emgo.4)."""
         ctx = ExecutionContext()
         result = ActionResult(
             success=True,
@@ -140,9 +140,52 @@ class TestExecutionContext:
         )
         ctx.add_result(result)
 
-        assert ctx.channels_updated == 1
+        # The fix: merge operations go to streams_merged, not channels_updated.
+        assert ctx.streams_merged == 1
+        assert ctx.channels_updated == 0
         assert len(ctx.modified_entities) == 1
         assert ctx.modified_entities[0]["previous"]["streams"] == [101]
+
+    def test_add_result_property_update_increments_channels_updated(self):
+        """Non-merge channel modifications (logo, tvg, epg, etc.) increment channels_updated (bd-0emgo.4)."""
+        ctx = ExecutionContext()
+        for action_type in ("update_channel", "assign_logo", "assign_tvg_id", "assign_epg",
+                            "assign_profile", "assign_channel_profile", "set_channel_number"):
+            result = ActionResult(
+                success=True,
+                action_type=action_type,
+                description=f"Updated channel via {action_type}",
+                entity_type="channel",
+                entity_id=1,
+                entity_name="ESPN",
+                modified=True,
+            )
+            ctx.add_result(result)
+
+        assert ctx.channels_updated == 7
+        assert ctx.streams_merged == 0
+
+    def test_add_result_multiple_merges_into_distinct_channels(self):
+        """N merge_stream results do NOT inflate channels_updated (bd-0emgo.4 regression guard)."""
+        ctx = ExecutionContext()
+        # Simulate 1341 merges (the production bug scenario)
+        for i in range(1341):
+            result = ActionResult(
+                success=True,
+                action_type="merge_stream",
+                description=f"Added stream {i} to channel",
+                entity_type="channel",
+                entity_id=(i % 726) + 1,  # 726 distinct channels
+                entity_name=f"Channel {(i % 726) + 1}",
+                modified=True,
+            )
+            ctx.add_result(result)
+
+        # Old behavior was channels_updated == 1341 (the inflation bug).
+        assert ctx.channels_updated == 0, (
+            "channels_updated must NOT count merge operations (was the bd-0emgo.4 inflation bug)"
+        )
+        assert ctx.streams_merged == 1341
 
     def test_add_result_skipped(self):
         """add_result tracks skipped streams."""
@@ -950,6 +993,119 @@ class TestActionExecutorMergeStreams:
 
         self.client.update_channel.assert_not_called()
         assert any("Would remove" in r.get("action", "") for r in results["dry_run_results"])
+
+
+class TestMergeStreamsExactDefaultMatch:
+    """Regression tests for bd-0emgo.1: merge_streams target=auto must default
+    to EXACT normalized-name equality and must NOT run the legacy fuzzy cascade
+    (core-name / deparen / word-prefix containment / call-sign) unless the
+    ``loose_name_match`` action flag is True.
+
+    Reproduces the production failure: a "SKY Sport 4K" channel (core name
+    "sky sport" because "4K" is stripped as a quality suffix) over-matched 75
+    unrelated streams ("Sky Sport Bundesliga", "SKY SPORT TENNIS", ...) because
+    "sky sport" is a leading word-prefix of all of them.
+    """
+
+    def _make_engine(self, core_map):
+        """Fake normalization engine.
+
+        ``core_map`` maps a raw name -> its core name (lowercased core used by
+        the executor's _core_name_to_channel index and the word-prefix step).
+        normalize() returns the core as the normalized form so the exact-key
+        indices (_normalized_name_to_channel) are keyed under the core too.
+        """
+        engine = MagicMock()
+
+        def _normalize(name, *args, **kwargs):
+            result = MagicMock()
+            result.normalized = core_map.get(name, name)
+            result.transformations = []
+            return result
+
+        engine.normalize.side_effect = _normalize
+        engine.extract_core_name.side_effect = lambda n: core_map.get(n, n)
+        engine.extract_call_sign.return_value = None
+        return engine
+
+    def _build(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        # Existing channel "SKY Sport 4K" — its core/normalized form is
+        # "sky sport" ("4K" stripped as a quality suffix).
+        existing = [{"id": 50, "name": "SKY Sport 4K", "streams": [],
+                     "channel_group_id": 9}]
+        core_map = {
+            "SKY Sport 4K": "sky sport",
+            # Unrelated streams that share the "sky sport" leading prefix.
+            "Sky Sport Bundesliga": "sky sport bundesliga",
+            "SKY SPORT TENNIS": "sky sport tennis",
+            "SKY SPORT 251": "sky sport 251",
+            # A genuinely-matching stream whose core equals the channel core.
+            "SKY Sport 4K UHD": "sky sport",
+        }
+        engine = self._make_engine(core_map)
+        executor = ActionExecutor(client, existing_channels=existing,
+                                  normalization_engine=engine)
+        return client, executor
+
+    def _stream(self, sid, name):
+        return StreamContext(
+            stream_id=sid,
+            stream_name=name,
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="Sports",
+            tvg_id=None,
+        )
+
+    def _merge(self, executor, stream_ctx, loose=False):
+        action = {"type": "merge_streams", "target": "auto"}
+        if loose:
+            action["loose_name_match"] = True
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             normalization_group_ids=[1])
+        )
+
+    def test_default_does_not_overmatch_via_word_prefix(self):
+        """DEFAULT (exact-only): a 'Sky Sport Bundesliga' stream must NOT merge
+        into 'SKY Sport 4K' — the word-prefix containment cascade is disabled.
+        """
+        client, executor = self._build()
+        result = self._merge(executor, self._stream(201, "Sky Sport Bundesliga"))
+        # Skipped — no exact-name channel for "sky sport bundesliga".
+        assert result.skipped is True
+        client.update_channel.assert_not_called()
+
+    def test_default_does_not_overmatch_multiple_unrelated_streams(self):
+        """DEFAULT: none of the unrelated 'SKY SPORT *' streams merge."""
+        client, executor = self._build()
+        for sid, name in [(301, "SKY SPORT TENNIS"), (302, "SKY SPORT 251")]:
+            result = self._merge(executor, self._stream(sid, name))
+            assert result.skipped is True, f"{name} should not merge by default"
+        client.update_channel.assert_not_called()
+
+    def test_loose_flag_restores_word_prefix_match(self):
+        """loose_name_match=True restores the legacy fuzzy cascade: the
+        'Sky Sport Bundesliga' stream merges into 'SKY Sport 4K' (id=50).
+        """
+        client, executor = self._build()
+        result = self._merge(executor, self._stream(201, "Sky Sport Bundesliga"),
+                             loose=True)
+        assert result.success is True
+        client.update_channel.assert_called()
+        assert client.update_channel.call_args[0][0] == 50
+
+    def test_exact_normalized_name_merges_by_default(self):
+        """DEFAULT: a stream whose normalized/core name EXACTLY equals the
+        channel's ('sky sport') DOES merge into 'SKY Sport 4K'.
+        """
+        client, executor = self._build()
+        result = self._merge(executor, self._stream(401, "SKY Sport 4K UHD"))
+        assert result.success is True
+        client.update_channel.assert_called()
+        assert client.update_channel.call_args[0][0] == 50
 
 
 class TestActionExecutorPropertyActions:
@@ -2145,6 +2301,172 @@ class TestMatchScopeGroupId:
         self.client.update_channel.assert_called()
 
 
+class TestMergeStreamsTargetChannelGroupFilter:
+    """bd-0emgo.3: target-channel group filter on the merge_streams action.
+
+    The ``*_in_group`` / ``normalized_name_not_in_group`` *conditions* are
+    stream-side — they only gate whether a rule FIRES, never which existing
+    channel merge_streams target=auto resolves to. This new action-level
+    filter is a post-resolution reject (mirroring the GH #298 scope-reject at
+    auto_creation_executor.py): after the target channel is resolved, the merge
+    is skipped if the resolved channel's ``channel_group_id`` is in
+    ``target_channel_not_in_group`` (or, for ``target_channel_in_group``, NOT
+    in the allow-list). Resolution itself is unchanged.
+
+    Two existing channels named "ESPN": one in group 1 (allowed), one in
+    group 567 (the excluded group from the production report). The filter is
+    applied AFTER resolution, so we vary which channel resolution returns by
+    pointing find_channel_value at the right name.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.create_channel = AsyncMock()
+        self.client.update_channel = AsyncMock()
+
+        # "Keep" lives in group 1; "Excluded" lives in group 567.
+        self.channels = [
+            {"id": 10, "name": "Keep", "channel_number": 100,
+             "channel_group_id": 1, "streams": [101]},
+            {"id": 20, "name": "Excluded", "channel_number": 200,
+             "channel_group_id": 567, "streams": [201]},
+        ]
+        self.groups = [
+            {"id": 1, "name": "ALLOWED"},
+            {"id": 567, "name": "EXCLUDED"},
+        ]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            existing_groups=self.groups,
+        )
+
+    def _stream(self, name):
+        return StreamContext(
+            stream_id=999,
+            stream_name=name,
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            group_name="whatever",
+        )
+
+    def _run(self, action, stream_name, **kwargs):
+        exec_ctx = ExecutionContext()
+        return asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self._stream(stream_name), exec_ctx, **kwargs)
+        )
+
+    # --- target_channel_not_in_group (primary: "merge anywhere EXCEPT X") ---
+
+    def test_not_in_group_skips_merge_into_excluded_group(self):
+        """Bug-1 reproduction: the resolved target is in the excluded group →
+        the merge is SKIPPED and the channel in that group receives nothing.
+        """
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",  # resolves to channel 20 (group 567)
+            "target_channel_not_in_group": [567],
+        }
+        result = self._run(action, "Excluded")
+        assert result.success is True
+        assert result.skipped is True
+        # The channel in the excluded group did NOT receive the merge.
+        self.client.update_channel.assert_not_called()
+
+    def test_not_in_group_merges_when_target_outside_excluded_group(self):
+        """A stream whose resolved target is NOT in the excluded group merges."""
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Keep",  # resolves to channel 10 (group 1)
+            "target_channel_not_in_group": [567],
+        }
+        result = self._run(action, "Keep")
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    # --- target_channel_in_group (complement: "only merge into X") ---
+
+    def test_in_group_merges_when_target_in_allowed_group(self):
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Keep",  # group 1 — in allow-list
+            "target_channel_in_group": [1],
+        }
+        result = self._run(action, "Keep")
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    def test_in_group_skips_when_target_outside_allowed_group(self):
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",  # group 567 — NOT in allow-list
+            "target_channel_in_group": [1],
+        }
+        result = self._run(action, "Excluded")
+        assert result.success is True
+        assert result.skipped is True
+        self.client.update_channel.assert_not_called()
+
+    # --- back-compat: no filter → unchanged ---
+
+    def test_no_filter_merges_into_any_group(self):
+        """No filter set → behavior unchanged; merges into group 567 freely."""
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",
+        }
+        result = self._run(action, "Excluded")
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    def test_empty_not_in_group_list_is_noop(self):
+        """An empty exclusion list excludes nothing — merge proceeds."""
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",
+            "target_channel_not_in_group": [],
+        }
+        result = self._run(action, "Excluded")
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    def test_not_in_group_composes_with_match_scope(self):
+        """The new filter is independent of GH #298 match_scope: with scope on
+        and pinned to group 567, the candidate is in scope, but the new
+        exclusion still rejects it.
+        """
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "Excluded",
+            "target_channel_not_in_group": [567],
+        }
+        result = self._run(
+            action, "Excluded",
+            match_scope_target_group=True,
+            rule_scope_group_id=567,
+        )
+        assert result.success is True
+        assert result.skipped is True
+        self.client.update_channel.assert_not_called()
+
 
 class TestCreateChannelSuperscriptStripping:
     """
@@ -2278,3 +2600,544 @@ class TestCreateChannelSuperscriptStripping:
         posted = client.create_channel.call_args[0][0]
         assert "²" not in posted["name"]  # ² stripped/converted
         assert posted["name"] == "ESPN2"
+
+
+class TestMergeJournalEntry:
+    """bd-0emgo.5: per-merge journal entry for lightweight recoverability.
+
+    Each LIVE merge in ``_add_stream_to_channel`` must write one
+    ``auto_creation``/``merge_stream`` journal entry tagged with
+    ``batch_id=str(execution_id)`` so an operator can later list every
+    ``(channel_id, stream_id)`` pair a run touched via
+    ``get_journal(batch_id=...)``. STREAM IDs ONLY in before/after — never
+    stream URLs/objects (they embed provider credentials). Dry-run writes
+    nothing.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        self.channels = [
+            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US",
+             "channel_number": 100, "streams": [101]},
+        ]
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="ESPN HD Backup",
+            stream_url="http://provider.example/secret-token/201.ts",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            tvg_id="ESPN.US",
+        )
+
+    def _run_live_merge(self, execution_id):
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=execution_id,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()  # dry_run defaults to False (live)
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+    def test_live_merge_writes_one_journal_entry(self):
+        """A live merge writes exactly one auto_creation/merge_stream entry."""
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            result = self._run_live_merge(execution_id=42)
+
+        assert result.success is True
+        assert result.modified is True
+        mock_log.assert_called_once()
+        kwargs = mock_log.call_args.kwargs
+        assert kwargs["category"] == "auto_creation"
+        assert kwargs["action_type"] == "merge_stream"
+        assert kwargs["entity_id"] == 1  # channel_id
+        assert kwargs["entity_name"] == "ESPN"
+        assert kwargs["user_initiated"] is False
+
+    def test_journal_batch_id_is_execution_id(self):
+        """batch_id carries the run's execution_id (as a string)."""
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            self._run_live_merge(execution_id=42)
+
+        kwargs = mock_log.call_args.kwargs
+        assert kwargs["batch_id"] == "42"
+
+    def test_journal_before_after_carry_stream_ids_only(self):
+        """before/after hold stream IDs only — never URLs/objects (creds)."""
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            self._run_live_merge(execution_id=42)
+
+        kwargs = mock_log.call_args.kwargs
+        before = kwargs["before_value"]
+        after = kwargs["after_value"]
+        assert before == {"stream_ids": [101]}
+        assert after == {"stream_ids": [101, 201]}
+        # Credential safety: the provider token must not leak anywhere.
+        serialized = repr(kwargs)
+        assert "secret-token" not in serialized
+        assert "http" not in serialized
+
+    def test_journal_round_trip_recovers_channel_stream_pair(self):
+        """The (channel_id, stream_id) pair is recoverable from the entry."""
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            self._run_live_merge(execution_id=42)
+
+        kwargs = mock_log.call_args.kwargs
+        channel_id = kwargs["entity_id"]
+        before_ids = set(kwargs["before_value"]["stream_ids"])
+        after_ids = set(kwargs["after_value"]["stream_ids"])
+        merged_stream_ids = after_ids - before_ids
+        assert channel_id == 1
+        assert merged_stream_ids == {201}
+
+    def test_dry_run_writes_no_journal_entry(self):
+        """A dry-run merge writes NOTHING to the journal."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=42,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext(dry_run=True)
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, self.stream_ctx, exec_ctx)
+            )
+
+        assert result.success is True
+        assert "Would add" in result.description
+        self.client.update_channel.assert_not_called()
+        mock_log.assert_not_called()
+
+    def test_multi_merge_run_writes_one_entry_per_merge(self):
+        """A run merging N streams writes N entries, all sharing batch_id."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=7,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        stream_ctxs = [
+            StreamContext(stream_id=sid, stream_name=f"S{sid}",
+                          m3u_account_id=1, tvg_id="ESPN.US")
+            for sid in (301, 302, 303)
+        ]
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            for sc in stream_ctxs:
+                asyncio.get_event_loop().run_until_complete(
+                    executor.execute(action, sc, exec_ctx)
+                )
+
+        assert mock_log.call_count == 3
+        batch_ids = {c.kwargs["batch_id"] for c in mock_log.call_args_list}
+        assert batch_ids == {"7"}
+
+    def test_no_execution_id_skips_journal(self):
+        """Without an execution_id (direct-construct callers) no entry is written.
+
+        execution_id is the audit-correlation primitive; entries without it
+        would be unrecoverable noise, so the executor skips the journal write
+        when no execution_id was threaded in (default None).
+        """
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+        )  # no execution_id
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, self.stream_ctx, exec_ctx)
+            )
+
+        assert result.success is True
+        mock_log.assert_not_called()
+
+    def test_already_present_stream_writes_no_journal_entry(self):
+        """Re-merging an already-present stream is a skip — no journal entry."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=42,
+        )
+        stream_ctx = StreamContext(
+            stream_id=101,  # already in channel 1
+            stream_name="ESPN",
+            m3u_account_id=1,
+            tvg_id="ESPN.US",
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, stream_ctx, exec_ctx)
+            )
+
+        assert result.success is True
+        assert result.skipped is True
+        self.client.update_channel.assert_not_called()
+        mock_log.assert_not_called()
+
+
+class TestMergeCountLabels:
+    """bd-0emgo.4: merge counter correctness and distinct-channels tracking.
+
+    Verifies:
+    - streams_merged counts individual merge operations (one per stream added).
+    - channels_updated does NOT count merge operations.
+    - _merge_streams_added_by_channel gives distinct-channels-touched.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        # Two distinct channels; each will receive streams
+        self.channels = [
+            {"id": 10, "name": "ESPN", "tvg_id": "ESPN.US",
+             "channel_number": 100, "streams": []},
+            {"id": 20, "name": "CNN", "tvg_id": "CNN.US",
+             "channel_number": 200, "streams": []},
+        ]
+
+    def _merge_stream_into(self, executor, channel_name, stream_id):
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": channel_name,
+        }
+        stream_ctx = StreamContext(
+            stream_id=stream_id,
+            stream_name=f"stream-{stream_id}",
+            m3u_account_id=1,
+        )
+        exec_ctx = ExecutionContext()
+        with patch("auto_creation_executor.journal.log_entry"):
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, stream_ctx, exec_ctx)
+            )
+        return result, exec_ctx
+
+    def test_streams_merged_counts_individual_merge_operations(self):
+        """streams_merged increments once per successfully added stream (bd-0emgo.4)."""
+        # Old code: streams_merged was never incremented (dead counter).
+        # New code: add_result with action_type="merge_stream" increments streams_merged.
+        ctx = ExecutionContext()
+        for i in range(5):
+            ctx.add_result(ActionResult(
+                success=True,
+                action_type="merge_stream",
+                description=f"Added stream {i}",
+                entity_type="channel",
+                entity_id=10,
+                entity_name="ESPN",
+                modified=True,
+            ))
+        assert ctx.streams_merged == 5
+        assert ctx.channels_updated == 0, (
+            "channels_updated must NOT be incremented by merge operations"
+        )
+
+    def test_merge_does_not_inflate_channels_updated(self):
+        """Merging N streams into M channels: channels_updated==0, streams_merged==N (bd-0emgo.4)."""
+        executor = ActionExecutor(self.client, existing_channels=self.channels)
+        # 3 merges into ESPN (channel 10), 2 merges into CNN (channel 20) = 5 total
+        merge_inputs = [
+            ("ESPN", 301), ("ESPN", 302), ("ESPN", 303),
+            ("CNN", 401), ("CNN", 402),
+        ]
+        total_streams_merged = 0
+        total_channels_updated = 0
+        for ch_name, sid in merge_inputs:
+            _, exec_ctx = self._merge_stream_into(executor, ch_name, sid)
+            total_streams_merged += exec_ctx.streams_merged
+            total_channels_updated += exec_ctx.channels_updated
+
+        assert total_channels_updated == 0, (
+            "channels_updated inflated by merges (the bd-0emgo.4 bug is still present)"
+        )
+        assert total_streams_merged == 5
+
+    def test_merge_streams_added_by_channel_gives_distinct_channel_count(self):
+        """len(_merge_streams_added_by_channel) == number of distinct channels touched (bd-0emgo.4)."""
+        executor = ActionExecutor(self.client, existing_channels=self.channels)
+        # 3 merges into ESPN (id=10), 2 into CNN (id=20) — 2 distinct channels
+        for sid in (301, 302, 303):
+            self._merge_stream_into(executor, "ESPN", sid)
+        for sid in (401, 402):
+            self._merge_stream_into(executor, "CNN", sid)
+
+        # Distinct channels touched = 2
+        assert len(executor._merge_streams_added_by_channel) == 2
+        assert 10 in executor._merge_streams_added_by_channel
+        assert 20 in executor._merge_streams_added_by_channel
+        # Stream IDs tracked per channel
+        assert executor._merge_streams_added_by_channel[10] == {301, 302, 303}
+        assert executor._merge_streams_added_by_channel[20] == {401, 402}
+
+    def test_old_behavior_fails_without_fix(self):
+        """Regression: prove the pre-fix behavior (channels_updated==N for merges) does NOT hold.
+
+        If this assertion fires on the patched code, the fix has been reverted.
+        """
+        ctx = ExecutionContext()
+        # Simulate 1341 merge operations into 726 distinct channels
+        # (the production scenario from bd-0emgo.4).
+        for i in range(1341):
+            ctx.add_result(ActionResult(
+                success=True,
+                action_type="merge_stream",
+                description=f"Merged stream {i}",
+                entity_type="channel",
+                entity_id=(i % 726) + 1,
+                entity_name=f"Channel {(i % 726) + 1}",
+                modified=True,
+            ))
+        # Pre-fix: channels_updated would have been 1341 (the bug).
+        # Post-fix: channels_updated must be 0; streams_merged must be 1341.
+        assert ctx.channels_updated != 1341, (
+            "Pre-fix inflation bug is still present: channels_updated == streams count"
+        )
+        assert ctx.channels_updated == 0
+        assert ctx.streams_merged == 1341
+
+
+class TestChannelsTouchedDryRun:
+    """bd-0emgo.4 dry-run consistency: channels_touched must match streams_merged.
+
+    Live verification exposed: dry_run=True produced streams_merged==26 but
+    channels_touched==0.
+
+    Root cause: channels_touched was derived from a dict populated at scattered
+    CALL SITES (_execute_merge_streams, and the _execute_create_channel
+    if_exists=merge branch). That accounting missed merge paths, so the dict
+    stayed empty while the ActionResult still carried action_type="merge_stream"
+    and modified=True (so streams_merged incremented correctly) — channels_touched
+    stayed 0.
+
+    Fix (chokepoint): track distinct touched channels in
+    ExecutionContext.merged_channel_ids, populated in ExecutionContext.add_result
+    — the SINGLE point every merge_stream ActionResult flows through (merge_streams
+    action AND create_channel if_exists=merge AND any future merge path), and the
+    SAME point that counts streams_merged, so the two can never drift. The engine
+    unions each stream's set into channels_touched. The prune dict
+    _merge_streams_added_by_channel is reserved for merge_streams prune accounting
+    and is no longer consulted for channels_touched.
+
+    These tests mirror the engine: each stream gets its own ExecutionContext, and
+    the test unions exec_ctx.merged_channel_ids across streams just as the engine's
+    Pass-2 loop does.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        # Three distinct channels; streams lists start empty.
+        self.channels = [
+            {"id": 10, "name": "ESPN", "tvg_id": "", "channel_number": 100, "streams": []},
+            {"id": 20, "name": "CNN", "tvg_id": "", "channel_number": 200, "streams": []},
+            {"id": 30, "name": "FOX", "tvg_id": "", "channel_number": 300, "streams": []},
+        ]
+
+    def _create_channel_merge_dry_run(self, executor, channel_name, stream_id,
+                                      if_exists="merge"):
+        """Execute a dry-run create_channel+if_exists=merge action for one stream.
+
+        This is the code path that was MISSING the dict update: _execute_create_channel
+        finds an existing channel → calls _add_stream_to_channel directly, bypassing
+        _execute_merge_streams and its _merge_streams_added_by_channel update.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": channel_name,
+            "if_exists": if_exists,
+        }
+        stream_ctx = StreamContext(
+            stream_id=stream_id,
+            stream_name=f"stream-{stream_id}",
+            m3u_account_id=1,
+        )
+        exec_ctx = ExecutionContext(dry_run=True)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, exec_ctx)
+        )
+        return result, exec_ctx
+
+    def _create_channel_merge_live(self, executor, channel_name, stream_id,
+                                   if_exists="merge"):
+        """Execute a live create_channel+if_exists=merge action for one stream."""
+        action = {
+            "type": "create_channel",
+            "name_template": channel_name,
+            "if_exists": if_exists,
+        }
+        stream_ctx = StreamContext(
+            stream_id=stream_id,
+            stream_name=f"stream-{stream_id}",
+            m3u_account_id=1,
+        )
+        exec_ctx = ExecutionContext(dry_run=False)
+        with patch("auto_creation_executor.journal.log_entry"):
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, stream_ctx, exec_ctx)
+            )
+        return result, exec_ctx
+
+    # ------------------------------------------------------------------
+    # DRY-RUN: create_channel + if_exists=merge (the reported bug path)
+    # ------------------------------------------------------------------
+
+    def test_create_channel_merge_dry_run_populates_dict(self):
+        """DRY-RUN: create_channel+if_exists=merge records the touched channel.
+
+        This is the exact bug: streams_merged==N but channels_touched==0.
+        channels_touched is unioned from exec_ctx.merged_channel_ids (populated at
+        the add_result chokepoint), which every merge path flows through.
+        """
+        executor = ActionExecutor(self.client, existing_channels=self.channels)
+
+        # 3 merges into ESPN (id=10), 2 into CNN (id=20) — 2 distinct channels
+        touched: set = set()
+        for sid in (301, 302, 303):
+            _, exec_ctx = self._create_channel_merge_dry_run(executor, "ESPN", sid)
+            touched.update(exec_ctx.merged_channel_ids)
+        for sid in (401, 402):
+            _, exec_ctx = self._create_channel_merge_dry_run(executor, "CNN", sid)
+            touched.update(exec_ctx.merged_channel_ids)
+
+        assert len(touched) == 2, (
+            f"channels_touched=0 (create_channel+if_exists=merge dry-run bug): "
+            f"touched={touched!r}"
+        )
+        assert touched == {10, 20}
+
+    def test_create_channel_merge_only_dry_run_populates_dict(self):
+        """DRY-RUN: create_channel+if_exists=merge_only also records the channel."""
+        executor = ActionExecutor(self.client, existing_channels=self.channels)
+
+        touched: set = set()
+        for sid in (501, 502):
+            _, exec_ctx = self._create_channel_merge_dry_run(executor, "ESPN", sid, if_exists="merge_only")
+            touched.update(exec_ctx.merged_channel_ids)
+        _, exec_ctx = self._create_channel_merge_dry_run(executor, "FOX", 503, if_exists="merge_only")
+        touched.update(exec_ctx.merged_channel_ids)
+
+        assert len(touched) == 2, (
+            f"merge_only dry-run bug: touched={touched!r}"
+        )
+        assert touched == {10, 30}
+
+    def test_create_channel_merge_dry_run_streams_merged_channels_touched_consistent(self):
+        """DRY-RUN: streams_merged and channels_touched are consistent for create_channel+merge.
+
+        This is the exact inconsistency reported: streams_merged=26, channels_touched=0.
+        After the fix: channels_touched == distinct target channels.
+        """
+        executor = ActionExecutor(self.client, existing_channels=self.channels)
+
+        total_streams_merged = 0
+        touched: set = set()
+        inputs = [
+            ("ESPN", 601), ("ESPN", 602), ("ESPN", 603),  # 3 into channel 10
+            ("CNN",  701), ("CNN",  702),                  # 2 into channel 20
+            ("FOX",  801),                                 # 1 into channel 30
+        ]
+        for ch_name, sid in inputs:
+            _, exec_ctx = self._create_channel_merge_dry_run(executor, ch_name, sid)
+            total_streams_merged += exec_ctx.streams_merged
+            touched.update(exec_ctx.merged_channel_ids)
+
+        assert total_streams_merged == 6, (
+            f"streams_merged should be 6, got {total_streams_merged}"
+        )
+        channels_touched = len(touched)
+        assert channels_touched == 3, (
+            f"streams_merged={total_streams_merged} but channels_touched={channels_touched} "
+            f"(inconsistency in dry-run create_channel+merge path)"
+        )
+
+    # ------------------------------------------------------------------
+    # LIVE: create_channel + if_exists=merge (regression guard)
+    # ------------------------------------------------------------------
+
+    def test_create_channel_merge_live_populates_dict(self):
+        """LIVE: create_channel+if_exists=merge also records the touched channel.
+
+        Both live and dry-run paths must record the target channel id.
+        """
+        executor = ActionExecutor(self.client, existing_channels=self.channels)
+
+        touched: set = set()
+        for sid in (901, 902, 903):
+            _, exec_ctx = self._create_channel_merge_live(executor, "ESPN", sid)
+            touched.update(exec_ctx.merged_channel_ids)
+        for sid in (911, 912):
+            _, exec_ctx = self._create_channel_merge_live(executor, "CNN", sid)
+            touched.update(exec_ctx.merged_channel_ids)
+
+        assert len(touched) == 2
+        assert touched == {10, 20}
+
+    # ------------------------------------------------------------------
+    # merge_streams action path (already worked; regression guard)
+    # ------------------------------------------------------------------
+
+    def test_merge_streams_action_dry_run_still_works(self):
+        """REGRESSION: merge_streams action path still tracks correctly in dry-run.
+
+        The fix must not break the merge_streams action path. It still populates
+        the prune dict _merge_streams_added_by_channel (used by prune) AND now
+        also records into exec_ctx.merged_channel_ids (used by channels_touched)
+        via the add_result chokepoint.
+        """
+        executor = ActionExecutor(self.client, existing_channels=self.channels)
+
+        touched: set = set()
+        for sid in (1001, 1002):
+            action = {
+                "type": "merge_streams",
+                "target": "existing_channel",
+                "find_channel_by": "name_exact",
+                "find_channel_value": "ESPN",
+            }
+            stream_ctx = StreamContext(stream_id=sid, stream_name=f"s{sid}", m3u_account_id=1)
+            exec_ctx = ExecutionContext(dry_run=True)
+            asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, stream_ctx, exec_ctx)
+            )
+            touched.update(exec_ctx.merged_channel_ids)
+
+        # Prune dict (call-site accounting) still works:
+        assert 10 in executor._merge_streams_added_by_channel
+        assert executor._merge_streams_added_by_channel[10] == {1001, 1002}
+        # Chokepoint set (channels_touched accounting) is populated too:
+        assert touched == {10}

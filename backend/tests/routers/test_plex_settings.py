@@ -317,3 +317,56 @@ class TestPlexTestConnectionSsrfMitigation:
         assert response.status_code == 200, response.json()
         assert response.json() == {"ok": True}
         assert captured["base_url"] == "https://plex.example.com:32400"
+
+    @pytest.mark.asyncio
+    async def test_rejects_loopback_smoke(self, async_client):
+        """Loopback denylist smoke (bd-fbc50) — full coverage is on the
+        shared ``_sanitize_base_url`` helper in the Emby suite; this just
+        confirms the Plex path is wired through the same guard."""
+        plex_constructor = AsyncMock()
+        with patch("routers.settings.PlexClient", side_effect=plex_constructor):
+            response = await async_client.post(
+                "/api/settings/plex/test-connection",
+                json={"base_url": "http://127.0.0.1:32400", "token": "tkn"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        plex_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_metadata_ip_smoke(self, async_client):
+        """Cloud metadata IP is blocked on the Plex path (bd-fbc50)."""
+        plex_constructor = AsyncMock()
+        with patch("routers.settings.PlexClient", side_effect=plex_constructor):
+            response = await async_client.post(
+                "/api/settings/plex/test-connection",
+                json={"base_url": "http://169.254.169.254", "token": "tkn"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        plex_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_allows_rfc1918_smoke(self, async_client):
+        """RFC1918 LAN host stays reachable on the Plex path (bd-fbc50)."""
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[])
+        mock_client.close = AsyncMock()
+
+        captured: dict = {}
+
+        def constructor_spy(base_url, token):
+            captured["base_url"] = base_url
+            return mock_client
+
+        with patch("routers.settings.PlexClient", side_effect=constructor_spy):
+            response = await async_client.post(
+                "/api/settings/plex/test-connection",
+                json={"base_url": "http://192.168.1.50:32400", "token": "tkn"},
+            )
+
+        assert response.status_code == 200, response.json()
+        assert response.json() == {"ok": True}
+        assert captured["base_url"] == "http://192.168.1.50:32400"

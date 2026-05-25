@@ -50,6 +50,7 @@ const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string
   video_codec: { icon: 'movie_filter', label: 'Video Codec', description: 'AV1 > HEVC > H.264 > MPEG2' },
   m3u_priority: { icon: 'low_priority', label: 'M3U Priority', description: 'Higher priority M3U first' },
   audio_channels: { icon: 'surround_sound', label: 'Audio Channels', description: '5.1 > Stereo > Mono' },
+  custom_streams: { icon: 'edit_note', label: 'Custom Streams', description: 'Operator-added custom streams first' },
 };
 
 // Failed stream category configuration for drag-and-drop ordering
@@ -62,7 +63,7 @@ const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label
 const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps'];
 
 // All known sort criteria - used to merge new criteria into saved settings
-const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels'];
+const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams'];
 
 // Default enabled state for each criterion
 const DEFAULT_SORT_ENABLED: SortEnabledMap = {
@@ -72,6 +73,7 @@ const DEFAULT_SORT_ENABLED: SortEnabledMap = {
   video_codec: false,
   m3u_priority: false,
   audio_channels: false,
+  custom_streams: false,
 };
 
 // Merge saved sort criteria with any new criteria that may have been added
@@ -389,8 +391,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // attribution candidates, never to gate.
   const [trustedMediaNetworks, setTrustedMediaNetworks] = useState<string[]>([]);
 
-  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels']);
-  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false });
+  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams']);
+  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
   const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);

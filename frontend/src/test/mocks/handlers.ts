@@ -178,12 +178,14 @@ export function createMockAutoCreationExecution(overrides: Partial<MockAutoCreat
     groups_created: overrides.groups_created ?? 1,
     streams_merged: overrides.streams_merged ?? 2,
     streams_skipped: overrides.streams_skipped ?? 0,
+    streams_excluded: overrides.streams_excluded ?? 0,
     created_entities: overrides.created_entities ?? [],
     modified_entities: overrides.modified_entities ?? [],
     dry_run_results: overrides.dry_run_results ?? undefined,
     rolled_back_at: overrides.rolled_back_at ?? undefined,
     rolled_back_by: overrides.rolled_back_by ?? undefined,
     error: overrides.error ?? undefined,
+    has_snapshot: overrides.has_snapshot ?? false,
   }
 }
 
@@ -341,12 +343,15 @@ interface MockAutoCreationExecution {
   groups_created: number
   streams_merged: number
   streams_skipped: number
+  streams_excluded: number
   created_entities: object[]
   modified_entities: object[]
   dry_run_results?: object[]
   rolled_back_at?: string
   rolled_back_by?: string
   error?: string
+  /** ADR-010 §D6 — true when a pre-run AutoCreationSnapshot row exists. */
+  has_snapshot?: boolean
 }
 
 export function createMockPopularityScore(overrides: Partial<MockPopularityScore> = {}): MockPopularityScore {
@@ -422,8 +427,8 @@ export const mockDataStore: MockDataStore = {
     timezone_preference: 'both',
     default_channel_profile_ids: [],
     custom_network_prefixes: [],
-    stream_sort_priority: ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'],
-    stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
+    stream_sort_priority: ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels', 'custom_streams'],
+    stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false, custom_streams: false },
     m3u_account_priorities: {},
     deprioritize_failed_streams: true,
     deprioritize_black_screen: true,
@@ -1125,6 +1130,56 @@ export const handlers = [
       success: true,
       entities_removed: execution.channels_created,
       entities_restored: 0,
+    })
+  }),
+
+  // Snapshot-restore endpoint (ADR-010 §D8, uc51o.7).
+  // Returns removed_channels / restored_channels counts + failed_channels list.
+  http.post(`${API_BASE}/auto-creation/executions/:id/restore-snapshot`, ({ params, request }) => {
+    const id = parseInt(params.id as string)
+    const url = new URL(request.url)
+    const confirm = url.searchParams.get('confirm') === 'true'
+
+    if (!confirm) {
+      return HttpResponse.json(
+        { detail: 'Restore requires confirm=true' },
+        { status: 400 }
+      )
+    }
+
+    const execution = mockDataStore.autoCreationExecutions.find(e => e.id === id)
+    if (!execution) {
+      return HttpResponse.json(
+        { detail: 'Execution not found' },
+        { status: 404 }
+      )
+    }
+    if (!execution.has_snapshot) {
+      return HttpResponse.json(
+        { detail: 'No snapshot for this execution (use /rollback instead)' },
+        { status: 404 }
+      )
+    }
+    if (execution.mode === 'dry_run') {
+      return HttpResponse.json(
+        { detail: 'Cannot restore a dry-run execution' },
+        { status: 400 }
+      )
+    }
+    if (execution.status === 'rolled_back') {
+      return HttpResponse.json(
+        { detail: 'Execution has already been reverted' },
+        { status: 400 }
+      )
+    }
+
+    execution.status = 'rolled_back'
+    execution.rolled_back_at = new Date().toISOString()
+    return HttpResponse.json({
+      success: true,
+      removed_channels: execution.channels_created,
+      restored_channels: 10,
+      failed_channels: [],
     })
   }),
 

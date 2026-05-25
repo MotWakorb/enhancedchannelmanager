@@ -22,6 +22,7 @@ from bandwidth_tracker import (
 from database import get_session
 from dispatcharr_client import get_client
 from models import SessionTelemetry, UniqueClientConnection, User
+from observability import get_metric
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ def _ms_to_iso_z(ms: Optional[int]) -> Optional[str]:
     )
 
 
-def _distinct_poll_subquery(session: Session):
+def _distinct_poll_subquery(session: Session, *, include_usernames: bool = False):
     """DISTINCT (user_id, channel_id, observed_at) collapse subquery.
 
     Returns one row per (user, channel, poll-tick) tuple with the poll
@@ -108,7 +109,24 @@ def _distinct_poll_subquery(session: Session):
     (user, channel, observed_at) tuple, take the longer one — never
     overcount.
 
-    bd-gsn3r: ``MAX(dispatcharr_username)`` is also defensive — within a
+    ``include_usernames`` (bd-ly5sa perf fix) gates the four denormalized
+    display-name columns (``dispatcharr_username``, ``emby_user_name``,
+    ``plex_user_name``, ``jellyfin_user_name``). They are ``MAX()``
+    aggregates over wide nullable TEXT columns, and the inner GROUP BY on
+    ``(user_id, channel_id, observed_at)`` already requires a temp-B-tree
+    sort (no index covers that exact key, and a covering index measured
+    *slower* because it forces random table lookups to fetch these TEXT
+    columns). Carrying the four TEXT aggregates through that sort cost
+    ~10% CPU on the hot ``GET /api/stats/watch-time`` total path even
+    though that path's own caller (and the channel-breakdown caller)
+    never read them back. Default is **False** (lean: only the columns
+    the SUM/MAX-by-user aggregations need); callers that surface the
+    display name opt in. Behaviour is identical either way for callers
+    that do not read the username columns — only the inner aggregate
+    work changes, never the collapsed row population or the
+    ``poll_interval_ms`` / ``observed_at`` values.
+
+    bd-gsn3r: ``MAX(dispatcharr_username)`` is defensive — within a
     single (user_id, channel_id, observed_at) tuple every row should
     carry the same username (one human, one poll). MAX picks one
     deterministically without inflating the row count, so the outer
@@ -125,22 +143,32 @@ def _distinct_poll_subquery(session: Session):
     ``attribution_source`` field so the frontend can render a "via
     Emby" badge.
     """
-    return (
-        session.query(
-            SessionTelemetry.user_id.label("user_id"),
-            SessionTelemetry.channel_id.label("channel_id"),
-            SessionTelemetry.observed_at.label("observed_at"),
-            func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
-            func.max(SessionTelemetry.dispatcharr_username).label("dispatcharr_username"),
-            func.max(SessionTelemetry.emby_user_name).label("emby_user_name"),
-            # bd-r5f0c.4: Plex + Jellyfin attribution surfaces alongside
-            # Emby on the same per-row aggregation. Same defensive MAX
-            # rationale as the Emby column — within one (user, channel,
-            # observed_at) tuple every row should agree, but MAX picks
-            # one deterministically without inflating the row count.
-            func.max(SessionTelemetry.plex_user_name).label("plex_user_name"),
-            func.max(SessionTelemetry.jellyfin_user_name).label("jellyfin_user_name"),
+    columns = [
+        SessionTelemetry.user_id.label("user_id"),
+        SessionTelemetry.channel_id.label("channel_id"),
+        SessionTelemetry.observed_at.label("observed_at"),
+        func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+    ]
+    if include_usernames:
+        columns.extend(
+            [
+                func.max(SessionTelemetry.dispatcharr_username).label(
+                    "dispatcharr_username"
+                ),
+                func.max(SessionTelemetry.emby_user_name).label("emby_user_name"),
+                # bd-r5f0c.4: Plex + Jellyfin attribution surfaces alongside
+                # Emby on the same per-row aggregation. Same defensive MAX
+                # rationale as the Emby column — within one (user, channel,
+                # observed_at) tuple every row should agree, but MAX picks
+                # one deterministically without inflating the row count.
+                func.max(SessionTelemetry.plex_user_name).label("plex_user_name"),
+                func.max(SessionTelemetry.jellyfin_user_name).label(
+                    "jellyfin_user_name"
+                ),
+            ]
         )
+    return (
+        session.query(*columns)
         .group_by(
             SessionTelemetry.user_id,
             SessionTelemetry.channel_id,
@@ -958,6 +986,19 @@ async def get_channel_stats():
             # added keys.
             await _enrich_channels_with_attribution(channels)
 
+        # bd-w89ox: SLO-8 dashboard signal — count unattributed channels
+        # (m3u_account_id is None after resolver ran) so the Unknown-bucket
+        # rate can be trended in Prometheus without scraping the UI.
+        # Label-free counter; cardinality is one series process-wide.
+        unknown_count = sum(
+            1 for ch in channels if ch.get("m3u_account_id") is None
+        )
+        if unknown_count:
+            try:
+                get_metric("stats_active_channels_unknown_provider_total").inc(unknown_count)
+            except Exception:
+                pass  # Metrics are best-effort; never break the response path.
+
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to get channel stats")
@@ -1369,7 +1410,12 @@ async def get_watch_time_by_user(
         return _build_envelope([], from_ms=from_ms, to_ms=to_ms, group_by=group_by)
 
     try:
-        distinct = _distinct_poll_subquery(db)
+        # bd-ly5sa: this endpoint surfaces the denormalized display-name
+        # columns in its outer MAX() aggregation (see the total/day branches
+        # below), so it opts into the username columns in the collapse
+        # subquery. The channel-breakdown caller and the perf benchmark use
+        # the lean default (no TEXT MAX) for the hot path.
+        distinct = _distinct_poll_subquery(db, include_usernames=True)
         # Only count rows whose user_id is non-NULL: NULL user_id == anonymous
         # poll (no logged-in user). Watch-time-by-user has no meaningful row
         # for the anonymous bucket — drop them rather than emit a NULL-user

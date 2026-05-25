@@ -359,6 +359,38 @@ class TestAutoCreationEngineRunPipeline:
         assert result["message"] == "No enabled rules to process"
 
 
+def _route_rollback_queries(mock_session, mock_execution):
+    """Wire a MagicMock session so the LEGACY (no-snapshot) rollback path runs.
+
+    uc51o.5 made ``rollback_execution`` first probe for an AutoCreationSnapshot
+    and divert to the full restore when one exists. A plain
+    ``mock_session.query.return_value...`` returns the SAME chain for every
+    query, so the snapshot-existence probe would wrongly see the execution mock
+    and treat the run as snapshotted. These legacy tests model NO-snapshot runs,
+    so route the AutoCreationSnapshot probe to None and everything else to the
+    execution.
+    """
+    from models import AutoCreationSnapshot
+
+    exec_chain = MagicMock()
+    exec_chain.filter.return_value.first.return_value = mock_execution
+    none_chain = MagicMock()
+    none_chain.filter.return_value.first.return_value = None
+
+    def _is_snapshot_arg(a):
+        # The probe is session.query(AutoCreationSnapshot.id) — a column
+        # attribute whose owning class is AutoCreationSnapshot. Also match the
+        # class itself for robustness.
+        return a is AutoCreationSnapshot or getattr(a, "class_", None) is AutoCreationSnapshot
+
+    def _query(*args, **kwargs):
+        if any(_is_snapshot_arg(a) for a in args):
+            return none_chain
+        return exec_chain
+
+    mock_session.query.side_effect = _query
+
+
 class TestAutoCreationEngineRollback:
     """Tests for rollback functionality."""
 
@@ -435,7 +467,7 @@ class TestAutoCreationEngineRollback:
         mock_execution.get_modified_entities.return_value = [
             {"type": "channel", "id": 3, "name": "CNN", "previous": {"logo_url": "old.png"}},
         ]
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         result = asyncio.get_event_loop().run_until_complete(
             self.engine.rollback_execution(1)
@@ -467,7 +499,7 @@ class TestAutoCreationEngineRollback:
             {"type": "channel", "id": 1, "name": "ESPN"},
         ]
         mock_execution.get_modified_entities.return_value = []
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         # Make delete fail
         self.client.delete_channel = AsyncMock(side_effect=Exception("API error"))
@@ -478,6 +510,52 @@ class TestAutoCreationEngineRollback:
 
         # Should still succeed (errors are logged but don't fail rollback)
         assert result["success"] is True
+
+        # The delete was attempted — the API-error swallow path was actually hit.
+        self.client.delete_channel.assert_called_once_with(1)
+
+    @patch("auto_creation_engine.get_session")
+    def test_rollback_unmerge_multiple_into_same_channel_restores_original(self, mock_get_session):
+        """bd-a7okb: multiple merges into ONE pre-existing channel restore to the
+        true original stream list, not the second-to-last snapshot.
+
+        A run that merges streams 11, 12, 13 into a channel that already held
+        [10] records cumulative `previous` snapshots, one per merge:
+            before 11 -> [10]
+            before 12 -> [10, 11]
+            before 13 -> [10, 11, 12]
+        Restore is overwrite/last-write-wins. Applied FORWARD, the final state
+        would be [10, 11, 12] (only the last merge removed). Applied REVERSED,
+        the earliest snapshot [10] wins — the correct original. This asserts the
+        LAST update_channel call restores [10].
+        """
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
+        mock_execution = MagicMock()
+        mock_execution.status = "completed"
+        mock_execution.mode = "execute"
+        mock_execution.get_created_entities.return_value = []
+        mock_execution.get_modified_entities.return_value = [
+            {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10]}},
+            {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10, 11]}},
+            {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10, 11, 12]}},
+        ]
+        _route_rollback_queries(mock_session, mock_execution)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.engine.rollback_execution(1)
+        )
+
+        assert result["success"] is True
+        assert result["entities_restored"] == 3
+        assert self.client.update_channel.call_count == 3
+        # The decisive assertion: the final write must restore the ORIGINAL list.
+        last_call = self.client.update_channel.call_args_list[-1]
+        assert last_call.args == (3, {"streams": [10]}), (
+            "rollback must end by restoring the pre-run streams [10]; "
+            f"last update_channel was {last_call.args} (forward-order bug leaves extra streams)"
+        )
 
 
 class TestAutoCreationEngineProcessStreams:
@@ -739,7 +817,8 @@ class TestPass3RenumberGating:
                                 rule_target_group_id=None,
                                 normalization_group_ids=None,
                                 match_scope_target_group=False,
-                                rule_scope_group_id=None):
+                                rule_scope_group_id=None,
+                                rule_id=None):
             exec_ctx.current_channel_id = channel_id
             if created:
                 exec_ctx.created_channel_ids.add(channel_id)
@@ -844,7 +923,8 @@ class TestPass3RenumberGating:
                                 rule_target_group_id=None,
                                 normalization_group_ids=None,
                                 match_scope_target_group=False,
-                                rule_scope_group_id=None):
+                                rule_scope_group_id=None,
+                                rule_id=None):
             exec_ctx.current_channel_id = 501
             return self.ActionResult(
                 success=True,
@@ -1212,7 +1292,7 @@ class TestAutoCreationEngineRollbackHelpers:
         self.client.delete_channel_group.assert_called_once_with(1)
 
     def test_rollback_created_entity_api_error(self):
-        """Rollback handles API error gracefully."""
+        """Rollback handles API error gracefully — and actually attempted the delete."""
         self.client.delete_channel = AsyncMock(side_effect=Exception("API error"))
         entity = {"type": "channel", "id": 1, "name": "ESPN"}
 
@@ -1220,6 +1300,9 @@ class TestAutoCreationEngineRollbackHelpers:
         asyncio.get_event_loop().run_until_complete(
             self.engine._rollback_created_entity(entity)
         )
+
+        # The delete was attempted — the swallow path was actually reached.
+        self.client.delete_channel.assert_called_once_with(1)
 
     def test_rollback_modified_channel(self):
         """Rollback modified channel by restoring state."""
@@ -1247,7 +1330,7 @@ class TestAutoCreationEngineRollbackHelpers:
         self.client.update_channel.assert_not_called()
 
     def test_rollback_modified_entity_api_error(self):
-        """Rollback handles API error gracefully."""
+        """Rollback handles API error gracefully — and actually attempted the update."""
         self.client.update_channel = AsyncMock(side_effect=Exception("API error"))
         entity = {
             "type": "channel",
@@ -1260,6 +1343,9 @@ class TestAutoCreationEngineRollbackHelpers:
         asyncio.get_event_loop().run_until_complete(
             self.engine._rollback_modified_entity(entity)
         )
+
+        # The update was attempted — the swallow path was actually reached.
+        self.client.update_channel.assert_called_once_with(1, {"logo_url": "old.png"})
 
 
 class TestAutoCreationEngineIntegration:
@@ -1820,4 +1906,267 @@ class TestSmartSortCustomStreams:
         assert result == [20, 10], (
             f"Expected custom stream (priority 50) to lead over M3U stream "
             f"(priority 10) within the deprioritized bucket, got {result}"
+        )
+
+
+class TestSmartSortCustomStreamsCriterion:
+    """bead ap1ud / GH #244: the dedicated ``custom_streams`` Smart Sort criterion.
+
+    Binary criterion — a stream scores 1 if its id is in ``custom_stream_ids``
+    (Dispatcharr is_custom), else 0. When ranked as the top active criterion,
+    custom streams sort to the top; ties fall through to the next criterion.
+    Mirrors the prober's TestSmartSortCustomStreamsCriterion.
+    """
+
+    def test_custom_stream_sorts_first_when_top_criterion(self):
+        """With custom_streams as the sole/top criterion, the custom stream leads."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams"],
+            stream_sort_enabled={"custom_streams": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, stream_name="M3U Stream"),
+            20: _success_stats_dict(20, stream_name="Custom Stream"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={10: 1, 20: 2},
+            channel_name="ap1ud-custom-first", settings=settings,
+            custom_stream_ids={20},
+        )
+        assert result == [20, 10], (
+            f"Expected custom stream (id=20) to sort first, got {result}"
+        )
+
+    def test_custom_streams_disabled_has_no_effect(self):
+        """When custom_streams is disabled, it does not influence ordering."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": False, "resolution": True},
+        )
+        # id=10 is custom but lower resolution; id=20 is M3U but higher resolution.
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1280x720", stream_name="Custom"),
+            20: _success_stats_dict(20, resolution="1920x1080", stream_name="M3U"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={20: 1},
+            channel_name="ap1ud-custom-disabled", settings=settings,
+            custom_stream_ids={10},
+        )
+        # Sorted by resolution only — higher res (id=20) first.
+        assert result == [20, 10], (
+            f"Expected resolution-only ordering [20, 10] with custom_streams "
+            f"disabled, got {result}"
+        )
+
+    def test_pure_m3u_channel_unaffected(self):
+        """A channel with no custom streams is unaffected by the criterion."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1920x1080", stream_name="M3U Hi"),
+            20: _success_stats_dict(20, resolution="1280x720", stream_name="M3U Lo"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={10: 1, 20: 2},
+            channel_name="ap1ud-pure-m3u", settings=settings,
+            custom_stream_ids=set(),  # no custom streams
+        )
+        # No custom streams → custom_streams criterion is a constant 0; falls
+        # through to resolution: higher res (id=10) first.
+        assert result == [10, 20], (
+            f"Expected resolution ordering [10, 20] for pure-M3U channel, got {result}"
+        )
+
+    def test_criterion_inert_when_custom_stream_ids_not_supplied(self):
+        """When custom_stream_ids is omitted, custom_streams scores 0 everywhere
+        and the next criterion (resolution) decides — graceful degradation."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1920x1080", stream_name="Hi"),
+            20: _success_stats_dict(20, resolution="1280x720", stream_name="Lo"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={10: 1, 20: 2},
+            channel_name="ap1ud-inert", settings=settings,
+            # custom_stream_ids intentionally omitted
+        )
+        assert result == [10, 20], (
+            f"Expected resolution ordering [10, 20] when custom_stream_ids "
+            f"omitted, got {result}"
+        )
+
+    def test_custom_tie_falls_through_to_next_criterion(self):
+        """Two custom streams tie on custom_streams; resolution breaks the tie."""
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1280x720", stream_name="Custom Lo"),
+            20: _success_stats_dict(20, resolution="1920x1080", stream_name="Custom Hi"),
+        }
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={},
+            channel_name="ap1ud-custom-tie", settings=settings,
+            custom_stream_ids={10, 20},  # both custom
+        )
+        # Both custom (tie); resolution breaks tie → higher res (id=20) first.
+        assert result == [20, 10], (
+            f"Expected resolution tiebreak [20, 10] among custom streams, got {result}"
+        )
+
+
+class TestRunPipelineCreateChannelMergeChannelsTouched:
+    """bd-0emgo.4 real-path regression: create_channel + if_exists=merge dry-run.
+
+    A live dry-run of a ``create_channel`` rule with ``if_exists=merge`` reported
+    ``streams_merged=26`` but ``channels_touched=0`` — inconsistent. Two earlier
+    fix attempts populated the per-channel tracking dict at specific CALL SITES
+    (``_execute_merge_streams`` and the ``_execute_create_channel`` if_exists=merge
+    branch), and their tests pre-seeded ``existing_channels`` so the FIRST stream
+    of each name already merged. But the real run created the channel for the
+    first stream and merged the 2nd+ streams into the *would-be-created* channel —
+    a path that, depending on lookup/normalization, the call-site additions did
+    not reliably cover.
+
+    These tests drive the REAL pipeline (``run_pipeline`` -> ``_process_streams``
+    -> ``executor.execute`` -> ``_execute_create_channel`` -> ``_add_stream_to_channel``)
+    with channels that do NOT pre-exist, so the merges flow through the create
+    path exactly as in the live run. They assert ``channels_touched`` is the
+    distinct count of channels that received a merged stream — and is NOT 0.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        # No pre-existing channels: every channel is created during the run,
+        # so 2nd+ same-name streams merge into a would-be-created channel.
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_channel_groups = AsyncMock(return_value=[])
+        self.client.update_channel = AsyncMock()
+        # create_channel is only called in LIVE mode; dry-run never hits it.
+        self._next_live_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_live_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        self.engine = AutoCreationEngine(self.client)
+
+    def _make_rule(self, if_exists="merge"):
+        """A real (unpersisted) AutoCreationRule: create_channel + if_exists=merge.
+
+        Using a real model instance (not a MagicMock) keeps sort_field=None,
+        get_managed_channel_ids()=[], get_normalization_group_ids()=[], etc., so
+        the pipeline's sort/renumber passes stay inert and the merge path is the
+        only thing exercised.
+        """
+        from models import AutoCreationRule
+
+        rule = AutoCreationRule()
+        rule.id = 1
+        rule.name = "Create+Merge Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([{
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": if_exists,
+        }])
+        return rule
+
+    def _make_streams(self, names_to_ids):
+        """Build StreamContexts. names_to_ids: list of (name, stream_id)."""
+        return [
+            StreamContext(stream_id=sid, stream_name=name, m3u_account_id=1)
+            for name, sid in names_to_ids
+        ]
+
+    def _run(self, rule, streams, dry_run):
+        """Drive the REAL pipeline with the rule/streams, stubbing only the
+        DB/IO lifecycle boundaries (rules load, stream fetch, execution
+        persistence). _process_streams and the whole executor chain run for real.
+        """
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.engine._create_execution = AsyncMock(return_value=MagicMock(id=1, mode=None))
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+
+        with patch("auto_creation_engine.get_session") as mock_get_session:
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_dry_run_create_channel_merge_channels_touched_not_zero(self):
+        """DRY-RUN: streams_merged>=1 AND channels_touched == distinct merged-into
+        channels (NOT 0) — the exact live inconsistency.
+
+        Inputs share names so 2nd+ streams merge into would-be-created channels:
+          ESPN x3 -> 1 created + 2 merged
+          CNN  x2 -> 1 created + 1 merged
+          FOX  x1 -> 1 created + 0 merged (not "touched by a merge")
+        => streams_merged == 3, channels_touched == 2 (ESPN, CNN).
+        """
+        rule = self._make_rule(if_exists="merge")
+        streams = self._make_streams([
+            ("ESPN", 601), ("ESPN", 602), ("ESPN", 603),
+            ("CNN", 701), ("CNN", 702),
+            ("FOX", 801),
+        ])
+
+        result = self._run(rule, streams, dry_run=True)
+
+        assert result["streams_merged"] == 3, (
+            f"expected 3 merges (2 ESPN + 1 CNN), got {result['streams_merged']}"
+        )
+        # The bug: channels_touched stays 0 even though merges happened.
+        assert result["channels_touched"] != 0, (
+            f"channels_touched must not be 0 when streams_merged="
+            f"{result['streams_merged']} (live create_channel+merge dry-run bug)"
+        )
+        assert result["channels_touched"] == 2, (
+            f"expected 2 distinct channels touched by merges (ESPN, CNN), "
+            f"got {result['channels_touched']} "
+            f"(streams_merged={result['streams_merged']})"
+        )
+
+    def test_live_create_channel_merge_channels_touched_consistent(self):
+        """LIVE: same scenario through the real create_channel API path.
+
+        channels_touched must still equal the distinct merged-into channel count.
+        """
+        rule = self._make_rule(if_exists="merge")
+        streams = self._make_streams([
+            ("ESPN", 901), ("ESPN", 902), ("ESPN", 903),
+            ("CNN", 911), ("CNN", 912),
+            ("FOX", 921),
+        ])
+
+        with patch("auto_creation_executor.journal.log_entry"):
+            result = self._run(rule, streams, dry_run=False)
+
+        assert result["streams_merged"] == 3, (
+            f"expected 3 merges, got {result['streams_merged']}"
+        )
+        assert result["channels_touched"] == 2, (
+            f"expected 2 distinct channels touched by merges, "
+            f"got {result['channels_touched']}"
         )

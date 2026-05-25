@@ -275,6 +275,17 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/auto-creation/run",
         request_fields=frozenset({"dry_run", "m3u_account_ids", "rule_ids"}),
     ),
+    # enhancedchannelmanager-jnzst Component B: no-write scored fuzzy preview.
+    # The MCP preview_fuzzy_matches tool + the dry-run path of
+    # match_streams_to_channels / fuzzy_match_stream read from here.
+    "ac_fuzzy_preview": Endpoint(
+        name="ac_fuzzy_preview",
+        method="GET",
+        path="/api/auto-creation/fuzzy-preview",
+        query_params=frozenset(
+            {"group_ids", "min_score", "allow_no_callsign", "page", "page_size"}
+        ),
+    ),
     "ac_list_executions": Endpoint(
         name="ac_list_executions",
         method="GET",
@@ -300,6 +311,28 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="ac_rollback",
         method="POST",
         path="/api/auto-creation/executions/{execution_id}/rollback",
+    ),
+    # ADR-010 §D8 / uc51o.4 — full whole-run snapshot restore. ``confirm`` is a
+    # QUERY param (FastAPI ``Query``), the API-level acknowledgement of the §D5
+    # optimistic-overwrite warning; the restore is refused (400) without it. The
+    # restore_auto_creation_snapshot MCP tool (uc51o.6) routes here.
+    "ac_restore_snapshot": Endpoint(
+        name="ac_restore_snapshot",
+        method="POST",
+        path="/api/auto-creation/executions/{execution_id}/restore-snapshot",
+        query_params=frozenset({"confirm"}),
+    ),
+    # ADR-010 §D6 — read-only pre-run snapshot for an execution. The
+    # restore_auto_creation_snapshot tool reads ``channel_count`` from here on
+    # the confirm=False warning path so the operator sees the blast radius
+    # (how many channels a restore would overwrite) before re-invoking.
+    "ac_get_execution_snapshot": Endpoint(
+        name="ac_get_execution_snapshot",
+        method="GET",
+        path="/api/auto-creation/executions/{execution_id}/snapshot",
+        response_fields=frozenset({
+            "id", "execution_id", "snapshot_time", "channel_count", "channels",
+        }),
     ),
     # -- channel_groups domain --------------------------------------------
     "groups_list": Endpoint(
@@ -525,6 +558,18 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/normalization/rules",
     ),
+    # PATCH /api/normalization/groups/{group_id} — UpdateRuleGroupRequest
+    # (backend/routers/normalization.py:249 update_normalization_group).
+    # Wraps the existing backend endpoint; the MCP tool uses only ``enabled``
+    # to toggle the global enabled flag on a NormalizationRuleGroup, but the
+    # full UpdateRuleGroupRequest field set is declared here so request_fields
+    # subset check matches the Pydantic model (bd-svixy).
+    "normalization_update_group": Endpoint(
+        name="normalization_update_group",
+        method="PATCH",
+        path="/api/normalization/groups/{group_id}",
+        request_fields=frozenset({"name", "description", "enabled", "priority"}),
+    ),
     # -- notifications domain ---------------------------------------------
     "notifications_list": Endpoint(
         name="notifications_list",
@@ -713,14 +758,15 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/streams",
         query_params=frozenset(
-            {"page", "page_size", "search", "channel_group_name", "m3u_account", "sort", "enrich", "bypass_cache"}
+            {"page", "page_size", "search", "channel_group_name", "m3u_account",
+             "sort", "enrich", "include_assignment", "bypass_cache"}
         ),
     ),
     "streams_by_ids": Endpoint(
         name="streams_by_ids",
         method="POST",
         path="/api/streams/by-ids",
-        request_fields=frozenset({"stream_ids"}),  # BulkStreamIdsRequest
+        request_fields=frozenset({"stream_ids", "include_assignment"}),  # BulkStreamIdsRequest
     ),
     "stream_stats_summary": Endpoint(
         name="stream_stats_summary",
@@ -785,6 +831,16 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/backup/create",
     ),
+    # bd-0hjrk.5 — POST /api/backup/save PERSISTS the full backup ZIP to
+    # BACKUPS_DIR (unlike GET /create which only streams). No request body
+    # (admin-guarded; the backend builds the artifact). Returns
+    # {filename, size_bytes, created_at} — a bare dict (no response_model), so
+    # response_fields stays empty (the tool reads keys off the runtime dict).
+    "backup_save": Endpoint(
+        name="backup_save",
+        method="POST",
+        path="/api/backup/save",
+    ),
     "backup_export_sections": Endpoint(
         name="backup_export_sections",
         method="GET",
@@ -799,6 +855,16 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="backup_delete_saved",
         method="DELETE",
         path="/api/backup/saved/{filename}",
+    ),
+    # bd-0hjrk.5 — POST /api/backup/restore-saved restores from an on-disk saved
+    # ZIP (RestoreSavedRequest body = {"filename": ...}). The backend validates
+    # the filename via the strict regex + containment guard and reuses the same
+    # restore code path as the uploaded-ZIP POST /restore. Admin-guarded.
+    "backup_restore_saved": Endpoint(
+        name="backup_restore_saved",
+        method="POST",
+        path="/api/backup/restore-saved",
+        request_fields=frozenset({"filename"}),  # RestoreSavedRequest
     ),
     "journal_list": Endpoint(
         name="journal_list",

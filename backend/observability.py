@@ -749,6 +749,43 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             registry=registry,
         ),
         # ----------------------------------------------------------------
+        # Auto-creation pre-run snapshot growth (ADR-010 §D7, uc51o.3).
+        #
+        # A per-run snapshot of ~570 channels serializes to roughly
+        # 50 KB–3 MB, captured on every execute (incl. hourly
+        # run_on_refresh). Retention (CleanupTask age window + count cap)
+        # bounds it by construction; these two gauges make the current
+        # state observable so an operator (and any future alert rule) can
+        # see whether the cap is doing its job. Both are label-free —
+        # single-file, single-tenant — matching the database-size gauges.
+        #
+        # ``snapshot_count`` is the live row count of auto_creation_snapshots;
+        # the count cap (auto_creation_snapshot_max, default 50) is the
+        # ceiling, so a value pinned at the cap means the prune is the
+        # binding constraint (healthy). ``snapshot_bytes`` sums the
+        # serialized channels_data payload (LENGTH(channels_data)) — the
+        # storage cost — computed cheaply at prune time. Updated by
+        # CleanupTask.execute after the snapshot prune. No established
+        # alert rule yet; SRE owns the threshold (note in ADR-010 §D7).
+        # ----------------------------------------------------------------
+        "auto_creation_snapshot_count": Gauge(
+            "ecm_auto_creation_snapshot_count",
+            "Current number of auto_creation_snapshots rows retained. Bounded "
+            "by the auto_creation_snapshot_max count cap (default 50) and the "
+            "auto_creation_snapshot_days age window (default 30) enforced by "
+            "CleanupTask. Updated after the snapshot prune. No labels.",
+            registry=registry,
+        ),
+        "auto_creation_snapshot_bytes": Gauge(
+            "ecm_auto_creation_snapshot_bytes",
+            "Total size in bytes of the serialized channels_data payloads "
+            "across all retained auto_creation_snapshots (SUM(LENGTH("
+            "channels_data))). The storage cost of the snapshot table; the "
+            "count cap holds this to a bounded ceiling. Updated after the "
+            "snapshot prune. No labels.",
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
         # Task scheduler health (bd-qxi02, bd-p5b8i SRE recommendation).
         #
         # Two gauges expose the operational health of the task scheduler
@@ -1022,6 +1059,32 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             ["source"],
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # SLO-8 dashboard signal — Unknown-bucket channel count (bd-w89ox)
+        #
+        # Incremented once per /api/stats/channels response for EACH channel
+        # whose m3u_account_id is None after the live stream-identity resolver
+        # runs. A non-zero rate indicates that some active channels cannot be
+        # attributed to an M3U provider — the "Unknown" bucket in the Providers
+        # panel. This counter lets SRE build ratio panels against the total
+        # active-channel count (ecm_http_requests_total is not suitable for
+        # this ratio — use the Dispatcharr-reported channel count from
+        # /api/stats/channels as the denominator in dashboards).
+        #
+        # Cardinality: label-free counter. One counter process-wide. No
+        # per-channel, per-provider, or per-user labels — those belong in
+        # structured logs ("[STATS] unknown_provider channel_id=... url=...").
+        # ----------------------------------------------------------------
+        "stats_active_channels_unknown_provider_total": Counter(
+            "ecm_stats_active_channels_unknown_provider_total",
+            "Count of /api/stats/channels response entries where "
+            "m3u_account_id is None (provider attribution could not be "
+            "resolved for the active stream). Incremented once per "
+            "unattributed channel per /api/stats/channels call. "
+            "Use as numerator against total active channels for the "
+            "Unknown-bucket rate on SLO-8 dashboards. bd-w89ox.",
+            registry=registry,
+        ),
     }
 
 
@@ -1167,6 +1230,57 @@ def update_database_size_metrics(db_path: Optional[str] = None) -> None:
         logging.getLogger(__name__).debug(
             "[OBSERVABILITY] update_database_size_metrics failed", exc_info=True
         )
+
+
+def update_auto_creation_snapshot_metrics(session=None) -> None:
+    """Sample the auto_creation_snapshots count + size onto the gauges (ADR-010 §D7).
+
+    Publishes ``ecm_auto_creation_snapshot_count`` (live row count) and
+    ``ecm_auto_creation_snapshot_bytes`` (SUM(LENGTH(channels_data)) — the
+    serialized payload size, computed without parsing the BLOB) so the
+    growth of the pre-run snapshot table is observable and the count cap's
+    effectiveness is visible.
+
+    Called from ``tasks.cleanup.CleanupTask.execute`` immediately after the
+    snapshot prune step, so the gauges reflect the post-prune state.
+
+    Defensive: never raises. Observability instrumentation must not break the
+    cleanup task it's wrapping. A failure to publish is logged at DEBUG.
+
+    Parameters
+    ----------
+    session:
+        An active SQLAlchemy ``Session`` already connected to the journal DB
+        (the cleanup task passes its own). When ``None``, opens a fresh
+        session via ``database.get_session`` (the import is local so tests
+        that haven't initialized the DB module don't pay an import-time cost).
+    """
+    own_session = False
+    try:
+        from sqlalchemy import func
+
+        from models import AutoCreationSnapshot
+
+        if session is None:
+            from database import get_session  # local — avoid import cycle
+            session = get_session()
+            own_session = True
+
+        count = session.query(func.count(AutoCreationSnapshot.id)).scalar() or 0
+        total_bytes = session.query(
+            func.coalesce(func.sum(func.length(AutoCreationSnapshot.channels_data)), 0)
+        ).scalar() or 0
+
+        get_metric("auto_creation_snapshot_count").set(float(count))
+        get_metric("auto_creation_snapshot_bytes").set(float(total_bytes))
+    except Exception:  # pragma: no cover — never break the caller
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] update_auto_creation_snapshot_metrics failed",
+            exc_info=True,
+        )
+    finally:
+        if own_session and session is not None:
+            session.close()
 
 
 def record_task_success(task_id: str, timestamp: Optional[float] = None) -> None:

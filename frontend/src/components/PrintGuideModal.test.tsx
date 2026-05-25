@@ -1,14 +1,20 @@
 /**
- * Unit tests for PrintGuideModal — channel-number range filter.
+ * Unit tests for PrintGuideModal — per-group channel-number range and empty-slot
+ * placeholders.
  *
- * bd-9q9z0: Operator-selectable channel-number range filter for the Print
- * Channel Guide modal. Defaults to the full range so existing all-channels
- * behaviour is preserved; operators can narrow to a sub-range (e.g. 100–199)
- * for booklet sections. Range is applied before the existing group filter.
+ * bd-9eyqp: Replace the single global From/To range (bd-9q9z0) with per-group
+ * From/To inputs that default to each group's min/max used channel number and
+ * are independently editable. The empty-slot fill (bd-w532y) uses each group's
+ * own [From,To].
+ *
+ * bd-w532y: Empty-slot placeholders — when "Show empty slots" is enabled,
+ * generatePrintHtml fills in placeholder rows for channel numbers within a
+ * group's per-group range that have no real channel assigned.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { PrintGuideModal } from './PrintGuideModal';
+import { render, screen, fireEvent, within } from '@testing-library/react';
+import { PrintGuideModal, generatePrintHtml, MAX_EMPTY_SLOTS_PER_GROUP } from './PrintGuideModal';
+import type { GroupPrintSettings, GroupRangeMap } from './PrintGuideModal';
 import type { Channel, ChannelGroup } from '../types';
 
 // --- Test fixtures ---
@@ -35,7 +41,7 @@ function makeChannel(id: number, num: number | null, groupId: number | null): Ch
   };
 }
 
-// Channels 100–110 in Sports, 200–210 in News
+// Sports: 100, 105, 110 — News: 200, 205, 210
 const CHANNELS: Channel[] = [
   makeChannel(1, 100, 1),
   makeChannel(2, 105, 1),
@@ -61,119 +67,425 @@ function renderModal(channels = CHANNELS, groups = GROUPS) {
   return { onClose };
 }
 
-function getFromInput() {
-  return screen.getByLabelText(/from channel/i) as HTMLInputElement;
-}
-
-function getToInput() {
-  return screen.getByLabelText(/to channel/i) as HTMLInputElement;
-}
-
 // --- Test suite ---
 
-describe('PrintGuideModal — channel range filter (bd-9q9z0)', () => {
-  describe('default range covers all channels (regression guard)', () => {
-    it('From input defaults to the lowest channel number in the guide', () => {
-      renderModal();
-      expect(getFromInput().value).toBe('100');
-    });
+describe('PrintGuideModal — per-group range defaults (bd-9eyqp)', () => {
+  it('Sports group From input defaults to its minimum channel (100)', () => {
+    renderModal();
+    // Each group-item renders its own From/To inputs labeled with the group name context
+    const sportsSection = screen.getByText('Sports').closest('.group-item') as HTMLElement;
+    const fromInput = within(sportsSection).getByLabelText(/from/i) as HTMLInputElement;
+    expect(fromInput.value).toBe('100');
+  });
 
-    it('To input defaults to the highest channel number in the guide', () => {
-      renderModal();
-      expect(getToInput().value).toBe('210');
-    });
+  it('Sports group To input defaults to its maximum channel (110)', () => {
+    renderModal();
+    const sportsSection = screen.getByText('Sports').closest('.group-item') as HTMLElement;
+    const toInput = within(sportsSection).getByLabelText(/to/i) as HTMLInputElement;
+    expect(toInput.value).toBe('110');
+  });
 
-    it('all groups remain visible at default range', () => {
-      renderModal();
-      expect(screen.getByText('Sports')).toBeInTheDocument();
-      expect(screen.getByText('News')).toBeInTheDocument();
-    });
+  it('News group From input defaults to its minimum channel (200)', () => {
+    renderModal();
+    const newsSection = screen.getByText('News').closest('.group-item') as HTMLElement;
+    const fromInput = within(newsSection).getByLabelText(/from/i) as HTMLInputElement;
+    expect(fromInput.value).toBe('200');
+  });
 
-    it('Print button is enabled at default range', () => {
-      renderModal();
-      expect(
-        screen.getByRole('button', { name: /print selected/i })
-      ).not.toBeDisabled();
+  it('News group To input defaults to its maximum channel (210)', () => {
+    renderModal();
+    const newsSection = screen.getByText('News').closest('.group-item') as HTMLElement;
+    const toInput = within(newsSection).getByLabelText(/to/i) as HTMLInputElement;
+    expect(toInput.value).toBe('210');
+  });
+
+  it('both groups are visible by default (no global range filter)', () => {
+    renderModal();
+    expect(screen.getByText('Sports')).toBeInTheDocument();
+    expect(screen.getByText('News')).toBeInTheDocument();
+  });
+
+  it('Print button is enabled at default ranges', () => {
+    renderModal();
+    expect(
+      screen.getByRole('button', { name: /print selected/i })
+    ).not.toBeDisabled();
+  });
+});
+
+describe('PrintGuideModal — per-group range editing is independent (bd-9eyqp)', () => {
+  it('editing News group To does not affect Sports group To', () => {
+    renderModal();
+    const newsSection = screen.getByText('News').closest('.group-item') as HTMLElement;
+    const newsToInput = within(newsSection).getByLabelText(/to/i) as HTMLInputElement;
+    fireEvent.change(newsToInput, { target: { value: '251' } });
+
+    const sportsSection = screen.getByText('Sports').closest('.group-item') as HTMLElement;
+    const sportsToInput = within(sportsSection).getByLabelText(/to/i) as HTMLInputElement;
+    expect(sportsToInput.value).toBe('110'); // unchanged
+  });
+
+  it('editing Sports From does not affect News From', () => {
+    renderModal();
+    const sportsSection = screen.getByText('Sports').closest('.group-item') as HTMLElement;
+    const sportsFromInput = within(sportsSection).getByLabelText(/from/i) as HTMLInputElement;
+    fireEvent.change(sportsFromInput, { target: { value: '105' } });
+
+    const newsSection = screen.getByText('News').closest('.group-item') as HTMLElement;
+    const newsFromInput = within(newsSection).getByLabelText(/from/i) as HTMLInputElement;
+    expect(newsFromInput.value).toBe('200'); // unchanged
+  });
+
+  it('Print button remains enabled when only one group has From > To (other group ok)', () => {
+    // Per-group validation: only blocks that group's print, not the whole button
+    // (unless ALL selected groups have invalid ranges — but here News is still valid)
+    renderModal();
+    const sportsSection = screen.getByText('Sports').closest('.group-item') as HTMLElement;
+    const sportsFromInput = within(sportsSection).getByLabelText(/from/i) as HTMLInputElement;
+    const sportsToInput = within(sportsSection).getByLabelText(/to/i) as HTMLInputElement;
+    fireEvent.change(sportsFromInput, { target: { value: '110' } });
+    fireEvent.change(sportsToInput, { target: { value: '100' } });
+    // News group is still valid; Print should remain enabled
+    expect(screen.getByRole('button', { name: /print selected/i })).not.toBeDisabled();
+  });
+});
+
+describe('PrintGuideModal — no global From/To controls (bd-9eyqp)', () => {
+  it('does not render a standalone global "From channel #" input outside group rows', () => {
+    renderModal();
+    // There should be no single global From/To — only per-group ones inside .group-item
+    const allFromLabels = screen.getAllByLabelText(/from/i) as HTMLInputElement[];
+    // Each From label should be inside a .group-item
+    allFromLabels.forEach(input => {
+      expect(input.closest('.group-item')).not.toBeNull();
+    });
+  });
+});
+
+describe('PrintGuideModal — Show empty slots toggle (bd-w532y, preserved)', () => {
+  it('renders the empty-slots checkbox', () => {
+    renderModal();
+    expect(screen.getByLabelText(/show empty slots/i)).toBeInTheDocument();
+  });
+
+  it('empty-slots checkbox is checked by default', () => {
+    renderModal();
+    const cb = screen.getByLabelText(/show empty slots/i) as HTMLInputElement;
+    expect(cb.checked).toBe(true);
+  });
+
+  it('unchecking the empty-slots checkbox does not disable the Print button', () => {
+    renderModal();
+    const cb = screen.getByLabelText(/show empty slots/i);
+    fireEvent.click(cb);
+    expect(screen.getByRole('button', { name: /print selected/i })).not.toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generatePrintHtml — per-group range + empty-slot tests (bd-9eyqp + bd-w532y)
+// ---------------------------------------------------------------------------
+
+/** Build a minimal Channel for generatePrintHtml tests. */
+function makeChannelForHtml(
+  id: number,
+  num: number,
+  groupId: number,
+  name = `Ch ${num}`,
+): Channel {
+  return {
+    id,
+    channel_number: num,
+    name,
+    channel_group_id: groupId,
+    tvg_id: null,
+    tvc_guide_stationid: null,
+    epg_data_id: null,
+    streams: [],
+    stream_profile_id: null,
+    uuid: `uuid-${id}`,
+    logo_id: null,
+    auto_created: false,
+    auto_created_by: null,
+    auto_created_by_name: null,
+  };
+}
+
+function makeGroupSettings(
+  groupId: number,
+  selected = true,
+  mode: 'detailed' | 'summary' = 'detailed',
+  fromRaw = '1',
+  toRaw = '9999',
+): GroupPrintSettings {
+  return { groupId, selected, mode, fromRaw, toRaw };
+}
+
+describe('generatePrintHtml — per-group range filter (bd-9eyqp)', () => {
+  const GROUP_PPV: ChannelGroup = { id: 10, name: 'PPV', channel_count: 5 };
+  const GROUP_SPORTS: ChannelGroup = { id: 20, name: 'Sports', channel_count: 3 };
+
+  // PPV: 1101..1201, Sports: 100..110
+  const PPV_CHANNELS = Array.from({ length: 101 }, (_, i) =>
+    makeChannelForHtml(1000 + i, 1101 + i, 10)
+  );
+  const SPORTS_CHANNELS = [
+    makeChannelForHtml(1, 100, 20),
+    makeChannelForHtml(2, 105, 20),
+    makeChannelForHtml(3, 110, 20),
+  ];
+  const ALL_CHANNELS = [...PPV_CHANNELS, ...SPORTS_CHANNELS];
+
+  it('PO example: PPV defaults From=1101 To=1201 — no empty slots', () => {
+    // With per-group range defaulting to the group's own min/max, no empty slots appear
+    const rangeMap: GroupRangeMap = { 10: { from: 1101, to: 1201 }, 20: { from: 100, to: 110 } };
+    const html = generatePrintHtml(
+      ALL_CHANNELS,
+      [GROUP_PPV, GROUP_SPORTS],
+      [makeGroupSettings(10), makeGroupSettings(20)],
+      'Test Guide',
+      rangeMap,
+      false, // showEmptySlots off — no gaps expected anyway
+    );
+    expect(html).toContain('>1101<');
+    expect(html).toContain('>1201<');
+    expect(html).not.toContain('class="ch-slot-label"');
+  });
+
+  it('PO example: operator edits PPV To to 1251 → empty slots 1202-1251 for PPV only', () => {
+    // Sports remains at 100-110 unchanged
+    const rangeMap: GroupRangeMap = { 10: { from: 1101, to: 1251 }, 20: { from: 100, to: 110 } };
+    const html = generatePrintHtml(
+      ALL_CHANNELS,
+      [GROUP_PPV, GROUP_SPORTS],
+      [makeGroupSettings(10), makeGroupSettings(20)],
+      'Test Guide',
+      rangeMap,
+      true,
+    );
+    // PPV real channels present
+    expect(html).toContain('>1101<');
+    expect(html).toContain('>1201<');
+    // PPV empty slots 1202-1251 present
+    expect(html).toContain('>1202<');
+    expect(html).toContain('>1251<');
+    // Sports real channels present
+    expect(html).toContain('>100<');
+    expect(html).toContain('>110<');
+    // Sports does NOT have channels at 111-..., empty slots only for PPV beyond 1201
+    // (Sports group ends at 110, its To is 110 — no extension)
+    expect(html).not.toContain('>111<');
+  });
+
+  it('narrowing a group From/To filters that group\'s real channels', () => {
+    // Sports From=105 To=110 — channel 100 excluded
+    const rangeMap: GroupRangeMap = { 20: { from: 105, to: 110 } };
+    const html = generatePrintHtml(
+      SPORTS_CHANNELS,
+      [GROUP_SPORTS],
+      [makeGroupSettings(20)],
+      'Test Guide',
+      rangeMap,
+      false,
+    );
+    expect(html).not.toContain('>100<');
+    expect(html).toContain('>105<');
+    expect(html).toContain('>110<');
+  });
+
+  it('each group uses only its own range — other groups unaffected', () => {
+    const rangeMap: GroupRangeMap = {
+      10: { from: 1101, to: 1110 }, // narrow PPV to first 10
+      20: { from: 100, to: 110 },
+    };
+    const html = generatePrintHtml(
+      ALL_CHANNELS,
+      [GROUP_PPV, GROUP_SPORTS],
+      [makeGroupSettings(10), makeGroupSettings(20)],
+      'Test Guide',
+      rangeMap,
+      false,
+    );
+    // Only PPV channels 1101-1110 present
+    expect(html).toContain('>1101<');
+    expect(html).toContain('>1110<');
+    expect(html).not.toContain('>1111<');
+    // Sports unaffected — all 3 channels present
+    expect(html).toContain('>100<');
+    expect(html).toContain('>105<');
+    expect(html).toContain('>110<');
+  });
+});
+
+describe('generatePrintHtml — empty-slot placeholders with per-group range (bd-w532y)', () => {
+  const GROUP: ChannelGroup = { id: 1, name: 'Sports', channel_count: 3 };
+
+  // Sparse group: channels at 100, 105, 110
+  const SPARSE_CHANNELS = [
+    makeChannelForHtml(1, 100, 1),
+    makeChannelForHtml(2, 105, 1),
+    makeChannelForHtml(3, 110, 1),
+  ];
+
+  describe('showEmptySlots = false', () => {
+    it('renders only real channel rows — no placeholder rows', () => {
+      const rangeMap: GroupRangeMap = { 1: { from: 100, to: 115 } };
+      const html = generatePrintHtml(
+        SPARSE_CHANNELS,
+        [GROUP],
+        [makeGroupSettings(1)],
+        'Test Guide',
+        rangeMap,
+        false,
+      );
+      expect(html).toContain('>100<');
+      expect(html).toContain('>105<');
+      expect(html).toContain('>110<');
+      expect(html).not.toContain('class="ch-slot-label"');
     });
   });
 
-  describe('narrowed range filters channels in the group list', () => {
-    it('setting To=150 hides the News group (200–210) from the group list', () => {
-      renderModal();
-      const toInput = getToInput();
-      fireEvent.change(toInput, { target: { value: '150' } });
-      // News group has no channels in 100–150, should be hidden from group list
-      expect(screen.queryByText('News')).not.toBeInTheDocument();
-      expect(screen.getByText('Sports')).toBeInTheDocument();
+  describe('showEmptySlots = true', () => {
+    it('includes a placeholder row for each gap in the group range', () => {
+      const rangeMap: GroupRangeMap = { 1: { from: 100, to: 112 } };
+      const html = generatePrintHtml(
+        SPARSE_CHANNELS,
+        [GROUP],
+        [makeGroupSettings(1)],
+        'Test Guide',
+        rangeMap,
+        true,
+      );
+      expect(html).toContain('>100<');
+      expect(html).toContain('>105<');
+      expect(html).toContain('>110<');
+      // Gap numbers
+      expect(html).toContain('>101<');
+      expect(html).toContain('>104<');
+      expect(html).toContain('>106<');
+      expect(html).toContain('>109<');
+      expect(html).toContain('>111<');
+      expect(html).toContain('>112<');
+      expect(html).toContain('class="ch-slot-label"');
     });
 
-    it('setting From=200 hides the Sports group (100–110) from the group list', () => {
-      renderModal();
-      const fromInput = getFromInput();
-      fireEvent.change(fromInput, { target: { value: '200' } });
-      expect(screen.queryByText('Sports')).not.toBeInTheDocument();
-      expect(screen.getByText('News')).toBeInTheDocument();
+    it('does not add placeholders before the group From value', () => {
+      // From=105: channel 100 excluded; gaps start at 106
+      const rangeMap: GroupRangeMap = { 1: { from: 105, to: 112 } };
+      const html = generatePrintHtml(
+        SPARSE_CHANNELS,
+        [GROUP],
+        [makeGroupSettings(1)],
+        'Test Guide',
+        rangeMap,
+        true,
+      );
+      expect(html).toContain('>105<');
+      expect(html).toContain('>110<');
+      expect(html).not.toContain('>100<');
+      expect(html).not.toContain('>104<');
+      expect(html).toContain('>106<');
+      expect(html).toContain('>111<');
+      expect(html).toContain('>112<');
     });
 
-    it('setting From=105 To=205 shows both groups (each has at least one channel in range)', () => {
-      renderModal();
-      fireEvent.change(getFromInput(), { target: { value: '105' } });
-      fireEvent.change(getToInput(), { target: { value: '205' } });
-      expect(screen.getByText('Sports')).toBeInTheDocument();
-      expect(screen.getByText('News')).toBeInTheDocument();
-    });
-  });
-
-  describe('invalid range — From > To', () => {
-    it('shows a validation error when From > To', () => {
-      renderModal();
-      fireEvent.change(getFromInput(), { target: { value: '210' } });
-      fireEvent.change(getToInput(), { target: { value: '100' } });
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByRole('alert').textContent).toMatch(/from.*must.*to|range.*invalid/i);
-    });
-
-    it('disables the Print button when From > To', () => {
-      renderModal();
-      fireEvent.change(getFromInput(), { target: { value: '210' } });
-      fireEvent.change(getToInput(), { target: { value: '100' } });
-      expect(screen.getByRole('button', { name: /print selected/i })).toBeDisabled();
-    });
-  });
-
-  describe('out-of-bounds clamping with operator hint', () => {
-    it('clamps From below the minimum and shows an Adjusted hint', () => {
-      renderModal();
-      fireEvent.change(getFromInput(), { target: { value: '1' } });
-      fireEvent.blur(getFromInput());
-      // Should clamp to 100 (the minimum)
-      expect(getFromInput().value).toBe('100');
-      expect(screen.getByText(/adjusted to/i)).toBeInTheDocument();
+    it('extends placeholders to group To when To > group last channel', () => {
+      const channels = [
+        makeChannelForHtml(1, 100, 1),
+        makeChannelForHtml(2, 105, 1),
+      ];
+      const rangeMap: GroupRangeMap = { 1: { from: 100, to: 108 } };
+      const html = generatePrintHtml(
+        channels,
+        [GROUP],
+        [makeGroupSettings(1)],
+        'Test Guide',
+        rangeMap,
+        true,
+      );
+      expect(html).toContain('>100<');
+      expect(html).toContain('>105<');
+      expect(html).toContain('>101<');
+      expect(html).toContain('>106<');
+      expect(html).toContain('>107<');
+      expect(html).toContain('>108<');
     });
 
-    it('clamps To above the maximum and shows an Adjusted hint', () => {
-      renderModal();
-      fireEvent.change(getToInput(), { target: { value: '9999' } });
-      fireEvent.blur(getToInput());
-      // Should clamp to 210 (the maximum)
-      expect(getToInput().value).toBe('210');
-      expect(screen.getByText(/adjusted to/i)).toBeInTheDocument();
-    });
-  });
-
-  describe('no channels in range — graceful empty state', () => {
-    it('shows an empty state message when no groups have channels in the range', () => {
-      renderModal();
-      fireEvent.change(getFromInput(), { target: { value: '300' } });
-      fireEvent.change(getToInput(), { target: { value: '400' } });
-      expect(screen.getByText(/no channels in range/i)).toBeInTheDocument();
+    it('inclusive bounds: group From and To endpoints are included', () => {
+      const channels = [makeChannelForHtml(1, 100, 1)];
+      const rangeMap: GroupRangeMap = { 1: { from: 100, to: 102 } };
+      const html = generatePrintHtml(
+        channels,
+        [GROUP],
+        [makeGroupSettings(1)],
+        'Test Guide',
+        rangeMap,
+        true,
+      );
+      expect(html).toContain('>101<');
+      expect(html).toContain('>102<');
+      expect(html).not.toContain('>103<');
     });
 
-    it('disables the Print button when no channels are in range', () => {
-      renderModal();
-      fireEvent.change(getFromInput(), { target: { value: '300' } });
-      fireEvent.change(getToInput(), { target: { value: '400' } });
-      expect(screen.getByRole('button', { name: /print selected/i })).toBeDisabled();
+    it('no placeholders when group channels are fully contiguous in the range', () => {
+      const contiguous = [
+        makeChannelForHtml(1, 100, 1),
+        makeChannelForHtml(2, 101, 1),
+        makeChannelForHtml(3, 102, 1),
+      ];
+      const rangeMap: GroupRangeMap = { 1: { from: 100, to: 102 } };
+      const html = generatePrintHtml(
+        contiguous,
+        [GROUP],
+        [makeGroupSettings(1)],
+        'Test Guide',
+        rangeMap,
+        true,
+      );
+      expect(html).not.toContain('class="ch-slot-label"');
+    });
+
+    it('summary mode groups never emit empty-slot rows regardless of showEmptySlots', () => {
+      const rangeMap: GroupRangeMap = { 1: { from: 100, to: 115 } };
+      const html = generatePrintHtml(
+        SPARSE_CHANNELS,
+        [GROUP],
+        [makeGroupSettings(1, true, 'summary')],
+        'Test Guide',
+        rangeMap,
+        true,
+      );
+      expect(html).not.toContain('class="ch-slot-label"');
+    });
+
+    it(`truncates at ${MAX_EMPTY_SLOTS_PER_GROUP} empty slots and appends a warning row`, () => {
+      const bigRange = [makeChannelForHtml(1, 1, 1)];
+      const rangeEnd = MAX_EMPTY_SLOTS_PER_GROUP + 50;
+      const rangeMap: GroupRangeMap = { 1: { from: 1, to: rangeEnd } };
+      const html = generatePrintHtml(
+        bigRange,
+        [GROUP],
+        [makeGroupSettings(1)],
+        'Test Guide',
+        rangeMap,
+        true,
+      );
+      expect(html).toContain('empty-slot limit reached');
+      expect(html).not.toContain(`>${rangeEnd}<`);
+    });
+
+    it('deselected group produces no output even with showEmptySlots=true', () => {
+      const rangeMap: GroupRangeMap = { 1: { from: 100, to: 115 } };
+      const html = generatePrintHtml(
+        SPARSE_CHANNELS,
+        [GROUP],
+        [makeGroupSettings(1, false)],
+        'Test Guide',
+        rangeMap,
+        true,
+      );
+      expect(html).not.toContain('>Sports<');
+      expect(html).not.toContain('class="ch-slot-label"');
     });
   });
 });

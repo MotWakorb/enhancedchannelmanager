@@ -229,7 +229,8 @@ export function ActionEditor({
 
   // Fetch channel groups for group selector
   useEffect(() => {
-    if (action.type === 'create_channel' || action.type === 'create_group') {
+    if (action.type === 'create_channel' || action.type === 'create_group'
+        || action.type === 'merge_streams') {
       getChannelGroups().then(groups => {
         setChannelGroups(groups.map(g => ({ id: g.id, name: g.name })));
       }).catch(() => {
@@ -877,6 +878,56 @@ export function ActionEditor({
               <span className="field-hint">
                 When enabled, the target channel is kept in sync: after this run, it will keep only the streams that were merged into that channel during this run (removing stale streams that no longer match).
               </span>
+            </div>
+
+            <div className="action-field">
+              <label className="transform-toggle">
+                <input
+                  type="checkbox"
+                  checked={!!action.loose_name_match}
+                  onChange={e => onChange({ ...action, loose_name_match: e.target.checked })}
+                  disabled={readonly}
+                  aria-label="Loose name matching (legacy fuzzy)"
+                />
+                Loose name matching (legacy fuzzy)
+              </label>
+              <span className="field-hint">
+                Off (default): a stream merges into an existing channel only when its normalized name exactly matches. On: restores the older fuzzy matching (core-name, parentheses, word-prefix, call-sign) — this can over-match unrelated streams.
+              </span>
+            </div>
+
+            {/* Target-channel group filter (bd-0emgo.3) */}
+            <div className="action-field">
+              <label>Exclude target groups</label>
+              <span className="field-hint">
+                After the merge target channel is resolved, skip the merge if that channel is in any selected group. Keeps merges OUT of these groups. This is a real target-channel guard — the stream-side &ldquo;not in group&rdquo; condition only decides whether the rule fires, not where it merges. Leave empty for no filter.
+              </span>
+              {channelGroups.length === 0 ? (
+                <span className="field-hint">No channel groups available.</span>
+              ) : (
+                <div className="checkbox-group vertical" role="group" aria-label="Exclude target groups">
+                  {channelGroups.map(group => (
+                    <label key={group.id} className="checkbox-item">
+                      <input
+                        type="checkbox"
+                        checked={(action.target_channel_not_in_group ?? []).includes(group.id)}
+                        onChange={e => {
+                          const current = action.target_channel_not_in_group ?? [];
+                          const next = e.target.checked
+                            ? [...current, group.id]
+                            : current.filter(gid => gid !== group.id);
+                          onChange({
+                            ...action,
+                            target_channel_not_in_group: next.length > 0 ? next : undefined,
+                          });
+                        }}
+                        disabled={readonly}
+                      />
+                      <span>{group.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}

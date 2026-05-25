@@ -1,7 +1,6 @@
 """Stream management and health tools."""
 import asyncio
 import logging
-import re
 
 from mcp.server.fastmcp import FastMCP
 
@@ -11,253 +10,87 @@ from ecm_client import get_ecm_client
 logger = logging.getLogger(__name__)
 
 
-# ---- Shared fuzzy matching helpers (used by both streams and channels tools) ----
+def _is_not_found(exc: Exception) -> bool:
+    """True if ``exc`` represents an upstream HTTP 404.
 
-def _strip_stream_prefix(name: str) -> str:
-    """Strip common prefixes like 'US : ', 'US: ', 'US :' from stream names."""
-    return re.sub(r'^(US|UK|CA|AU)\s*:\s*', '', name).strip()
-
-def _normalize(name: str) -> str:
-    """Normalize a name for comparison: lowercase, strip prefixes, hyphens, extra spaces."""
-    s = _strip_stream_prefix(name).lower()
-    s = s.replace("-", " ").replace("&amp;", "&")
-    return " ".join(s.split())
-
-_ABBREVIATIONS = {
-    "fs1": "FOX Sports 1",
-    "fs2": "FOX Sports 2",
-    "espn2": "ESPN 2",
-    "espnu": "ESPN U",
-    "espnews": "ESPN News",
-    "hln": "HLN",
-    "tbs": "TBS",
-    "tnt": "TNT",
-    "tbn": "TBN",
-    "cmt": "CMT",
-    "bet": "BET",
-    "mtv": "MTV",
-    "mtv2": "MTV 2",
-    "vh1": "VH1",
-    "ifc": "IFC",
-    "fx": "FX",
-    "fxx": "FXX",
-    "fxm": "FX Movie Channel",
-    "hbo": "HBO",
-    "qvc": "QVC",
-    "hsn": "HSN",
-    "nesn": "NESN",
-    "msg": "MSG",
-    "masn": "MASN",
-    "btn": "Big Ten Network",
-    "secn": "SEC Network",
-    "accn": "ACC Network",
-    "cbssn": "CBS Sports Network",
-    "sundancetv": "Sundance TV",
-    "babyfirst tv": "Baby First",
-    "nick jr.": "Nick Jr",
-    "tmc xtra": "Movie Channel Extra",
-    "actionmax": "Cinemax Action",
-    "sho x bet": "SHOxBET",
-    "bloomberg tv": "Bloomberg",
-    "nbc sports chicago": "Chicago Sports Network",
-    "sportsnet pittsburgh": "AT&T SportsNet Pittsburgh",
-}
-
-# Prefix abbreviations: if a channel name starts with one of these,
-# expand the prefix to generate an additional search form.
-# e.g., "MC - Blues" -> "Music Choice Blues"
-_PREFIX_EXPANSIONS = {
-    "mc": "Music Choice",
-    "hbo": "HBO",
-    "fcs": "Fox College Sports",
-}
-
-def _generate_variants(name: str) -> list[str]:
-    """Generate search variants from a channel name."""
-    variants = []
-    base = name.strip()
-    upper = base.upper()
-
-    # Extract call sign from parenthetical like "WISC (CBS Madison)"
-    paren_match = re.search(r'\(([^)]+)\)', base)
-    if paren_match:
-        inner = paren_match.group(1)
-        outer = base[:paren_match.start()].strip()
-        variants.append(outer)
-        parts = inner.split()
-        if len(parts) >= 2:
-            variants.append(f"{parts[-1]} {parts[0]}")
-            variants.append(f"{parts[0]} {outer}")
-
-    # Check abbreviation map
-    lower = base.lower().strip()
-    if lower in _ABBREVIATIONS:
-        variants.append(_ABBREVIATIONS[lower])
-
-    # Expand prefix abbreviations: "MC - Blues" -> "Music Choice Blues"
-    for prefix, expansion in _PREFIX_EXPANSIONS.items():
-        pattern = re.compile(r'^' + re.escape(prefix) + r'[\s\-:]+(.+)$', re.IGNORECASE)
-        m = pattern.match(base)
-        if m:
-            remainder = m.group(1).strip()
-            variants.append(f"{expansion} {remainder}")
-
-    # Base name
-    variants.append(base)
-
-    # Hyphen/space normalization
-    dehyphenated = base.replace("-", " ")
-    if dehyphenated != base:
-        variants.append(dehyphenated)
-
-    # Split merged words: "SundanceTV" -> "Sundance TV"
-    split_tv = re.sub(r'([a-z])TV$', r'\1 TV', base)
-    if split_tv != base:
-        variants.append(split_tv)
-
-    # Add/remove common suffixes
-    for suffix in (" TV", " Channel", " Network"):
-        if upper.endswith(suffix.upper()):
-            variants.append(base[:-len(suffix)])
-        else:
-            variants.append(f"{base}{suffix}")
-
-    # Market + quality variants
-    variants.extend([f"{base} East", f"{base} West", f"{base} HD", f"{base} FHD"])
-
-    # Deduplicate while preserving order
-    seen = set()
-    unique = []
-    for v in variants:
-        v_stripped = v.strip()
-        if v_stripped and v_stripped.lower() not in seen:
-            seen.add(v_stripped.lower())
-            unique.append(v_stripped)
-    return unique
-
-def _normalize_channel(name: str) -> list[str]:
-    """Generate normalized forms of a channel name for scoring comparison."""
-    base = _normalize(name)
-    forms = {base}
-    # Apply abbreviation expansion (full name match)
-    lower = name.lower().strip()
-    if lower in _ABBREVIATIONS:
-        forms.add(_normalize(_ABBREVIATIONS[lower]))
-    # Apply prefix expansions: "mc - blues" -> "music choice blues"
-    for prefix, expansion in _PREFIX_EXPANSIONS.items():
-        # Match prefix followed by separator (space, dash, colon) or end
-        pattern = re.compile(r'^' + re.escape(prefix) + r'[\s\-:]+(.+)$', re.IGNORECASE)
-        m = pattern.match(base)
-        if m:
-            remainder = m.group(1).strip()
-            forms.add(_normalize(f"{expansion} {remainder}"))
-    # Strip/split common suffixes
-    for suffix in ("tv", "channel", "network"):
-        if base.endswith(f" {suffix}"):
-            forms.add(base[:-(len(suffix) + 1)].strip())
-        # Handle merged: "sundancetv" -> "sundance"
-        if base.endswith(suffix) and not base.endswith(f" {suffix}"):
-            forms.add(base[:-len(suffix)].strip())
-    # Extract from parenthetical: "wisc (cbs madison)" -> "wisc"
-    paren = re.search(r'^([^(]+)\s*\(', base)
-    if paren:
-        forms.add(paren.group(1).strip())
-    return list(forms)
-
-def _score_match(channel_name: str, stream_name: str, market: str = "east") -> int:
-    """Score how well a stream name matches a channel name."""
-    ch_forms = _normalize_channel(channel_name)
-    st_norm = _normalize(stream_name)
-    score = 0
-
-    # Check all normalized forms of the channel name
-    best_form_score = 0
-    for ch_norm in ch_forms:
-        form_score = 0
-        # Exact match
-        if st_norm == ch_norm:
-            form_score = max(form_score, 50)
-        # Word-set match
-        ch_words = set(ch_norm.split())
-        st_words = set(st_norm.split())
-        if ch_words and ch_words.issubset(st_words):
-            form_score = max(form_score, 25)
-        # Whole-word match in stream
-        pattern = r'\b' + re.escape(ch_norm) + r'\b'
-        if re.search(pattern, st_norm):
-            form_score = max(form_score, 20)
-        elif ch_norm in st_norm:
-            form_score = max(form_score, 5)
-        # Reverse: stream name as whole word in channel
-        if st_norm != ch_norm:
-            st_pattern = r'\b' + re.escape(st_norm) + r'\b'
-            if re.search(st_pattern, ch_norm):
-                form_score = max(form_score, 15)
-        best_form_score = max(best_form_score, form_score)
-    score += best_form_score
-
-    # Use primary normalized form for remaining checks
-    ch_norm = ch_forms[0] if ch_forms else _normalize(channel_name)
-
-    # Local station bonus: if channel has parenthetical like "(NBC Madison)",
-    # boost streams containing the network affiliation and/or market name
-    paren_match = re.search(r'\(([^)]+)\)', channel_name)
-    if paren_match:
-        paren_content = paren_match.group(1).lower()
-        paren_words = paren_content.split()
-        # Network affiliations to look for
-        networks = {"cbs", "nbc", "abc", "fox", "cw", "pbs", "my", "ion"}
-        for word in paren_words:
-            if word in networks and word in st_norm:
-                score += 15  # Stream mentions the right network
-            elif word not in networks and word in st_norm:
-                score += 10  # Stream mentions the market (e.g., "madison")
-        # Penalize streams with WRONG network affiliation
-        stream_networks = {n for n in networks if n in st_norm}
-        channel_networks = {n for n in networks if n in paren_content}
-        if channel_networks and stream_networks and not channel_networks.intersection(stream_networks):
-            score -= 20  # Stream has a different network than expected
-
-    # Penalize Radio streams for TV channels
-    if "radio" in st_norm and "radio" not in ch_norm:
-        score -= 30
-
-    # Penalize sub-channels when searching for main channel
-    if st_norm != ch_norm and len(st_norm) > len(ch_norm) + 5:
-        score -= 3
-
-    # Market preference
-    st_upper = stream_name.upper()
-    preferred = market.upper()
-    opposite = "WEST" if preferred == "EAST" else "EAST"
-    if preferred in st_upper:
-        score += 10
-    if opposite in st_upper:
-        score -= 5
-
-    # Quality bonus
-    if "FHD" in st_upper:
-        score += 7
-    elif " HD" in st_upper or st_upper.endswith("HD"):
-        score += 5
-    if " SD" in st_upper:
-        score -= 3
-
-    return score
-
-# Export helpers for use by channels.py
-_fuzzy_helpers = {
-    "generate_variants": _generate_variants,
-    "score_match": _score_match,
-}
+    The ECM client wraps upstream failures in a ``RuntimeError`` (built by
+    ``ecm_client._http_error``) chained via ``raise ... from e`` to the original
+    ``httpx.HTTPStatusError``. Prefer the precise status code on the chained
+    cause; fall back to the message text (``-> HTTP 404``) for robustness.
+    """
+    cause = getattr(exc, "__cause__", None)
+    resp = getattr(cause, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) == 404:
+        return True
+    return "HTTP 404" in str(exc)
 
 
-def _stream_query(*, search=None, m3u_account=None, channel_group_name=None, page=None, page_size=None):
+# enhancedchannelmanager-jnzst: the MCP-local fuzzy scorer (_strip_stream_prefix,
+# _normalize, _generate_variants, _normalize_channel, _score_match, and the
+# _fuzzy_helpers export) was DELETED. Name matching now flows through the single
+# backend scoring core via GET /api/auto-creation/fuzzy-preview (see
+# _preview_triples below). channels.build_channel_lineup was repointed too.
+
+
+async def _preview_triples(
+    client,
+    group_ids: list[int],
+    min_score: float,
+    allow_no_callsign: bool = False,
+) -> list[dict]:
+    """Fetch ALL ADMISSIBLE scored (stream, channel) triples from the backend.
+
+    Calls the backend ``GET /api/auto-creation/fuzzy-preview`` endpoint
+    (Component B, jnzst) — the SAME shared scoring core AND admission policy the
+    rule path uses (``services.dedup_matcher.is_admissible``). The endpoint
+    returns ADMISSIBLE-only triples: M1 callsign ``conflict`` pairs are never
+    returned, and no-callsign ``absent`` pairs only when ``allow_no_callsign``
+    is True at score >= 0.90. This is why the write consumers below
+    (match_streams_to_channels apply=true, build_channel_lineup) can assign
+    purely on ``score`` and still inherit M1/M2 — they never see a non-admissible
+    triple (FIX 2). Pages through every result so callers can rank/group locally.
+    Pure read — the preview endpoint never writes.
+
+    ``allow_no_callsign`` defaults False so the write path REQUIRES a parseable
+    callsign on both sides (Q1 default policy).
+
+    Module-level (not nested in ``register``) so channels.build_channel_lineup
+    can import it after the MCP-local scorer deletion.
+    """
+    triples: list[dict] = []
+    page = 1
+    while True:
+        result = await client.call_endpoint(
+            ENDPOINTS["ac_fuzzy_preview"],
+            query={
+                "group_ids": group_ids,
+                "min_score": min_score,
+                "allow_no_callsign": allow_no_callsign,
+                "page": page,
+                "page_size": 200,
+            },
+        )
+        if not isinstance(result, dict):
+            break
+        triples.extend(result.get("triples", []))
+        if page >= (result.get("total_pages") or 0):
+            break
+        page += 1
+    return triples
+
+
+def _stream_query(*, search=None, m3u_account=None, channel_group_name=None,
+                  page=None, page_size=None, include_assignment=None):
     """Build a query dict for ENDPOINTS["streams_list"], dropping None values.
 
     Note the param names match the backend (``m3u_account``, ``channel_group_name``)
     — the MCP tools used to send ``provider_id`` / ``group`` here, which the
     backend silently ignored (drift fixed in bd-vtghg Phase 2).
+
+    ``include_assignment`` asks the backend to annotate each stream with
+    channel-assignment status (has_channel / assigned_channel_ids). It is only
+    sent when truthy so the default list path keeps the backend on its cheap
+    no-channel-fetch path.
     """
     q = {
         "search": search,
@@ -265,8 +98,41 @@ def _stream_query(*, search=None, m3u_account=None, channel_group_name=None, pag
         "channel_group_name": channel_group_name,
         "page": page,
         "page_size": page_size,
+        "include_assignment": True if include_assignment else None,
     }
     return {k: v for k, v in q.items() if v is not None}
+
+
+def _filter_by_assigned(streams: list[dict], assigned: bool | None) -> list[dict]:
+    """Filter streams by channel-assignment status.
+
+    assigned=True  -> only streams in at least one channel (has_channel)
+    assigned=False -> only unassigned streams
+    assigned=None  -> no filtering (returned unchanged)
+    """
+    if assigned is None:
+        return streams
+    return [s for s in streams if bool(s.get("has_channel")) is assigned]
+
+
+def _stream_assignment_suffix(s: dict) -> str:
+    """Render the `` -> channel N`` / `` [unassigned]`` assignment suffix.
+
+    Only emitted when the stream dict carries assignment fields (i.e. the
+    backend was called with include_assignment). Returns "" otherwise so the
+    default rendering is unchanged.
+    """
+    if "has_channel" not in s:
+        return ""
+    if not s.get("has_channel"):
+        return " [unassigned]"
+    channel_ids = s.get("assigned_channel_ids") or []
+    if len(channel_ids) > 1:
+        return " -> channels " + ", ".join(str(c) for c in channel_ids)
+    cid = s.get("assigned_channel_id")
+    if cid is None and channel_ids:
+        cid = channel_ids[0]
+    return f" -> channel {cid}"
 
 
 async def _build_id_name_maps(client) -> tuple[dict, dict]:
@@ -334,6 +200,7 @@ def register(mcp: FastMCP):
         search: str | None = None,
         page: int = 1,
         page_size: int = 50,
+        assigned: bool | None = None,
     ) -> str:
         """List streams with optional filtering.
 
@@ -343,6 +210,11 @@ def register(mcp: FastMCP):
             search: Search streams by name
             page: Page number (default 1)
             page_size: Results per page (default 50, max 100)
+            assigned: Filter by channel-assignment status. True -> only streams
+                assigned to a channel; False -> only unassigned streams; None
+                (default) -> no filtering. When set, the backend is asked to
+                include assignment status (costs an extra cached channel fetch),
+                so leave it None unless you need it.
         """
         try:
             client = get_ecm_client()
@@ -351,6 +223,7 @@ def register(mcp: FastMCP):
                 query=_stream_query(
                     search=search, m3u_account=provider_id, channel_group_name=group,
                     page=page, page_size=min(page_size, 100),
+                    include_assignment=assigned is not None,
                 ),
             )
 
@@ -360,6 +233,8 @@ def register(mcp: FastMCP):
             else:
                 streams = result
                 total = len(streams)
+
+            streams = _filter_by_assigned(streams, assigned)
 
             if not streams:
                 return "No streams found."
@@ -372,6 +247,7 @@ def register(mcp: FastMCP):
                 provider = s.get("provider_name", "")
                 info = f" [{group_name}]" if group_name else ""
                 info += f" from {provider}" if provider else ""
+                info += _stream_assignment_suffix(s)
                 lines.append(f"  {name} (id={sid}){info}")
 
             return "\n".join(lines)
@@ -727,6 +603,12 @@ def register(mcp: FastMCP):
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] get_streams_for_channel failed: %s", e)
+            if _is_not_found(e):
+                return (
+                    f"Channel {channel_id} not found "
+                    "(channel_id is the internal channel id, not the channel "
+                    "number shown in the UI). Use list_channels to find the id."
+                )
             return f"Error getting streams for channel {channel_id}: {e}"
 
     @mcp.tool()
@@ -734,6 +616,7 @@ def register(mcp: FastMCP):
         query: str,
         provider_id: int | None = None,
         limit: int = 25,
+        assigned: bool | None = None,
     ) -> str:
         """Search for streams by name across all providers.
 
@@ -741,12 +624,19 @@ def register(mcp: FastMCP):
             query: Search term to match against stream names
             provider_id: Optional M3U provider ID to narrow the search
             limit: Maximum results to return (default 25)
+            assigned: Filter by channel-assignment status. True -> only assigned
+                streams; False -> only unassigned; None (default) -> no filter.
+                When set, the backend includes assignment status (extra cached
+                channel fetch), and filtering is applied client-side.
         """
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(
                 ENDPOINTS["streams_list"],
-                query=_stream_query(search=query, m3u_account=provider_id, page_size=min(limit, 100)),
+                query=_stream_query(
+                    search=query, m3u_account=provider_id, page_size=min(limit, 100),
+                    include_assignment=assigned is not None,
+                ),
             )
 
             if isinstance(result, dict):
@@ -754,6 +644,12 @@ def register(mcp: FastMCP):
                 total = result.get("count", len(streams))
             else:
                 streams = result
+                total = len(streams)
+
+            streams = _filter_by_assigned(streams, assigned)
+            # When an assignment filter narrows results client-side, the backend
+            # total no longer reflects what's shown; report the filtered count.
+            if assigned is not None:
                 total = len(streams)
 
             if not streams:
@@ -767,6 +663,7 @@ def register(mcp: FastMCP):
                 provider = s.get("provider_name", "")
                 info = f" [{group}]" if group else ""
                 info += f" from {provider}" if provider else ""
+                info += _stream_assignment_suffix(s)
                 lines.append(f"  {name} (id={sid}){info}")
 
             if total > limit:
@@ -778,15 +675,28 @@ def register(mcp: FastMCP):
             return f"Error searching streams: {e}"
 
     @mcp.tool()
-    async def get_streams_by_ids(stream_ids: list[int]) -> str:
+    async def get_streams_by_ids(stream_ids: list[int], include_assignment: bool = False) -> str:
         """Fetch detailed stream information for specific stream IDs.
+
+        Dispatcharr's stream payload carries no channel linkage, so assignment
+        status is derived backend-side from a reverse stream->channel index that
+        costs an extra (cached, ~45s TTL) channel fetch. It is therefore opt-in:
+        only set include_assignment=True when you need to know whether streams
+        are attached to a channel.
 
         Args:
             stream_ids: List of stream IDs to look up
+            include_assignment: When True, annotate each stream with its channel
+                assignment and render " -> channel N" (or " -> channels N, M" for
+                several) when assigned, or " [unassigned]" when not. Default
+                False leaves output unchanged and skips the channel fetch.
         """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["streams_by_ids"], body={"stream_ids": stream_ids})
+            body = {"stream_ids": stream_ids}
+            if include_assignment:
+                body["include_assignment"] = True
+            result = await client.call_endpoint(ENDPOINTS["streams_by_ids"], body=body)
 
             streams = result if isinstance(result, list) else result.get("streams", result.get("results", []))
 
@@ -800,6 +710,7 @@ def register(mcp: FastMCP):
                 name = s.get("name", "Unknown")
                 sid = s.get("id", "?")
                 info = _stream_group_provider_suffix(s, provider_map, group_map)
+                info += _stream_assignment_suffix(s)
                 lines.append(f"  {name} (id={sid}){info}")
 
             return "\n".join(lines)
@@ -900,52 +811,6 @@ def register(mcp: FastMCP):
             logger.error("[MCP] probe_bulk_streams failed: %s", e)
             return f"Error probing streams in bulk: {e}"
 
-    async def _fuzzy_search(
-        client,
-        name: str,
-        provider_id: int | None = None,
-        market: str = "east",
-    ) -> tuple[dict | None, list[dict]]:
-        """Search for a stream using multiple name variants. Returns (best_match, all_results)."""
-        variants = _generate_variants(name)
-
-        seen_ids = set()
-        all_results = []
-        for variant in variants:
-            try:
-                result = await client.call_endpoint(
-                    ENDPOINTS["streams_list"],
-                    query=_stream_query(search=variant, m3u_account=provider_id, page_size=10),
-                )
-                streams = result.get("results", result.get("streams", [])) if isinstance(result, dict) else result
-                for s in streams:
-                    sid = s.get("id")
-                    if sid and sid not in seen_ids:
-                        seen_ids.add(sid)
-                        all_results.append(s)
-            except Exception:
-                continue
-
-        if not all_results:
-            return None, []
-
-        # Score and sort results
-        scored = []
-        for s in all_results:
-            sname = s.get("name", "")
-            score = _score_match(name, sname, market)
-            scored.append((score, s))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        # Only return best match if score is positive (avoid garbage matches)
-        if scored[0][0] <= 0:
-            return None, [s for _, s in scored]
-
-        best = scored[0][1]
-        alternatives = [s for _, s in scored[1:]]
-        return best, alternatives
-
     @mcp.tool()
     async def bulk_search_streams(
         queries: list[str],
@@ -984,43 +849,81 @@ def register(mcp: FastMCP):
             return f"Error searching streams in bulk: {e}"
 
     @mcp.tool()
-    async def fuzzy_match_stream(
-        name: str,
-        provider_id: int | None = None,
-        market: str = "east",
+    async def preview_fuzzy_matches(
+        group_ids: list[int],
+        min_score: float = 0.6,
     ) -> str:
-        """Search for a stream using multiple name variants automatically (with TV, HD, East/West suffixes, etc).
+        """Preview scored stream→channel fuzzy matches WITHOUT writing anything.
+
+        Calls the backend's unified scoring core (the same M1 callsign
+        hard-reject + tvg_id override + Locals fuzzy used by auto-creation
+        rules) over the given channel groups and returns ranked
+        (stream, channel, score) triples. Zero writes — inspection only.
 
         Args:
-            name: Stream name to search for
-            provider_id: Optional M3U provider ID to narrow the search
-            market: Preferred market - "east" or "west" (default "east")
+            group_ids: Channel group IDs to scope the preview to (non-empty).
+            min_score: Minimum score to include (0.0-1.0). May be below the
+                0.60 confidence floor — the preview exposes sub-floor scores
+                for inspection.
         """
         try:
             client = get_ecm_client()
-            best, alternatives = await _fuzzy_search(client, name, provider_id, market)
+            triples = await _preview_triples(client, group_ids, min_score)
+            if not triples:
+                return (f"No scored matches >= {min_score} in groups {group_ids}.")
+            lines = [
+                f"Scored matches in groups {group_ids} (min_score={min_score}, "
+                f"{len(triples)} total — PREVIEW, no writes):"
+            ]
+            for t in triples[:50]:
+                lines.append(
+                    f"  stream {t['stream_id']} '{t['stream_name']}' -> "
+                    f"channel {t['channel_id']} '{t['channel_name']}' "
+                    f"(score={t['score']}, {t['callsign_verdict']}, {t['signal']})"
+                )
+            if len(triples) > 50:
+                lines.append(f"  ... and {len(triples) - 50} more")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] preview_fuzzy_matches failed: %s", e)
+            return f"Error previewing fuzzy matches: {e}"
 
-            if not best:
-                upper = name.upper()
-                variants = [upper]
-                if not upper.endswith(" TV"):
-                    variants.append(f"{upper} TV")
-                if not upper.endswith(" CHANNEL"):
-                    variants.append(f"{upper} Channel")
-                variants.append(f"{upper} HD")
-                variants.append(f"{upper} {market.capitalize()}")
-                return f'No match found for "{name}" (tried: {", ".join(variants)})'
+    @mcp.tool()
+    async def fuzzy_match_stream(
+        group_ids: list[int],
+        min_score: float = 0.6,
+    ) -> str:
+        """Score streams against channels in the given groups (with confidence scores).
 
-            best_name = best.get("name", "Unknown")
-            best_id = best.get("id", "?")
-            lines = [f'Best match for "{name}": {best_name} (id={best_id})']
-            if alternatives:
-                lines.append("  Also found:")
-                for s in alternatives[:10]:
-                    lines.append(f"    {s.get('name', 'Unknown')} (id={s.get('id', '?')})")
-                if len(alternatives) > 10:
-                    lines.append(f"    ... and {len(alternatives) - 10} more")
+        Repointed (jnzst) to the backend scoring core — no client-side scoring.
+        Read-only: returns the best-scoring channel per stream above min_score.
+        Use ``match_streams_to_channels(apply=true)`` to actually assign.
 
+        Args:
+            group_ids: Channel group IDs to score within (non-empty).
+            min_score: Minimum confidence score (0.0-1.0) to surface a match.
+        """
+        try:
+            client = get_ecm_client()
+            triples = await _preview_triples(client, group_ids, min_score)
+            if not triples:
+                return f"No matches >= {min_score} in groups {group_ids}."
+            # Best channel per stream.
+            best_by_stream: dict[int, dict] = {}
+            for t in triples:
+                cur = best_by_stream.get(t["stream_id"])
+                if cur is None or t["score"] > cur["score"]:
+                    best_by_stream[t["stream_id"]] = t
+            lines = [f"Best fuzzy match per stream in groups {group_ids} "
+                     f"(min_score={min_score}):"]
+            for t in list(best_by_stream.values())[:50]:
+                lines.append(
+                    f"  stream {t['stream_id']} '{t['stream_name']}' -> "
+                    f"channel {t['channel_id']} '{t['channel_name']}' "
+                    f"(score={t['score']})"
+                )
+            if len(best_by_stream) > 50:
+                lines.append(f"  ... and {len(best_by_stream) - 50} more")
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] fuzzy_match_stream failed: %s", e)
@@ -1028,90 +931,95 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def match_streams_to_channels(
-        group_id: int,
-        provider_id: int | None = None,
-        market: str = "east",
+        group_ids: list[int],
+        min_score: float = 0.6,
+        apply: bool = False,
+        backfill: bool = False,
     ) -> str:
-        """Auto-match streams to unassigned channels in a group using fuzzy name matching.
+        """Match streams to channels in the given groups using the scored core.
 
-        Gets all channels in the group that have 0 streams, fuzzy-matches each channel
-        name to a stream, and assigns the best match.
+        Repointed (jnzst) to the backend unified scoring core. DEFAULTS TO
+        DRY-RUN (Q3): it only assigns streams when ``apply=true``. The M1
+        callsign hard-reject, tvg_id override and Q1 no-callsign policy are
+        enforced server-side. group_ids is a LIST.
 
         Args:
-            group_id: Channel group ID to process
-            provider_id: Optional M3U provider ID to narrow the search
-            market: Preferred market - "east" or "west" (default "east")
+            group_ids: Channel group IDs to process (non-empty).
+            min_score: Minimum confidence score (0.0-1.0) to admit a match.
+            apply: When True, actually assign the best stream per channel.
+                Default False = dry-run (ranked candidates + scores, no writes).
+            backfill: When True, also match channels that already have streams.
+                Default False = only channels with 0 streams (current behavior).
         """
         try:
             client = get_ecm_client()
 
-            # Paginate through all channels in the group. Backend GET /api/channels
-            # filters by ``channel_group`` (NOT a bare ``group_id`` — GH #221).
-            all_channels = []
-            page = 1
-            while True:
-                result = await client.call_endpoint(
-                    ENDPOINTS["channels_list"],
-                    query={"channel_group": group_id, "page": page, "page_size": 500},
-                )
-                if isinstance(result, dict):
-                    channels = result.get("results", [])
-                    all_channels.extend(channels)
-                    if not result.get("next"):
+            # Determine which channels are eligible (0 streams unless backfill).
+            eligible: dict[str, dict] = {}
+            for gid in group_ids:
+                page = 1
+                while True:
+                    result = await client.call_endpoint(
+                        ENDPOINTS["channels_list"],
+                        query={"channel_group": gid, "page": page, "page_size": 500},
+                    )
+                    chans = result.get("results", []) if isinstance(result, dict) else (result or [])
+                    for ch in chans:
+                        if backfill or len(ch.get("streams", [])) == 0:
+                            eligible[str(ch.get("id"))] = ch
+                    if not isinstance(result, dict) or not result.get("next"):
                         break
                     page += 1
-                else:
-                    all_channels.extend(result)
-                    break
 
-            if not all_channels:
-                return f"No channels found in group {group_id}."
+            triples = await _preview_triples(client, group_ids, min_score)
+            # Best stream per eligible channel.
+            best_by_channel: dict[str, dict] = {}
+            for t in triples:
+                cid = t["channel_id"]
+                if cid not in eligible:
+                    continue
+                cur = best_by_channel.get(cid)
+                if cur is None or t["score"] > cur["score"]:
+                    best_by_channel[cid] = t
 
-            # Filter to channels with 0 streams
-            unassigned = []
-            for ch in all_channels:
-                stream_count = len(ch.get("streams", []))
-                if stream_count == 0:
-                    unassigned.append(ch)
+            if not best_by_channel:
+                return (f"No streams matched any eligible channel in groups "
+                        f"{group_ids} at min_score={min_score}.")
 
-            if not unassigned:
-                return f"All {len(all_channels)} channels in group {group_id} already have streams assigned."
+            if not apply:
+                lines = [
+                    f"DRY-RUN: {len(best_by_channel)} channel(s) would be matched "
+                    f"in groups {group_ids} (min_score={min_score}). "
+                    "Re-run with apply=true to assign."
+                ]
+                for t in list(best_by_channel.values())[:50]:
+                    lines.append(
+                        f"  channel {t['channel_id']} '{t['channel_name']}' <- "
+                        f"stream {t['stream_id']} '{t['stream_name']}' "
+                        f"(score={t['score']})"
+                    )
+                if len(best_by_channel) > 50:
+                    lines.append(f"  ... and {len(best_by_channel) - 50} more")
+                return "\n".join(lines)
 
-            matched = []
-            unmatched = []
-            for ch in unassigned:
-                ch_name = ch.get("name", "")
-                ch_id = ch.get("id")
-                ch_num = ch.get("channel_number", "?")
+            # apply=true → assign the best stream per channel.
+            assigned, errors = 0, []
+            for cid, t in best_by_channel.items():
+                try:
+                    await client.call_endpoint(
+                        ENDPOINTS["channels_add_stream"],
+                        path_args={"channel_id": cid},
+                        body={"stream_id": t["stream_id"]},
+                    )
+                    assigned += 1
+                except Exception as assign_err:
+                    errors.append(f"channel {cid}: {assign_err}")
 
-                best, _ = await _fuzzy_search(client, ch_name, provider_id, market)
-                if best:
-                    stream_id = best.get("id")
-                    stream_name = best.get("name", "Unknown")
-                    try:
-                        await client.call_endpoint(
-                            ENDPOINTS["channels_add_stream"],
-                            path_args={"channel_id": ch_id},
-                            body={"stream_id": stream_id},
-                        )
-                        matched.append((ch_num, ch_name, stream_name, stream_id))
-                    except Exception as assign_err:
-                        unmatched.append((ch_num, ch_name, f"assign failed: {assign_err}"))
-                else:
-                    unmatched.append((ch_num, ch_name, "no streams found"))
-
-            lines = [f"Matched {len(matched)} of {len(unassigned)} unassigned channels in group {group_id}:"]
-            for i, (num, ch_name, s_name, sid) in enumerate(matched):
-                if i >= 50:
-                    lines.append(f"  ... and {len(matched) - 50} more")
-                    break
-                lines.append(f"  #{num} {ch_name} → {s_name} (id={sid})")
-
-            if unmatched:
-                lines.append(f"Unmatched ({len(unmatched)}):")
-                for num, ch_name, reason in unmatched:
-                    lines.append(f"  #{num} {ch_name} — {reason}")
-
+            lines = [f"Assigned {assigned} of {len(best_by_channel)} channel(s) "
+                     f"in groups {group_ids} (min_score={min_score})."]
+            if errors:
+                lines.append(f"Errors ({len(errors)}):")
+                lines.extend(f"  {e}" for e in errors[:20])
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] match_streams_to_channels failed: %s", e)

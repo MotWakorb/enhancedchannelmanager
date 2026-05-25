@@ -4,12 +4,13 @@ from pydantic import BaseModel, field_validator
 import json
 import os
 import logging
-import secrets
 
 # Single source of truth for the dedup confidence floor per ADR-008 §D2.
-# Imported from BD-A's matcher so this validator (layer 2) cannot drift from
-# the matcher's clamp (layer 1).
-from services.dedup_matcher import CONFIDENCE_FLOOR
+# Imported from the ``confidence_constants`` leaf module (NOT from
+# services.dedup_matcher) so this validator (layer 2) cannot drift from the
+# matcher's clamp (layer 1) — both read the same constant — while keeping
+# ``config`` out of the dedup_matcher import cycle (bd-0nabr).
+from confidence_constants import CONFIDENCE_FLOOR
 from pathlib import Path
 
 # Set up logging
@@ -133,17 +134,19 @@ class DispatcharrSettings(BaseModel):
     stream_fetch_page_limit: int = 200
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
-    # Valid values: "resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"]
+    # Valid values: "resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"]
     # Which sort criteria are enabled (users can disable criteria they don't want to use)
     # Only enabled criteria appear in sort dropdown and are used by Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False}
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False}
     # M3U account priorities for sorting - maps M3U account ID (as string) to priority value
     # Higher priority value = preferred (sorted first). Accounts not in this map get priority 0.
     # Example: {"1": 100, "2": 50} means M3U account 1 is preferred over account 2
-    # Special key "custom": priority assigned to operator-added (non-M3U) custom streams
-    # when the m3u_priority sort criterion is active (bd-sgtmx / GH #244).
-    # Example: {"1": 100, "custom": 200} places custom streams above M3U account 1.
+    # Special key "custom": a vestigial defensive fallback applied by the m3u_priority
+    # criterion to streams that carry NO M3U account (m3u_account_id is None). Operator-added
+    # custom streams belong to the real Dispatcharr "custom" M3U account and are now ranked
+    # by the dedicated "custom_streams" Smart Sort criterion (bead ap1ud / GH #244), not by
+    # this key. Example: {"1": 100, "custom": 200} only affects account-less streams.
     m3u_account_priorities: dict[str, int] = {}
     # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
     # Black screen detection - run ffmpeg blackdetect after successful probe
@@ -195,25 +198,33 @@ class DispatcharrSettings(BaseModel):
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
+    # Auto-creation pre-run snapshot retention (ADR-010 §D7 / uc51o.3). Two
+    # bounds, whichever fires first, pruned by CleanupTask BEFORE the VACUUM
+    # step. Without these, a per-run ~570-channel snapshot captured on every
+    # execute (incl. hourly run_on_refresh) is an unbounded SQLite-growth bomb.
+    # Naming + 30-day default match the auto_creation_blob_days retention
+    # cadence already in tasks/cleanup.py; the count cap is modeled on the
+    # M3USnapshot newest-N precedent (ADR-010 §D7).
+    auto_creation_snapshot_days: int = 30  # Age window — prune snapshots older than this many days (by snapshot_time).
+    auto_creation_snapshot_max: int = 50  # Count cap — keep at most this many newest snapshots; older ones pruned regardless of age.
+    # M3U change-tracking retention (bd-wehek / bd-f9gd8 DBA spike). Both tables
+    # grow with every Dispatcharr upstream change (every 5-min poll if upstream
+    # churns): m3u_snapshots stores ~1-10 kB groups_data JSON per row;
+    # m3u_change_logs stores ~500 B per detected change.  Neither had retention.
+    # Prune both by age, BEFORE the VACUUM step, mirroring the established
+    # age-window pattern.  90-day default matches the journal hot-retention window
+    # (bd-dmu8w) and gives operators a comfortable M3U change history without
+    # unbounded growth.
+    m3u_snapshot_days: int = 90  # Delete m3u_snapshots rows older than this many days (by snapshot_time).
+    m3u_change_log_days: int = 90  # Delete m3u_change_logs rows older than this many days (by change_time).
+    # unique_client_connections retention (bd-1wi3y / bd-f9gd8 DBA spike). High
+    # write rate (one row per (channel, IP) connection start) + 6 indexes makes
+    # this table grow quickly.  Currently no retention beyond manual stats reset.
+    # Prune by age, BEFORE the VACUUM step, mirroring the established
+    # age-window pattern.  90-day default mirrors the M3U retention window above.
+    unique_client_connection_days: int = 90  # Delete unique_client_connections rows older than this many days (by connected_at).
     # MCP server API key for Claude integration (empty = not configured)
     mcp_api_key: str = ""
-    # Dedicated OAuth token-signing secret (ADR-009 §3, amended 2026-05-21).
-    # SEPARATE from ECM's user-session jwt.secret_key (auth_settings.json) — the
-    # MCP Resource Server reads THIS (settings.json, :ro) for offline JWT verify,
-    # so isolating it means a compromised MCP can forge only MCP-scope tokens, not
-    # ECM admin sessions. Auto-generated on first use; credential-class (redacted
-    # in backups via backup.py _SETTINGS_CREDENTIAL_FIELDS).
-    mcp_oauth_signing_secret: str = ""
-    # OAuth HTTP-posture safety flag (ADR-009 §4, bd-buiqr.5). Default FALSE
-    # (fail-closed). When False AND the OAuth issuer is plain-HTTP on a
-    # non-loopback host, BOTH discovery endpoints
-    # (/.well-known/oauth-authorization-server,
-    # /.well-known/oauth-protected-resource) return 404 — the OAuth surface is
-    # off for insecure-posture deploys (threat model HT1). Setting it True is the
-    # operator's EXPLICIT, recorded opt-in to running OAuth over plain HTTP,
-    # accepting token-interception/replay risk (threat model T5/HT1). The flag
-    # never affects the static-key MCP path. See docs/security/threat_model_mcp_oauth.md.
-    oauth_allow_insecure: bool = False
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
     # Default ON — Phase 1 data never leaves the container. When False,
     # the backend /api/client-errors endpoint returns 204 without logging
@@ -307,7 +318,8 @@ class DispatcharrSettings(BaseModel):
     def clamp_dedup_threshold(cls, v: float) -> float:
         """Clamp dedup_threshold to [CONFIDENCE_FLOOR, 1.00] per ADR-008 §D2.
 
-        CONFIDENCE_FLOOR (imported from services.dedup_matcher) is the
+        CONFIDENCE_FLOOR (imported from the confidence_constants leaf module,
+        the single source of truth shared with the matcher) is the
         defense-in-depth integrity constraint (Security Engineer veto-class per
         ADR-008 §D2). A below-floor value triggers a one-time-per-process WARN
         so operators are informed of the clamp; the upper-bound clamp (> 1.00)
@@ -606,30 +618,6 @@ def clear_settings_cache() -> None:
 def get_settings() -> DispatcharrSettings:
     """Get the current Dispatcharr settings."""
     return load_settings()
-
-
-def get_or_create_oauth_signing_secret() -> str:
-    """Return the dedicated OAuth signing secret, generating it on first use.
-
-    This is the HS256 secret the ECM Authorization Server signs MCP OAuth access
-    tokens with, and the MCP Resource Server reads (from /config/settings.json,
-    read-only) to verify them offline (ADR-009 §1/§3, amended 2026-05-21 for the
-    dedicated-secret design). It is **deliberately separate** from ECM's
-    user-session ``jwt.secret_key`` (``auth_settings.json``): the RS never reads
-    that file, so a compromised MCP container can forge only MCP-scope tokens,
-    never ECM admin sessions (threat model SR1 blast-radius isolation).
-
-    Auto-generated (``secrets.token_urlsafe(32)``) and persisted on first use,
-    mirroring the auth subsystem's ``jwt.secret_key`` bootstrap. ECM must call
-    this at startup so the secret exists in ``settings.json`` for the read-only
-    RS to find it. Idempotent: a present secret is returned unchanged.
-    """
-    settings = get_settings()
-    if not settings.mcp_oauth_signing_secret:
-        settings.mcp_oauth_signing_secret = secrets.token_urlsafe(32)
-        save_settings(settings)
-        logger.info("[CONFIG] Generated dedicated OAuth signing secret (mcp_oauth_signing_secret)")
-    return settings.mcp_oauth_signing_secret
 
 
 def get_http_port() -> int:

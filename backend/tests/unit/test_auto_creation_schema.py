@@ -355,6 +355,104 @@ class TestActionValidation:
         assert len(errors) > 0
         assert "find_channel_by" in errors[0]
 
+    def test_merge_streams_loose_name_match_defaults_false(self):
+        """bd-0emgo.1: loose_name_match defaults to False when omitted."""
+        action = Action(type="merge_streams", params={"target": "auto"})
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["loose_name_match"] is False
+
+    def test_merge_streams_loose_name_match_accepts_bool(self):
+        """bd-0emgo.1: loose_name_match accepts an explicit boolean."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["loose_name_match"] is True
+
+    def test_merge_streams_loose_name_match_rejects_non_bool(self):
+        """bd-0emgo.1: loose_name_match must be a boolean."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": "yes"},
+        )
+        errors = action.validate()
+        assert any("loose_name_match" in e for e in errors)
+
+    # --- bd-0emgo.3: target-channel group filter -------------------------
+
+    def test_merge_streams_target_channel_filters_absent_by_default(self):
+        """bd-0emgo.3: with no filter set the keys are NOT auto-injected.
+
+        Absent = no filter (back-compat). Unlike loose_name_match (which the
+        schema defaults to False), the group-filter lists are left absent so
+        a stored rule with no filter stays byte-identical.
+        """
+        action = Action(type="merge_streams", params={"target": "auto"})
+        errors = action.validate()
+        assert len(errors) == 0
+        assert "target_channel_not_in_group" not in action.params
+        assert "target_channel_in_group" not in action.params
+
+    def test_merge_streams_target_channel_not_in_group_accepts_int_list(self):
+        """bd-0emgo.3: target_channel_not_in_group accepts a list of group IDs."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": [567, 12]},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_not_in_group"] == [567, 12]
+
+    def test_merge_streams_target_channel_in_group_accepts_int_list(self):
+        """bd-0emgo.3: target_channel_in_group accepts a list of group IDs."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_in_group": [42]},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_in_group"] == [42]
+
+    def test_merge_streams_target_channel_not_in_group_rejects_non_list(self):
+        """bd-0emgo.3: target_channel_not_in_group must be a list."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": 567},
+        )
+        errors = action.validate()
+        assert any("target_channel_not_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_not_in_group_rejects_non_int_items(self):
+        """bd-0emgo.3: target_channel_not_in_group items must be integers."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": ["sports"]},
+        )
+        errors = action.validate()
+        assert any("target_channel_not_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_in_group_rejects_non_int_items(self):
+        """bd-0emgo.3: target_channel_in_group items must be integers."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_in_group": [1.5]},
+        )
+        errors = action.validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_empty_list_is_valid(self):
+        """bd-0emgo.3: an empty list is valid (no exclusions) and preserved."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": []},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_not_in_group"] == []
+
     def test_valid_assign_logo(self):
         """Validates assign_logo action."""
         action = Action(
@@ -982,3 +1080,89 @@ class TestSafeRegexMigrationWriteTimeValidation:
         )
         errors = action.validate()
         assert errors == []
+
+
+class TestScoredFuzzyMergeStreams:
+    """enhancedchannelmanager-jnzst Component A — scored-fuzzy validation.
+
+    The new ``min_score`` lever upgrades loose_name_match to the unified
+    scoring core. The validation rules apply ONLY when min_score is present;
+    legacy loose rules (no min_score) keep validating unchanged.
+    """
+
+    def _scored(self, **overrides):
+        params = {
+            "target": "auto",
+            "loose_name_match": True,
+            "min_score": 0.7,
+            "target_channel_in_group": [42],
+        }
+        params.update(overrides)
+        return Action(type="merge_streams", params=params)
+
+    def test_valid_scored_fuzzy_rule(self):
+        errors = self._scored().validate()
+        assert errors == []
+
+    def test_legacy_loose_rule_without_min_score_still_valid(self):
+        # No min_score, no allowlist — the legacy cascade must keep working.
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True},
+        )
+        assert action.validate() == []
+
+    def test_scored_fuzzy_requires_allowlist(self):
+        errors = self._scored(target_channel_in_group=[]).validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_scored_fuzzy_requires_allowlist_when_absent(self):
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True, "min_score": 0.8},
+        )
+        errors = action.validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_scored_fuzzy_requires_loose_name_match(self):
+        errors = self._scored(loose_name_match=False).validate()
+        assert any("loose_name_match" in e for e in errors)
+
+    def test_min_score_below_floor_rejected(self):
+        errors = self._scored(min_score=0.5).validate()
+        assert any("floor" in e for e in errors)
+
+    def test_min_score_above_one_rejected(self):
+        errors = self._scored(min_score=1.5).validate()
+        assert any("min_score" in e for e in errors)
+
+    def test_min_score_at_floor_accepted(self):
+        assert self._scored(min_score=0.6).validate() == []
+
+    def test_min_score_at_one_accepted(self):
+        assert self._scored(min_score=1.0).validate() == []
+
+    def test_min_score_bool_rejected(self):
+        errors = self._scored(min_score=True).validate()
+        assert any("min_score" in e for e in errors)
+
+    def test_allow_no_callsign_must_be_bool(self):
+        errors = self._scored(allow_no_callsign="yes").validate()
+        assert any("allow_no_callsign" in e for e in errors)
+
+    def test_allow_no_callsign_opt_in_valid(self):
+        assert self._scored(allow_no_callsign=True).validate() == []
+
+    def test_tie_break_invalid_rejected(self):
+        errors = self._scored(tie_break="random").validate()
+        assert any("tie_break" in e for e in errors)
+
+    def test_tie_break_valid(self):
+        assert self._scored(tie_break="highest_score").validate() == []
+
+    def test_max_candidates_must_be_positive_int(self):
+        assert any("max_candidates" in e for e in self._scored(max_candidates=0).validate())
+        assert any("max_candidates" in e for e in self._scored(max_candidates=True).validate())
+
+    def test_max_candidates_valid(self):
+        assert self._scored(max_candidates=5).validate() == []

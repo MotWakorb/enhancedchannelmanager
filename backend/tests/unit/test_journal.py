@@ -296,6 +296,97 @@ class TestGetEntries:
             assert page1["total_pages"] == 2
 
 
+class TestAutoCreationMergeJournalRoundTrip:
+    """bd-0emgo.5: end-to-end round-trip — a LIVE auto-creation merge writes a
+    real journal entry recoverable via get_entries(batch_id=...).
+
+    Unlike the executor unit tests (which mock journal.log_entry), this drives
+    the executor against the real journal module + a test DB session, then
+    queries by batch_id to confirm the (channel_id, stream_id) audit trail an
+    operator would use to recover from a bad run.
+    """
+
+    def _run_live_merge(self, execution_id, stream_id, channel):
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+        from auto_creation_executor import ActionExecutor, ExecutionContext
+        from auto_creation_evaluator import StreamContext
+
+        client = MagicMock()
+        client.update_channel = AsyncMock()
+        executor = ActionExecutor(
+            client,
+            existing_channels=[channel],
+            execution_id=execution_id,
+        )
+        stream_ctx = StreamContext(
+            stream_id=stream_id,
+            stream_name=f"Stream {stream_id}",
+            stream_url=f"http://provider.example/secret-token/{stream_id}.ts",
+            m3u_account_id=1,
+            tvg_id="ESPN.US",
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+
+    def test_live_merge_round_trips_through_journal_by_batch_id(self, test_session):
+        """A live merge entry is queryable by its execution_id batch_id."""
+        from journal import get_entries
+
+        channel = {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US",
+                   "channel_number": 100, "streams": [101]}
+
+        with patch("journal.get_session", return_value=test_session):
+            result = self._run_live_merge(execution_id=555, stream_id=201,
+                                          channel=channel)
+            assert result.success is True
+
+            entries = get_entries(batch_id="555")
+
+        assert entries["count"] == 1
+        row = entries["results"][0]
+        assert row["category"] == "auto_creation"
+        assert row["action_type"] == "merge_stream"
+        assert row["entity_id"] == 1  # channel_id
+        assert row["batch_id"] == "555"
+        assert row["user_initiated"] is False
+        # Stream IDs recoverable from before/after (to_dict parses the JSON);
+        # no credentials leaked.
+        assert row["before_value"] == {"stream_ids": [101]}
+        assert row["after_value"] == {"stream_ids": [101, 201]}
+        assert "secret-token" not in json.dumps(row)
+
+    def test_multi_merge_run_groups_all_pairs_under_one_batch_id(self, test_session):
+        """All pairs a run touched are recoverable under the shared batch_id."""
+        from journal import get_entries
+
+        # Two channels, two live merges in the same run (execution_id=777).
+        ch_a = {"id": 10, "name": "ESPN", "tvg_id": "ESPN.US",
+                "channel_number": 100, "streams": [1001]}
+        ch_b = {"id": 20, "name": "ESPN", "tvg_id": "ESPN.US",
+                "channel_number": 101, "streams": []}
+
+        with patch("journal.get_session", return_value=test_session):
+            self._run_live_merge(execution_id=777, stream_id=2001, channel=ch_a)
+            self._run_live_merge(execution_id=777, stream_id=2002, channel=ch_b)
+
+            entries = get_entries(batch_id="777")
+
+        assert entries["count"] == 2
+        pairs = {
+            (r["entity_id"], r["after_value"]["stream_ids"][-1])
+            for r in entries["results"]
+        }
+        assert pairs == {(10, 2001), (20, 2002)}
+
+
 class TestGetStats:
     """Tests for get_stats() function."""
 

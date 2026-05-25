@@ -642,6 +642,16 @@ class NormalizationRule(Base):
     # Tag group condition (v0.8.7) - used when condition_type='tag_group'
     tag_group_id = Column(Integer, ForeignKey("tag_groups.id", ondelete="SET NULL"), nullable=True)
     tag_match_position = Column(String(20), nullable=True)  # 'prefix', 'suffix', or 'contains'
+    # When True, a tag_group prefix/suffix match requires a STRONG delimiter
+    # (':', '-', '|', '/' — surrounding spaces allowed) after/before the tag,
+    # NOT a bare space (bd-0emgo.2). This distinguishes a category column
+    # ("NFL: Buffalo Bills" -> strip) from a brand name ("NFL RedZone" -> keep).
+    # Default False preserves the legacy bare-space-accepting behavior.
+    # server_default="0" matches the Alembic 0020 add-column so ORM/migration
+    # agree (no schema drift) and the NOT NULL add succeeds on populated tables.
+    require_delimiter = Column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     # Compound conditions (new - takes precedence over legacy fields if set)
     conditions = Column(Text, nullable=True)  # JSON array of condition objects: [{type, value, negate, case_sensitive}]
     condition_logic = Column(String(3), default="AND", nullable=False)  # "AND" or "OR" for combining conditions
@@ -692,6 +702,7 @@ class NormalizationRule(Base):
             "case_sensitive": self.case_sensitive,
             "tag_group_id": self.tag_group_id,
             "tag_match_position": self.tag_match_position,
+            "require_delimiter": self.require_delimiter,
             "tag_group_name": self.tag_group.name if self.tag_group else None,
             "conditions": self.get_conditions(),
             "condition_logic": self.condition_logic,
@@ -2086,6 +2097,12 @@ class AutoCreationExecution(Base):
     channels_updated = Column(Integer, default=0, nullable=False)
     groups_created = Column(Integer, default=0, nullable=False)
     streams_merged = Column(Integer, default=0, nullable=False)
+    # Distinct channels that received at least one stream merge this run
+    # (bd-0emgo.4). Counts target channels, not merge operations — so it reads
+    # honestly even when many streams merge into a handful of channels.
+    # server_default="0" matches the Alembic 0021 add-column so an existing-row
+    # NOT NULL add succeeds and ORM/migration stay drift-free.
+    channels_touched = Column(Integer, nullable=False, server_default="0", default=0)
     streams_skipped = Column(Integer, default=0, nullable=False)
     streams_excluded = Column(Integer, default=0, nullable=False)
 
@@ -2212,6 +2229,7 @@ class AutoCreationExecution(Base):
             "channels_updated": self.channels_updated,
             "groups_created": self.groups_created,
             "streams_merged": self.streams_merged,
+            "channels_touched": self.channels_touched,
             "streams_skipped": self.streams_skipped,
             "streams_excluded": self.streams_excluded,
             "rolled_back_at": self.rolled_back_at.isoformat() + "Z" if self.rolled_back_at else None,
@@ -2229,6 +2247,74 @@ class AutoCreationExecution(Base):
 
     def __repr__(self):
         return f"<AutoCreationExecution(id={self.id}, rule_id={self.rule_id}, status={self.status}, mode={self.mode})>"
+
+
+class AutoCreationSnapshot(Base):
+    """Point-in-time snapshot of the manual (non-Dispatcharr-auto-created)
+    channel<->stream state captured BEFORE an auto-creation execution mutated
+    anything, to enable a full whole-run revert (ADR-010).
+
+    Stores STREAM IDs ONLY — never stream URLs (ADR-010 §D1: XC URLs embed
+    live credentials and the backup ZIP scrubber covers only
+    ``alert_methods``, so storing URLs here would be unscrubbed
+    credential-at-rest). One row per ``mode="execute"`` execution (1:1 FK,
+    UNIQUE on ``execution_id``); dry-run executions get no snapshot.
+    """
+    __tablename__ = "auto_creation_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # 1:1 to the execution whose pre-run state this captures. CASCADE so a
+    # pruned/deleted execution row takes its snapshot with it.
+    execution_id = Column(
+        Integer,
+        ForeignKey("auto_creation_executions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    snapshot_time = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Number of channels captured (denormalized for cheap list/size reporting
+    # without parsing the BLOB; feeds the retention metric in ADR-010 §D7).
+    channel_count = Column(Integer, default=0, nullable=False)
+    # Serialized per-channel payload. JSON TEXT (the project convention for
+    # snapshot/entity BLOBs — cf. AutoCreationExecution.created_entities and
+    # M3USnapshot.groups_data). Shape: {"channels": [{id, name,
+    # channel_group_id, epg_data_id, tvg_id, stream_ids: [int]}, ...]}.
+    channels_data = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        # Unique 1:1 — one snapshot per execution. Also the FK lookup index
+        # that makes the has_snapshot existence check O(1) (ADR-010 §D6).
+        UniqueConstraint("execution_id", name="uq_auto_snapshot_execution"),
+        # Age-window prune scan (ADR-010 §D7).
+        Index("idx_auto_snapshot_time", snapshot_time.desc()),
+    )
+
+    def get_channels_data(self) -> dict:
+        """Parse channels_data JSON into a dict ({"channels": [...]})."""
+        if not self.channels_data:
+            return {"channels": []}
+        try:
+            return json.loads(self.channels_data)
+        except (ValueError, TypeError):
+            return {"channels": []}
+
+    def set_channels_data(self, data: dict) -> None:
+        """Set channels_data from a dict."""
+        self.channels_data = json.dumps(data) if data else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "execution_id": self.execution_id,
+            "snapshot_time": self.snapshot_time.isoformat() + "Z" if self.snapshot_time else None,
+            "channel_count": self.channel_count,
+            "channels": self.get_channels_data().get("channels", []),
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f"<AutoCreationSnapshot(id={self.id}, execution_id={self.execution_id}, channel_count={self.channel_count})>"
 
 
 class AutoCreationConflict(Base):

@@ -16,6 +16,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
 from pydantic import BaseModel
 
+from auth import RequireAdminIfEnabled
 from concurrency import run_cpu_bound
 from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
@@ -355,8 +356,8 @@ async def get_channels(
 
 
 @router.post("")
-async def create_channel(request: CreateChannelRequest):
-    """Create a new channel."""
+async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEnabled):
+    """Create a new channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] POST /channels - name=%s number=%s normalize=%s", request.name, request.channel_number, request.normalize)
     client = get_client()
     try:
@@ -483,8 +484,8 @@ async def get_logo(logo_id: int):
 
 
 @router.post("/logos")
-async def create_logo(request: CreateLogoRequest):
-    """Create a logo from a URL."""
+async def create_logo(request: CreateLogoRequest, _admin=RequireAdminIfEnabled):
+    """Create a logo from a URL. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] POST /channels/logos - name=%s", request.name)
     client = get_client()
     try:
@@ -511,8 +512,8 @@ async def create_logo(request: CreateLogoRequest):
 
 
 @router.post("/logos/upload")
-async def upload_logo(request: Request, file: UploadFile = File(...)):
-    """Upload a logo image file directly to Dispatcharr."""
+async def upload_logo(request: Request, file: UploadFile = File(...), _admin=RequireAdminIfEnabled):
+    """Upload a logo image file directly to Dispatcharr. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] POST /channels/logos/upload - filename=%s", file.filename)
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
@@ -537,8 +538,8 @@ async def upload_logo(request: Request, file: UploadFile = File(...)):
 
 
 @router.patch("/logos/{logo_id}")
-async def update_logo(logo_id: int, data: dict):
-    """Update a logo."""
+async def update_logo(logo_id: int, data: dict, _admin=RequireAdminIfEnabled):
+    """Update a logo. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] PATCH /channels/logos/%s", logo_id)
     client = get_client()
     try:
@@ -553,8 +554,8 @@ async def update_logo(logo_id: int, data: dict):
 
 
 @router.delete("/logos/{logo_id}")
-async def delete_logo(logo_id: int):
-    """Delete a logo."""
+async def delete_logo(logo_id: int, _admin=RequireAdminIfEnabled):
+    """Delete a logo. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] DELETE /channels/logos/%s", logo_id)
     client = get_client()
     try:
@@ -672,8 +673,8 @@ async def export_channels_csv():
 
 
 @router.post("/import-csv")
-async def import_channels_csv(file: UploadFile = File(...)):
-    """Import channels from CSV file."""
+async def import_channels_csv(file: UploadFile = File(...), _admin=RequireAdminIfEnabled):
+    """Import channels from CSV file. Admin only (bulk operator op, bd-um30y)."""
     logger.debug("[CHANNELS-CSV] POST /channels/import-csv - filename=%s", file.filename)
     client = get_client()
 
@@ -927,8 +928,8 @@ async def preview_csv(data: dict):
 # ---------------------------------------------------------------------------
 
 @router.post("/assign-numbers")
-async def assign_channel_numbers(request: AssignNumbersRequest):
-    """Bulk assign channel numbers."""
+async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAdminIfEnabled):
+    """Bulk assign channel numbers. Admin only (bulk operator op, bd-um30y)."""
     logger.debug("[CHANNELS] POST /channels/assign-numbers - %s channels starting_number=%s", len(request.channel_ids), request.starting_number)
     client = get_client()
     settings = get_settings()
@@ -1118,9 +1119,10 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
 
 
 @router.post("/bulk-commit")
-async def bulk_commit_operations(request: BulkCommitRequest):
+async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdminIfEnabled):
     """
-    Process multiple channel operations in a single request.
+    Process multiple channel operations in a single request. Admin only
+    (bulk operator op, bd-um30y).
 
     This endpoint is optimized for bulk changes (1000+ operations) by:
     - Processing all operations in a single HTTP request
@@ -1779,11 +1781,13 @@ async def normalize_preview_batch(request: NormalizePreviewBatchRequest):
 
 
 @router.post("/clear-auto-created")
-async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
+async def clear_auto_created_flag(request: ClearAutoCreatedRequest, _admin=RequireAdminIfEnabled):
     """Clear the auto_created flag from all channels in the specified groups.
 
     This converts auto_created channels to manual channels by setting
     auto_created=False and auto_created_by=None.
+
+    Admin only (destructive bulk operator op, bd-um30y).
     """
     logger.debug("[CHANNELS] POST /channels/clear-auto-created - group_ids=%s", request.group_ids)
     client = get_client()
@@ -1959,14 +1963,26 @@ async def get_channel_streams(channel_id: int):
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Fetched streams for channel id=%s in %.1fms", channel_id, elapsed_ms)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id surfaces as an upstream 404 — return 404, not 500
+        # (bd-8w1ba). Common trigger: callers pass a channel NUMBER (shown in the
+        # UI) rather than the internal channel id.
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning(
+                "[CHANNELS] Upstream error fetching streams for channel id=%s: %s",
+                channel_id, e,
+            )
+            raise mapped
         logger.exception("[CHANNELS] Failed to fetch streams for channel id=%s", channel_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/{channel_id}")
-async def update_channel(channel_id: int, data: dict):
-    """Update a channel."""
+async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabled):
+    """Update a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] PATCH /channels/%s - data=%s", channel_id, data)
     client = get_client()
     try:
@@ -2042,12 +2058,14 @@ async def update_channel(channel_id: int, data: dict):
 
 
 @router.post("/merge")
-async def merge_channels(request: "MergeChannelsRequest"):
+async def merge_channels(request: "MergeChannelsRequest", _admin=RequireAdminIfEnabled):
     """Merge multiple channels into a single new channel.
 
     Creates a new channel with the specified metadata, moves all streams
     from the source channels into it (preserving order, deduplicating),
     then deletes the source channels.
+
+    Admin only (destructive operator op — deletes channels, bd-um30y).
     """
     logger.debug("[CHANNELS] POST /channels/merge - sources=%s target_name=%s",
                  request.source_channel_ids, request.target_name)
@@ -2171,8 +2189,8 @@ async def merge_channels(request: "MergeChannelsRequest"):
 
 
 @router.delete("/{channel_id}")
-async def delete_channel(channel_id: int):
-    """Delete a channel."""
+async def delete_channel(channel_id: int, _admin=RequireAdminIfEnabled):
+    """Delete a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] DELETE /channels/%s", channel_id)
     client = get_client()
     try:
@@ -2211,8 +2229,8 @@ async def delete_channel(channel_id: int):
 
 
 @router.post("/{channel_id}/add-stream")
-async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
-    """Add a stream to a channel."""
+async def add_stream_to_channel(channel_id: int, request: AddStreamRequest, _admin=RequireAdminIfEnabled):
+    """Add a stream to a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] POST /channels/%s/add-stream - stream_id=%s", channel_id, request.stream_id)
     client = get_client()
     try:
@@ -2259,8 +2277,10 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
 
 
 @router.post("/{channel_id}/add-streams")
-async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest):
+async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest, _admin=RequireAdminIfEnabled):
     """Add multiple streams to a channel in a single Dispatcharr roundtrip.
+
+    Admin only (operator-only write, bd-v7n9f).
 
     Mirrors the single-add semantics (dedup against streams already on the
     channel, append in request order) but fetches the channel once and PUTs
@@ -2323,8 +2343,8 @@ async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest):
 
 
 @router.post("/{channel_id}/remove-stream")
-async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest):
-    """Remove a stream from a channel."""
+async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest, _admin=RequireAdminIfEnabled):
+    """Remove a stream from a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] POST /channels/%s/remove-stream - stream_id=%s", channel_id, request.stream_id)
     client = get_client()
     try:
@@ -2371,8 +2391,10 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
 
 
 @router.post("/{channel_id}/reorder-streams")
-async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
+async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest, _admin=RequireAdminIfEnabled):
     """Reorder streams within a channel.
+
+    Admin only (operator-only write, bd-v7n9f).
 
     This endpoint REPLACES the channel's stream set with the supplied list, so
     the list must be a true reorder — a permutation of the channel's *current*
@@ -2549,11 +2571,13 @@ async def find_duplicate_channels():
 
 
 @router.post("/bulk-merge")
-async def bulk_merge_channels(request: BulkMergeRequest):
+async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEnabled):
     """Merge multiple groups of duplicate channels.
 
     For each merge item, keeps the target channel and moves all streams
     from source channels into it, then deletes the sources.
+
+    Admin only (destructive bulk operator op — deletes channels, bd-um30y).
     """
     logger.debug("[CHANNELS] POST /channels/bulk-merge - %d merge groups", len(request.merges))
 
@@ -2564,7 +2588,28 @@ async def bulk_merge_channels(request: BulkMergeRequest):
 
     for item in request.merges:
         try:
-            target = await client.get_channel(item.target_channel_id)
+            # Pre-validate the target ID the same way source IDs are validated
+            # below: if the target no longer exists upstream (e.g., a stale
+            # reference after a previous merge), surface 422 with the same
+            # refresh hint instead of falling through to the per-item catch-all
+            # (which returns 200 + a failed count). Consistent with the
+            # source-ID path added in bd-ozhkf (bd-4xxax).
+            try:
+                target = await client.get_channel(item.target_channel_id)
+            except httpx.HTTPStatusError as fetch_err:
+                if fetch_err.response.status_code == 404:
+                    logger.warning(
+                        "[CHANNELS] bulk-merge: rejected — stale target ID %s no longer exists",
+                        item.target_channel_id,
+                    )
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Target channel {item.target_channel_id} no longer exists — "
+                            "refresh the channels list and try again"
+                        ),
+                    )
+                raise
             target_name = target.get("name", f"Channel {item.target_channel_id}")
 
             # Collect all streams from target + sources (deduplicated, target first).
@@ -2594,6 +2639,13 @@ async def bulk_merge_channels(request: BulkMergeRequest):
                 except httpx.HTTPStatusError as fetch_err:
                     if fetch_err.response.status_code == 404:
                         missing_ids.append(src_id)
+                        # Keep source_names complete — one entry per requested
+                        # source ID, in order. Harmless today because the 422
+                        # branch below raises before the journal entry is
+                        # written, but prevents a silently misaligned audit
+                        # record if this ever becomes a partial-success batch
+                        # (bd-4xxax).
+                        source_names.append(f"Channel {src_id}")
                     else:
                         raise
 

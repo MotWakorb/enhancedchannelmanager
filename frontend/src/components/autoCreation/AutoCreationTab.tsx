@@ -9,6 +9,8 @@ import type {
   ExecutionLogEntry,
   ActionLogEntry,
   BulkUpdateRulesPatch,
+  RestoreSnapshotResponse,
+  FailedChannel,
 } from '../../types/autoCreation';
 import { useAutoCreationRules } from '../../hooks/useAutoCreationRules';
 import { useAutoCreationExecution } from '../../hooks/useAutoCreationExecution';
@@ -94,6 +96,10 @@ export function AutoCreationTab() {
   const [editingRule, setEditingRule] = useState<AutoCreationRule | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<AutoCreationRule | null>(null);
   const [showRollbackConfirm, setShowRollbackConfirm] = useState<AutoCreationExecution | null>(null);
+  // Snapshot-restore state (ADR-010 §D5 / uc51o.7)
+  const [showRevertConfirm, setShowRevertConfirm] = useState<AutoCreationExecution | null>(null);
+  const [revertLoading, setRevertLoading] = useState(false);
+  const [revertResult, setRevertResult] = useState<RestoreSnapshotResponse | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showExecutionDetails, setShowExecutionDetails] = useState<AutoCreationExecution | null>(null);
@@ -423,6 +429,30 @@ export function AutoCreationTab() {
       }
     }
   }, [showRollbackConfirm, rollback, fetchExecutions, notifications]);
+
+  // Snapshot-restore handlers (ADR-010 §D5/§D8, uc51o.7)
+  const handleRevertClick = useCallback((execution: AutoCreationExecution) => {
+    setRevertResult(null);
+    setShowRevertConfirm(execution);
+  }, []);
+
+  const handleConfirmRevert = useCallback(async () => {
+    if (!showRevertConfirm) return;
+    setRevertLoading(true);
+    try {
+      const result = await autoCreationApi.restoreAutoCreationSnapshot(showRevertConfirm.id);
+      setRevertResult(result);
+      await fetchExecutions();
+    } catch (err) {
+      notifications.error(
+        err instanceof Error ? err.message : 'Failed to restore snapshot',
+        'Auto-Creation',
+      );
+      setShowRevertConfirm(null);
+    } finally {
+      setRevertLoading(false);
+    }
+  }, [showRevertConfirm, fetchExecutions, notifications]);
 
   const handleViewDetails = useCallback(async (execution: AutoCreationExecution) => {
     setShowExecutionDetails(execution);
@@ -940,6 +970,30 @@ export function AutoCreationTab() {
                         <span className="material-icons">undo</span>
                       </button>
                     )}
+                    {/* Snapshot-restore affordance (ADR-010 uc51o.7): shown only
+                        when has_snapshot=true; hidden for dry runs, legacy runs,
+                        and already-reverted executions so the operator always
+                        knows what will happen. */}
+                    {execution.has_snapshot && execution.status === 'completed' && execution.mode === 'execute' && (
+                      <button
+                        className="action-btn action-btn-revert"
+                        onClick={() => handleRevertClick(execution)}
+                        aria-label="Undo this run"
+                        title="Undo this run — restores pre-run channel state from snapshot"
+                        data-testid="revert-btn"
+                      >
+                        <span className="material-icons">settings_backup_restore</span>
+                      </button>
+                    )}
+                    {!execution.has_snapshot && execution.mode === 'execute' && execution.status === 'completed' && (
+                      <span
+                        className="execution-no-snapshot"
+                        title="No pre-run snapshot — only legacy rollback is available for this run"
+                        data-testid="no-snapshot-indicator"
+                      >
+                        <span className="material-icons">history_toggle_off</span>
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1037,6 +1091,130 @@ export function AutoCreationTab() {
                 aria-label="Confirm"
               >
                 Rollback
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Snapshot-Restore Confirmation Dialog (ADR-010 §D5 mandatory warning, uc51o.7) */}
+      {showRevertConfirm && !revertResult && (
+        <ModalOverlay
+          onClose={() => { setShowRevertConfirm(null); setRevertResult(null); }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="revert-confirm-title"
+        >
+          <div className="modal-container modal-sm">
+            <div className="modal-header">
+              <h2 id="revert-confirm-title">Undo This Run</h2>
+            </div>
+            <div className="modal-body">
+              <div className="revert-warning-banner" data-testid="revert-warning">
+                <span className="material-icons revert-warning-icon">warning</span>
+                <p>
+                  <strong>This will overwrite the current stream assignments</strong> of all
+                  channels with the state captured before this run on{' '}
+                  <strong>{new Date(showRevertConfirm.started_at).toLocaleString()}</strong>.
+                </p>
+              </div>
+              <p className="revert-warning-detail">
+                Any changes made since that snapshot — manual edits, automatic merges, or
+                Dispatcharr updates — <strong>will be lost</strong>. This cannot be undone.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn-secondary"
+                onClick={() => { setShowRevertConfirm(null); setRevertResult(null); }}
+                disabled={revertLoading}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-danger"
+                onClick={handleConfirmRevert}
+                disabled={revertLoading}
+                aria-label="Confirm revert"
+                data-testid="revert-confirm-btn"
+              >
+                {revertLoading ? (
+                  <>
+                    <span className="material-icons spinning" style={{ fontSize: '16px', marginRight: '4px' }}>sync</span>
+                    Reverting...
+                  </>
+                ) : (
+                  'Undo This Run'
+                )}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Snapshot-Restore Result Summary (ADR-010 §D8 step 6 — partial failures never silent) */}
+      {showRevertConfirm && revertResult && (
+        <ModalOverlay
+          onClose={() => { setShowRevertConfirm(null); setRevertResult(null); }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="revert-result-title"
+        >
+          <div className="modal-container modal-sm">
+            <div className="modal-header">
+              <h2 id="revert-result-title">Revert Complete</h2>
+            </div>
+            <div className="modal-body">
+              {/* Partial-failure warning: never show as plain success when channels failed */}
+              {revertResult.failed_channels.length > 0 && (
+                <div className="revert-partial-failure" data-testid="revert-partial-failure">
+                  <span className="material-icons revert-warning-icon">warning</span>
+                  <p>
+                    Revert completed with <strong>{revertResult.failed_channels.length} failure{revertResult.failed_channels.length !== 1 ? 's' : ''}</strong>.
+                    The channels listed below could not be restored.
+                  </p>
+                </div>
+              )}
+              <div className="revert-result-stats" data-testid="revert-result-stats">
+                <div className="detail-row">
+                  <span className="detail-label">Channels restored:</span>
+                  <span data-testid="revert-restored-count">{revertResult.restored_channels}</span>
+                </div>
+                {revertResult.removed_channels > 0 && (
+                  <div className="detail-row">
+                    <span className="detail-label">Created channels removed:</span>
+                    <span data-testid="revert-removed-count">{revertResult.removed_channels}</span>
+                  </div>
+                )}
+                {revertResult.failed_channels.length > 0 && (
+                  <div className="detail-row">
+                    <span className="detail-label">Failed:</span>
+                    <span className="revert-failed-count" data-testid="revert-failed-count">
+                      {revertResult.failed_channels.length}
+                    </span>
+                  </div>
+                )}
+              </div>
+              {revertResult.failed_channels.length > 0 && (
+                <div className="revert-failed-channels" data-testid="revert-failed-channels">
+                  <h4 className="revert-failed-title">Failed channels</h4>
+                  <ul className="revert-failed-list">
+                    {revertResult.failed_channels.map((ch: FailedChannel) => (
+                      <li key={ch.id} className="revert-failed-item">
+                        <span className="revert-failed-name">{ch.name}</span>
+                        <span className="revert-failed-error">{ch.error}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn-primary"
+                onClick={() => { setShowRevertConfirm(null); setRevertResult(null); }}
+              >
+                Close
               </button>
             </div>
           </div>

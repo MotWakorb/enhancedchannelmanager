@@ -1328,6 +1328,83 @@ class TestGetExecutions:
         assert data["total"] == 5
         assert len(data["executions"]) == 2
 
+    @pytest.mark.asyncio
+    async def test_has_snapshot_flag(self, async_client, test_session):
+        """Each execution carries a derived has_snapshot boolean (ADR-010 §D6):
+        true for executions that have an AutoCreationSnapshot row, false
+        otherwise. uc51o.6/.7 gate the snapshot-restore affordance on it."""
+        from models import AutoCreationSnapshot
+
+        with_snap = _create_execution(test_session, rule_name="HasSnap")
+        without_snap = _create_execution(test_session, rule_name="NoSnap")
+
+        snapshot = AutoCreationSnapshot(
+            execution_id=with_snap.id,
+            snapshot_time=datetime.utcnow(),
+            channel_count=1,
+        )
+        snapshot.set_channels_data({"channels": [
+            {"id": 10, "name": "ESPN", "stream_ids": [501]},
+        ]})
+        test_session.add(snapshot)
+        test_session.commit()
+
+        response = await async_client.get("/api/auto-creation/executions")
+        assert response.status_code == 200
+        flags = {e["id"]: e["has_snapshot"] for e in response.json()["executions"]}
+        assert flags[with_snap.id] is True
+        assert flags[without_snap.id] is False
+
+    @pytest.mark.asyncio
+    async def test_has_snapshot_no_n_plus_one(self, async_client, test_session):
+        """has_snapshot is resolved with a SINGLE existence query over the page's
+        ids, not one query per execution. Asserts the snapshot table is hit at
+        most once regardless of page size (no N+1)."""
+        from models import AutoCreationSnapshot
+
+        execs = [_create_execution(test_session, rule_name=f"E{i}") for i in range(5)]
+        # Snapshot a couple of them.
+        for ex in execs[:2]:
+            snap = AutoCreationSnapshot(
+                execution_id=ex.id, snapshot_time=datetime.utcnow(), channel_count=0,
+            )
+            snap.set_channels_data({"channels": []})
+            test_session.add(snap)
+        test_session.commit()
+
+        # Count how many times the AutoCreationSnapshot table is queried while
+        # building the list response. A per-execution lookup would be 5 (N);
+        # the batched IN query is exactly 1. We wrap Session.query and inspect
+        # its args (the snapshot probe is session.query(AutoCreationSnapshot
+        # .execution_id) — a column attribute owned by AutoCreationSnapshot).
+        from sqlalchemy.orm import Session
+
+        snapshot_query_count = 0
+        orig_query = Session.query
+
+        def _is_snapshot_arg(a):
+            return (
+                a is AutoCreationSnapshot
+                or getattr(a, "class_", None) is AutoCreationSnapshot
+            )
+
+        def counting_query(self, *args, **kwargs):
+            nonlocal snapshot_query_count
+            if any(_is_snapshot_arg(a) for a in args):
+                snapshot_query_count += 1
+            return orig_query(self, *args, **kwargs)
+
+        with patch.object(Session, "query", counting_query):
+            response = await async_client.get("/api/auto-creation/executions")
+
+        assert response.status_code == 200
+        assert len(response.json()["executions"]) == 5
+        # Exactly one query against the snapshot table — never one per execution.
+        assert snapshot_query_count == 1, (
+            f"expected 1 snapshot query (batched IN), got {snapshot_query_count} "
+            "— likely an N+1"
+        )
+
 
 class TestGetExecution:
     """Tests for GET /api/auto-creation/executions/{execution_id}."""
@@ -1347,6 +1424,65 @@ class TestGetExecution:
     async def test_returns_404(self, async_client):
         """Returns 404 for nonexistent execution."""
         response = await async_client.get("/api/auto-creation/executions/99999")
+        assert response.status_code == 404
+
+
+class TestGetExecutionSnapshot:
+    """Tests for GET /api/auto-creation/executions/{execution_id}/snapshot (ADR-010)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_snapshot(self, async_client, test_session):
+        """Returns the pre-run snapshot payload for an execution that has one."""
+        from models import AutoCreationSnapshot
+
+        execution = _create_execution(test_session)
+        snapshot = AutoCreationSnapshot(
+            execution_id=execution.id,
+            snapshot_time=datetime.utcnow(),
+            channel_count=2,
+        )
+        snapshot.set_channels_data({"channels": [
+            {"id": 10, "name": "ESPN", "channel_group_id": 1,
+             "epg_data_id": 99, "tvg_id": "espn.us", "stream_ids": [501, 502]},
+            {"id": 11, "name": "CNN", "channel_group_id": 2,
+             "epg_data_id": None, "tvg_id": "cnn.us", "stream_ids": [601]},
+        ]})
+        test_session.add(snapshot)
+        test_session.commit()
+
+        response = await async_client.get(
+            f"/api/auto-creation/executions/{execution.id}/snapshot"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["execution_id"] == execution.id
+        assert data["channel_count"] == 2
+        assert data["snapshot_time"] is not None
+        assert len(data["channels"]) == 2
+        espn = next(c for c in data["channels"] if c["id"] == 10)
+        assert espn["stream_ids"] == [501, 502]
+        assert espn["tvg_id"] == "espn.us"
+        # IDs only — no URL leakage anywhere in the payload.
+        assert "url" not in espn
+        assert "streams" not in espn
+
+    @pytest.mark.asyncio
+    async def test_returns_404_when_no_snapshot(self, async_client, test_session):
+        """Returns 404 when the execution exists but has no snapshot (dry-run,
+        legacy, or capture-failure run)."""
+        execution = _create_execution(test_session, mode="dry_run")
+
+        response = await async_client.get(
+            f"/api/auto-creation/executions/{execution.id}/snapshot"
+        )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_returns_404_for_nonexistent_execution(self, async_client):
+        """Returns 404 for an execution id with no snapshot row at all."""
+        response = await async_client.get(
+            "/api/auto-creation/executions/99999/snapshot"
+        )
         assert response.status_code == 404
 
 
@@ -1384,6 +1520,191 @@ class TestRollbackExecution:
             response = await async_client.post("/api/auto-creation/executions/1/rollback")
 
         assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_legacy_path_needs_no_confirm(self, async_client):
+        """uc51o.5: a no-snapshot run is rolled back without confirm (byte-compat).
+        The endpoint passes confirm=False through to the engine."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": True,
+            "rule_name": "Sports Rule",
+            "entities_removed": 3,
+            "entities_restored": 0,
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/executions/1/rollback")
+        assert response.status_code == 200
+        # confirm defaulted to False and was threaded to the engine.
+        _, kwargs = mock_engine.rollback_execution.call_args
+        assert kwargs.get("confirm") is False
+
+    @pytest.mark.asyncio
+    async def test_snapshot_present_without_confirm_returns_409(self, async_client):
+        """uc51o.5: a snapshotted run rolled back WITHOUT confirm → 409 (the
+        overwrite acknowledgement is required). The engine signals this with
+        requires_confirm."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": False,
+            "has_snapshot": True,
+            "requires_confirm": True,
+            "error": (
+                "Execution 1 has a pre-run snapshot, so rollback performs a "
+                "FULL restore that overwrites ... confirm=true."
+            ),
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post("/api/auto-creation/executions/1/rollback")
+        assert response.status_code == 409
+        assert "confirm" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_present_with_confirm_does_full_restore(self, async_client):
+        """uc51o.5: confirm=true on a snapshotted run runs the full restore and
+        returns the restore-shaped result (restored_channels)."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": True,
+            "rule_name": "Sports Rule",
+            "removed_channels": 1,
+            "restored_channels": 5,
+            "failed_channels": [],
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/rollback?confirm=true"
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["restored_channels"] == 5
+        _, kwargs = mock_engine.rollback_execution.call_args
+        assert kwargs.get("confirm") is True
+
+    @pytest.mark.asyncio
+    async def test_snapshot_partial_failure_is_200_with_failures(self, async_client):
+        """uc51o.5: a partial restore via /rollback returns 200 success=False
+        with failures surfaced — never a blanket 500."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": False,
+            "rule_name": "Sports Rule",
+            "removed_channels": 0,
+            "restored_channels": 4,
+            "failed_channels": [{"id": 11, "name": "GONE", "error": "404"}],
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/rollback?confirm=true"
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert data["restored_channels"] == 4
+        assert len(data["failed_channels"]) == 1
+
+
+class TestRestoreSnapshot:
+    """Tests for POST /api/auto-creation/executions/{id}/restore-snapshot (ADR-010 §D8).
+
+    SAFETY-CRITICAL destructive write — admin-gated, confirm-gated, surfaces
+    partial failures.
+    """
+
+    @pytest.mark.asyncio
+    async def test_requires_confirm(self, async_client):
+        """Without confirm=true → 400 (the §D5 warning is unacknowledged); the
+        engine is never invoked."""
+        mock_engine = AsyncMock()
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot"
+            )
+        assert response.status_code == 400
+        assert "confirm" in response.json()["detail"].lower()
+        mock_engine.restore_snapshot.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restores_with_confirm(self, async_client):
+        """confirm=true → engine.restore_snapshot runs and the result is returned."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": True,
+            "execution_id": 1,
+            "rule_name": "Sports Rule",
+            "removed_channels": 2,
+            "restored_channels": 5,
+            "failed_channels": [],
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["restored_channels"] == 5
+        mock_engine.restore_snapshot.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_snapshot_returns_404(self, async_client):
+        """An execution with no snapshot → 404 (use /rollback instead)."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": False,
+            "no_snapshot": True,
+            "error": "No snapshot for execution 1; use /rollback instead.",
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_dry_run_guard_returns_400(self, async_client):
+        """A dry-run / already-reverted guard failure → 400."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": False,
+            "error": "Cannot restore a dry-run execution",
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_is_200_with_failures_surfaced(self, async_client):
+        """A restore that failed on some channels returns 200 with success=False
+        and the per-item failures — success-with-warnings, never a blanket 200
+        that hides them, never a blanket 500."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": False,
+            "execution_id": 1,
+            "rule_name": "Sports Rule",
+            "removed_channels": 0,
+            "restored_channels": 4,
+            "failed_channels": [{"id": 11, "name": "GONE", "error": "404"}],
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert data["restored_channels"] == 4
+        assert len(data["failed_channels"]) == 1
+        assert data["failed_channels"][0]["id"] == 11
 
 
 class TestExportYAML:
@@ -2095,3 +2416,223 @@ rules:
             files={"file": ("debug.tar.gz", bundle, "application/gzip")},
         )
         assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Admin gating (bd-757hc) — destructive / mutating endpoints carry
+# RequireAdminIfEnabled, matching backup.py's create_backup / restore_backup.
+#
+# SECURITY FINDING: every mutating endpoint in this router was previously only
+# authenticated (via the global middleware) but NOT authorized to admin. Any
+# authenticated principal — including a narrowly-scoped MCP static-key session —
+# could invoke destructive bulk rollback / run / write ops. These tests prove
+# the gate is now in place.
+#
+# Pattern mirrors tests/routers/test_normalization.py::TestApplyToChannelsAdminGuard
+# and tests/routers/test_0hjrk_backup_save_restore.py: the default `async_client`
+# fixture runs with auth DISABLED (RequireAdminIfEnabled is a no-op → returns
+# None), so the existing happy-path tests above already prove behavior is
+# unchanged when auth is off. Here we override the prebuilt dependency to
+# simulate auth-enabled non-admin (403) and auth-enabled admin (pass-through).
+# ---------------------------------------------------------------------------
+
+# (path, http_method, request_kwargs) for every endpoint that must be admin-gated.
+# Bodies are intentionally well-formed enough to pass FastAPI request parsing —
+# the admin dependency raises BEFORE the handler runs, so the handler internals
+# are never reached when the gate rejects.
+_GATED_ENDPOINTS = [
+    ("/api/auto-creation/rules", "post", {"json": {"name": "X", "conditions": [], "actions": []}}),
+    ("/api/auto-creation/rules/1", "put", {"json": {"name": "X"}}),
+    ("/api/auto-creation/rules/bulk-update", "post", {"json": {"rule_ids": [1], "enabled": True}}),
+    ("/api/auto-creation/rules/1", "delete", {}),
+    ("/api/auto-creation/rules/reorder", "post", {"json": [1, 2, 3]}),
+    ("/api/auto-creation/rules/1/toggle", "post", {}),
+    ("/api/auto-creation/rules/1/duplicate", "post", {}),
+    ("/api/auto-creation/run", "post", {"json": {}}),
+    ("/api/auto-creation/rules/1/run", "post", {}),
+    ("/api/auto-creation/executions/1/rollback", "post", {}),
+    # restore-snapshot: the admin dependency raises BEFORE the confirm check
+    # and BEFORE the handler, so a non-admin caller is rejected even without
+    # confirm=true (proving the gate, not the confirm gate).
+    ("/api/auto-creation/executions/1/restore-snapshot", "post", {}),
+    ("/api/auto-creation/import/yaml", "post", {"json": {"yaml_content": "rules: []"}}),
+]
+
+
+class TestAutoCreationAdminGating:
+    """Mutating/destructive auto-creation endpoints require admin when auth is
+    enabled; read endpoints stay open. Mirrors backup.py's admin guard."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path, method, kwargs", _GATED_ENDPOINTS)
+    async def test_non_admin_is_forbidden_when_auth_enabled(
+        self, async_client, path, method, kwargs
+    ):
+        """Auth enabled + non-admin principal → 403 on every gated endpoint.
+
+        Overriding RequireAdminIfEnabled.dependency to raise 403 simulates an
+        authenticated-but-non-admin caller regardless of the test's auth state."""
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _reject() -> None:
+            # Parameterless so FastAPI's DI introspection doesn't pull query args.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        app.dependency_overrides[_prebuilt.dependency] = _reject
+        try:
+            response = await getattr(async_client, method)(path, **kwargs)
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 403, (
+            f"{method.upper()} {path} should be admin-gated but returned "
+            f"{response.status_code}"
+        )
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_admin_principal_can_rollback_when_auth_enabled(self, async_client):
+        """Auth enabled + admin principal → the gate passes through and the
+        destructive rollback (the headline finding) executes normally."""
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _allow_admin():
+            # Stand in for an authenticated admin User; the handler ignores the
+            # returned value (param is the unused `_admin`).
+            return MagicMock(is_admin=True, username="admin")
+
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": True,
+            "rule_name": "Sports Rule",
+            "entities_removed": 3,
+            "entities_restored": 0,
+        }
+
+        app.dependency_overrides[_prebuilt.dependency] = _allow_admin
+        try:
+            with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+                 patch("routers.auto_creation.journal"):
+                response = await async_client.post(
+                    "/api/auto-creation/executions/1/rollback"
+                )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_rollback_allowed_when_auth_disabled(self, async_client):
+        """Auth disabled (default async_client) → RequireAdminIfEnabled is a
+        no-op and the endpoint behaves exactly as before the gate was added."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": True,
+            "rule_name": "Sports Rule",
+            "entities_removed": 1,
+            "entities_restored": 0,
+        }
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/rollback"
+            )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_admin_principal_can_restore_when_auth_enabled(self, async_client):
+        """Auth enabled + admin principal → the gate passes and the destructive
+        snapshot restore (with confirm) executes normally."""
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _allow_admin():
+            return MagicMock(is_admin=True, username="admin")
+
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": True,
+            "execution_id": 1,
+            "rule_name": "Sports Rule",
+            "removed_channels": 1,
+            "restored_channels": 3,
+            "failed_channels": [],
+        }
+
+        app.dependency_overrides[_prebuilt.dependency] = _allow_admin
+        try:
+            with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+                 patch("routers.auto_creation.journal"):
+                response = await async_client.post(
+                    "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+                )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_restore_allowed_when_auth_disabled(self, async_client):
+        """Auth disabled (default async_client) → RequireAdminIfEnabled is a
+        no-op; the restore endpoint behaves normally (confirm still required)."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": True,
+            "execution_id": 1,
+            "rule_name": "Sports Rule",
+            "removed_channels": 0,
+            "restored_channels": 2,
+            "failed_channels": [],
+        }
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_read_endpoints_not_admin_gated(self, async_client, test_session):
+        """Read-only endpoints stay reachable for a non-admin principal even
+        when auth is enabled — only mutating ops are gated. We override the admin
+        dependency to reject; the read endpoints don't depend on it, so they
+        must still return 200."""
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _reject() -> None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        _create_rule(test_session, name="Readable")
+
+        app.dependency_overrides[_prebuilt.dependency] = _reject
+        try:
+            list_resp = await async_client.get("/api/auto-creation/rules")
+            execs_resp = await async_client.get("/api/auto-creation/executions")
+            schema_resp = await async_client.get(
+                "/api/auto-creation/schema/conditions"
+            )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert list_resp.status_code == 200
+        assert execs_resp.status_code == 200
+        assert schema_resp.status_code == 200

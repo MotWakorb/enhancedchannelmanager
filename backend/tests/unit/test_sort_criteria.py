@@ -231,6 +231,97 @@ class TestSmartSortCustomStreamsProber:
         assert sorted_ids == [2, 1]
 
 
+class TestSmartSortCustomStreamsCriterion:
+    """bead ap1ud / GH #244: the dedicated ``custom_streams`` Smart Sort criterion
+    in stream_prober. Binary — a stream scores 1 if its id is in
+    ``custom_stream_ids`` (Dispatcharr is_custom), else 0. When ranked as the top
+    active criterion, custom streams sort to the top; ties fall through to the next
+    criterion. Inert when custom_stream_ids is not supplied."""
+
+    def test_custom_stream_sorts_first_when_top_criterion(self):
+        """With custom_streams as the sole/top criterion, the custom stream leads."""
+        prober = create_prober(
+            stream_sort_priority=["custom_streams"],
+            stream_sort_enabled={"custom_streams": True},
+        )
+        stats_map = {
+            1: create_mock_stats(1),  # M3U stream
+            2: create_mock_stats(2),  # custom stream
+        }
+        sorted_ids = prober._smart_sort_streams(
+            [1, 2], stats_map, {1: 1, 2: 2}, "Test Channel",
+            custom_stream_ids={2},
+        )
+        assert sorted_ids == [2, 1]
+
+    def test_custom_streams_disabled_no_effect(self):
+        """When custom_streams is disabled, it has no effect on sorting."""
+        prober = create_prober(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": False, "resolution": True},
+        )
+        # id=1 is custom but lower res; id=2 is M3U but higher res.
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720"),
+            2: create_mock_stats(2, resolution="1920x1080"),
+        }
+        sorted_ids = prober._smart_sort_streams(
+            [1, 2], stats_map, {2: 1}, "Test Channel",
+            custom_stream_ids={1},
+        )
+        # Sorted by resolution only — higher res (id=2) first.
+        assert sorted_ids == [2, 1]
+
+    def test_pure_m3u_channel_unaffected(self):
+        """A channel with no custom streams is unaffected by the criterion."""
+        prober = create_prober(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_map = {
+            1: create_mock_stats(1, resolution="1920x1080"),
+            2: create_mock_stats(2, resolution="1280x720"),
+        }
+        sorted_ids = prober._smart_sort_streams(
+            [1, 2], stats_map, {1: 1, 2: 2}, "Test Channel",
+            custom_stream_ids=set(),
+        )
+        # No custom streams → falls through to resolution: higher res (id=1) first.
+        assert sorted_ids == [1, 2]
+
+    def test_criterion_inert_when_custom_stream_ids_not_supplied(self):
+        """When custom_stream_ids is omitted, custom_streams scores 0 everywhere
+        and resolution decides — graceful degradation, no crash."""
+        prober = create_prober(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_map = {
+            1: create_mock_stats(1, resolution="1920x1080"),
+            2: create_mock_stats(2, resolution="1280x720"),
+        }
+        # custom_stream_ids intentionally omitted
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
+        assert sorted_ids == [1, 2]
+
+    def test_custom_tie_falls_through_to_next_criterion(self):
+        """Two custom streams tie on custom_streams; resolution breaks the tie."""
+        prober = create_prober(
+            stream_sort_priority=["custom_streams", "resolution"],
+            stream_sort_enabled={"custom_streams": True, "resolution": True},
+        )
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720"),
+            2: create_mock_stats(2, resolution="1920x1080"),
+        }
+        sorted_ids = prober._smart_sort_streams(
+            [1, 2], stats_map, {}, "Test Channel",
+            custom_stream_ids={1, 2},  # both custom
+        )
+        # Both custom (tie); resolution breaks tie → higher res (id=2) first.
+        assert sorted_ids == [2, 1]
+
+
 class TestAudioChannelsSorting:
     """Tests for audio channels sort criterion."""
 

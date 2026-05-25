@@ -17,6 +17,7 @@ import pytest
 from normalization_migration import (
     backfill_tag_group_rule_ids,
     ensure_abbreviation_tags_acronyms,
+    set_league_strip_require_delimiter,
     RULE_GROUP_TO_TAG_GROUP,
     ACTION_TYPE_TO_POSITION,
 )
@@ -482,3 +483,130 @@ class TestEndToEndAfterMigration:
 
         assert "US" in result.normalized
         assert "Us" not in result.normalized
+
+
+# ---------------------------------------------------------------------------
+# set_league_strip_require_delimiter (bd-0emgo.2)
+# ---------------------------------------------------------------------------
+
+class TestSetLeagueStripRequireDelimiter:
+    """The boot migration flips require_delimiter=True on the existing league
+    strip rule so upgrading operators get the brand-preservation fix."""
+
+    def _make_league_rule(self, session, action_type="strip_prefix",
+                          require_delimiter=False, name="Match League Tags"):
+        league = create_tag_group(session, name="League Tags")
+        create_tag(session, group_id=league.id, value="NFL")
+        rule_group = create_normalization_rule_group(
+            session, name="Strip League Prefixes", enabled=True, priority=3,
+        )
+        rule = create_normalization_rule(
+            session,
+            group_id=rule_group.id,
+            name=name,
+            condition_type="tag_group",
+            condition_value=None,
+            action_type=action_type,
+            tag_group_id=league.id,
+            tag_match_position="prefix" if action_type == "strip_prefix" else "suffix",
+            require_delimiter=require_delimiter,
+        )
+        return league, rule
+
+    def test_flips_existing_league_rule_to_true(self, test_session):
+        """A strip_prefix League Tags rule gets require_delimiter=True."""
+        _, rule = self._make_league_rule(test_session)
+        assert rule.require_delimiter is False
+
+        result = set_league_strip_require_delimiter(test_session)
+
+        assert result["updated"] == 1
+        test_session.refresh(rule)
+        assert rule.require_delimiter is True
+
+    def test_idempotent_second_run_is_noop(self, test_session):
+        """Re-running after it's already True touches nothing."""
+        _, rule = self._make_league_rule(test_session)
+        first = set_league_strip_require_delimiter(test_session)
+        assert first["updated"] == 1
+
+        second = set_league_strip_require_delimiter(test_session)
+        assert second["updated"] == 0
+        test_session.refresh(rule)
+        assert rule.require_delimiter is True
+
+    def test_noop_when_already_true(self, test_session):
+        """A rule already True (e.g. fresh install) is left untouched."""
+        _, rule = self._make_league_rule(test_session, require_delimiter=True)
+        result = set_league_strip_require_delimiter(test_session)
+        assert result["updated"] == 0
+        test_session.refresh(rule)
+        assert rule.require_delimiter is True
+
+    def test_noop_when_league_tag_group_absent(self, test_session):
+        """No 'League Tags' group -> safe no-op (returns updated=0)."""
+        result = set_league_strip_require_delimiter(test_session)
+        assert result["updated"] == 0
+
+    def test_robust_to_renamed_rule_group(self, test_session):
+        """Identification keys off the League Tags TAG GROUP, not the rule-group
+        name — so an operator who renamed the rule group still gets the fix."""
+        league = create_tag_group(test_session, name="League Tags")
+        create_tag(test_session, group_id=league.id, value="NFL")
+        # Operator renamed the rule group AND the rule.
+        rule_group = create_normalization_rule_group(
+            test_session, name="My Custom Sports Cleanup", enabled=True,
+        )
+        rule = create_normalization_rule(
+            test_session,
+            group_id=rule_group.id,
+            name="strip the league bit",
+            condition_type="tag_group",
+            condition_value=None,
+            action_type="strip_prefix",
+            tag_group_id=league.id,
+            tag_match_position="prefix",
+        )
+
+        result = set_league_strip_require_delimiter(test_session)
+
+        assert result["updated"] == 1
+        test_session.refresh(rule)
+        assert rule.require_delimiter is True
+
+    def test_leaves_non_prefix_league_rules_alone(self, test_session):
+        """A strip_suffix League rule is NOT the brand-corruption vector and is
+        left untouched (only strip_prefix league rules are targeted)."""
+        _, rule = self._make_league_rule(test_session, action_type="strip_suffix")
+        result = set_league_strip_require_delimiter(test_session)
+        assert result["updated"] == 0
+        test_session.refresh(rule)
+        assert rule.require_delimiter is False
+
+    def test_does_not_touch_country_rule(self, test_session):
+        """A Country Tags strip rule must NOT be flipped (scoping guard)."""
+        country = create_tag_group(test_session, name="Country Tags")
+        create_tag(test_session, group_id=country.id, value="US")
+        rule_group = create_normalization_rule_group(
+            test_session, name="Strip Country Prefixes", enabled=True,
+        )
+        country_rule = create_normalization_rule(
+            test_session,
+            group_id=rule_group.id,
+            name="Match Country Tags",
+            condition_type="tag_group",
+            condition_value=None,
+            action_type="strip_prefix",
+            tag_group_id=country.id,
+            tag_match_position="prefix",
+        )
+        # Also have a league rule present to prove only it is flipped.
+        _, league_rule = self._make_league_rule(test_session)
+
+        result = set_league_strip_require_delimiter(test_session)
+
+        assert result["updated"] == 1
+        test_session.refresh(country_rule)
+        test_session.refresh(league_rule)
+        assert country_rule.require_delimiter is False
+        assert league_rule.require_delimiter is True

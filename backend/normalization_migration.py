@@ -49,7 +49,11 @@ DEMO_RULE_CONFIGS = [
         "priority": 3,
         "tag_group_name": "League Tags",
         "match_position": "prefix",
-        "action_type": "strip_prefix"
+        "action_type": "strip_prefix",
+        # bd-0emgo.2: the league strip must fire only on a STRONG delimiter
+        # ("NFL: Buffalo Bills" -> "Buffalo Bills"), not a bare space, so brands
+        # like "NFL RedZone" / "NFL Network" / "NFL Sunday Ticket" are preserved.
+        "require_delimiter": True
     },
     {
         "rule_group_name": "Strip State/Province Tags",
@@ -155,6 +159,8 @@ def create_demo_rules(
             tag_group_id=tag_group_id,
             tag_match_position=config["match_position"],
             action_type=config["action_type"],
+            # bd-0emgo.2: per-rule strong-delimiter requirement (league strip).
+            require_delimiter=config.get("require_delimiter", False),
             is_builtin=False  # Editable
         )
         db.add(rule)
@@ -681,6 +687,83 @@ def backfill_tag_group_rule_ids(db: Session) -> dict:
         )
 
     return {"rules_wired": wired, "rules_skipped": skipped}
+
+
+def set_league_strip_require_delimiter(db: Session) -> dict:
+    """Set ``require_delimiter=True`` on the existing league-strip rule (bd-0emgo.2).
+
+    The "Strip League Prefixes" rule strips a league tag (NFL/MLB/NHL/...) off
+    the START of a channel name. Without a delimiter requirement it also strips
+    on a BARE SPACE, which corrupts brands: "NFL RedZone" -> "RedZone",
+    "NFL Network" -> "Network". The fix requires a STRONG delimiter (':', '-',
+    '|', '/') after the tag so "NFL: Buffalo Bills" / "NFL | X" still strip
+    while "NFL RedZone" is preserved.
+
+    Fresh installs get this via create_demo_rules (the league DEMO_RULE_CONFIGS
+    entry carries ``require_delimiter: True``). This boot migration flips it on
+    for EXISTING operators upgrading to the fixed release.
+
+    Robust identification (do NOT rely on rule-group name alone — operators may
+    have renamed it): a rule qualifies iff it is a ``strip_prefix`` tag_group
+    rule whose ``tag_group_id`` resolves to the "League Tags" tag group. This
+    keys off the tag group's identity, which the operator cannot rename (it's a
+    built-in group name), rather than the user-editable rule/group name.
+
+    Strictly idempotent and safe if absent:
+    - No "League Tags" group -> no-op (returns updated=0).
+    - No matching strip_prefix rule -> no-op.
+    - Rules already True are left untouched; only rows flipped False->True are
+      counted and committed, so re-running is a no-op.
+
+    Returns:
+        Dict with count of rules updated.
+    """
+    league_group = db.query(TagGroup).filter(
+        TagGroup.name == "League Tags"
+    ).first()
+
+    if not league_group:
+        logger.info(
+            "[NORMALIZE-MIGRATE] No 'League Tags' tag group; league delimiter "
+            "fix is a no-op"
+        )
+        return {"updated": 0}
+
+    # A league strip is a strip_prefix tag_group rule pointed at League Tags.
+    # (strip_suffix / contains league rules are not the brand-corruption vector
+    # this fix targets, so they are intentionally left alone.)
+    candidates = db.query(NormalizationRule).filter(
+        NormalizationRule.condition_type == "tag_group",
+        NormalizationRule.tag_group_id == league_group.id,
+        NormalizationRule.action_type == "strip_prefix",
+    ).all()
+
+    updated = 0
+    for rule in candidates:
+        # Only flip rows that are currently False/NULL -> idempotent re-run.
+        if not rule.require_delimiter:
+            rule.require_delimiter = True
+            updated += 1
+            logger.info(
+                "[NORMALIZE-MIGRATE] Set require_delimiter=True on league strip "
+                "rule id=%s ('%s')",
+                rule.id, rule.name
+            )
+
+    if updated > 0:
+        db.commit()
+        logger.info(
+            "[NORMALIZE-MIGRATE] Enabled strong-delimiter requirement on %s "
+            "league strip rule(s)",
+            updated
+        )
+    else:
+        logger.info(
+            "[NORMALIZE-MIGRATE] League strip rule(s) already require a strong "
+            "delimiter (or none present); no-op"
+        )
+
+    return {"updated": updated}
 
 
 # Acronyms that title-casing must preserve. "US" and "EU" contain a vowel and

@@ -399,6 +399,12 @@ class Action:
             if target not in ("new_channel", "existing_channel", "auto"):
                 errors.append(f"merge_streams.target must be 'new_channel', 'existing_channel', or 'auto'")
 
+            # NOTE (bd-0emgo.1): match_by is validated here and surfaced in the
+            # OpenAPI enum but is a runtime NO-OP — it is never consumed by the
+            # executor. It is retained for backward compatibility of stored
+            # rules. The control that actually selects fuzzy vs exact matching
+            # for merge_streams target=auto is the ``loose_name_match`` boolean
+            # below. Do not rely on match_by to change matching behavior.
             match_by = self.params.get("match_by", "tvg_id")
             if match_by not in ("tvg_id", "normalized_name", "stream_group"):
                 errors.append(f"merge_streams.match_by must be 'tvg_id', 'normalized_name', or 'stream_group'")
@@ -415,6 +421,102 @@ class Action:
                 errors.append("merge_streams.remove_non_matching must be a boolean")
             if "remove_non_matching" not in self.params:
                 self.params["remove_non_matching"] = False
+
+            # bd-0emgo.1: opt-in loose (legacy fuzzy) matching for target=auto.
+            # Default False — merge into existing channel uses EXACT normalized-
+            # name equality. True restores the legacy core-name / deparen /
+            # word-prefix / call-sign cascade.
+            loose_name_match = self.params.get("loose_name_match", False)
+            if loose_name_match is not None and not isinstance(loose_name_match, bool):
+                errors.append("merge_streams.loose_name_match must be a boolean")
+            if "loose_name_match" not in self.params:
+                self.params["loose_name_match"] = False
+
+            # bd-0emgo.3: TARGET-CHANNEL group filter (post-resolution reject).
+            # These constrain which existing channel the merge may land in, by
+            # the RESOLVED channel's group — distinct from the stream-side
+            # normalized_name_[not_]in_group *conditions* (which only gate
+            # whether the rule FIRES). Absent = no filter (back-compat); the
+            # keys are NOT auto-injected so a no-filter rule stays unchanged.
+            # An empty list is valid and means "no exclusion / no restriction".
+            for key in ("target_channel_not_in_group", "target_channel_in_group"):
+                if key not in self.params:
+                    continue
+                value = self.params[key]
+                if not isinstance(value, list):
+                    errors.append(f"merge_streams.{key} must be a list of group IDs")
+                    continue
+                # bool is a subclass of int — reject it explicitly so True/False
+                # cannot masquerade as a group ID.
+                if any(not isinstance(item, int) or isinstance(item, bool)
+                       for item in value):
+                    errors.append(f"merge_streams.{key} must contain only integer group IDs")
+
+            # enhancedchannelmanager-jnzst: SCORED-FUZZY path (Component A).
+            # ``min_score`` upgrades loose_name_match from the legacy boolean
+            # cascade to the unified scoring core (services.dedup_matcher).
+            # Scope of the new rules is NARROW — they apply ONLY when min_score
+            # is PRESENT. A legacy loose_name_match rule WITHOUT min_score keeps
+            # validating and running exactly as before (the legacy cascade).
+            min_score = self.params.get("min_score")
+            scored_fuzzy = min_score is not None
+            if scored_fuzzy:
+                # min_score is a float/int in [0.0, 1.0]; bool rejected (it is
+                # an int subclass and a boolean min_score is always a mistake).
+                if isinstance(min_score, bool) or not isinstance(min_score, (int, float)):
+                    errors.append("merge_streams.min_score must be a number in [0.0, 1.0]")
+                elif not (0.0 <= float(min_score) <= 1.0):
+                    errors.append("merge_streams.min_score must be between 0.0 and 1.0")
+                else:
+                    # Enforce the hard CONFIDENCE_FLOOR — min_score can never
+                    # drop below it (ADR-008 §D2 floor; the scored path inherits
+                    # the same integrity constraint as dedup). Floor is imported
+                    # lazily to avoid a heavy import at module load.
+                    from services.dedup_matcher import CONFIDENCE_FLOOR
+                    if float(min_score) < CONFIDENCE_FLOOR:
+                        errors.append(
+                            f"merge_streams.min_score must be >= the confidence "
+                            f"floor {CONFIDENCE_FLOOR}"
+                        )
+
+                # The scored path REQUIRES loose_name_match=True — min_score has
+                # no meaning on the exact path.
+                if not loose_name_match:
+                    errors.append(
+                        "merge_streams.min_score requires loose_name_match=true "
+                        "(the scored fuzzy path)"
+                    )
+
+                # Q2 SCOPING: a scored-fuzzy rule MUST be scoped to an allowlist
+                # of target groups. An unscoped fuzzy rule is the over-matching
+                # foot-gun the incident was about — refuse it.
+                allowlist = self.params.get("target_channel_in_group") or []
+                if not (isinstance(allowlist, list) and len(allowlist) > 0):
+                    errors.append(
+                        "merge_streams.min_score (scored fuzzy) requires a "
+                        "non-empty target_channel_in_group allowlist"
+                    )
+
+                # Q1 NO-CALLSIGN POLICY: by default a scored-fuzzy rule REQUIRES
+                # a parseable callsign on both sides. ``allow_no_callsign`` is an
+                # explicit opt-in; when set, no-callsign pairs are admitted only
+                # at score >= NO_CALLSIGN_FLOOR (enforced in the executor).
+                allow_no_callsign = self.params.get("allow_no_callsign", False)
+                if not isinstance(allow_no_callsign, bool):
+                    errors.append("merge_streams.allow_no_callsign must be a boolean")
+
+                # Optional tie_break / max_candidates.
+                tie_break = self.params.get("tie_break")
+                if tie_break is not None and tie_break not in ("lowest_id", "highest_score"):
+                    errors.append(
+                        "merge_streams.tie_break must be 'lowest_id' or 'highest_score'"
+                    )
+                max_candidates = self.params.get("max_candidates")
+                if max_candidates is not None:
+                    if isinstance(max_candidates, bool) or not isinstance(max_candidates, int):
+                        errors.append("merge_streams.max_candidates must be a positive integer")
+                    elif max_candidates < 1:
+                        errors.append("merge_streams.max_candidates must be >= 1")
 
         # Validate assign_logo
         elif action_type == ActionType.ASSIGN_LOGO:

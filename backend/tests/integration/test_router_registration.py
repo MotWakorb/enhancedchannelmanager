@@ -72,9 +72,6 @@ class TestRoutePrefixes:
     #   /metrics              — Prometheus scrape endpoint (unauthenticated by design)
     #   /{full_path:path}     — SPA fallback (serve_spa), registered only when
     #                           backend/static/ exists (container runtime, not CI).
-    # NOTE (bd-9axgc): /.well-known/oauth-authorization-server was removed from
-    # this allowlist with the MCP OAuth offering — the OAuth discovery router is
-    # no longer registered, so that route no longer exists.
     NON_API_ROUTES = {
         "/swagger",
         "/metrics",

@@ -21,13 +21,13 @@ from config import (
     get_mcp_api_key,
     get_mcp_api_key_status,
 )
-# MCP OAuth offering RETIRED (bd-9axgc). The OAuth Resource-Server modules —
-# ``oauth_rs`` (HS256 token verify) and ``oauth_discovery`` (RFC 9728 metadata) —
-# plus the config OAuth helpers (get_signing_key / get_signing_key_status /
-# get_oauth_allow_insecure / OAUTH_ISSUER / MCP_RESOURCE_URL) are kept dormant
-# in-tree but NO LONGER IMPORTED here. The only symbol still needed from
-# oauth_rs is ``looks_like_jwt``, used to SHAPE-classify and REJECT JWT-shaped
-# Bearer tokens (so they can never fall through to the static-key path — CD1).
+# MCP OAuth offering RETIRED (bd-9axgc). The OAuth Resource-Server verify path
+# (oauth_rs.verify_oauth_token), the RFC 9728 discovery module (oauth_discovery),
+# and the config OAuth helpers (get_signing_key / get_signing_key_status /
+# get_oauth_allow_insecure / OAUTH_ISSUER / MCP_RESOURCE_URL) were REMOVED with
+# the feature. The only symbol still needed from oauth_rs is ``looks_like_jwt``,
+# used to SHAPE-classify and REJECT JWT-shaped Bearer tokens (so they can never
+# fall through to the static-key path — CD1 no-fail-cascade).
 from oauth_rs import looks_like_jwt
 from resources import register_all_resources
 from tools import register_all_tools
@@ -61,9 +61,9 @@ register_all_tools(mcp)
 register_all_resources(mcp)
 
 
-#: The 401 challenge header. Per RFC 6750 / RFC 9728 a client that gets this on
-#: /mcp learns OAuth is offered and where to discover it. Always present on a
-#: 401 so an OAuth client can bootstrap from any rejected request (ADR-009 §2).
+#: The 401 challenge header (RFC 6750). Signals that a Bearer credential is
+#: required. The supported credential is the static MCP API key presented as
+#: ``?api_key=`` or a non-JWT-shaped ``Bearer <key>`` (OAuth retired — bd-9axgc).
 _WWW_AUTHENTICATE = {"WWW-Authenticate": "Bearer"}
 
 
@@ -85,9 +85,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
       - Neither → 401 + ``WWW-Authenticate: Bearer``.
 
     The OAuth verify path (``oauth_rs.verify_oauth_token``) and the RFC 9728
-    discovery endpoint are kept dormant in-tree but no longer wired up; re-add
-    the ``_handle_oauth`` dispatch + the discovery route to re-enable the
-    offering.
+    discovery endpoint were REMOVED with the feature (bd-9axgc).
 
     ``/health`` stays public (exempt below). With the Streamable HTTP transport
     every POST and the SSE GET hit the single ``/mcp`` endpoint, so auth is
@@ -227,9 +225,8 @@ async def handle_health(request):
 # MCP OAuth offering RETIRED (bd-9axgc). ``handle_protected_resource`` (RFC 9728
 # /.well-known/oauth-protected-resource discovery) and
 # ``_log_oauth_discovery_posture`` (the one-per-startup discovery WARN) were
-# REMOVED — the RS no longer advertises an OAuth Authorization Server. The
-# oauth_discovery module is kept dormant in-tree; re-add this handler + its
-# Route registration to re-enable the offering.
+# REMOVED with the feature — the RS no longer advertises an OAuth Authorization
+# Server, and the oauth_discovery module was deleted.
 
 
 # The StreamableHTTP transport needs mcp.session_manager.run() active for the

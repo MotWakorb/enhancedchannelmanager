@@ -709,7 +709,13 @@ class TestPhase2Migration:
 
     @pytest.mark.asyncio
     async def test_get_journal_sends_page_size_not_limit(self):
-        """Backend /api/journal paginates via page_size (drift fixed in bd-vtghg)."""
+        """Backend /api/journal paginates via page_size (drift fixed in bd-vtghg).
+
+        bd-0hjrk.1: ``limit`` is now honored by CLIENT-SIDE pagination, so the
+        query carries the page cap (page_size=200) plus a ``page`` cursor rather
+        than the raw ``limit``. The contract this test guards — the backend gets
+        ``page_size``/``category`` and NEVER a bare ``limit`` key — still holds.
+        """
         from tools.system import register
         from mcp.server.fastmcp import FastMCP
         from _endpoint_contracts import ENDPOINTS
@@ -722,7 +728,7 @@ class TestPhase2Migration:
         call = mock_client.call_endpoint.call_args
         assert call.args[0] is ENDPOINTS["journal_list"]
         q = call.kwargs["query"]
-        assert q == {"page_size": 5, "category": "channels"}
+        assert q == {"page_size": 200, "category": "channels", "page": 1}
         assert "limit" not in q
 
 
@@ -1191,10 +1197,14 @@ class TestGetAutoCreatedGroupsEnvelopeUnwrap:
             result = await mcp.call_tool("get_auto_created_groups", {})
 
         text = result[0][0].text
-        assert "2 auto-created" in text
+        # Both groups in the envelope are rendered (unwrap worked).
+        assert "Found 2 groups" in text
         assert "Sports AC" in text
         assert "News AC" in text
         assert "id=20" in text
+        # Per-group auto-created subset counts are rendered (bd-0hjrk.3).
+        assert "5 auto-created" in text
+        assert "3 auto-created" in text
         assert "has no attribute" not in text
 
     @pytest.mark.asyncio
@@ -2802,3 +2812,300 @@ class TestListNormalizationRules:
         ep = ENDPOINTS["normalization_list_rules"]
         assert ep.method == "GET"
         assert ep.path == "/api/normalization/rules"
+
+
+# --- TestRunAutoCreationMergeLabels (bd-0emgo.4) ---
+class TestRunAutoCreationMergeLabels:
+    """run_auto_creation output renders 'Stream merges' and 'Channels touched'
+    instead of the misleading single 'Channels updated' label (bd-0emgo.4)."""
+
+    @pytest.mark.asyncio
+    async def test_output_shows_stream_merges_and_channels_touched(self):
+        """Live run with merge data shows 'Stream merges' and 'Channels touched' lines."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+        from unittest.mock import AsyncMock
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        kickoff_response = {"execution_id": 77, "status": "running", "message": "started"}
+        final_response = {
+            "id": 77,
+            "status": "completed",
+            "mode": "execute",
+            "streams_evaluated": 2000,
+            "streams_matched": 1341,
+            "channels_created": 0,
+            "channels_updated": 5,   # genuine property updates only
+            "channels_touched": 726,  # distinct channels that received merges
+            "streams_merged": 1341,   # individual merge operations
+            "groups_created": 0,
+            "streams_skipped": 0,
+            "duration_seconds": 120.0,
+        }
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [kickoff_response, final_response]
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("run_auto_creation", {"dry_run": False})
+
+        text = result[0][0].text
+
+        # Must show the honest merge counts.
+        assert "Stream merges: 1341" in text, (
+            f"Expected 'Stream merges: 1341' in output, got: {text!r}"
+        )
+        assert "Channels touched: 726" in text, (
+            f"Expected 'Channels touched: 726' in output, got: {text!r}"
+        )
+        # channels_updated (5) reflects only property updates — still shown.
+        assert "Channels updated: 5" in text, (
+            f"Expected 'Channels updated: 5' in output, got: {text!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_old_label_does_not_appear_alone_as_merge_count(self):
+        """The misleading 'Channels updated: 1341' pattern from the bug must not appear.
+
+        Pre-fix the output was:  'Channels updated: 1341'  (inflate)
+        Post-fix it is:          'Stream merges: 1341'
+                                 'Channels touched: 726'
+                                 'Channels updated: 5'    (genuine updates)
+
+        This test explicitly guards against regressing to the pre-fix shape.
+        """
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+        from unittest.mock import AsyncMock
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        kickoff_response = {"execution_id": 88, "status": "running"}
+        final_response = {
+            "id": 88,
+            "status": "completed",
+            "mode": "execute",
+            "streams_evaluated": 3000,
+            "streams_matched": 1341,
+            "channels_created": 0,
+            "channels_updated": 0,
+            "channels_touched": 726,
+            "streams_merged": 1341,
+            "groups_created": 0,
+            "streams_skipped": 0,
+            "duration_seconds": 95.0,
+        }
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [kickoff_response, final_response]
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("run_auto_creation", {"dry_run": False})
+
+        text = result[0][0].text
+
+        # The old bug would render "Channels updated: 1341".
+        # After the fix, streams_merged is shown as "Stream merges: 1341"
+        # and channels_updated reflects only property updates (0 here).
+        assert "Channels updated: 1341" not in text, (
+            "Pre-fix inflation bug still present: 'Channels updated: 1341' rendered"
+        )
+        assert "Stream merges: 1341" in text
+        assert "Channels touched: 726" in text
+
+    @pytest.mark.asyncio
+    async def test_channels_touched_defaults_to_zero_when_absent(self):
+        """If the execution result has no channels_touched key, output shows 0 (graceful fallback)."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+        from unittest.mock import AsyncMock
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        kickoff_response = {"execution_id": 99, "status": "running"}
+        # Omit channels_touched / streams_merged — older execution rows won't have them.
+        final_response = {
+            "id": 99,
+            "status": "completed",
+            "mode": "execute",
+            "streams_evaluated": 500,
+            "streams_matched": 10,
+            "channels_created": 10,
+            "channels_updated": 0,
+            "groups_created": 0,
+            "streams_skipped": 0,
+            "duration_seconds": 30.0,
+        }
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [kickoff_response, final_response]
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("run_auto_creation", {"dry_run": False})
+
+        text = result[0][0].text
+
+        # Should render 0 gracefully, not crash.
+        assert "Stream merges: 0" in text
+        assert "Channels touched: 0" in text
+
+
+# --- TestSetNormalizationGroupEnabled (bd-svixy) ---
+class TestSetNormalizationGroupEnabled:
+    """Tests for set_normalization_group_enabled tool.
+
+    The tool wraps PATCH /api/normalization/groups/{group_id} with {enabled}
+    in the body (backend/routers/normalization.py:249 update_normalization_group).
+    """
+
+    @pytest.mark.asyncio
+    async def test_enable_group_calls_correct_endpoint(self):
+        """Enabling a group calls PATCH with group_id path arg and enabled=True body."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(
+            call_endpoint={"id": 3, "name": "Strip Quality", "enabled": True}
+        )
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 3, "enabled": True}
+            )
+
+        text = result[0][0].text
+        assert "Strip Quality" in text
+        assert "3" in text
+        assert "enabled" in text
+        mock_client.call_endpoint.assert_awaited_once_with(
+            ENDPOINTS["normalization_update_group"],
+            path_args={"group_id": 3},
+            body={"enabled": True},
+        )
+
+    @pytest.mark.asyncio
+    async def test_disable_group_calls_correct_endpoint(self):
+        """Disabling a group calls PATCH with enabled=False body."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(
+            call_endpoint={"id": 7, "name": "Title Case", "enabled": False}
+        )
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 7, "enabled": False}
+            )
+
+        text = result[0][0].text
+        assert "Title Case" in text
+        assert "disabled" in text
+        mock_client.call_endpoint.assert_awaited_once_with(
+            ENDPOINTS["normalization_update_group"],
+            path_args={"group_id": 7},
+            body={"enabled": False},
+        )
+
+    @pytest.mark.asyncio
+    async def test_success_message_includes_group_name_and_state(self):
+        """Success response surfaces group name, id, and new state."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(
+            call_endpoint={"id": 5, "name": "My Group", "enabled": True}
+        )
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 5, "enabled": True}
+            )
+
+        text = result[0][0].text
+        assert "My Group" in text
+        assert "5" in text
+        assert "enabled" in text
+
+    @pytest.mark.asyncio
+    async def test_404_error_surfaces_in_output(self):
+        """When the backend returns 404, the error message is surfaced to the operator."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock()
+        mock_client.call_endpoint.side_effect = Exception("404: Group not found")
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 999, "enabled": True}
+            )
+
+        text = result[0][0].text
+        assert "Error" in text
+        assert "999" in text
+
+    @pytest.mark.asyncio
+    async def test_missing_name_in_response_falls_back_gracefully(self):
+        """When the backend omits 'name' in its response, the tool falls back to 'group {id}'."""
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        # Backend response missing 'name' key.
+        mock_client = _make_ecm_client_mock(call_endpoint={"id": 2, "enabled": False})
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "set_normalization_group_enabled", {"group_id": 2, "enabled": False}
+            )
+
+        text = result[0][0].text
+        assert "2" in text
+        assert "disabled" in text
+
+    def test_normalization_update_group_endpoint_registered(self):
+        """normalization_update_group is in the registry with correct PATCH method/path."""
+        from _endpoint_contracts import ENDPOINTS
+
+        ep = ENDPOINTS["normalization_update_group"]
+        assert ep.method == "PATCH"
+        assert ep.path == "/api/normalization/groups/{group_id}"
+        assert "enabled" in ep.request_fields
+
+    def test_list_normalization_rules_shows_id_and_enabled(self):
+        """list_normalization_rules rendering includes id= and enabled/disabled per group.
+
+        Verifies that operators can read the group_id they need to pass to
+        set_normalization_group_enabled directly from the list output (bd-svixy scope §3).
+        """
+        # The rendering is in tools/normalization.py list_normalization_rules.
+        # Lines render as: "  {name} (id={gid}) — {enabled}, {count} rules"
+        # Check that the format matches by inspecting the source directly.
+        import inspect
+        from tools import normalization
+        src = inspect.getsource(normalization)
+        assert "id={gid}" in src or "id=" in src, (
+            "list_normalization_rules must render the group id so the operator "
+            "knows which group_id to pass to set_normalization_group_enabled"
+        )

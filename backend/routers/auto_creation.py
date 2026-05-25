@@ -14,14 +14,20 @@ from datetime import datetime
 from typing import List, Optional
 
 import journal
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
 
+from auth import RequireAdminIfEnabled
 from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
+from services.dedup_matcher import (
+    NameCleanMode,
+    is_admissible,
+    score_all,
+)
 from regex_lint import (
     lint_actions_json,
     lint_conditions_json,
@@ -543,8 +549,8 @@ def _lint_auto_creation_rule_request(
 
 
 @router.post("/rules")
-async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
-    """Create a new auto-creation rule."""
+async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest, _admin=RequireAdminIfEnabled):
+    """Create a new auto-creation rule. Admin only."""
     try:
         from models import AutoCreationRule
         from auto_creation_schema import validate_rule
@@ -632,8 +638,8 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
 
 
 @router.put("/rules/{rule_id}")
-async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRuleRequest):
-    """Update an auto-creation rule."""
+async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRuleRequest, _admin=RequireAdminIfEnabled):
+    """Update an auto-creation rule. Admin only."""
     try:
         from models import AutoCreationRule
         from auto_creation_schema import validate_rule
@@ -710,8 +716,8 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
 
 
 @router.post("/rules/bulk-update")
-async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRequest):
-    """Apply the same field changes to many rules. Omitted fields are left unchanged."""
+async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRequest, _admin=RequireAdminIfEnabled):
+    """Apply the same field changes to many rules. Omitted fields are left unchanged. Admin only."""
     from models import AutoCreationRule
     from auto_creation_schema import validate_rule
 
@@ -865,8 +871,8 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
 
 
 @router.delete("/rules/{rule_id}")
-async def delete_auto_creation_rule(rule_id: int):
-    """Delete an auto-creation rule."""
+async def delete_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnabled):
+    """Delete an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] DELETE /rules/%s", rule_id)
     try:
         from models import AutoCreationRule
@@ -903,8 +909,8 @@ async def delete_auto_creation_rule(rule_id: int):
 
 
 @router.post("/rules/reorder")
-async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...)):
-    """Reorder auto-creation rules by setting priorities based on array order."""
+async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...), _admin=RequireAdminIfEnabled):
+    """Reorder auto-creation rules by setting priorities based on array order. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/reorder - %d rules", len(rule_ids))
     try:
         from models import AutoCreationRule
@@ -926,8 +932,8 @@ async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...)):
 
 
 @router.post("/rules/{rule_id}/toggle")
-async def toggle_auto_creation_rule(rule_id: int):
-    """Toggle the enabled state of an auto-creation rule."""
+async def toggle_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnabled):
+    """Toggle the enabled state of an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/%s/toggle", rule_id)
     try:
         from models import AutoCreationRule
@@ -954,8 +960,8 @@ async def toggle_auto_creation_rule(rule_id: int):
 
 
 @router.post("/rules/{rule_id}/duplicate")
-async def duplicate_auto_creation_rule(rule_id: int):
-    """Duplicate an auto-creation rule."""
+async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnabled):
+    """Duplicate an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/%s/duplicate", rule_id)
     try:
         from models import AutoCreationRule
@@ -1116,7 +1122,7 @@ def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> as
 
 
 @router.post("/run", status_code=202)
-async def run_auto_creation_pipeline(request: RunPipelineRequest):
+async def run_auto_creation_pipeline(request: RunPipelineRequest, _admin=RequireAdminIfEnabled):
     """Enqueue an auto-creation pipeline run and return immediately (bd-enfsy).
 
     Pipeline runs on large catalogs can take minutes — running them inside the
@@ -1161,7 +1167,7 @@ async def run_auto_creation_pipeline(request: RunPipelineRequest):
 
 
 @router.post("/rules/{rule_id}/run", status_code=202)
-async def run_auto_creation_rule(rule_id: int, dry_run: bool = False):
+async def run_auto_creation_rule(rule_id: int, dry_run: bool = False, _admin=RequireAdminIfEnabled):
     """Enqueue a single-rule auto-creation run and return immediately (bd-enfsy).
 
     See ``run_auto_creation_pipeline`` for the 202 + poll contract.
@@ -1228,7 +1234,7 @@ async def get_auto_creation_executions(
     """Get auto-creation execution history."""
     logger.debug("[AUTO-CREATE] GET /executions - limit=%s offset=%s rule_id=%s status=%s", limit, offset, rule_id, status)
     try:
-        from models import AutoCreationExecution
+        from models import AutoCreationExecution, AutoCreationSnapshot
         session = get_session()
         try:
             query = session.query(AutoCreationExecution)
@@ -1243,8 +1249,32 @@ async def get_auto_creation_executions(
                 AutoCreationExecution.started_at.desc()
             ).offset(offset).limit(limit).all()
 
+            # Derive has_snapshot (ADR-010 §D6) — a boolean from the existence
+            # of an AutoCreationSnapshot row, NOT a denormalized column (which
+            # could drift from the FK truth). uc51o.6 (MCP) and uc51o.7 (UI)
+            # gate the snapshot-restore affordance on this flag. Resolve it with
+            # ONE query over the page's execution ids (an IN over the snapshot
+            # FK index) — never one query per execution (no N+1).
+            page_ids = [e.id for e in executions]
+            snapshotted_ids: set[int] = set()
+            if page_ids:
+                snapshotted_ids = {
+                    row[0]
+                    for row in session.query(
+                        AutoCreationSnapshot.execution_id
+                    ).filter(
+                        AutoCreationSnapshot.execution_id.in_(page_ids)
+                    ).all()
+                }
+
+            execution_dicts = []
+            for e in executions:
+                d = e.to_dict()
+                d["has_snapshot"] = e.id in snapshotted_ids
+                execution_dicts.append(d)
+
             return {
-                "executions": [e.to_dict() for e in executions],
+                "executions": execution_dicts,
                 "total": total,
                 "limit": limit,
                 "offset": offset
@@ -1288,10 +1318,90 @@ async def get_auto_creation_execution(execution_id: int, include_entities: bool 
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/executions/{execution_id}/snapshot")
+async def get_auto_creation_execution_snapshot(execution_id: int):
+    """Get the pre-run channel<->stream snapshot for an execution (ADR-010).
+
+    Returns the snapshot payload — the manual (non-Dispatcharr-auto-created)
+    channels captured BEFORE this execution mutated anything, with
+    ``stream_ids`` (IDs only — never URLs, §D1), plus ``snapshot_time`` and
+    ``channel_count``. Read-only — no admin guard (consistent with the
+    router's other GETs; the global auth middleware already covers it). The
+    WRITE restore endpoint (Phase 3, uc51o.4) WILL be admin-gated.
+
+    Returns 404 when the execution has no snapshot (e.g. a dry-run, a legacy
+    run, or a run whose capture failed and logged-and-proceeded — §D2).
+    """
+    logger.debug("[AUTO-CREATE] GET /executions/%s/snapshot", execution_id)
+    try:
+        from models import AutoCreationSnapshot
+        session = get_session()
+        try:
+            snapshot = session.query(AutoCreationSnapshot).filter(
+                AutoCreationSnapshot.execution_id == execution_id
+            ).first()
+            if not snapshot:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No snapshot for this execution",
+                )
+            return snapshot.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "[AUTO-CREATE] Failed to get snapshot for execution %s: %s",
+            execution_id, e,
+        )
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.post("/executions/{execution_id}/rollback")
-async def rollback_auto_creation_execution(execution_id: int):
-    """Rollback an auto-creation execution."""
-    logger.debug("[AUTO-CREATE] POST /executions/%s/rollback", execution_id)
+async def rollback_auto_creation_execution(
+    execution_id: int,
+    confirm: bool = Query(
+        False,
+        description=(
+            "Acknowledgement of the optimistic-overwrite warning (ADR-010 §D5), "
+            "REQUIRED only when the execution has a pre-run snapshot. When a "
+            "snapshot exists, rollback performs a FULL restore that overwrites "
+            "the current stream assignments of every snapshot channel with the "
+            "pre-run state — any changes made after the run will be LOST. "
+            "Executions with NO snapshot ignore this flag and keep the legacy "
+            "delete-created-only behaviour (no confirm needed)."
+        ),
+    ),
+    _admin=RequireAdminIfEnabled,
+):
+    """Rollback an auto-creation execution. Admin only.
+
+    UNIFIED REVERT (ADR-010 §D8, uc51o.5). The behaviour is chosen from whether
+    the execution has a pre-run snapshot:
+
+    * **Snapshot present** — performs the FULL whole-run restore (delegates to
+      the same path as ``/restore-snapshot``): re-adds streams the run removed,
+      removes streams it added, restores drifted metadata. Because this is an
+      OPTIMISTIC OVERWRITE that can clobber edits made after the run, it
+      REQUIRES ``confirm=true``; without it the call is refused with HTTP 409
+      and a message explaining the overwrite. The response carries
+      ``removed_channels`` / ``restored_channels`` / ``failed_channels``.
+    * **No snapshot** — the legacy delete-created-only rollback, BYTE-COMPATIBLE
+      with the pre-uc51o.5 behaviour (no ``confirm`` required). The response
+      carries ``entities_removed`` / ``entities_restored``.
+
+    Status codes:
+      * 409 — the execution has a snapshot and ``confirm`` was not set.
+      * 400 — other guard failures (already rolled back, dry-run, nothing to
+        undo).
+      * 200 — rollback performed (legacy or restore shape; on the restore path
+        ``success`` is False with ``failed_channels`` when any channel failed).
+    """
+    logger.debug(
+        "[AUTO-CREATE] POST /executions/%s/rollback (confirm=%s)",
+        execution_id, confirm,
+    )
     try:
         from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
 
@@ -1301,23 +1411,56 @@ async def rollback_auto_creation_execution(execution_id: int):
             client = get_client()
             engine = await init_auto_creation_engine(client)
 
-        result = await engine.rollback_execution(execution_id, rolled_back_by="api")
+        result = await engine.rollback_execution(
+            execution_id, rolled_back_by="api", confirm=confirm,
+        )
 
         if not result["success"]:
-            raise HTTPException(status_code=400, detail=result.get("error", "Rollback failed"))
+            # Snapshot present + no confirm → 409 (acknowledge the overwrite,
+            # uc51o.5). The restore path still returns success=False WITH
+            # restore counts on a partial failure; that is handled below as a
+            # 200 success-with-warnings, so only guard failures land here.
+            if result.get("requires_confirm"):
+                raise HTTPException(status_code=409, detail=result.get("error"))
+            # A restore that was ATTEMPTED returns counts even when success is
+            # False (partial failure) — let that fall through to 200. Only
+            # pre-attempt guard failures (no counts) become 400.
+            if "restored_channels" not in result:
+                raise HTTPException(
+                    status_code=400, detail=result.get("error", "Rollback failed"),
+                )
 
-        # Log to journal
+        # Journal — the description adapts to whichever revert path ran. The
+        # snapshot-restore path returns removed_channels/restored_channels; the
+        # legacy path returns entities_removed/entities_restored.
         rule_name = result.get("rule_name", f"Execution {execution_id}")
-        removed = result.get("entities_removed", 0)
-        restored = result.get("entities_restored", 0)
         session = get_session()
         try:
+            if "restored_channels" in result:
+                # Full snapshot-restore path.
+                removed = result.get("removed_channels", 0)
+                restored = result.get("restored_channels", 0)
+                failed = len(result.get("failed_channels", []))
+                description = (
+                    f"Rolled back '{rule_name}' via snapshot restore: "
+                    f"removed {removed} created channel(s), "
+                    f"restored {restored} channel(s)"
+                    + (f", {failed} failed" if failed else "")
+                )
+            else:
+                # Legacy delete-created-only path.
+                removed = result.get("entities_removed", 0)
+                restored = result.get("entities_restored", 0)
+                description = (
+                    f"Rolled back '{rule_name}': removed {removed} channel(s), "
+                    f"restored {restored} entit{'y' if restored == 1 else 'ies'}"
+                )
             journal.log_entry(
                 category="auto_creation",
                 action_type="rollback",
                 entity_id=execution_id,
                 entity_name=rule_name,
-                description=f"Rolled back '{rule_name}': removed {removed} channel(s), restored {restored} entit{'y' if restored == 1 else 'ies'}"
+                description=description,
             )
         finally:
             session.close()
@@ -1327,6 +1470,117 @@ async def rollback_auto_creation_execution(execution_id: int):
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to rollback auto-creation execution %s: %s", execution_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/executions/{execution_id}/restore-snapshot")
+async def restore_auto_creation_snapshot(
+    execution_id: int,
+    confirm: bool = Query(
+        False,
+        description=(
+            "Required acknowledgement of the optimistic-overwrite warning "
+            "(ADR-010 §D5). Must be true. Reverting OVERWRITES the current "
+            "stream assignments of every snapshot channel with the state "
+            "captured before this run — ANY changes made after the run "
+            "(manual edits, Dispatcharr drift) WILL BE LOST. This cannot be "
+            "undone."
+        ),
+    ),
+    _admin=RequireAdminIfEnabled,
+):
+    """Whole-run revert from the pre-run snapshot (ADR-010 §D8). Admin only.
+
+    SAFETY-CRITICAL DESTRUCTIVE WRITE. This overwrites live Dispatcharr channels
+    with the snapshot's pre-run stream-set + metadata (OPTIMISTIC OVERWRITE,
+    §D5) — it intentionally clobbers any changes made since the snapshot was
+    captured. The caller MUST have surfaced the §D5 pre-revert warning; the
+    ``confirm=true`` parameter is the API-level acknowledgement so a raw call
+    cannot skip it.
+
+    Returns a structured result — ``removed_channels`` / ``restored_channels``
+    counts plus a per-item ``failed_channels`` list. Partial failures are
+    SURFACED (a snapshot channel deleted since the run, a vanished stream id):
+    the operation does NOT abort on the first failure and does NOT report
+    blanket success if any item failed.
+
+    Status codes:
+      * 400 — ``confirm`` not set (warning unacknowledged), or the execution is
+        a dry-run / already reverted.
+      * 404 — no snapshot for this execution (use ``/rollback`` instead).
+      * 200 — restore attempted. ``success`` is False (with the failures
+        listed) when any channel failed; True when all succeeded.
+    """
+    logger.debug(
+        "[AUTO-CREATE] POST /executions/%s/restore-snapshot (confirm=%s)",
+        execution_id, confirm,
+    )
+
+    if not confirm:
+        # The §D5 warning is mandatory and the ONLY mitigation for the
+        # overwrite risk in v1 — refuse to act without explicit acknowledgement.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Restore requires confirm=true. Reverting overwrites the "
+                "current stream assignments of every snapshot channel with the "
+                "pre-run state; any changes made after the run will be lost. "
+                "This cannot be undone."
+            ),
+        )
+
+    try:
+        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+
+        engine = get_auto_creation_engine()
+        if not engine:
+            client = get_client()
+            engine = await init_auto_creation_engine(client)
+
+        result = await engine.restore_snapshot(execution_id, restored_by="api")
+
+        # No snapshot → 404 with guidance to use /rollback (ADR-010 §D8 step 1).
+        if result.get("no_snapshot"):
+            raise HTTPException(status_code=404, detail=result.get("error"))
+
+        # Guard failures (dry-run, already reverted, not found) → 400.
+        # A restore that was ATTEMPTED returns success/failure with counts;
+        # only the pre-attempt guards carry no count keys.
+        if not result.get("success") and "restored_channels" not in result:
+            error = result.get("error", "Restore failed")
+            status = 404 if "not found" in error.lower() else 400
+            raise HTTPException(status_code=status, detail=error)
+
+        # Journal the restore (mirrors the rollback endpoint's journaling).
+        rule_name = result.get("rule_name", f"Execution {execution_id}")
+        removed = result.get("removed_channels", 0)
+        restored = result.get("restored_channels", 0)
+        failed = len(result.get("failed_channels", []))
+        session = get_session()
+        try:
+            journal.log_entry(
+                category="auto_creation",
+                action_type="restore_snapshot",
+                entity_id=execution_id,
+                entity_name=rule_name,
+                description=(
+                    f"Restored snapshot for '{rule_name}': "
+                    f"removed {removed} created channel(s), "
+                    f"restored {restored} channel(s)"
+                    + (f", {failed} failed" if failed else "")
+                ),
+            )
+        finally:
+            session.close()
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "[AUTO-CREATE] Failed to restore snapshot for execution %s: %s",
+            execution_id, e,
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -1446,7 +1700,7 @@ async def export_auto_creation_rules_yaml():
 
 
 @router.post("/import/yaml")
-async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
+async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=RequireAdminIfEnabled):
     """Import auto-creation rules from YAML.
 
     Supports portable name fields: if group_name/target_group_name/m3u_account_name
@@ -1676,6 +1930,232 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
 # =============================================================================
 
 
+# =============================================================================
+# Component B — no-write scored fuzzy preview (enhancedchannelmanager-jnzst)
+# =============================================================================
+
+# DoS guard ceilings. The preview is an N×M scoring pass (every stream against
+# every channel in the scoped groups); without caps a broad group set could be
+# turned into a CPU-amplification vector. These bound the worst case.
+_PREVIEW_MAX_GROUPS = 25
+_PREVIEW_MAX_STREAMS = 2000
+_PREVIEW_MAX_CHANNELS = 2000
+_PREVIEW_FETCH_PAGE_SIZE = 500
+
+
+class ScoredTriple(BaseModel):
+    """One scored (stream, channel) pair surfaced by the preview."""
+
+    stream_id: int
+    stream_name: str
+    channel_id: str
+    channel_name: str
+    score: float
+    callsign_verdict: str  # "match" | "conflict" | "absent"
+    signal: str
+
+
+class FuzzyPreviewResponse(BaseModel):
+    """Paginated, write-free preview of scored fuzzy matches."""
+
+    triples: List[ScoredTriple]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    min_score: float
+    truncated: bool  # True when the candidate pool hit a DoS ceiling
+
+
+@router.get("/fuzzy-preview", response_model=FuzzyPreviewResponse)
+async def preview_fuzzy_matches(
+    group_ids: List[int] = Query(
+        ..., description="Channel-group IDs to scope the preview to (non-empty)"
+    ),
+    min_score: float = Query(
+        ..., ge=0.0, le=1.0,
+        description="Minimum score to include a triple. May be below the 0.60 "
+                    "confidence floor here — the preview deliberately exposes "
+                    "sub-floor scores for inspection (it never writes).",
+    ),
+    allow_no_callsign: bool = Query(
+        False,
+        description="Q1 opt-in. When True, a no-callsign ('absent') pair is "
+                    "admissible at score >= 0.90 (NO_CALLSIGN_FLOOR). Default "
+                    "False = require a parseable callsign on both sides. An M1 "
+                    "callsign 'conflict' is NEVER admissible regardless.",
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    _admin=RequireAdminIfEnabled,
+) -> FuzzyPreviewResponse:
+    """Score streams against channels in the given groups — ZERO writes.
+
+    This is the read-only sibling of the scored-fuzzy rule path: it runs the
+    SAME shared core (``services.dedup_matcher.score_all``) AND the SAME
+    admission policy (``services.dedup_matcher.is_admissible``) so operators can
+    inspect exactly what a rule WOULD do before committing. It never calls any
+    mutating Dispatcharr method.
+
+    Admission (FIX 2 — single source of truth). Returned triples are
+    ADMISSIBLE-only: an M1 callsign ``conflict`` is NEVER returned (even at
+    ``min_score == 0``), and a no-callsign ``absent`` pair is returned only when
+    ``allow_no_callsign`` is True and its score reaches ``NO_CALLSIGN_FLOOR``
+    (0.90). This is what makes the two MCP write tools (which assign purely on
+    ``score`` from these triples) inherit M1/M2 with no consumer-side policy —
+    they can only ever see admissible pairs.
+
+    The ``min_score`` floor clamp is deliberately NOT applied here (unlike the
+    dedup candidate lookup): a sub-0.60 ``min_score`` lets an operator see
+    borderline ``match``-verdict pairs. ``conflict``/``absent`` admission is
+    still governed by the shared policy, so sub-floor ``min_score`` cannot
+    re-admit an incident-class false positive.
+
+    Validation (DoS hardening): ``group_ids`` must be non-empty (an empty list
+    would mean "all groups" → an unbounded N×M scoring pass), free of
+    duplicates and negatives, and capped at ``_PREVIEW_MAX_GROUPS``. The fetched
+    stream and channel pools are each capped; hitting a cap sets ``truncated``.
+    """
+    # --- Validate group_ids (reject empty=all, dup, negative; cap count) ---
+    if not group_ids:
+        raise HTTPException(status_code=400, detail="group_ids must be non-empty")
+    if any(g < 0 for g in group_ids):
+        raise HTTPException(status_code=400, detail="group_ids must be non-negative")
+    if len(set(group_ids)) != len(group_ids):
+        raise HTTPException(status_code=400, detail="group_ids must not contain duplicates")
+    if len(group_ids) > _PREVIEW_MAX_GROUPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"group_ids exceeds the cap of {_PREVIEW_MAX_GROUPS}",
+        )
+
+    client = get_client()
+    allowed = set(group_ids)
+    truncated = False
+
+    # --- Fetch channels in the scoped groups (capped) ---
+    channels: list[dict] = []
+    try:
+        for gid in group_ids:
+            cpage = 1
+            while True:
+                resp = await client.get_channels(
+                    page=cpage, page_size=_PREVIEW_FETCH_PAGE_SIZE, channel_group=gid
+                )
+                batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
+                channels.extend(batch)
+                if len(channels) >= _PREVIEW_MAX_CHANNELS:
+                    channels = channels[:_PREVIEW_MAX_CHANNELS]
+                    truncated = True
+                    break
+                if not isinstance(resp, dict) or not resp.get("next"):
+                    break
+                cpage += 1
+            if truncated:
+                break
+    except Exception as e:
+        logger.warning("[AUTO-CREATE] fuzzy-preview channel fetch failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # --- Fetch streams in the scoped groups (capped) ---
+    streams: list[dict] = []
+    try:
+        group_names = [
+            await client._channel_group_name_for_id(gid) for gid in group_ids
+        ]
+        for gname in group_names:
+            if not gname or truncated:
+                continue
+            spage = 1
+            while True:
+                resp = await client.get_streams(
+                    page=spage, page_size=_PREVIEW_FETCH_PAGE_SIZE,
+                    channel_group_name=gname,
+                )
+                batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
+                streams.extend(batch)
+                if len(streams) >= _PREVIEW_MAX_STREAMS:
+                    streams = streams[:_PREVIEW_MAX_STREAMS]
+                    truncated = True
+                    break
+                if not isinstance(resp, dict) or not resp.get("next"):
+                    break
+                spage += 1
+    except Exception as e:
+        logger.warning("[AUTO-CREATE] fuzzy-preview stream fetch failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Build the candidate (channel) list scoped to the allowed groups and the
+    # per-candidate tvg_id map for the override rung.
+    candidates: list[tuple[str, str]] = []
+    cand_tvg: dict[str, str] = {}
+    for ch in channels:
+        if ch.get("channel_group_id") not in allowed:
+            continue
+        cid, cname = ch.get("id"), ch.get("name")
+        if cid is None or not cname:
+            continue
+        candidates.append((str(cid), cname))
+        if ch.get("tvg_id"):
+            cand_tvg[str(cid)] = ch["tvg_id"]
+
+    # Score every (stream, candidate) pair via the shared core. Offload the
+    # CPU-bound scoring off the event loop.
+    def _score_all_pairs() -> list[ScoredTriple]:
+        out: list[ScoredTriple] = []
+        for s in streams:
+            sid, sname = s.get("id"), s.get("name")
+            if sid is None or not sname:
+                continue
+            stvg = s.get("tvg_id")
+            for cid, cname, sm in score_all(
+                sname, candidates,
+                stream_tvg_id=stvg, candidate_tvg_ids=cand_tvg,
+                mode=NameCleanMode.LOCALS,
+            ):
+                # Shared admission policy — conflict never returned, absent only
+                # at >= NO_CALLSIGN_FLOOR when allow_no_callsign, match at
+                # >= min_score (FIX 2). The MCP write tools inherit M1/M2 here.
+                if not is_admissible(
+                    sm, min_score=min_score, allow_no_callsign=allow_no_callsign
+                ):
+                    continue
+                out.append(ScoredTriple(
+                    stream_id=int(sid), stream_name=sname,
+                    channel_id=cid, channel_name=cname,
+                    score=round(sm.score, 4),
+                    callsign_verdict=sm.callsign_verdict,
+                    signal=sm.signal,
+                ))
+        # Highest score first, deterministic tie-break on ids.
+        out.sort(key=lambda t: (-t.score, t.stream_id, t.channel_id))
+        return out
+
+    all_triples = await run_cpu_bound(_score_all_pairs)
+
+    # --- REAL pagination ---
+    total = len(all_triples)
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    start = (page - 1) * page_size
+    page_slice = all_triples[start:start + page_size]
+
+    logger.debug(
+        "[AUTO-CREATE] fuzzy-preview groups=%s streams=%d channels=%d "
+        "min_score=%.2f total=%d page=%d truncated=%s",
+        group_ids, len(streams), len(candidates), min_score, total, page, truncated,
+    )
+
+    return FuzzyPreviewResponse(
+        triples=page_slice,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        min_score=min_score,
+        truncated=truncated,
+    )
+
+
 @router.post("/validate")
 async def validate_auto_creation_rule(
     conditions: list = Body(...),
@@ -1781,7 +2261,8 @@ async def get_auto_creation_action_schema():
             "description": "Merge multiple streams into one channel",
             "params": {
                 "target": {"type": "string", "enum": ["new_channel", "existing_channel", "auto"], "default": "auto"},
-                "match_by": {"type": "string", "enum": ["tvg_id", "normalized_name", "stream_group"], "default": "tvg_id"},
+                "match_by": {"type": "string", "enum": ["tvg_id", "normalized_name", "stream_group"], "default": "tvg_id", "description": "DEPRECATED no-op (bd-0emgo.1): validated but never consumed at runtime. Use loose_name_match to control fuzzy vs exact matching."},
+                "loose_name_match": {"type": "boolean", "default": False, "description": "When false (default), target=auto merges only on EXACT normalized-name equality. When true, restores the legacy fuzzy cascade (core-name/deparen/word-prefix/call-sign)."},
                 "find_channel_by": {"type": "string", "enum": ["name_exact", "name_regex", "tvg_id"], "optional": True},
                 "find_channel_value": {"type": "string", "optional": True},
                 "quality_preference": {"type": "array", "default": [1080, 720, 480], "description": "Quality order preference"},
@@ -2235,6 +2716,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
                     "case_sensitive": r.case_sensitive,
                     "tag_group_id": r.tag_group_id,
                     "tag_match_position": r.tag_match_position,
+                    "require_delimiter": r.require_delimiter,
                     "tag_group_name": r.tag_group.name if r.tag_group else None,
                     "conditions": r.get_conditions(),
                     "condition_logic": r.condition_logic,

@@ -103,11 +103,26 @@ class ECMClient:
             logger.error("[ECM-CLIENT] GET %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
             raise _http_error("GET", path, e) from e
 
-    async def post(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | list:
-        """POST request to ECM API."""
+    async def post(
+        self,
+        path: str,
+        json_data: dict | None = None,
+        timeout: float | None = None,
+        params: dict | None = None,
+    ) -> dict | list:
+        """POST request to ECM API.
+
+        ``params`` carries query-string keys for endpoints that take a
+        query param on a write verb (e.g. the ADR-010 ``confirm`` gate on
+        ``/restore-snapshot``). ``None`` values are dropped, matching ``get``.
+        """
         client = _get_client()
+        params = {k: v for k, v in (params or {}).items() if v is not None}
+        # Pass ``params`` to httpx ONLY when present so the common no-query call
+        # stays byte-identical (and existing call-signature mocks keep working).
+        extra = {"params": params} if params else {}
         try:
-            r = await client.post(path, json=json_data, timeout=timeout)
+            r = await client.post(path, json=json_data, timeout=timeout, **extra)
             r.raise_for_status()
             return r.json()
         except httpx.TimeoutException:
@@ -142,11 +157,19 @@ class ECMClient:
             logger.error("[ECM-CLIENT] POST(multipart) %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
             raise _http_error("POST", path, e) from e
 
-    async def patch(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | list:
+    async def patch(
+        self,
+        path: str,
+        json_data: dict | None = None,
+        timeout: float | None = None,
+        params: dict | None = None,
+    ) -> dict | list:
         """PATCH request to ECM API."""
         client = _get_client()
+        params = {k: v for k, v in (params or {}).items() if v is not None}
+        extra = {"params": params} if params else {}
         try:
-            r = await client.patch(path, json=json_data, timeout=timeout)
+            r = await client.patch(path, json=json_data, timeout=timeout, **extra)
             r.raise_for_status()
             return r.json()
         except httpx.TimeoutException:
@@ -157,11 +180,19 @@ class ECMClient:
             logger.error("[ECM-CLIENT] PATCH %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
             raise _http_error("PATCH", path, e) from e
 
-    async def put(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | list:
+    async def put(
+        self,
+        path: str,
+        json_data: dict | None = None,
+        timeout: float | None = None,
+        params: dict | None = None,
+    ) -> dict | list:
         """PUT request to ECM API."""
         client = _get_client()
+        params = {k: v for k, v in (params or {}).items() if v is not None}
+        extra = {"params": params} if params else {}
         try:
-            r = await client.put(path, json=json_data, timeout=timeout)
+            r = await client.put(path, json=json_data, timeout=timeout, **extra)
             r.raise_for_status()
             return r.json()
         except httpx.TimeoutException:
@@ -172,11 +203,19 @@ class ECMClient:
             logger.error("[ECM-CLIENT] PUT %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
             raise _http_error("PUT", path, e) from e
 
-    async def delete(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | None:
+    async def delete(
+        self,
+        path: str,
+        json_data: dict | None = None,
+        timeout: float | None = None,
+        params: dict | None = None,
+    ) -> dict | None:
         """DELETE request to ECM API."""
         client = _get_client()
+        params = {k: v for k, v in (params or {}).items() if v is not None}
+        extra = {"params": params} if params else {}
         try:
-            r = await client.request("DELETE", path, json=json_data, timeout=timeout)
+            r = await client.request("DELETE", path, json=json_data, timeout=timeout, **extra)
             r.raise_for_status()
             if r.status_code == 204:
                 return None
@@ -262,14 +301,22 @@ class ECMClient:
         method = ep.method.upper()
         if method == "GET":
             return await self.get(formatted_path, timeout=timeout, **(query or {}))
+        # Write verbs forward ``query`` too (subset-checked above) so endpoints
+        # that take a query param on a write — e.g. the ADR-010 ``confirm`` gate
+        # on /restore-snapshot — work through the contract, not a raw call.
+        # ``params`` is passed ONLY when a query is present, so the common
+        # no-query write call stays byte-identical to the pre-query behaviour.
+        write_kwargs: dict = {"json_data": body, "timeout": timeout}
+        if query:
+            write_kwargs["params"] = query
         if method == "POST":
-            return await self.post(formatted_path, json_data=body, timeout=timeout)
+            return await self.post(formatted_path, **write_kwargs)
         if method == "PATCH":
-            return await self.patch(formatted_path, json_data=body, timeout=timeout)
+            return await self.patch(formatted_path, **write_kwargs)
         if method == "PUT":
-            return await self.put(formatted_path, json_data=body, timeout=timeout)
+            return await self.put(formatted_path, **write_kwargs)
         if method == "DELETE":
-            return await self.delete(formatted_path, json_data=body, timeout=timeout)
+            return await self.delete(formatted_path, **write_kwargs)
         raise ContractError(
             f"call_endpoint({ep.name!r}): unsupported method {ep.method!r}"
         )

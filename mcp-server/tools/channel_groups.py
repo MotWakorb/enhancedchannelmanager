@@ -11,21 +11,73 @@ logger = logging.getLogger(__name__)
 
 def register(mcp: FastMCP):
     @mcp.tool()
-    async def list_channel_groups() -> str:
-        """List all channel groups with their channel counts."""
+    async def list_channel_groups(
+        compact: bool = False,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> str:
+        """List all channel groups with their channel counts.
+
+        The live system can hold ~1000+ groups, so the default human-readable
+        call is PAGINATED to stay within the MCP token limit (bd-0hjrk.4).
+
+        Args:
+            compact: If True, output pipe-delimited format optimized for agent
+                consumption — ``id|name|channel_count`` with a header line.
+                Ignores pagination and shows ALL groups (mirrors list_channels).
+            page: 1-based page number for the human-readable format (default 1).
+            page_size: Rows per page for the human-readable format (default 100).
+        """
         try:
             client = get_ecm_client()
             groups = await client.call_endpoint(ENDPOINTS["groups_list"])
+            # Backend groups_list returns a flat list with no server-side
+            # pagination, so we slice client-side.
+            groups = groups or []
 
             if not groups:
                 return "No channel groups found."
 
-            lines = [f"Found {len(groups)} channel groups:"]
-            for g in groups:
+            if compact:
+                # Pipe-delimited, all rows, no pagination — same idiom as
+                # list_channels' compact mode.
+                lines = ["id|name|channel_count"]
+                for g in groups:
+                    gid = g.get("id", "?")
+                    name = g.get("name", "Unknown")
+                    channel_count = g.get("channel_count", 0)
+                    lines.append(f"{gid}|{name}|{channel_count}")
+                return "\n".join(lines)
+
+            total = len(groups)
+            page = max(page, 1)
+            page_size = max(page_size, 1)
+            start = (page - 1) * page_size
+            end = start + page_size
+            shown = groups[start:end]
+            total_pages = (total + page_size - 1) // page_size
+
+            if not shown:
+                return (
+                    f"No channel groups on page {page} "
+                    f"(total {total} groups across {total_pages} pages)."
+                )
+
+            lines = [
+                f"Found {total} channel groups "
+                f"(page {page}/{total_pages}, showing {len(shown)}):"
+            ]
+            for g in shown:
                 name = g.get("name", "Unknown")
                 gid = g.get("id", "?")
                 channel_count = g.get("channel_count", 0)
                 lines.append(f"  {name} (id={gid}) — {channel_count} channels")
+
+            if page < total_pages:
+                lines.append(
+                    f"  ... {total - end} more — request page {page + 1} "
+                    f"(or use compact=True for all groups in one call)"
+                )
 
             return "\n".join(lines)
         except Exception as e:
@@ -182,7 +234,17 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def get_auto_created_groups() -> str:
-        """List channel groups that were created by the auto-creation pipeline."""
+        """List channel groups that contain auto-created channels.
+
+        Each group shows two distinct counts:
+          - **channels**: total group membership (every channel in the group,
+            regardless of how it was created).
+          - **auto-created**: the subset of that membership whose channels were
+            produced by the auto-creation pipeline (auto_created=True).
+
+        A group can show e.g. "170 channels (12 auto-created)" — most of the
+        group was created manually or by M3U sync; only 12 came from a rule.
+        """
         try:
             client = get_ecm_client()
             resp = await client.call_endpoint(ENDPOINTS["groups_auto_created"])
@@ -193,12 +255,20 @@ def register(mcp: FastMCP):
             if not groups:
                 return "No auto-created channel groups."
 
-            lines = [f"Found {len(groups)} auto-created groups:"]
+            lines = [f"Found {len(groups)} groups with auto-created channels:"]
             for g in groups:
                 name = g.get("name", "Unknown")
                 gid = g.get("id", "?")
+                # channel_count = total membership; auto_created_count = subset.
+                # bd-0hjrk.3: the tool used to read a non-existent
+                # "channel_count" off the old payload and always printed 0;
+                # the backend now supplies both, so render both explicitly.
                 channel_count = g.get("channel_count", 0)
-                lines.append(f"  {name} (id={gid}) — {channel_count} channels")
+                auto_created_count = g.get("auto_created_count", 0)
+                lines.append(
+                    f"  {name} (id={gid}) — {channel_count} channels "
+                    f"({auto_created_count} auto-created)"
+                )
 
             return "\n".join(lines)
         except Exception as e:
