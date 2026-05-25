@@ -205,6 +205,22 @@ class DispatcharrSettings(BaseModel):
     # M3USnapshot newest-N precedent (ADR-010 §D7).
     auto_creation_snapshot_days: int = 30  # Age window — prune snapshots older than this many days (by snapshot_time).
     auto_creation_snapshot_max: int = 50  # Count cap — keep at most this many newest snapshots; older ones pruned regardless of age.
+    # M3U change-tracking retention (bd-wehek / bd-f9gd8 DBA spike). Both tables
+    # grow with every Dispatcharr upstream change (every 5-min poll if upstream
+    # churns): m3u_snapshots stores ~1-10 kB groups_data JSON per row;
+    # m3u_change_logs stores ~500 B per detected change.  Neither had retention.
+    # Prune both by age, BEFORE the VACUUM step, mirroring the established
+    # age-window pattern.  90-day default matches the journal hot-retention window
+    # (bd-dmu8w) and gives operators a comfortable M3U change history without
+    # unbounded growth.
+    m3u_snapshot_days: int = 90  # Delete m3u_snapshots rows older than this many days (by snapshot_time).
+    m3u_change_log_days: int = 90  # Delete m3u_change_logs rows older than this many days (by change_time).
+    # unique_client_connections retention (bd-1wi3y / bd-f9gd8 DBA spike). High
+    # write rate (one row per (channel, IP) connection start) + 6 indexes makes
+    # this table grow quickly.  Currently no retention beyond manual stats reset.
+    # Prune by age, BEFORE the VACUUM step, mirroring the established
+    # age-window pattern.  90-day default mirrors the M3U retention window above.
+    unique_client_connection_days: int = 90  # Delete unique_client_connections rows older than this many days (by connected_at).
     # MCP server API key for Claude integration (empty = not configured)
     mcp_api_key: str = ""
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
