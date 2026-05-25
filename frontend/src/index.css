@@ -297,6 +297,12 @@
 html, body, #root {
   height: 100%;
   width: 100%;
+  /* Prevent the document itself from becoming a scroll container.
+   * This is an SPA — all scrolling happens inside the app shell.
+   * Without overflow:hidden the page can scroll if any content path
+   * lets a flex/block child overflow its constrained ancestor (e.g.
+   * the Stats tab footer-hover scroll bug, bd-tkcmu). */
+  overflow: hidden;
 }
 
 /* Search input with clear button */
