@@ -346,6 +346,13 @@ export interface AutoCreationExecution {
   execution_log?: ExecutionLogEntry[];
   rolled_back_at?: string;
   rolled_back_by?: string;
+  /**
+   * True when a pre-run snapshot exists for this execution (ADR-010 §D6).
+   * Derived by the backend from the existence of an AutoCreationSnapshot row;
+   * gates the snapshot-restore affordance in the UI. False / absent for
+   * dry-run executions, legacy runs, and runs where snapshot capture failed.
+   */
+  has_snapshot?: boolean;
 }
 
 export interface CreatedEntity {
@@ -479,6 +486,32 @@ export interface RollbackResponse {
   success: boolean;
   entities_removed: number;
   entities_restored: number;
+  error?: string;
+}
+
+/**
+ * A channel that failed to restore during snapshot-restore (ADR-010 §D8 step 6).
+ * Partial failures are always surfaced; a restore that fails on some channels
+ * is never presented as plain success.
+ */
+export interface FailedChannel {
+  id: number;
+  name: string;
+  error: string;
+}
+
+/**
+ * Response from POST /auto-creation/executions/{id}/restore-snapshot (ADR-010 §D8).
+ *
+ * ``success`` is false when any channel failed (partial failures are surfaced
+ * in ``failed_channels``). A 200 with ``success: false`` is a partial-failure
+ * result, NOT a server error.
+ */
+export interface RestoreSnapshotResponse {
+  success: boolean;
+  removed_channels: number;
+  restored_channels: number;
+  failed_channels: FailedChannel[];
   error?: string;
 }
 

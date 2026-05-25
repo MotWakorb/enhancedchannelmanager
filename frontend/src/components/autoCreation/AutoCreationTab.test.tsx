@@ -474,6 +474,182 @@ describe('AutoCreationTab', () => {
     });
   });
 
+  describe('snapshot revert affordance (ADR-010 uc51o.7)', () => {
+    it('shows the revert button when has_snapshot is true', async () => {
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
+      });
+    });
+
+    it('hides the revert button when has_snapshot is false', async () => {
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: false })
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        // Execution item should appear
+        expect(screen.getByTestId('execution-item')).toBeInTheDocument();
+        // But the revert button must not be rendered
+        expect(screen.queryByRole('button', { name: /undo this run/i })).toBeNull();
+      });
+    });
+
+    it('hides the revert button for dry-run executions even with a snapshot', async () => {
+      // dry-run executions never get a snapshot (ADR-010 §D2), so this combo
+      // should not arise in production — but the UI must still be safe.
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'completed', mode: 'dry_run', has_snapshot: true })
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /undo this run/i })).toBeNull();
+      });
+    });
+
+    it('opens the confirm dialog with the overwrite warning when revert is clicked', async () => {
+      const user = userEvent.setup();
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /undo this run/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        // ADR-010 §D5 mandatory overwrite warning must be visible
+        expect(screen.getByTestId('revert-warning')).toBeInTheDocument();
+        expect(screen.getByText(/overwrite the current stream assignments/i)).toBeInTheDocument();
+      });
+    });
+
+    it('does not call the restore API when the confirm dialog is cancelled', async () => {
+      const user = userEvent.setup();
+      let restoreCalled = false;
+      server.use(
+        http.post('/api/auto-creation/executions/:id/restore-snapshot', () => {
+          restoreCalled = true;
+          return HttpResponse.json({ success: true, removed_channels: 0, restored_channels: 0, failed_channels: [] });
+        })
+      );
+
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /undo this run/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+
+      expect(restoreCalled).toBe(false);
+    });
+
+    it('calls restore-snapshot with confirm=true and shows result summary on confirm', async () => {
+      const user = userEvent.setup();
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({
+          status: 'completed',
+          mode: 'execute',
+          has_snapshot: true,
+          channels_created: 3,
+        })
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /undo this run/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('revert-confirm-btn')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTestId('revert-confirm-btn'));
+
+      // After confirm: result summary appears
+      await waitFor(() => {
+        expect(screen.getByTestId('revert-result-stats')).toBeInTheDocument();
+        expect(screen.getByTestId('revert-restored-count')).toBeInTheDocument();
+      });
+    });
+
+    it('surfaces partial failures in the result summary — never shows as plain success', async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.post('/api/auto-creation/executions/:id/restore-snapshot', () => {
+          return HttpResponse.json({
+            success: false,
+            removed_channels: 2,
+            restored_channels: 8,
+            failed_channels: [
+              { id: 101, name: 'ESPN HD', error: 'Channel not found in Dispatcharr' },
+              { id: 102, name: 'CNN', error: 'Stream 9999 no longer exists' },
+            ],
+          });
+        })
+      );
+
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /undo this run/i }));
+      await waitFor(() => screen.getByTestId('revert-confirm-btn'));
+      await user.click(screen.getByTestId('revert-confirm-btn'));
+
+      await waitFor(() => {
+        // Partial-failure warning must be present
+        expect(screen.getByTestId('revert-partial-failure')).toBeInTheDocument();
+        // Failed channels list must appear
+        expect(screen.getByTestId('revert-failed-channels')).toBeInTheDocument();
+        expect(screen.getByText('ESPN HD')).toBeInTheDocument();
+        expect(screen.getByText('CNN')).toBeInTheDocument();
+        expect(screen.getByText('Channel not found in Dispatcharr')).toBeInTheDocument();
+        // Counts rendered
+        expect(screen.getByTestId('revert-restored-count').textContent).toBe('8');
+        expect(screen.getByTestId('revert-failed-count').textContent).toBe('2');
+      });
+    });
+  });
+
   describe('import/export', () => {
     it('shows import/export buttons', () => {
       renderWithProviders(<AutoCreationTab />);

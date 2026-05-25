@@ -658,6 +658,15 @@ def register(mcp: FastMCP):
     async def list_auto_creation_executions(limit: int = 10) -> str:
         """List recent auto-creation pipeline executions.
 
+        Each line ends with a snapshot marker (ADR-010):
+          - ``[snapshot]`` — the run captured a pre-run channel/stream snapshot,
+            so it is FULLY revertible via restore_auto_creation_snapshot (the
+            whole-run revert re-adds removed streams + restores drifted
+            metadata). rollback_auto_creation also uses the snapshot for these.
+          - ``[no snapshot]`` — a dry-run, a legacy run, or a run whose snapshot
+            capture failed. Only the narrower rollback_auto_creation applies
+            (deletes created channels, un-merges run-added streams).
+
         Args:
             limit: Number of executions to return (default 10)
         """
@@ -677,7 +686,12 @@ def register(mcp: FastMCP):
                 created = ex.get("created_at", ex.get("timestamp", "?"))
                 channels = ex.get("channels_created", ex.get("created", 0))
                 dry = " (dry run)" if ex.get("dry_run") else ""
-                lines.append(f"  #{eid}: {status} — {channels} channels{dry} ({created})")
+                # has_snapshot (ADR-010 §D6) tells the operator/agent which runs
+                # are fully revertible via restore_auto_creation_snapshot.
+                snap = "[snapshot]" if ex.get("has_snapshot") else "[no snapshot]"
+                lines.append(
+                    f"  #{eid}: {status} — {channels} channels{dry} {snap} ({created})"
+                )
 
             return "\n".join(lines)
         except Exception as e:
@@ -745,6 +759,145 @@ def register(mcp: FastMCP):
             # it here. Surface it clearly so the user sees WHY nothing changed.
             logger.error("[MCP] rollback_auto_creation failed: %s", e)
             return f"Error rolling back execution {execution_id}: {e}"
+
+    @mcp.tool()
+    async def restore_auto_creation_snapshot(
+        execution_id: int, confirm: bool = False
+    ) -> str:
+        """Full WHOLE-RUN revert of an auto-creation run from its pre-run snapshot (ADR-010 §D8).
+
+        This is the FULLER revert (vs rollback_auto_creation). It restores the
+        entire snapshotted channel<->stream state captured BEFORE the run mutated
+        anything: re-adds streams the run REMOVED, removes streams it added,
+        restores drifted metadata (channel group / EPG link / tvg id). Only runs
+        that captured a snapshot are eligible — check list_auto_creation_executions
+        for the ``[snapshot]`` marker first. Runs without a snapshot (dry-runs,
+        legacy runs, capture-failure runs) are NOT restorable this way; use
+        rollback_auto_creation for those (this tool returns guidance to do so).
+
+        SAFETY — OPTIMISTIC OVERWRITE, NOT UNDOABLE (ADR-010 §D5):
+        A restore spans EVERY channel in the snapshot (often hundreds). It
+        UNCONDITIONALLY OVERWRITES each channel's CURRENT stream assignments and
+        metadata with the pre-run state — any manual edit or Dispatcharr drift
+        made AFTER the run and BEFORE this revert is LOST. There is no conflict
+        detection and the restore CANNOT be undone.
+
+        Because of that blast radius this tool REQUIRES explicit confirmation:
+          - confirm=False (default) → NOTHING is restored. The tool returns the
+            warning (including how many channels would be overwritten, when the
+            snapshot was taken) and tells you to re-invoke with confirm=true.
+          - confirm=true → the restore runs. Partial failures (a channel deleted
+            since the run, a stream id that no longer resolves) are SURFACED
+            per-channel — never a silent partial success.
+
+        Args:
+            execution_id: The execution whose pre-run snapshot to restore.
+            confirm: Must be true to actually perform the (destructive,
+                non-undoable) restore. Defaults to false, which only returns the
+                warning and does NOT touch any channel.
+        """
+        client = get_ecm_client()
+
+        # confirm=False: refuse to act. Surface the §D5 warning + blast radius
+        # WITHOUT calling the restore endpoint at all. Try to read the snapshot's
+        # channel_count so the operator sees how many channels would be
+        # overwritten before re-invoking; best-effort — never block the warning.
+        if not confirm:
+            channel_count = None
+            snapshot_time = None
+            try:
+                snap = await client.call_endpoint(
+                    ENDPOINTS["ac_get_execution_snapshot"],
+                    path_args={"execution_id": execution_id},
+                )
+                if isinstance(snap, dict):
+                    channel_count = snap.get("channel_count")
+                    snapshot_time = snap.get("snapshot_time")
+            except Exception as e:
+                # No snapshot (404) is the common case here — tell the caller to
+                # use rollback_auto_creation instead, and do NOT pretend a
+                # restore is pending.
+                if "404" in str(e) or "no snapshot" in str(e).lower():
+                    return (
+                        f"Execution {execution_id} has NO pre-run snapshot, so it "
+                        f"cannot be restored with this tool. Use "
+                        f"rollback_auto_creation({execution_id}) instead (it deletes "
+                        f"channels the run created and un-merges streams it added)."
+                    )
+                logger.warning(
+                    "[MCP] restore_auto_creation_snapshot: could not read snapshot "
+                    "metadata for execution %s: %s", execution_id, e,
+                )
+
+            count_phrase = (
+                f"{channel_count} channel(s)" if channel_count is not None
+                else "every channel in the snapshot"
+            )
+            taken_phrase = f" (snapshot taken {snapshot_time})" if snapshot_time else ""
+            return (
+                f"CONFIRMATION REQUIRED — restore NOT performed.\n\n"
+                f"Restoring execution {execution_id} will OVERWRITE the current "
+                f"stream assignments and metadata of {count_phrase} with the "
+                f"pre-run state{taken_phrase}. Any changes made after the run "
+                f"(manual edits, Dispatcharr drift) WILL BE LOST. This is an "
+                f"optimistic overwrite with no conflict detection and CANNOT be "
+                f"undone.\n\n"
+                f"To proceed, re-invoke with confirm=true: "
+                f"restore_auto_creation_snapshot(execution_id={execution_id}, confirm=true)"
+            )
+
+        # confirm=True: perform the restore. ``confirm`` is a query param on the
+        # backend (ADR-010 §D8) — pass it through the contract.
+        try:
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_restore_snapshot"],
+                path_args={"execution_id": execution_id},
+                query={"confirm": True},
+                timeout=300.0,
+            )
+        except Exception as e:
+            # 404 → no snapshot: point at the narrower rollback path (§D8 step 1).
+            if "404" in str(e) or "no snapshot" in str(e).lower():
+                return (
+                    f"Execution {execution_id} has NO pre-run snapshot, so it "
+                    f"cannot be restored. Use rollback_auto_creation({execution_id}) "
+                    f"instead."
+                )
+            logger.error("[MCP] restore_auto_creation_snapshot failed: %s", e)
+            return f"Error restoring snapshot for execution {execution_id}: {e}"
+
+        if not isinstance(result, dict):
+            return f"Snapshot restore for execution {execution_id} returned an unexpected response."
+
+        # Defensive: a no_snapshot signal that arrives as a dict instead of HTTP
+        # 404 (changed/direct call paths) → same guidance, not a phantom success.
+        if result.get("no_snapshot"):
+            return (
+                f"Execution {execution_id} has NO pre-run snapshot, so it cannot "
+                f"be restored. Use rollback_auto_creation({execution_id}) instead."
+            )
+
+        removed = result.get("removed_channels", 0)
+        restored = result.get("restored_channels", 0)
+        failed_channels = result.get("failed_channels", []) or []
+
+        msg = (
+            f"Snapshot restore for execution {execution_id}: "
+            f"{restored} channel(s) restored to their pre-run state, "
+            f"{removed} run-created channel(s) deleted."
+        )
+        if failed_channels:
+            # Partial failure — surface exactly which channels failed and why.
+            detail = "; ".join(
+                f"#{fc.get('id', '?')} {fc.get('name', '')}".strip()
+                + (f" ({fc.get('error')})" if fc.get("error") else "")
+                for fc in failed_channels
+            )
+            msg += (
+                f"\nWARNING — {len(failed_channels)} channel(s) FAILED to restore "
+                f"(re-running the restore is safe and idempotent): {detail}"
+            )
+        return msg
 
     @mcp.tool()
     async def analyze_auto_creation_rules(bundle_path: str | None = None) -> str:
