@@ -2095,3 +2095,163 @@ rules:
             files={"file": ("debug.tar.gz", bundle, "application/gzip")},
         )
         assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Admin gating (bd-757hc) — destructive / mutating endpoints carry
+# RequireAdminIfEnabled, matching backup.py's create_backup / restore_backup.
+#
+# SECURITY FINDING: every mutating endpoint in this router was previously only
+# authenticated (via the global middleware) but NOT authorized to admin. Any
+# authenticated principal — including a narrowly-scoped MCP static-key session —
+# could invoke destructive bulk rollback / run / write ops. These tests prove
+# the gate is now in place.
+#
+# Pattern mirrors tests/routers/test_normalization.py::TestApplyToChannelsAdminGuard
+# and tests/routers/test_0hjrk_backup_save_restore.py: the default `async_client`
+# fixture runs with auth DISABLED (RequireAdminIfEnabled is a no-op → returns
+# None), so the existing happy-path tests above already prove behavior is
+# unchanged when auth is off. Here we override the prebuilt dependency to
+# simulate auth-enabled non-admin (403) and auth-enabled admin (pass-through).
+# ---------------------------------------------------------------------------
+
+# (path, http_method, request_kwargs) for every endpoint that must be admin-gated.
+# Bodies are intentionally well-formed enough to pass FastAPI request parsing —
+# the admin dependency raises BEFORE the handler runs, so the handler internals
+# are never reached when the gate rejects.
+_GATED_ENDPOINTS = [
+    ("/api/auto-creation/rules", "post", {"json": {"name": "X", "conditions": [], "actions": []}}),
+    ("/api/auto-creation/rules/1", "put", {"json": {"name": "X"}}),
+    ("/api/auto-creation/rules/bulk-update", "post", {"json": {"rule_ids": [1], "enabled": True}}),
+    ("/api/auto-creation/rules/1", "delete", {}),
+    ("/api/auto-creation/rules/reorder", "post", {"json": [1, 2, 3]}),
+    ("/api/auto-creation/rules/1/toggle", "post", {}),
+    ("/api/auto-creation/rules/1/duplicate", "post", {}),
+    ("/api/auto-creation/run", "post", {"json": {}}),
+    ("/api/auto-creation/rules/1/run", "post", {}),
+    ("/api/auto-creation/executions/1/rollback", "post", {}),
+    ("/api/auto-creation/import/yaml", "post", {"json": {"yaml_content": "rules: []"}}),
+]
+
+
+class TestAutoCreationAdminGating:
+    """Mutating/destructive auto-creation endpoints require admin when auth is
+    enabled; read endpoints stay open. Mirrors backup.py's admin guard."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path, method, kwargs", _GATED_ENDPOINTS)
+    async def test_non_admin_is_forbidden_when_auth_enabled(
+        self, async_client, path, method, kwargs
+    ):
+        """Auth enabled + non-admin principal → 403 on every gated endpoint.
+
+        Overriding RequireAdminIfEnabled.dependency to raise 403 simulates an
+        authenticated-but-non-admin caller regardless of the test's auth state."""
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _reject() -> None:
+            # Parameterless so FastAPI's DI introspection doesn't pull query args.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        app.dependency_overrides[_prebuilt.dependency] = _reject
+        try:
+            response = await getattr(async_client, method)(path, **kwargs)
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 403, (
+            f"{method.upper()} {path} should be admin-gated but returned "
+            f"{response.status_code}"
+        )
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_admin_principal_can_rollback_when_auth_enabled(self, async_client):
+        """Auth enabled + admin principal → the gate passes through and the
+        destructive rollback (the headline finding) executes normally."""
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _allow_admin():
+            # Stand in for an authenticated admin User; the handler ignores the
+            # returned value (param is the unused `_admin`).
+            return MagicMock(is_admin=True, username="admin")
+
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": True,
+            "rule_name": "Sports Rule",
+            "entities_removed": 3,
+            "entities_restored": 0,
+        }
+
+        app.dependency_overrides[_prebuilt.dependency] = _allow_admin
+        try:
+            with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+                 patch("routers.auto_creation.journal"):
+                response = await async_client.post(
+                    "/api/auto-creation/executions/1/rollback"
+                )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_rollback_allowed_when_auth_disabled(self, async_client):
+        """Auth disabled (default async_client) → RequireAdminIfEnabled is a
+        no-op and the endpoint behaves exactly as before the gate was added."""
+        mock_engine = AsyncMock()
+        mock_engine.rollback_execution.return_value = {
+            "success": True,
+            "rule_name": "Sports Rule",
+            "entities_removed": 1,
+            "entities_restored": 0,
+        }
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/rollback"
+            )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_read_endpoints_not_admin_gated(self, async_client, test_session):
+        """Read-only endpoints stay reachable for a non-admin principal even
+        when auth is enabled — only mutating ops are gated. We override the admin
+        dependency to reject; the read endpoints don't depend on it, so they
+        must still return 200."""
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _reject() -> None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        _create_rule(test_session, name="Readable")
+
+        app.dependency_overrides[_prebuilt.dependency] = _reject
+        try:
+            list_resp = await async_client.get("/api/auto-creation/rules")
+            execs_resp = await async_client.get("/api/auto-creation/executions")
+            schema_resp = await async_client.get(
+                "/api/auto-creation/schema/conditions"
+            )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert list_resp.status_code == 200
+        assert execs_resp.status_code == 200
+        assert schema_resp.status_code == 200

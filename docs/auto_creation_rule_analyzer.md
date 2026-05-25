@@ -319,6 +319,77 @@ existed, not whether the merge itself would land there.
 
 ---
 
+## Scored-fuzzy rule path (`loose_name_match` + `min_score`)
+
+Shipped in v0.17.3-0006 (bead jnzst). This path adds a callsign-aware, confidence-scored stream→channel matching mode on top of the existing `loose_name_match` boolean. It is opt-in — a `loose_name_match` rule without `min_score` keeps running the legacy fuzzy cascade exactly as before.
+
+### How to activate it
+
+Add `min_score` to a `merge_streams` action that already has `loose_name_match: true`:
+
+```json
+{
+  "type": "merge_streams",
+  "target": "auto",
+  "loose_name_match": true,
+  "min_score": 0.75,
+  "target_channel_in_group": [14, 22],
+  "allow_no_callsign": false
+}
+```
+
+When `min_score` is present, the executor delegates to the unified scoring core (`services.dedup_matcher.score_all`) instead of the legacy cascade. The score is a normalized float in [0.0, 1.0] produced by RapidFuzz `token_set_ratio` on LOCALS-cleaned names, with two override rungs (callsign exact match → 1.0, tvg_id callsign equality → 1.0) that take precedence.
+
+### Required fields and validation
+
+| Field | Type | Required | Notes |
+|-|-|-|-|
+| `loose_name_match` | boolean | Yes (`true`) | Must be `true`; `min_score` has no meaning on the exact path. |
+| `min_score` | float [0.0–1.0] | Yes (to activate scored path) | Floored at `CONFIDENCE_FLOOR` (0.60). A value below the floor is rejected at write time with a `400`. |
+| `target_channel_in_group` | list of integer group IDs | **Yes — non-empty** | A scored-fuzzy rule with no `target_channel_in_group` allowlist is rejected by the schema validator (`400`). This is an intentional safety constraint: an unscoped fuzzy rule was the root cause of a 1,341-false-positive merge incident. |
+| `allow_no_callsign` | boolean | No (default `false`) | Opt-in to matching pairs where at least one side has no parseable callsign. When `true`, such pairs are admitted only at score ≥ 0.90. |
+
+### Scoring precedence (shared core)
+
+The scoring core applies a hard precedence ladder — the same ladder the `fuzzy-preview` endpoint uses:
+
+1. **M1 callsign hard-reject.** If both the stream name and the channel name parse a callsign (e.g. `WBAY`/`WGBA`) and they differ, the pair is rejected unconditionally — score 0.0, verdict `"conflict"`. This fires before any threshold and cannot be overridden.
+2. **tvg_id callsign override.** If the stream's `tvg_id` (or its name) and the channel's `tvg_id` (or its name) parse the same callsign, the score is set to 1.0 (`tvg_id-override`). Only reached when M1 did not fire.
+3. **LOCALS-cleaned fuzzy.** RapidFuzz `token_set_ratio` on names cleaned with the LOCALS cleaner (strips `US |` / state-code / `CITY:` / `DIREC TV` prefixes, dotted sub-channel numbers, superscripts, quality tags like `RAW`/`HD`, and run-together market tokens like `GREENBAY → GREEN BAY`).
+
+### No-callsign opt-in (`allow_no_callsign`)
+
+The default policy requires a parseable FCC callsign on both sides of a match. This is the safe default — without a callsign cross-check, `WGBA 2 (NBC)` scored 0.889 against `WBAY` in the spike that motivated the callsign gate.
+
+Set `allow_no_callsign: true` to admit pairs where at least one side lacks a parseable callsign, subject to the 0.90 floor (`NO_CALLSIGN_FLOOR`). Even with the opt-in, an M1 conflict (different callsigns on both sides) is still never admitted.
+
+### Journal provenance
+
+For each stream matched via the scored-fuzzy path, the executor writes a journal entry with:
+
+- The match `score` (float)
+- `callsign_verdict` (`"match"` or `"absent"`)
+- `signal` — which scoring rung fired (`"callsign-exact"`, `"tvg_id-override"`, `"fuzzy-with-callsign"`, `"fuzzy-no-callsign-floor"`)
+- The stream and channel callsigns (when parsed)
+
+This lets you audit exactly why a merge fired — accessible in the ECM journal tab or via `GET /api/journal`.
+
+### Rollback
+
+Auto-creation executions are rollback-able via `POST /api/auto-creation/executions/{id}/rollback` regardless of whether the run used the scored-fuzzy path or the exact path.
+
+### What is unchanged
+
+- The global exact-match rule path is unchanged. Rules without `min_score` run as before.
+- `match_by` remains a validated no-op (see below).
+- `CONFIDENCE_FLOOR` (0.60) is the same floor used by the interactive stream deduplication (ADR-008 §D2). Both import the constant from `services.dedup_matcher` so they cannot drift.
+
+### Previewing before committing
+
+Use the `GET /api/auto-creation/fuzzy-preview` endpoint (or the `preview_fuzzy_matches` MCP tool) to inspect scored triples before enabling a rule. The preview applies the identical scoring core and admission policy, so it shows exactly what the rule would do. See [`docs/api.md`](api.md) for the endpoint reference.
+
+---
+
 ## Matching: `loose_name_match` vs the deprecated `match_by`
 
 ### `loose_name_match` (the real control)
