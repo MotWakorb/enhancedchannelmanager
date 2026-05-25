@@ -48,6 +48,35 @@ def register(mcp: FastMCP):
             return f"Error testing normalization: {e}"
 
     @mcp.tool()
+    async def set_normalization_group_enabled(group_id: int, enabled: bool) -> str:
+        """Enable or disable a normalization rule group globally.
+
+        A normalization group must be globally enabled for its rules to be applied
+        by the engine — even if the group is listed in an auto-creation rule's
+        normalization_group_ids, the engine skips it when enabled=False.
+
+        Use list_normalization_rules to discover group IDs and their current
+        enabled status.
+
+        Args:
+            group_id: ID of the NormalizationRuleGroup to update.
+            enabled: True to enable the group; False to disable it.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["normalization_update_group"],
+                path_args={"group_id": group_id},
+                body={"enabled": enabled},
+            )
+            name = result.get("name", f"group {group_id}") if isinstance(result, dict) else f"group {group_id}"
+            state = "enabled" if enabled else "disabled"
+            return f"Normalization group '{name}' (id={group_id}) is now {state}."
+        except Exception as e:
+            logger.error("[MCP] set_normalization_group_enabled failed: %s", e)
+            return f"Error updating normalization group {group_id}: {e}"
+
+    @mcp.tool()
     async def list_normalization_rules() -> str:
         """List all normalization rule groups and their rules."""
         try:

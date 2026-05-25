@@ -294,3 +294,56 @@ class TestJellyfinTestConnectionSsrfMitigation:
         assert response.status_code == 200, response.json()
         assert response.json() == {"ok": True}
         assert captured["base_url"] == "https://jellyfin.example.com:8920"
+
+    @pytest.mark.asyncio
+    async def test_rejects_loopback_smoke(self, async_client):
+        """Loopback denylist smoke (bd-fbc50) — full coverage is on the
+        shared ``_sanitize_base_url`` helper in the Emby suite; this just
+        confirms the Jellyfin path is wired through the same guard."""
+        jellyfin_constructor = AsyncMock()
+        with patch("routers.settings.JellyfinClient", side_effect=jellyfin_constructor):
+            response = await async_client.post(
+                "/api/settings/jellyfin/test-connection",
+                json={"base_url": "http://[::1]:8096", "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        jellyfin_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_metadata_ip_smoke(self, async_client):
+        """Cloud metadata IP is blocked on the Jellyfin path (bd-fbc50)."""
+        jellyfin_constructor = AsyncMock()
+        with patch("routers.settings.JellyfinClient", side_effect=jellyfin_constructor):
+            response = await async_client.post(
+                "/api/settings/jellyfin/test-connection",
+                json={"base_url": "http://169.254.169.254", "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        jellyfin_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_allows_rfc1918_smoke(self, async_client):
+        """RFC1918 LAN host stays reachable on the Jellyfin path (bd-fbc50)."""
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[])
+        mock_client.close = AsyncMock()
+
+        captured: dict = {}
+
+        def constructor_spy(base_url, api_key):
+            captured["base_url"] = base_url
+            return mock_client
+
+        with patch("routers.settings.JellyfinClient", side_effect=constructor_spy):
+            response = await async_client.post(
+                "/api/settings/jellyfin/test-connection",
+                json={"base_url": "http://192.168.1.50:8096", "api_key": "k"},
+            )
+
+        assert response.status_code == 200, response.json()
+        assert response.json() == {"ok": True}
+        assert captured["base_url"] == "http://192.168.1.50:8096"
