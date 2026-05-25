@@ -107,4 +107,4 @@ Without this signal, the only way to find out ECM crashed was to notice the UI w
 
 - **[ADR-006](../adr/ADR-006-frontend-error-telemetry.md)** — full architecture record for this feature, including why we chose local-sink over Sentry/GlitchTip/OTel SDK.
 - **[SLO-6 in `docs/sre/slos.md`](../sre/slos.md)** — the error-free-session-rate SLO defined on top of this data.
-- **[`docs/sre/prometheus_rules.yaml`](../sre/prometheus_rules.yaml)** — alert rule `ECMClientErrorRateElevated` / `ECMClientErrorRateCritical` for operators running Prometheus + Alertmanager.
+- **[`docs/sre/prometheus_rules.yaml`](../sre/prometheus_rules.yaml)** — alert rule `ECMClientErrorRatioElevated` / `ECMClientErrorRatioCritical` for operators running Prometheus + Alertmanager.
