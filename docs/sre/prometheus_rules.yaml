@@ -520,7 +520,7 @@ groups:
               histogram_quantile(0.95,
                 sum by (le, endpoint) (
                   rate(ecm_stats_query_duration_seconds_bucket[5m])))
-          runbook_url: docs/runbooks/stats-v2-write-failures.md
+          runbook_url: docs/runbooks/stats-v2-query-latency.md
 
       - alert: ECMStatsQueryLatencyP99High
         # p99 > 2s — the "one query just blew the budget" signal. Same
@@ -545,7 +545,7 @@ groups:
             15+ minutes. Tail-latency regression — usually a single
             slow endpoint dragging the p99 even when p95 is healthy.
             Group by endpoint as in ECMStatsQueryLatencyHigh runbook.
-          runbook_url: docs/runbooks/stats-v2-write-failures.md
+          runbook_url: docs/runbooks/stats-v2-query-latency.md
 
   # =====================================================================
   # Stats v2 Storage Growth (bd-skqln.11)

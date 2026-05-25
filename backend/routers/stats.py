@@ -22,6 +22,7 @@ from bandwidth_tracker import (
 from database import get_session
 from dispatcharr_client import get_client
 from models import SessionTelemetry, UniqueClientConnection, User
+from observability import get_metric
 
 logger = logging.getLogger(__name__)
 
@@ -984,6 +985,19 @@ async def get_channel_stats():
             # change; new consumers (W5 AttributionBadge) read the
             # added keys.
             await _enrich_channels_with_attribution(channels)
+
+        # bd-w89ox: SLO-8 dashboard signal — count unattributed channels
+        # (m3u_account_id is None after resolver ran) so the Unknown-bucket
+        # rate can be trended in Prometheus without scraping the UI.
+        # Label-free counter; cardinality is one series process-wide.
+        unknown_count = sum(
+            1 for ch in channels if ch.get("m3u_account_id") is None
+        )
+        if unknown_count:
+            try:
+                get_metric("stats_active_channels_unknown_provider_total").inc(unknown_count)
+            except Exception:
+                pass  # Metrics are best-effort; never break the response path.
 
         return result
     except Exception as e:
