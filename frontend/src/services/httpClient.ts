@@ -18,12 +18,16 @@ export class HttpError extends Error {
 
 /** Extract a human-readable message from a FastAPI error detail field. */
 function extractDetail(detail: unknown): string {
-  if (typeof detail === 'string') return detail;
-  if (Array.isArray(detail)) {
+  let msg: string;
+  if (typeof detail === 'string') {
+    msg = detail;
+  } else if (Array.isArray(detail)) {
     // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
-    return detail.map((e: Record<string, unknown>) => e.msg || JSON.stringify(e)).join('; ');
+    msg = detail.map((e: Record<string, unknown>) => e.msg || JSON.stringify(e)).join('; ');
+  } else {
+    msg = JSON.stringify(detail);
   }
-  return JSON.stringify(detail);
+  return msg.trim() || 'Server returned an empty error';
 }
 
 /**
