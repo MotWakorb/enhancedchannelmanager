@@ -19,6 +19,37 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
+def _route_rollback_queries(mock_session, mock_execution):
+    """Route the uc51o.5 AutoCreationSnapshot-existence probe to None so these
+    LEGACY (no-snapshot) rollback tests stay on the entity-rollback /
+    surgical-unmerge path.
+
+    NOTE: "snapshot restore" in these test names refers to the legacy
+    ``_rollback_modified_entity`` modified-entity fallback, NOT the ADR-010
+    AutoCreationSnapshot table. ``rollback_execution`` now first probes the
+    AutoCreationSnapshot table; a flat ``mock_session.query.return_value``
+    returns the same chain for every query, which would make that probe see the
+    execution mock and divert to the FULL restore. These runs have no
+    AutoCreationSnapshot, so route that probe to None.
+    """
+    from models import AutoCreationSnapshot
+
+    exec_chain = MagicMock()
+    exec_chain.filter.return_value.first.return_value = mock_execution
+    none_chain = MagicMock()
+    none_chain.filter.return_value.first.return_value = None
+
+    def _is_snapshot_arg(a):
+        return a is AutoCreationSnapshot or getattr(a, "class_", None) is AutoCreationSnapshot
+
+    def _query(*args, **kwargs):
+        if any(_is_snapshot_arg(a) for a in args):
+            return none_chain
+        return exec_chain
+
+    mock_session.query.side_effect = _query
+
+
 class TestAddedStreamIds:
     def test_after_minus_before(self):
         added = AutoCreationEngine._added_stream_ids(
@@ -59,7 +90,7 @@ class TestSurgicalUnmerge:
             {"type": "channel", "id": 3, "name": "WBAY",
              "previous": {"streams": [10]}},
         ]
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         # Journal records the merge: before [10], after [10, 11].
         mock_get_entries.return_value = {
@@ -99,7 +130,7 @@ class TestSurgicalUnmerge:
             {"type": "channel", "id": 3, "name": "ESPN",
              "previous": {"streams": [10]}},
         ]
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         mock_get_entries.return_value = {"results": []}  # no journal entries
 
@@ -127,7 +158,7 @@ class TestSurgicalUnmerge:
             {"type": "channel", "id": 3, "name": "WBAY",
              "previous": {"streams": [10]}},
         ]
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
         mock_get_entries.return_value = {
             "results": [
                 {"entity_id": 3, "action_type": "merge_stream",

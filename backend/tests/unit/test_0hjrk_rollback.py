@@ -24,6 +24,34 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from auto_creation_engine import AutoCreationEngine
 
 
+def _route_rollback_queries(mock_session, mock_execution):
+    """Route the uc51o.5 snapshot-existence probe to None so these LEGACY
+    (no-snapshot) rollback tests stay on the delete-created-only path.
+
+    ``rollback_execution`` now probes for an AutoCreationSnapshot and diverts to
+    the full restore when one exists. A flat ``mock_session.query.return_value``
+    returns the same chain for every query, so the probe would see the execution
+    mock and wrongly treat the run as snapshotted. These tests model no-snapshot
+    runs, so the snapshot query must return None.
+    """
+    from models import AutoCreationSnapshot
+
+    exec_chain = MagicMock()
+    exec_chain.filter.return_value.first.return_value = mock_execution
+    none_chain = MagicMock()
+    none_chain.filter.return_value.first.return_value = None
+
+    def _is_snapshot_arg(a):
+        return a is AutoCreationSnapshot or getattr(a, "class_", None) is AutoCreationSnapshot
+
+    def _query(*args, **kwargs):
+        if any(_is_snapshot_arg(a) for a in args):
+            return none_chain
+        return exec_chain
+
+    mock_session.query.side_effect = _query
+
+
 class TestRollbackUnmergeMergeOnlyRun:
     """A merge-only run (0 created, modified present) un-merges on rollback."""
 
@@ -55,7 +83,7 @@ class TestRollbackUnmergeMergeOnlyRun:
         mock_execution.get_modified_entities.return_value = [
             {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10]}},
         ]
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         result = asyncio.get_event_loop().run_until_complete(
             self.engine.rollback_execution(1)
@@ -92,7 +120,7 @@ class TestRollbackRefusesWhenNoRestoreData:
         mock_execution.mode = "execute"
         mock_execution.get_created_entities.return_value = []
         mock_execution.get_modified_entities.return_value = []
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         result = asyncio.get_event_loop().run_until_complete(
             self.engine.rollback_execution(42)
@@ -124,7 +152,7 @@ class TestRollbackRefusesWhenNoRestoreData:
             {"type": "channel", "id": 1, "name": "ESPN"},
         ]
         mock_execution.get_modified_entities.return_value = []
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         result = asyncio.get_event_loop().run_until_complete(
             self.engine.rollback_execution(7)
@@ -147,7 +175,7 @@ class TestRollbackRefusesWhenNoRestoreData:
         mock_execution.get_modified_entities.return_value = [
             {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10]}},
         ]
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         result = asyncio.get_event_loop().run_until_complete(
             self.engine.rollback_execution(9)
@@ -165,7 +193,7 @@ class TestRollbackRefusesWhenNoRestoreData:
 
         mock_execution = MagicMock()
         mock_execution.status = "rolled_back"
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         result = asyncio.get_event_loop().run_until_complete(
             self.engine.rollback_execution(1)
