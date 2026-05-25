@@ -359,6 +359,38 @@ class TestAutoCreationEngineRunPipeline:
         assert result["message"] == "No enabled rules to process"
 
 
+def _route_rollback_queries(mock_session, mock_execution):
+    """Wire a MagicMock session so the LEGACY (no-snapshot) rollback path runs.
+
+    uc51o.5 made ``rollback_execution`` first probe for an AutoCreationSnapshot
+    and divert to the full restore when one exists. A plain
+    ``mock_session.query.return_value...`` returns the SAME chain for every
+    query, so the snapshot-existence probe would wrongly see the execution mock
+    and treat the run as snapshotted. These legacy tests model NO-snapshot runs,
+    so route the AutoCreationSnapshot probe to None and everything else to the
+    execution.
+    """
+    from models import AutoCreationSnapshot
+
+    exec_chain = MagicMock()
+    exec_chain.filter.return_value.first.return_value = mock_execution
+    none_chain = MagicMock()
+    none_chain.filter.return_value.first.return_value = None
+
+    def _is_snapshot_arg(a):
+        # The probe is session.query(AutoCreationSnapshot.id) — a column
+        # attribute whose owning class is AutoCreationSnapshot. Also match the
+        # class itself for robustness.
+        return a is AutoCreationSnapshot or getattr(a, "class_", None) is AutoCreationSnapshot
+
+    def _query(*args, **kwargs):
+        if any(_is_snapshot_arg(a) for a in args):
+            return none_chain
+        return exec_chain
+
+    mock_session.query.side_effect = _query
+
+
 class TestAutoCreationEngineRollback:
     """Tests for rollback functionality."""
 
@@ -435,7 +467,7 @@ class TestAutoCreationEngineRollback:
         mock_execution.get_modified_entities.return_value = [
             {"type": "channel", "id": 3, "name": "CNN", "previous": {"logo_url": "old.png"}},
         ]
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         result = asyncio.get_event_loop().run_until_complete(
             self.engine.rollback_execution(1)
@@ -467,7 +499,7 @@ class TestAutoCreationEngineRollback:
             {"type": "channel", "id": 1, "name": "ESPN"},
         ]
         mock_execution.get_modified_entities.return_value = []
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         # Make delete fail
         self.client.delete_channel = AsyncMock(side_effect=Exception("API error"))
@@ -509,7 +541,7 @@ class TestAutoCreationEngineRollback:
             {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10, 11]}},
             {"type": "channel", "id": 3, "name": "ESPN", "previous": {"streams": [10, 11, 12]}},
         ]
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
+        _route_rollback_queries(mock_session, mock_execution)
 
         result = asyncio.get_event_loop().run_until_complete(
             self.engine.rollback_execution(1)

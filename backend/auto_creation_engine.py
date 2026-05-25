@@ -275,16 +275,50 @@ class AutoCreationEngine:
             execution_id=execution_id,
         )
 
-    async def rollback_execution(self, execution_id: int, rolled_back_by: str = "manual") -> dict:
+    async def rollback_execution(
+        self,
+        execution_id: int,
+        rolled_back_by: str = "manual",
+        confirm: bool = False,
+    ) -> dict:
         """
-        Rollback changes from a specific execution.
+        Rollback changes from a specific execution (ADR-010 §D8, uc51o.5).
+
+        UNIFIED REVERT. This is the single revert entry point and chooses its
+        behaviour from whether the execution has a pre-run snapshot:
+
+        * **Snapshot present** — delegates to :meth:`restore_snapshot` for the
+          FULL whole-run revert (re-adds streams the run removed, removes
+          streams it added, restores drifted metadata). This is an OPTIMISTIC
+          OVERWRITE (ADR-010 §D5) that can clobber edits made AFTER the run, so
+          it requires ``confirm=True`` — the same acknowledgement the
+          ``/restore-snapshot`` endpoint demands. Without it, the call is
+          refused with ``requires_confirm=True`` and ``has_snapshot=True`` so
+          the router can surface the overwrite warning (HTTP 409). This is the
+          ONLY behaviour change for existing callers, and it ONLY affects runs
+          that have a snapshot (i.e. runs created after the snapshot feature
+          shipped).
+
+        * **No snapshot** — the legacy delete-created-only path, BYTE-COMPATIBLE
+          with the pre-uc51o.5 behaviour: deletes run-created entities, prefers
+          the surgical journal-driven un-merge, else restores ``modified``
+          entities. It does NOT require ``confirm`` (true backward compat for
+          legacy / dry-run-then-claimed / capture-failure runs that have no
+          snapshot to overwrite from).
 
         Args:
             execution_id: ID of the execution to rollback
             rolled_back_by: Who/what initiated the rollback
+            confirm: Acknowledgement of the optimistic-overwrite warning. Only
+                consulted when a snapshot is present; ignored on the legacy
+                no-snapshot path.
 
         Returns:
-            Dict with rollback results
+            Dict with rollback results. The snapshot path returns the
+            :meth:`restore_snapshot` shape (``removed_channels`` /
+            ``restored_channels`` / ``failed_channels``); the legacy path
+            returns the unchanged ``entities_removed`` / ``entities_restored``
+            shape.
         """
         session = get_session()
         try:
@@ -300,6 +334,52 @@ class AutoCreationEngine:
 
             if execution.mode == "dry_run":
                 return {"success": False, "error": "Cannot rollback a dry-run execution"}
+
+            # --- uc51o.5: unify on the snapshot when one exists ---------------
+            # If this execution has a pre-run snapshot, the FULL restore is the
+            # right revert (the legacy path cannot re-add streams the run
+            # removed — ADR-010 Context). Because restore is an optimistic
+            # overwrite that can clobber post-run edits (§D5), it requires the
+            # SAME confirm acknowledgement as /restore-snapshot. Refuse without
+            # it rather than silently widening the blast radius; the no-snapshot
+            # path below is untouched and keeps its no-confirm semantics.
+            has_snapshot = session.query(AutoCreationSnapshot.id).filter(
+                AutoCreationSnapshot.execution_id == execution_id
+            ).first() is not None
+
+            if has_snapshot:
+                if not confirm:
+                    logger.info(
+                        "[AUTO-CREATE-ENGINE] Rollback of execution %s has a "
+                        "snapshot; refusing without confirm (would overwrite "
+                        "post-run edits)",
+                        execution_id,
+                    )
+                    return {
+                        "success": False,
+                        "has_snapshot": True,
+                        "requires_confirm": True,
+                        "error": (
+                            f"Execution {execution_id} has a pre-run snapshot, "
+                            f"so rollback performs a FULL restore that "
+                            f"overwrites the current stream assignments of "
+                            f"every snapshot channel with the pre-run state — "
+                            f"any changes made after the run will be lost. "
+                            f"Re-send with confirm=true (or use "
+                            f"/restore-snapshot) to acknowledge."
+                        ),
+                    }
+                # Confirmed: delegate to the full snapshot-restore. Close this
+                # session first — restore_snapshot opens its own.
+                logger.info(
+                    "[AUTO-CREATE-ENGINE] Rollback of execution %s delegating "
+                    "to snapshot-restore (snapshot present, confirmed)",
+                    execution_id,
+                )
+                session.close()
+                return await self.restore_snapshot(
+                    execution_id, restored_by=rolled_back_by
+                )
 
             logger.info("[AUTO-CREATE-ENGINE] Rolling back execution %s", execution_id)
 
