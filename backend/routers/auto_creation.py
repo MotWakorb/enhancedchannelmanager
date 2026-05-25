@@ -1295,6 +1295,46 @@ async def get_auto_creation_execution(execution_id: int, include_entities: bool 
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/executions/{execution_id}/snapshot")
+async def get_auto_creation_execution_snapshot(execution_id: int):
+    """Get the pre-run channel<->stream snapshot for an execution (ADR-010).
+
+    Returns the snapshot payload — the manual (non-Dispatcharr-auto-created)
+    channels captured BEFORE this execution mutated anything, with
+    ``stream_ids`` (IDs only — never URLs, §D1), plus ``snapshot_time`` and
+    ``channel_count``. Read-only — no admin guard (consistent with the
+    router's other GETs; the global auth middleware already covers it). The
+    WRITE restore endpoint (Phase 3, uc51o.4) WILL be admin-gated.
+
+    Returns 404 when the execution has no snapshot (e.g. a dry-run, a legacy
+    run, or a run whose capture failed and logged-and-proceeded — §D2).
+    """
+    logger.debug("[AUTO-CREATE] GET /executions/%s/snapshot", execution_id)
+    try:
+        from models import AutoCreationSnapshot
+        session = get_session()
+        try:
+            snapshot = session.query(AutoCreationSnapshot).filter(
+                AutoCreationSnapshot.execution_id == execution_id
+            ).first()
+            if not snapshot:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No snapshot for this execution",
+                )
+            return snapshot.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "[AUTO-CREATE] Failed to get snapshot for execution %s: %s",
+            execution_id, e,
+        )
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.post("/executions/{execution_id}/rollback")
 async def rollback_auto_creation_execution(execution_id: int, _admin=RequireAdminIfEnabled):
     """Rollback an auto-creation execution. Admin only."""
