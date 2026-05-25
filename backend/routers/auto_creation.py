@@ -1377,6 +1377,117 @@ async def rollback_auto_creation_execution(execution_id: int, _admin=RequireAdmi
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.post("/executions/{execution_id}/restore-snapshot")
+async def restore_auto_creation_snapshot(
+    execution_id: int,
+    confirm: bool = Query(
+        False,
+        description=(
+            "Required acknowledgement of the optimistic-overwrite warning "
+            "(ADR-010 §D5). Must be true. Reverting OVERWRITES the current "
+            "stream assignments of every snapshot channel with the state "
+            "captured before this run — ANY changes made after the run "
+            "(manual edits, Dispatcharr drift) WILL BE LOST. This cannot be "
+            "undone."
+        ),
+    ),
+    _admin=RequireAdminIfEnabled,
+):
+    """Whole-run revert from the pre-run snapshot (ADR-010 §D8). Admin only.
+
+    SAFETY-CRITICAL DESTRUCTIVE WRITE. This overwrites live Dispatcharr channels
+    with the snapshot's pre-run stream-set + metadata (OPTIMISTIC OVERWRITE,
+    §D5) — it intentionally clobbers any changes made since the snapshot was
+    captured. The caller MUST have surfaced the §D5 pre-revert warning; the
+    ``confirm=true`` parameter is the API-level acknowledgement so a raw call
+    cannot skip it.
+
+    Returns a structured result — ``removed_channels`` / ``restored_channels``
+    counts plus a per-item ``failed_channels`` list. Partial failures are
+    SURFACED (a snapshot channel deleted since the run, a vanished stream id):
+    the operation does NOT abort on the first failure and does NOT report
+    blanket success if any item failed.
+
+    Status codes:
+      * 400 — ``confirm`` not set (warning unacknowledged), or the execution is
+        a dry-run / already reverted.
+      * 404 — no snapshot for this execution (use ``/rollback`` instead).
+      * 200 — restore attempted. ``success`` is False (with the failures
+        listed) when any channel failed; True when all succeeded.
+    """
+    logger.debug(
+        "[AUTO-CREATE] POST /executions/%s/restore-snapshot (confirm=%s)",
+        execution_id, confirm,
+    )
+
+    if not confirm:
+        # The §D5 warning is mandatory and the ONLY mitigation for the
+        # overwrite risk in v1 — refuse to act without explicit acknowledgement.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Restore requires confirm=true. Reverting overwrites the "
+                "current stream assignments of every snapshot channel with the "
+                "pre-run state; any changes made after the run will be lost. "
+                "This cannot be undone."
+            ),
+        )
+
+    try:
+        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+
+        engine = get_auto_creation_engine()
+        if not engine:
+            client = get_client()
+            engine = await init_auto_creation_engine(client)
+
+        result = await engine.restore_snapshot(execution_id, restored_by="api")
+
+        # No snapshot → 404 with guidance to use /rollback (ADR-010 §D8 step 1).
+        if result.get("no_snapshot"):
+            raise HTTPException(status_code=404, detail=result.get("error"))
+
+        # Guard failures (dry-run, already reverted, not found) → 400.
+        # A restore that was ATTEMPTED returns success/failure with counts;
+        # only the pre-attempt guards carry no count keys.
+        if not result.get("success") and "restored_channels" not in result:
+            error = result.get("error", "Restore failed")
+            status = 404 if "not found" in error.lower() else 400
+            raise HTTPException(status_code=status, detail=error)
+
+        # Journal the restore (mirrors the rollback endpoint's journaling).
+        rule_name = result.get("rule_name", f"Execution {execution_id}")
+        removed = result.get("removed_channels", 0)
+        restored = result.get("restored_channels", 0)
+        failed = len(result.get("failed_channels", []))
+        session = get_session()
+        try:
+            journal.log_entry(
+                category="auto_creation",
+                action_type="restore_snapshot",
+                entity_id=execution_id,
+                entity_name=rule_name,
+                description=(
+                    f"Restored snapshot for '{rule_name}': "
+                    f"removed {removed} created channel(s), "
+                    f"restored {restored} channel(s)"
+                    + (f", {failed} failed" if failed else "")
+                ),
+            )
+        finally:
+            session.close()
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "[AUTO-CREATE] Failed to restore snapshot for execution %s: %s",
+            execution_id, e,
+        )
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 # =============================================================================
 # YAML Import/Export Endpoints
 # =============================================================================
