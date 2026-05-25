@@ -1,9 +1,11 @@
 """
 Pytest configuration and shared fixtures for backend tests.
 """
+import inspect
 import os
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -28,6 +30,43 @@ import export_models  # noqa: F401 — registers export tables with SQLAlchemy B
 from ffmpeg_builder import persistence  # noqa: F401 — registers table
 # Reference side-effect imports so static analysis sees them as used
 assert models and persistence and export_models
+
+
+def closing_create_task_mock() -> MagicMock:
+    """Return a MagicMock drop-in for ``asyncio.create_task`` that does not leak.
+
+    Endpoints that fire-and-forget background work call
+    ``asyncio.create_task(some_coro())``. Python evaluates ``some_coro()`` —
+    creating a coroutine object — *before* the (patched-out) ``create_task`` ever
+    sees it. A bare ``MagicMock`` discards that coroutine without awaiting or
+    closing it, so it survives until garbage collection and then emits
+    ``RuntimeWarning: coroutine '...' was never awaited``.
+
+    That warning fires at ``gc.collect()`` time, which is non-deterministic and
+    can be attributed by pytest's unraisable-exception plugin to whatever test
+    happens to be running when GC fires — causing order-dependent, flaky
+    failures in *unrelated* later tests (bead enhancedchannelmanager-gqtyf).
+
+    This mock closes the coroutine it receives (``coro.close()``), which is the
+    correct way to dispose of a coroutine that will never be awaited. The mock
+    still records the call, so ``assert_called_once()`` / ``assert_not_called()``
+    assertions on the returned mock keep working unchanged.
+
+    Usage::
+
+        with patch("asyncio.create_task", new=closing_create_task_mock()) as m:
+            ...
+        m.assert_called_once()
+    """
+    mock = MagicMock(name="create_task")
+
+    def _close_coro(coro=None, *args, **kwargs):
+        if inspect.iscoroutine(coro):
+            coro.close()
+        return MagicMock(name="task")
+
+    mock.side_effect = _close_coro
+    return mock
 
 
 @pytest.fixture(scope="function")
