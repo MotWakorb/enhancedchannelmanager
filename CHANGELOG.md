@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.17.3] — 2026-05-25
+
 ### Removed
 - **Retired MCP OAuth 2.1 feature fully removed from the codebase (bead jir0m, bd-9axgc).** The MCP OAuth 2.1 "Custom Connector" offering — already disabled by PO decision in bd-9axgc because it required public-internet exposure the operator did not want — is now deleted, not just dormant. Removed: the backend OAuth Authorization Server (`routers/oauth_mcp.py`, `routers/oauth_discovery.py`, `auth/oauth_provider.py`, `auth/oauth_store.py`, `auth/oauth_clients.py`, `auth/oauth_rate_limit.py`, `auth/oauth_discovery.py`), the MCP-server OAuth bits (`oauth_discovery.py` and the `verify_oauth_token` HS256 verifier in `oauth_rs.py`), the OAuth config fields/helpers (`mcp_oauth_signing_secret`, `oauth_allow_insecure`, `get_or_create_oauth_signing_secret`, and the MCP-server `get_signing_key*` / `get_oauth_allow_insecure` / `OAUTH_ISSUER` helpers), the frontend consent UI (`OAuthConsentPage`) and OAuth grant/consent API functions, and ~60 OAuth-only tests. **The supported MCP authentication method is unchanged: the static `?api_key=` path.** The security-critical CD1 no-fail-cascade guard is preserved — `looks_like_jwt` still rejects any JWT-shaped Bearer with 401 so it can never fall through to the static-key compare. ADR-009 and `docs/security/threat_model_mcp_oauth.md` are retained (marked Superseded) for decision history. ([bead jir0m], bd-9axgc)
 
