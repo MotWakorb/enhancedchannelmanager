@@ -20,10 +20,10 @@ They also prove legitimate strips are NOT blocked.
 """
 import pytest
 
-import normalization_engine
 from normalization_engine import (
     NormalizationEngine,
     _tag_group_cache,
+    clear_abbreviation_cache,
 )
 from tests.fixtures.factories import (
     create_tag_group,
@@ -45,11 +45,11 @@ def clear_caches():
     """Clear every normalization cache before/after each test."""
     _tag_group_cache.clear()
     NormalizationEngine._tag_group_id_cache.clear()
-    normalization_engine.clear_abbreviation_cache()
+    clear_abbreviation_cache()
     yield
     _tag_group_cache.clear()
     NormalizationEngine._tag_group_id_cache.clear()
-    normalization_engine.clear_abbreviation_cache()
+    clear_abbreviation_cache()
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ class TestGenericWordsLoader:
     def test_hardcoded_fallback_when_group_absent(self):
         """With no 'Generic Word Tags' group, the hardcoded fallback applies."""
         from normalization_engine import _load_generic_words, _DEFAULT_GENERIC_WORDS
-        normalization_engine.clear_abbreviation_cache()
+        clear_abbreviation_cache()
         words = _load_generic_words()
         assert words == _DEFAULT_GENERIC_WORDS
         assert "network" in words and "tv" in words and "channel" in words
@@ -113,7 +113,7 @@ class TestGenericWordsLoader:
         group = create_tag_group(test_session, name="Generic Word Tags")
         create_tag(test_session, group_id=group.id, value="Bouquet")
         monkeypatch.setattr(database, "get_session", lambda: test_session)
-        normalization_engine.clear_abbreviation_cache()
+        clear_abbreviation_cache()
 
         words = _load_generic_words()
         assert "bouquet" in words

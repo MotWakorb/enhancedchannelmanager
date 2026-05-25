@@ -6,9 +6,11 @@ import os
 import logging
 
 # Single source of truth for the dedup confidence floor per ADR-008 §D2.
-# Imported from BD-A's matcher so this validator (layer 2) cannot drift from
-# the matcher's clamp (layer 1).
-from services.dedup_matcher import CONFIDENCE_FLOOR
+# Imported from the ``confidence_constants`` leaf module (NOT from
+# services.dedup_matcher) so this validator (layer 2) cannot drift from the
+# matcher's clamp (layer 1) — both read the same constant — while keeping
+# ``config`` out of the dedup_matcher import cycle (bd-0nabr).
+from confidence_constants import CONFIDENCE_FLOOR
 from pathlib import Path
 
 # Set up logging
@@ -316,7 +318,8 @@ class DispatcharrSettings(BaseModel):
     def clamp_dedup_threshold(cls, v: float) -> float:
         """Clamp dedup_threshold to [CONFIDENCE_FLOOR, 1.00] per ADR-008 §D2.
 
-        CONFIDENCE_FLOOR (imported from services.dedup_matcher) is the
+        CONFIDENCE_FLOOR (imported from the confidence_constants leaf module,
+        the single source of truth shared with the matcher) is the
         defense-in-depth integrity constraint (Security Engineer veto-class per
         ADR-008 §D2). A below-floor value triggers a one-time-per-process WARN
         so operators are informed of the clamp; the upper-bound clamp (> 1.00)

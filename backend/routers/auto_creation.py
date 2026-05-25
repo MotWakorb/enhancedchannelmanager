@@ -24,7 +24,6 @@ from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
 from services.dedup_matcher import (
-    CONFIDENCE_FLOOR,
     NameCleanMode,
     is_admissible,
     score_all,
