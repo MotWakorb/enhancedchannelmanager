@@ -196,6 +196,15 @@ class DispatcharrSettings(BaseModel):
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
+    # Auto-creation pre-run snapshot retention (ADR-010 §D7 / uc51o.3). Two
+    # bounds, whichever fires first, pruned by CleanupTask BEFORE the VACUUM
+    # step. Without these, a per-run ~570-channel snapshot captured on every
+    # execute (incl. hourly run_on_refresh) is an unbounded SQLite-growth bomb.
+    # Naming + 30-day default match the auto_creation_blob_days retention
+    # cadence already in tasks/cleanup.py; the count cap is modeled on the
+    # M3USnapshot newest-N precedent (ADR-010 §D7).
+    auto_creation_snapshot_days: int = 30  # Age window — prune snapshots older than this many days (by snapshot_time).
+    auto_creation_snapshot_max: int = 50  # Count cap — keep at most this many newest snapshots; older ones pruned regardless of age.
     # MCP server API key for Claude integration (empty = not configured)
     mcp_api_key: str = ""
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).

@@ -578,7 +578,7 @@ class TestCleanupTaskFullExecuteWithAllBlocks:
     without any prune block leaking errors into another's session."""
 
     @pytest.mark.asyncio
-    async def test_all_seven_steps_run_and_total_steps_is_seven(self, tmp_path):
+    async def test_all_eight_steps_run_and_total_steps_is_eight(self, tmp_path):
         db_file = tmp_path / "full.db"
         engine = _make_engine(db_file)
         Base.metadata.create_all(engine)
@@ -613,11 +613,16 @@ class TestCleanupTaskFullExecuteWithAllBlocks:
             result = await task.execute()
 
         assert result.success is True
-        assert result.total_items == 7, (
-            "execute() must report 7 cleanup steps now that bd-ia28g added "
-            "three new prune blocks (was 4: probe + tasks + journal + vacuum)"
+        assert result.total_items == 8, (
+            "execute() must report 8 cleanup steps: bd-ia28g added three prune "
+            "blocks (probe + tasks + journal + blob + health + notifications) "
+            "and ADR-010/uc51o.3 added the auto_creation_snapshots prune before "
+            "VACUUM (was 7)"
         )
         deleted = result.details["deleted"]
         assert deleted["auto_creation_blobs_pruned"] == 1
         assert deleted["health_checks"] == 1
         assert deleted["notifications"] == 1
+        # The snapshot prune block ran (zero eligible rows here, but the key
+        # is present, proving step 7 executed against the session).
+        assert "auto_creation_snapshots" in deleted

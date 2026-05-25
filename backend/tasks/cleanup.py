@@ -8,6 +8,7 @@ Scheduled task to clean up old data:
 - AutoCreationExecution BLOB columns (bd-ia28g)
 - health_checks rows (bd-ia28g)
 - Notifications (bd-ia28g)
+- AutoCreationSnapshot rows (ADR-010 §D7 / uc51o.3)
 - Orphaned data
 """
 import logging
@@ -19,6 +20,7 @@ from sqlalchemy import inspect, text, update
 from database import get_session
 from models import (
     AutoCreationExecution,
+    AutoCreationSnapshot,
     JournalEntry,
     Notification,
     StreamStats,
@@ -46,6 +48,21 @@ class CleanupTask(TaskScheduler):
     - notifications_days: Delete notifications older than this many days
       (default: 30) — see bd-ia28g; uses ``expires_at`` if set, else ``created_at``
     - vacuum_db: Run VACUUM after cleanup (default: True)
+
+    AutoCreationSnapshot retention (ADR-010 §D7, uc51o.3) is bounded by TWO
+    config knobs read from the global Settings (config.py), whichever fires
+    first — NOT from this task's own config, so they sit alongside the other
+    ``auto_creation_*`` settings and are operator-configurable there:
+    - auto_creation_snapshot_days (default 30): age window — prune snapshots
+      older than this many days by ``snapshot_time``.
+    - auto_creation_snapshot_max (default 50): count cap — keep at most this
+      many newest snapshots; older ones pruned regardless of age. This bounds
+      the hourly-refresh worst case (50 x up-to-3 MB ~= 150 MB ceiling)
+      independent of the age window.
+    The prune runs BEFORE the VACUUM step so the freed pages are reclaimed in
+    the same maintenance pass. Snapshot counts are bounded (tens, not millions)
+    by the count cap, so a single DELETE is fine (no batched-delete-to-dodge-
+    the-write-lock concern — ADR-010 §D7).
 
     Retention rationale (bd-dmu8w): the journal default is 90 days because
     bulk auto-creation now produces per-entity rows (bd-91mcq), amplifying
@@ -141,15 +158,17 @@ class CleanupTask(TaskScheduler):
         deleted_counts = {}
         errors = []
 
-        # 7 prune operations total:
+        # 8 prune operations total:
         # 1. stream_stats failed/pending probes
         # 2. task_executions
         # 3. journal_entries
         # 4. auto_creation_executions BLOB null-out (bd-ia28g)
         # 5. health_checks (bd-ia28g)
         # 6. notifications (bd-ia28g)
-        # 7. VACUUM
-        total_steps = 7
+        # 7. auto_creation_snapshots age + count prune (ADR-010 §D7, uc51o.3)
+        # 8. VACUUM (must remain LAST — runs after the snapshot prune so the
+        #    freed pages are reclaimed in the same pass)
+        total_steps = 8
 
         self._set_progress(
             total=total_steps,
@@ -386,8 +405,101 @@ class CleanupTask(TaskScheduler):
                     session.close()
                     return self._cancelled_result(started_at, deleted_counts)
 
-                # 7. VACUUM the database
-                self._set_progress(current=7, current_item="Vacuuming database")
+                # 7. ADR-010 §D7 (uc51o.3): prune AutoCreationSnapshot rows by
+                # BOTH an age window and a count cap (whichever fires first),
+                # BEFORE the VACUUM step below so the freed pages are reclaimed
+                # in this pass. Without retention, a per-run ~570-channel
+                # snapshot captured on every execute (incl. hourly
+                # run_on_refresh) grows SQLite unbounded — the same growth-bomb
+                # class the bd-ia28g blocks above exist to defuse.
+                #
+                # Knobs come from the global Settings (config.py), NOT this
+                # task's own config, so they live alongside the other
+                # auto_creation_* settings: auto_creation_snapshot_days (age,
+                # default 30) and auto_creation_snapshot_max (count cap,
+                # default 50). The age delete and the count-cap delete are
+                # separate statements: the age pass removes anything past the
+                # window; the count-cap pass then keeps only the newest N of
+                # whatever remains. A single DELETE per pass is fine — the cap
+                # bounds the table to tens of rows, so the ADR-007 batched-
+                # delete-to-dodge-the-write-lock concern does not apply.
+                self._set_progress(
+                    current=7,
+                    current_item="Pruning auto_creation_snapshots",
+                )
+
+                try:
+                    from config import get_settings
+                    settings = get_settings()
+                    snapshot_days = getattr(settings, "auto_creation_snapshot_days", 30)
+                    snapshot_max = getattr(settings, "auto_creation_snapshot_max", 50)
+
+                    snapshots_pruned = 0
+
+                    # 7a. Age window — prune snapshots older than the window by
+                    # snapshot_time (the idx_auto_snapshot_time index covers
+                    # this scan).
+                    snapshot_cutoff = datetime.utcnow() - timedelta(days=snapshot_days)
+                    aged = session.query(AutoCreationSnapshot).filter(
+                        AutoCreationSnapshot.snapshot_time < snapshot_cutoff,
+                    ).delete(synchronize_session=False)
+                    snapshots_pruned += aged
+
+                    # 7b. Count cap — of whatever survived the age pass, keep
+                    # only the newest ``snapshot_max``; delete the rest. Find
+                    # the cutoff ids by ordering newest-first, skipping the cap,
+                    # and deleting the remainder by id.
+                    surplus_ids = [
+                        row.id
+                        for row in session.query(AutoCreationSnapshot.id)
+                        .order_by(AutoCreationSnapshot.snapshot_time.desc())
+                        .offset(snapshot_max)
+                        .all()
+                    ]
+                    if surplus_ids:
+                        capped = session.query(AutoCreationSnapshot).filter(
+                            AutoCreationSnapshot.id.in_(surplus_ids),
+                        ).delete(synchronize_session=False)
+                        snapshots_pruned += capped
+
+                    deleted_counts["auto_creation_snapshots"] = snapshots_pruned
+                    session.commit()
+
+                    # Metric: publish the current retained snapshot count + size
+                    # so growth is observable (ADR-010 §D7). Best-effort —
+                    # never breaks the prune.
+                    try:
+                        from observability import update_auto_creation_snapshot_metrics
+                        update_auto_creation_snapshot_metrics(session=session)
+                    except Exception as exc:  # pragma: no cover — observability is best-effort
+                        logger.debug(
+                            "[%s] Snapshot metric publish failed: %s",
+                            self.task_id, exc,
+                        )
+
+                    logger.info(
+                        "[%s] Pruned %s auto_creation_snapshots (older than %s days "
+                        "or beyond newest %s)",
+                        self.task_id,
+                        snapshots_pruned,
+                        snapshot_days,
+                        snapshot_max,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[%s] Failed to prune auto_creation_snapshots: %s",
+                        self.task_id,
+                        e,
+                    )
+                    errors.append(f"AutoCreation snapshot prune: {str(e)}")
+                    session.rollback()
+
+                if self._cancel_requested:
+                    session.close()
+                    return self._cancelled_result(started_at, deleted_counts)
+
+                # 8. VACUUM the database
+                self._set_progress(current=8, current_item="Vacuuming database")
 
                 if self.vacuum_db:
                     try:

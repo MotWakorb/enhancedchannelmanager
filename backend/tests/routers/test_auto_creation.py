@@ -1445,6 +1445,105 @@ class TestRollbackExecution:
         assert response.status_code == 400
 
 
+class TestRestoreSnapshot:
+    """Tests for POST /api/auto-creation/executions/{id}/restore-snapshot (ADR-010 §D8).
+
+    SAFETY-CRITICAL destructive write — admin-gated, confirm-gated, surfaces
+    partial failures.
+    """
+
+    @pytest.mark.asyncio
+    async def test_requires_confirm(self, async_client):
+        """Without confirm=true → 400 (the §D5 warning is unacknowledged); the
+        engine is never invoked."""
+        mock_engine = AsyncMock()
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot"
+            )
+        assert response.status_code == 400
+        assert "confirm" in response.json()["detail"].lower()
+        mock_engine.restore_snapshot.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restores_with_confirm(self, async_client):
+        """confirm=true → engine.restore_snapshot runs and the result is returned."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": True,
+            "execution_id": 1,
+            "rule_name": "Sports Rule",
+            "removed_channels": 2,
+            "restored_channels": 5,
+            "failed_channels": [],
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["restored_channels"] == 5
+        mock_engine.restore_snapshot.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_snapshot_returns_404(self, async_client):
+        """An execution with no snapshot → 404 (use /rollback instead)."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": False,
+            "no_snapshot": True,
+            "error": "No snapshot for execution 1; use /rollback instead.",
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_dry_run_guard_returns_400(self, async_client):
+        """A dry-run / already-reverted guard failure → 400."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": False,
+            "error": "Cannot restore a dry-run execution",
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_is_200_with_failures_surfaced(self, async_client):
+        """A restore that failed on some channels returns 200 with success=False
+        and the per-item failures — success-with-warnings, never a blanket 200
+        that hides them, never a blanket 500."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": False,
+            "execution_id": 1,
+            "rule_name": "Sports Rule",
+            "removed_channels": 0,
+            "restored_channels": 4,
+            "failed_channels": [{"id": 11, "name": "GONE", "error": "404"}],
+        }
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert data["restored_channels"] == 4
+        assert len(data["failed_channels"]) == 1
+        assert data["failed_channels"][0]["id"] == 11
+
+
 class TestExportYAML:
     """Tests for GET /api/auto-creation/export/yaml."""
 
@@ -2189,6 +2288,10 @@ _GATED_ENDPOINTS = [
     ("/api/auto-creation/run", "post", {"json": {}}),
     ("/api/auto-creation/rules/1/run", "post", {}),
     ("/api/auto-creation/executions/1/rollback", "post", {}),
+    # restore-snapshot: the admin dependency raises BEFORE the confirm check
+    # and BEFORE the handler, so a non-admin caller is rejected even without
+    # confirm=true (proving the gate, not the confirm gate).
+    ("/api/auto-creation/executions/1/restore-snapshot", "post", {}),
     ("/api/auto-creation/import/yaml", "post", {"json": {"yaml_content": "rules: []"}}),
 ]
 
@@ -2278,6 +2381,62 @@ class TestAutoCreationAdminGating:
              patch("routers.auto_creation.journal"):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/rollback"
+            )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_admin_principal_can_restore_when_auth_enabled(self, async_client):
+        """Auth enabled + admin principal → the gate passes and the destructive
+        snapshot restore (with confirm) executes normally."""
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _allow_admin():
+            return MagicMock(is_admin=True, username="admin")
+
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": True,
+            "execution_id": 1,
+            "rule_name": "Sports Rule",
+            "removed_channels": 1,
+            "restored_channels": 3,
+            "failed_channels": [],
+        }
+
+        app.dependency_overrides[_prebuilt.dependency] = _allow_admin
+        try:
+            with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+                 patch("routers.auto_creation.journal"):
+                response = await async_client.post(
+                    "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
+                )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_restore_allowed_when_auth_disabled(self, async_client):
+        """Auth disabled (default async_client) → RequireAdminIfEnabled is a
+        no-op; the restore endpoint behaves normally (confirm still required)."""
+        mock_engine = AsyncMock()
+        mock_engine.restore_snapshot.return_value = {
+            "success": True,
+            "execution_id": 1,
+            "rule_name": "Sports Rule",
+            "removed_channels": 0,
+            "restored_channels": 2,
+            "failed_channels": [],
+        }
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
             )
 
         assert response.status_code == 200
