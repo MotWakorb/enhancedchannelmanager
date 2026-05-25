@@ -120,6 +120,27 @@ export interface Action {
   max_streams_per_channel?: number;
   /** When true, remove streams from the target channel that no longer match this rule run. */
   remove_non_matching?: boolean;
+  /**
+   * merge_streams target=auto matching mode (bd-0emgo.1). When false/undefined
+   * (default), the stream merges into an existing channel only on EXACT
+   * normalized-name equality. When true, restores the legacy fuzzy cascade
+   * (core-name / deparen / word-prefix containment / call-sign).
+   */
+  loose_name_match?: boolean;
+  /**
+   * merge_streams TARGET-channel group filter (bd-0emgo.3). After the merge
+   * target is resolved, the merge is SKIPPED if the resolved channel's group
+   * is in this list. This is the "keep merges OUT of group N" guard — distinct
+   * from the stream-side normalized_name_not_in_group *condition* (which only
+   * gates whether the rule fires). Absent/empty = no filter (back-compat).
+   */
+  target_channel_not_in_group?: number[];
+  /**
+   * merge_streams TARGET-channel group filter complement (bd-0emgo.3). When
+   * non-empty, only merges when the resolved channel's group IS in this list
+   * ("only merge into group N"). Absent/empty = no restriction.
+   */
+  target_channel_in_group?: number[];
   message?: string;
   // Name transform (for create_channel and create_group)
   name_transform_pattern?: string;
@@ -325,6 +346,13 @@ export interface AutoCreationExecution {
   execution_log?: ExecutionLogEntry[];
   rolled_back_at?: string;
   rolled_back_by?: string;
+  /**
+   * True when a pre-run snapshot exists for this execution (ADR-010 §D6).
+   * Derived by the backend from the existence of an AutoCreationSnapshot row;
+   * gates the snapshot-restore affordance in the UI. False / absent for
+   * dry-run executions, legacy runs, and runs where snapshot capture failed.
+   */
+  has_snapshot?: boolean;
 }
 
 export interface CreatedEntity {
@@ -458,6 +486,32 @@ export interface RollbackResponse {
   success: boolean;
   entities_removed: number;
   entities_restored: number;
+  error?: string;
+}
+
+/**
+ * A channel that failed to restore during snapshot-restore (ADR-010 §D8 step 6).
+ * Partial failures are always surfaced; a restore that fails on some channels
+ * is never presented as plain success.
+ */
+export interface FailedChannel {
+  id: number;
+  name: string;
+  error: string;
+}
+
+/**
+ * Response from POST /auto-creation/executions/{id}/restore-snapshot (ADR-010 §D8).
+ *
+ * ``success`` is false when any channel failed (partial failures are surfaced
+ * in ``failed_channels``). A 200 with ``success: false`` is a partial-failure
+ * result, NOT a server error.
+ */
+export interface RestoreSnapshotResponse {
+  success: boolean;
+  removed_channels: number;
+  restored_channels: number;
+  failed_channels: FailedChannel[];
   error?: string;
 }
 

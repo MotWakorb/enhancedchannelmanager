@@ -8,6 +8,9 @@ Scheduled task to clean up old data:
 - AutoCreationExecution BLOB columns (bd-ia28g)
 - health_checks rows (bd-ia28g)
 - Notifications (bd-ia28g)
+- AutoCreationSnapshot rows (ADR-010 §D7 / uc51o.3)
+- M3USnapshot and M3UChangeLog rows (bd-wehek)
+- UniqueClientConnection rows (bd-1wi3y)
 - Orphaned data
 """
 import logging
@@ -19,10 +22,14 @@ from sqlalchemy import inspect, text, update
 from database import get_session
 from models import (
     AutoCreationExecution,
+    AutoCreationSnapshot,
     JournalEntry,
+    M3UChangeLog,
+    M3USnapshot,
     Notification,
     StreamStats,
     TaskExecution,
+    UniqueClientConnection,
 )
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType
 from task_registry import register_task
@@ -46,6 +53,35 @@ class CleanupTask(TaskScheduler):
     - notifications_days: Delete notifications older than this many days
       (default: 30) — see bd-ia28g; uses ``expires_at`` if set, else ``created_at``
     - vacuum_db: Run VACUUM after cleanup (default: True)
+
+    AutoCreationSnapshot retention (ADR-010 §D7, uc51o.3) is bounded by TWO
+    config knobs read from the global Settings (config.py), whichever fires
+    first — NOT from this task's own config, so they sit alongside the other
+    ``auto_creation_*`` settings and are operator-configurable there:
+    - auto_creation_snapshot_days (default 30): age window — prune snapshots
+      older than this many days by ``snapshot_time``.
+    - auto_creation_snapshot_max (default 50): count cap — keep at most this
+      many newest snapshots; older ones pruned regardless of age. This bounds
+      the hourly-refresh worst case (50 x up-to-3 MB ~= 150 MB ceiling)
+      independent of the age window.
+    The prune runs BEFORE the VACUUM step so the freed pages are reclaimed in
+    the same maintenance pass. Snapshot counts are bounded (tens, not millions)
+    by the count cap, so a single DELETE is fine (no batched-delete-to-dodge-
+    the-write-lock concern — ADR-010 §D7).
+
+    M3USnapshot / M3UChangeLog retention (bd-wehek / bd-f9gd8 DBA spike) is
+    age-only, from the global Settings (config.py):
+    - m3u_snapshot_days (default 90): prune m3u_snapshots rows older than this
+      by ``snapshot_time``.
+    - m3u_change_log_days (default 90): prune m3u_change_logs rows older than
+      this by ``change_time``.
+    Both prune steps run BEFORE the VACUUM step (steps 8 and 9 below).
+
+    UniqueClientConnection retention (bd-1wi3y / bd-f9gd8 DBA spike) is
+    age-only, from the global Settings (config.py):
+    - unique_client_connection_days (default 90): prune rows older than this
+      by ``connected_at``.
+    Runs BEFORE the VACUUM step (step 9 below).
 
     Retention rationale (bd-dmu8w): the journal default is 90 days because
     bulk auto-creation now produces per-entity rows (bd-91mcq), amplifying
@@ -141,15 +177,19 @@ class CleanupTask(TaskScheduler):
         deleted_counts = {}
         errors = []
 
-        # 7 prune operations total:
+        # 10 prune operations total:
         # 1. stream_stats failed/pending probes
         # 2. task_executions
         # 3. journal_entries
         # 4. auto_creation_executions BLOB null-out (bd-ia28g)
         # 5. health_checks (bd-ia28g)
         # 6. notifications (bd-ia28g)
-        # 7. VACUUM
-        total_steps = 7
+        # 7. auto_creation_snapshots age + count prune (ADR-010 §D7, uc51o.3)
+        # 8. m3u_snapshots + m3u_change_logs age prune (bd-wehek)
+        # 9. unique_client_connections age prune (bd-1wi3y)
+        # 10. VACUUM (must remain LAST — runs after all prune steps so freed
+        #     pages are reclaimed in the same maintenance pass)
+        total_steps = 10
 
         self._set_progress(
             total=total_steps,
@@ -386,8 +426,206 @@ class CleanupTask(TaskScheduler):
                     session.close()
                     return self._cancelled_result(started_at, deleted_counts)
 
-                # 7. VACUUM the database
-                self._set_progress(current=7, current_item="Vacuuming database")
+                # 7. ADR-010 §D7 (uc51o.3): prune AutoCreationSnapshot rows by
+                # BOTH an age window and a count cap (whichever fires first),
+                # BEFORE the VACUUM step below so the freed pages are reclaimed
+                # in this pass. Without retention, a per-run ~570-channel
+                # snapshot captured on every execute (incl. hourly
+                # run_on_refresh) grows SQLite unbounded — the same growth-bomb
+                # class the bd-ia28g blocks above exist to defuse.
+                #
+                # Knobs come from the global Settings (config.py), NOT this
+                # task's own config, so they live alongside the other
+                # auto_creation_* settings: auto_creation_snapshot_days (age,
+                # default 30) and auto_creation_snapshot_max (count cap,
+                # default 50). The age delete and the count-cap delete are
+                # separate statements: the age pass removes anything past the
+                # window; the count-cap pass then keeps only the newest N of
+                # whatever remains. A single DELETE per pass is fine — the cap
+                # bounds the table to tens of rows, so the ADR-007 batched-
+                # delete-to-dodge-the-write-lock concern does not apply.
+                self._set_progress(
+                    current=7,
+                    current_item="Pruning auto_creation_snapshots",
+                )
+
+                try:
+                    from config import get_settings
+                    settings = get_settings()
+                    snapshot_days = getattr(settings, "auto_creation_snapshot_days", 30)
+                    snapshot_max = getattr(settings, "auto_creation_snapshot_max", 50)
+
+                    snapshots_pruned = 0
+
+                    # 7a. Age window — prune snapshots older than the window by
+                    # snapshot_time (the idx_auto_snapshot_time index covers
+                    # this scan).
+                    snapshot_cutoff = datetime.utcnow() - timedelta(days=snapshot_days)
+                    aged = session.query(AutoCreationSnapshot).filter(
+                        AutoCreationSnapshot.snapshot_time < snapshot_cutoff,
+                    ).delete(synchronize_session=False)
+                    snapshots_pruned += aged
+
+                    # 7b. Count cap — of whatever survived the age pass, keep
+                    # only the newest ``snapshot_max``; delete the rest. Find
+                    # the cutoff ids by ordering newest-first, skipping the cap,
+                    # and deleting the remainder by id.
+                    surplus_ids = [
+                        row.id
+                        for row in session.query(AutoCreationSnapshot.id)
+                        .order_by(AutoCreationSnapshot.snapshot_time.desc())
+                        .offset(snapshot_max)
+                        .all()
+                    ]
+                    if surplus_ids:
+                        capped = session.query(AutoCreationSnapshot).filter(
+                            AutoCreationSnapshot.id.in_(surplus_ids),
+                        ).delete(synchronize_session=False)
+                        snapshots_pruned += capped
+
+                    deleted_counts["auto_creation_snapshots"] = snapshots_pruned
+                    session.commit()
+
+                    # Metric: publish the current retained snapshot count + size
+                    # so growth is observable (ADR-010 §D7). Best-effort —
+                    # never breaks the prune.
+                    try:
+                        from observability import update_auto_creation_snapshot_metrics
+                        update_auto_creation_snapshot_metrics(session=session)
+                    except Exception as exc:  # pragma: no cover — observability is best-effort
+                        logger.debug(
+                            "[%s] Snapshot metric publish failed: %s",
+                            self.task_id, exc,
+                        )
+
+                    logger.info(
+                        "[%s] Pruned %s auto_creation_snapshots (older than %s days "
+                        "or beyond newest %s)",
+                        self.task_id,
+                        snapshots_pruned,
+                        snapshot_days,
+                        snapshot_max,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[%s] Failed to prune auto_creation_snapshots: %s",
+                        self.task_id,
+                        e,
+                    )
+                    errors.append(f"AutoCreation snapshot prune: {str(e)}")
+                    session.rollback()
+
+                if self._cancel_requested:
+                    session.close()
+                    return self._cancelled_result(started_at, deleted_counts)
+
+                # 8. bd-wehek: prune m3u_snapshots and m3u_change_logs by age.
+                # Both tables grow with every Dispatcharr upstream change (every
+                # 5-min poll if upstream churns): m3u_snapshots stores ~1-10 kB
+                # groups_data JSON per row; m3u_change_logs ~500 B per change.
+                # Neither had retention. Knobs from global Settings (config.py):
+                # ``m3u_snapshot_days`` (default 90) and
+                # ``m3u_change_log_days`` (default 90).
+                # Change-log rows are pruned first (they FK to snapshots via
+                # SET NULL on delete, so snapshot deletion is safe either way,
+                # but pruning change-logs first keeps the FK FK audit trail
+                # cleaner for operators who set different age windows).
+                self._set_progress(
+                    current=8,
+                    current_item="Pruning M3U snapshots and change logs",
+                )
+
+                try:
+                    from config import get_settings as _get_settings
+                    _settings = _get_settings()
+                    m3u_snapshot_days = getattr(_settings, "m3u_snapshot_days", 90)
+                    m3u_change_log_days = getattr(_settings, "m3u_change_log_days", 90)
+
+                    m3u_pruned = 0
+
+                    # 8a. Prune m3u_change_logs by change_time.
+                    change_log_cutoff = datetime.utcnow() - timedelta(days=m3u_change_log_days)
+                    change_logs_deleted = session.query(M3UChangeLog).filter(
+                        M3UChangeLog.change_time < change_log_cutoff,
+                    ).delete(synchronize_session=False)
+                    m3u_pruned += change_logs_deleted
+
+                    # 8b. Prune m3u_snapshots by snapshot_time. The FK from
+                    # m3u_change_logs to m3u_snapshots uses ON DELETE SET NULL,
+                    # so surviving change-log rows are not cascade-deleted.
+                    snapshot_cutoff = datetime.utcnow() - timedelta(days=m3u_snapshot_days)
+                    snapshots_deleted = session.query(M3USnapshot).filter(
+                        M3USnapshot.snapshot_time < snapshot_cutoff,
+                    ).delete(synchronize_session=False)
+                    m3u_pruned += snapshots_deleted
+
+                    deleted_counts["m3u_snapshots"] = snapshots_deleted
+                    deleted_counts["m3u_change_logs"] = change_logs_deleted
+                    session.commit()
+                    logger.info(
+                        "[%s] Pruned %s m3u_snapshots (older than %s days) and "
+                        "%s m3u_change_logs (older than %s days)",
+                        self.task_id,
+                        snapshots_deleted,
+                        m3u_snapshot_days,
+                        change_logs_deleted,
+                        m3u_change_log_days,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[%s] Failed to prune M3U snapshots/change logs: %s",
+                        self.task_id,
+                        e,
+                    )
+                    errors.append(f"M3U snapshot/change-log prune: {str(e)}")
+                    session.rollback()
+
+                if self._cancel_requested:
+                    session.close()
+                    return self._cancelled_result(started_at, deleted_counts)
+
+                # 9. bd-1wi3y: prune unique_client_connections by age.
+                # High write rate (one row per (channel, IP) connection start)
+                # + 6 indexes makes this table grow quickly. Currently no
+                # retention beyond manual stats reset. Knob from global Settings
+                # (config.py): ``unique_client_connection_days`` (default 90).
+                self._set_progress(
+                    current=9,
+                    current_item="Pruning unique client connections",
+                )
+
+                try:
+                    from config import get_settings as _get_settings_ucc
+                    _settings_ucc = _get_settings_ucc()
+                    ucc_days = getattr(_settings_ucc, "unique_client_connection_days", 90)
+                    ucc_cutoff = datetime.utcnow() - timedelta(days=ucc_days)
+
+                    ucc_deleted = session.query(UniqueClientConnection).filter(
+                        UniqueClientConnection.connected_at < ucc_cutoff,
+                    ).delete(synchronize_session=False)
+                    deleted_counts["unique_client_connections"] = ucc_deleted
+                    session.commit()
+                    logger.info(
+                        "[%s] Deleted %s unique_client_connections older than %s days",
+                        self.task_id,
+                        ucc_deleted,
+                        ucc_days,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[%s] Failed to prune unique_client_connections: %s",
+                        self.task_id,
+                        e,
+                    )
+                    errors.append(f"UniqueClientConnection prune: {str(e)}")
+                    session.rollback()
+
+                if self._cancel_requested:
+                    session.close()
+                    return self._cancelled_result(started_at, deleted_counts)
+
+                # 10. VACUUM the database
+                self._set_progress(current=10, current_item="Vacuuming database")
 
                 if self.vacuum_db:
                     try:

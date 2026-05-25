@@ -1693,15 +1693,26 @@ class TestSmartBootstrapFastPath:
             # create_all() materialises missing TABLES and their columns, but it
             # cannot add a column to a table that already exists at 0005. Post-
             # 0005 migrations that ADD COLUMN to a pre-0005 table (e.g. 0019's
-            # auto_creation_rules.match_scope_group_id, GH #298) therefore stay
-            # absent after create_all(). To simulate the true "ORM fully ahead
-            # of the migration timeline" state this test asserts on, add those
-            # columns by hand so the live schema genuinely matches head — exactly
-            # what _schema_matches_head must see for the fast-path to engage.
+            # auto_creation_rules.match_scope_group_id, GH #298; 0020's
+            # normalization_rules.require_delimiter, bd-0emgo.2; 0021's
+            # auto_creation_executions.channels_touched, bd-0emgo.4) therefore
+            # stay absent after create_all(). To simulate the true "ORM fully
+            # ahead of the migration timeline" state this test asserts on, add
+            # those columns by hand so the live schema genuinely matches head —
+            # exactly what _schema_matches_head must see for the fast-path to
+            # engage.
             with engine.begin() as conn:
                 conn.execute(text(
                     "ALTER TABLE auto_creation_rules "
                     "ADD COLUMN match_scope_group_id INTEGER"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE normalization_rules "
+                    "ADD COLUMN require_delimiter BOOLEAN NOT NULL DEFAULT 0"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_executions "
+                    "ADD COLUMN channels_touched INTEGER NOT NULL DEFAULT 0"
                 ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not

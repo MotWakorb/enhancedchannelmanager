@@ -1,14 +1,17 @@
 # Runbook: ECM Frontend Client-Error Rate
 
-> Operators who page on `ECMClientErrorRateElevated` or
-> `ECMClientErrorRateCritical` land here. Both alerts watch
-> `ecm_client_errors_total` — the counter incremented by
-> `POST /api/client-errors` for every frontend runtime error report
-> shipped in PR #173 (bd-i6a1m, ADR-006 Phase 1).
+> Operators who page on `ECMClientErrorRatioElevated` or
+> `ECMClientErrorRatioCritical` land here. Both alerts watch the
+> ratio of boundary errors per session (`ecm:client_error_session_ratio:5m`)
+> — driven by `ecm_client_errors_total` and `ecm_session_starts_total`,
+> the counters from `POST /api/client-errors` and the session-start
+> instrumentation shipped in PR #173 (bd-i6a1m, ADR-006 Phase 1) and
+> refined in bd-arp3o (ratio-based SLI, replacing the prior absolute-rate
+> alerts).
 
 **Alerts that route here:**
-- `ECMClientErrorRateElevated` (ticket) — `sum(ecm:client_errors:rate5m) > 0.2` for 15m
-- `ECMClientErrorRateCritical` (page) — `sum(ecm:client_errors:rate5m) > 2.0` for 5m
+- `ECMClientErrorRatioElevated` (ticket) — `ecm:client_error_session_ratio:5m > 0.005` for 10m
+- `ECMClientErrorRatioCritical` (page) — `ecm:client_error_session_ratio:5m > 0.05` for 5m
 
 **SLO:** [SLO-6 Frontend Error-free Session Rate](../sre/slos.md#slo-6-frontend-error-free-session-rate)
 
@@ -18,7 +21,7 @@
 
 ## What it fires on
 
-The `/api/client-errors` router emits two counters on `/metrics`. The recording rule `ecm:client_errors:rate5m` (defined in [`prometheus_rules.yaml`](../sre/prometheus_rules.yaml) group `ecm_client_error_rate`) sums the per-`{kind, release}` 5-minute rate of `ecm_client_errors_total`. Both alerts watch the unlabeled total of that rule.
+The `/api/client-errors` router emits counters on `/metrics`. The recording rule `ecm:client_error_session_ratio:5m` (defined in [`prometheus_rules.yaml`](../sre/prometheus_rules.yaml) group `ecm_client_error_rate`) divides the 5-minute rate of `ecm_client_errors_total{kind="boundary"}` by the 5-minute rate of `ecm_session_starts_total`. Both alerts fire on that ratio — not on the absolute error count — so a traffic surge that does not raise the per-session error fraction leaves the alerts silent. A zero-sessions guard (`sum(rate(ecm_session_starts_total[5m])) > 0`) prevents div-by-zero during idle periods.
 
 **`ecm_client_errors_total{kind, release}`** — counter, incremented per accepted report.
 
@@ -182,9 +185,9 @@ The two alerts climb a deliberate ladder:
 
 | State | Predicate | Severity | Expected on-call action |
 |-|-|-|-|
-| Quiet | `< 0.2/s` | none | normal |
-| `ECMClientErrorRateElevated` | `> 0.2/s` for 15m | **ticket** | open bead, run triage above during business hours |
-| `ECMClientErrorRateCritical` | `> 2/s` for 5m | **page** | wake on-call, treat as incident, identify offending `release`, prepare rollback |
+| Quiet | ratio `< 0.5%` | none | normal |
+| `ECMClientErrorRatioElevated` | `ecm:client_error_session_ratio:5m > 0.005` for 10m | **ticket** | open bead, run triage above during business hours |
+| `ECMClientErrorRatioCritical` | `ecm:client_error_session_ratio:5m > 0.05` for 5m | **page** | wake on-call, treat as incident, identify offending `release`, prepare rollback |
 
 Promote ticket → page yourself if any of:
 
@@ -193,7 +196,7 @@ Promote ticket → page yourself if any of:
 - `ecm_client_errors_dropped_total{reason="rate_limited"}` is climbing alongside the elevated rate (limiter is masking the real magnitude — actual rate is higher than the alert sees).
 - The error correlates with a deploy in the last 30 minutes and no rollback has been initiated.
 
-Demote page → ticket only after `ecm:client_errors:rate5m` has been below the elevated threshold for at least 15 minutes **and** the offending release is no longer the active deploy.
+Demote page → ticket only after `ecm:client_error_session_ratio:5m` has been below the elevated threshold (`0.005`) for at least 15 minutes **and** the offending release is no longer the active deploy.
 
 ---
 
@@ -203,8 +206,8 @@ ECM does not yet ship a runbook-style postmortem template — the postmortem wor
 
 Trigger a postmortem when:
 
-- `ECMClientErrorRateCritical` paged (any duration).
-- `ECMClientErrorRateElevated` ran for > 1 hour before mitigation.
+- `ECMClientErrorRatioCritical` paged (any duration).
+- `ECMClientErrorRatioElevated` ran for > 1 hour before mitigation.
 - Suppression via `telemetry_client_errors_enabled=false` was used at any point during the incident — capture why, the suppression window, and the re-enable timestamp.
 
 The postmortem must capture: deploy SHA before/after, dominant `kind` × `release` breakdown at peak, mitigation chosen (rollback / cache flush / suppress), time-to-detect, time-to-mitigate, and a regression test or alert tuning that would have caught it earlier.

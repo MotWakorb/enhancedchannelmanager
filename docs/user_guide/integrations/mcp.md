@@ -38,11 +38,19 @@ internet**.
 
 ### What this path is
 
-The `mcp-remote` npm package acts as a local bridge: Claude Desktop runs it via
-`npx`, it connects to ECM's Streamable HTTP MCP endpoint over plain HTTP, and
-presents a standard MCP interface to Claude Desktop. The static API key is
-embedded in the URL. Everything runs on your machine — ECM never has to be
-reachable from the internet.
+Claude Desktop speaks stdio for locally-configured MCP servers, so a remote
+HTTP server needs a local bridge. The `mcp-remote` npm package is that bridge:
+Claude Desktop runs it via `npx`, it connects to ECM's Streamable HTTP MCP
+endpoint over your LAN, and presents a standard MCP interface back to Claude
+Desktop. The static API key is embedded in the URL. Everything runs on your
+machine — ECM never has to be reachable from the internet.
+
+> **Why not use Settings → Connectors → Add custom connector?**
+> Claude Desktop's built-in "Connectors" UI requires OAuth 2.1 per the MCP
+> spec. ECM does not support OAuth (that offering was retired — see
+> [ADR-009](../../adr/ADR-009-mcp-oauth-authorization-server-split.md)). Do
+> not use the Connectors path; it will not work. The `mcp-remote` bridge below
+> is the supported path.
 
 ### Prerequisites
 
@@ -53,47 +61,108 @@ Install Node from [nodejs.org](https://nodejs.org/), or via a package manager:
 
 | Platform | Command |
 |---|---|
-| Windows | `winget install OpenJS.NodeJS.LTS` |
 | macOS | `brew install node` |
+| Windows | `winget install OpenJS.NodeJS.LTS` |
 | Debian/Ubuntu | `apt install nodejs npm` |
 
-### Setup
+Verify after install: `node --version` should print `v18.x.x` or higher.
 
-1. **Generate an API key** in ECM: Settings → MCP Integration → Generate Key.
-   Copy the key — it is shown once.
+### Step 1 — Generate your MCP API key in ECM
 
-2. **Add to `claude_desktop_config.json`** (replace `YOUR_ECM_HOST` and
-   `YOUR_API_KEY`):
+1. Open ECM in your browser.
+2. Go to **Settings → MCP Integration**.
+3. Click **Generate Key**.
+4. Copy the key immediately — it is displayed once. If you miss it, use
+   **Regenerate Key** to issue a new one (the old key is invalidated).
 
-   ```json
-   {
-     "mcpServers": {
-       "ecm": {
-         "command": "npx",
-         "args": [
-           "mcp-remote",
-           "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY",
-           "--allow-http"
-         ]
-       }
-     }
-   }
-   ```
+> This is your `mcp_api_key`. It is **not** your Dispatcharr API key. Mixing
+> them up breaks both: Dispatcharr returns 401, and the MCP container reports
+> "API key not configured." See the
+> [README field reference](../../../README.md#mcp-server-claude-integration)
+> for the distinction.
 
-   (`--allow-http` is needed because the endpoint is plain HTTP. The Settings →
-   MCP Integration page has a copy button for the pre-filled config block.)
+The Settings → MCP Integration panel also has a **copy button** for the
+pre-filled `claude_desktop_config.json` block with your host and key already
+substituted — use it to skip manual editing in Step 3.
 
-3. **Restart Claude Desktop.** It launches the `mcp-remote` bridge on startup.
+### Step 2 — Open the Claude Desktop config file
 
-You can now ask Claude to manage your ECM install — "list my channels," "probe
-all streams," "run the auto-creation pipeline and report what it created," etc.
+1. Open Claude Desktop.
+2. On **macOS**: click the **Claude** menu (top-left) → **Settings**.
+   On **Windows**: click the hamburger/menu icon → **Settings**.
+   *(Label may vary across Claude Desktop versions; look for the gear icon or
+   Settings entry.)*
+3. Click the **Developer** tab.
+4. Click **Edit Config**. This opens `claude_desktop_config.json` in your
+   default text editor and reveals the file in Finder (macOS) or Explorer
+   (Windows).
 
-> The `?api_key=` parameter is your `mcp_api_key` — the key generated in
-> Settings → MCP Integration. It is not your Dispatcharr API key. Mixing them up
-> breaks both: Dispatcharr returns 401, and the MCP container reports "API key
-> not configured." See the
-> [README field reference](../../../README.md#mcp-server-claude-integration) for
-> the distinction.
+Config file locations for reference:
+
+| Platform | Path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+If the file doesn't exist yet, create it at that path — Claude Desktop
+creates a blank one when you click Edit Config.
+
+### Step 3 — Add the ECM server block
+
+Paste the following into `claude_desktop_config.json`, replacing
+`YOUR_ECM_HOST` with your ECM hostname or IP, and `YOUR_API_KEY` with the key
+from Step 1. If you used the copy button in Settings → MCP Integration, the
+values are already filled in.
+
+```json
+{
+  "mcpServers": {
+    "ecm": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY",
+        "--allow-http"
+      ]
+    }
+  }
+}
+```
+
+Notes:
+- `--allow-http` is required because the endpoint is plain HTTP (not HTTPS).
+  Omitting it causes `mcp-remote` to refuse the connection.
+- If you already have other entries in `"mcpServers"`, add the `"ecm"` block
+  alongside them — do not replace the whole file.
+- If running ECM on the same machine as Claude Desktop, use `localhost` for
+  `YOUR_ECM_HOST`.
+
+Save the file.
+
+### Step 4 — Fully quit and reopen Claude Desktop
+
+Closing the Claude Desktop window is not enough — the bridge process only
+starts at launch. Fully quit the app:
+
+- **macOS**: Claude menu → **Quit Claude** (or Cmd+Q).
+- **Windows**: right-click the system tray icon → **Quit**, or use
+  Task Manager to end the process.
+
+Then reopen Claude Desktop.
+
+### Step 5 — Confirm the tools loaded
+
+After restart, look for the tools/MCP indicator in the chat input bar. It
+typically appears as a slider icon or a **"search and tools"** control
+(label varies by Claude Desktop version). Click it — the connected `ecm`
+server and its tools should be listed there.
+
+If the `ecm` server does not appear, or shows an error, check
+Settings → Developer — Claude Desktop surfaces bridge errors there.
+
+**First test prompt:** ask Claude "List my ECM channels." A valid response
+(a channel list or a message that no channels exist) confirms the bridge is
+working end-to-end.
 
 ### Key rotation
 
@@ -102,20 +171,81 @@ supported MCP authentication path.
 
 To rotate the static key:
 
-1. In ECM: Settings → MCP Integration → Regenerate Key.
+1. In ECM: Settings → MCP Integration → **Regenerate Key**.
 2. Copy the new key.
-3. Update the `?api_key=YOUR_API_KEY` value in `claude_desktop_config.json`.
-4. Restart Claude Desktop.
+3. Open `claude_desktop_config.json` (Step 2 above) and update the
+   `?api_key=YOUR_API_KEY` value.
+4. Fully quit and reopen Claude Desktop (Step 4 above).
 
 Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias). That is
 the Dispatcharr REST API token and is separate from MCP auth.
+
+If you hit `401 Invalid API key` after rotation, see
+[Troubleshooting — 401 Invalid API key](#401-invalid-api-key-on-tool-calls).
 
 ---
 
 ## Claude Code (`.mcp.json`)
 
-Claude Code talks Streamable HTTP directly — no bridge, no Node.js. Create a
-`.mcp.json` file in any project directory where you want ECM tools:
+### What this path is
+
+Claude Code speaks Streamable HTTP directly — no bridge, no Node.js required.
+You register ECM as an MCP server either via the CLI (`claude mcp add`) or by
+placing a `.mcp.json` file in your project directory. Both methods result in the
+same connection; pick whichever fits your workflow.
+
+### Step 1 — Generate your MCP API key in ECM
+
+Same as the Claude Desktop path: **Settings → MCP Integration → Generate Key**.
+Copy the key immediately. The Settings → MCP Integration panel has a copy button
+for the pre-filled config block with your host and key already substituted.
+
+If you already completed this step for Claude Desktop, reuse the same
+`mcp_api_key` — there is one key for both clients.
+
+### Step 2 — Register ECM with Claude Code
+
+Choose one method:
+
+---
+
+#### Method A: CLI (`claude mcp add`)
+
+Run this command in your terminal (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`):
+
+```bash
+claude mcp add --transport http ecm "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
+```
+
+By default this uses `--scope local`, which registers the server for your
+current project directory only (stored in `.claude/mcp.json`, not committed).
+You can pass a different scope:
+
+| Scope | Flag | Effect |
+|---|---|---|
+| `local` | `--scope local` (default) | Just you, in this project directory |
+| `project` | `--scope project` | Shared with everyone who checks out this repo (stored in `.mcp.json` at the project root — commit it) |
+| `user` | `--scope user` | All your projects on this machine |
+
+Example — register for all your projects:
+```bash
+claude mcp add --transport http --scope user ecm "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
+```
+
+> **Security note:** `project` scope stores the URL in `.mcp.json` at the repo
+> root — which you will likely commit. Do not put your API key in plaintext in a
+> committed file. Instead, use an environment-variable reference: Claude Code
+> expands `${VAR}` from your shell environment when it reads `.mcp.json`. The
+> repo ships a working example at `.mcp.json` in the project root, using
+> `http://localhost:6101/mcp?api_key=${ECM_MCP_API_KEY}`. Set
+> `ECM_MCP_API_KEY` in your shell (e.g. in `~/.zshrc` or `~/.bashrc`) and the
+> key never appears in the committed file.
+
+---
+
+#### Method B: `.mcp.json` file
+
+Create (or edit) `.mcp.json` in your project root:
 
 ```json
 {
@@ -128,13 +258,53 @@ Claude Code talks Streamable HTTP directly — no bridge, no Node.js. Create a
 }
 ```
 
-1. Replace `YOUR_ECM_HOST` and `YOUR_API_KEY` (same `mcp_api_key` as the
-   mcp-remote path).
-2. Start Claude Code in that directory — it auto-detects `.mcp.json` on launch.
-3. Run `/mcp` to reconnect if the MCP container restarts mid-session.
+Replace `YOUR_ECM_HOST` and `YOUR_API_KEY`. Save the file.
 
-If running ECM locally, use `localhost` as your host. If the MCP container is on
-the same Docker network as Claude Code, use the container name (`ecm-mcp`).
+This is equivalent to `--scope project` from the CLI: Claude Code auto-detects
+`.mcp.json` at startup when it is in the working directory.
+
+Host notes:
+- Same machine as Claude Code: use `localhost`.
+- MCP container on the same Docker network: use the service name (`ecm-mcp`).
+- Remote/homelab ECM: use the hostname or LAN IP.
+
+---
+
+### Step 3 — Verify the connection
+
+Start (or restart) Claude Code in the project directory, then run the `/mcp`
+slash command:
+
+```
+/mcp
+```
+
+This lists all registered MCP servers and their connection status. You should
+see `ecm` with a connected status and the list of available tools.
+
+If `ecm` is listed but shows an error, check that the ECM MCP container is
+running and reachable at port 6101. See
+[Troubleshooting — MCP server not reachable](#mcp-server-not-reachable-settings--mcp-integration-shows-offline).
+
+**First test prompt:** ask Claude Code "List my ECM channels." A valid response
+confirms the connection is working end-to-end.
+
+### Reconnecting after a container restart
+
+If the ECM MCP container restarts mid-session, re-run `/mcp` in Claude Code.
+This triggers a fresh connection attempt without requiring a full Claude Code
+restart.
+
+### Key rotation
+
+To rotate the static key: **Settings → MCP Integration → Regenerate Key** in
+ECM, then update the `?api_key=` value in your config (`.mcp.json` or the
+stored CLI registration) and restart Claude Code (or run `/mcp` to
+reconnect).
+
+For the full rotation procedure, see
+[Key rotation](#key-rotation) in the Claude Desktop section above — the
+ECM-side steps are identical.
 
 ---
 
@@ -244,6 +414,6 @@ unchanged.
 - **README**: [MCP Server (Claude Integration)](../../../README.md#mcp-server-claude-integration)
   — quick-start setup and the "choose your method" overview table.
 - **Retired OAuth offering**: [ADR-009 (Superseded)](../../adr/ADR-009-mcp-oauth-authorization-server-split.md)
-  and `docs/security/threat_model_mcp_oauth.md` (Superseded/dormant) — history of
-  the OAuth 2.1 "Custom Connector" offering that was retired (`bd-9axgc`); the
-  code is kept dormant in-tree for reversibility.
+  and `docs/security/threat_model_mcp_oauth.md` (Superseded) — history of
+  the OAuth 2.1 "Custom Connector" offering that was retired (`bd-9axgc`) and
+  whose code was removed from the tree in v0.17.3 (`bd-jir0m`).

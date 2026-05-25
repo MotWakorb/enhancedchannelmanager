@@ -176,6 +176,32 @@ A follow-up bead should split this SLO by `path` label once we've observed which
 
 ---
 
+## SLO-4: Readiness Sub-check Latency (informational)
+
+**SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).
+
+**Prometheus expression (per check):**
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le, check) (
+    rate(ecm_health_ready_check_duration_seconds_bucket[5m])
+  )
+)
+```
+
+**SLO target (soft / informational only):**
+
+- `database` sub-check p95 < 50ms
+- `dispatcharr` sub-check p95 < 500ms
+- `ffprobe` sub-check p95 < 100ms
+
+**Why informational only:** These are diagnostic signals — a slow readiness sub-check is a leading indicator for SLO-1 and SLO-2, but users don't directly experience readiness probe latency. We alert **warning** (not page) on breach so on-call gets situational awareness without being woken up.
+
+**Runbook:** [`docs/runbooks/readiness_subcheck_latency.md`](../runbooks/readiness_subcheck_latency.md)
+
+---
+
 ## SLO-5: Normalization Correctness
 
 **SLI:** Fraction of nightly canary runs where the Test Rules preview path (`engine.test_rule` / `engine.test_rules_batch`) and the auto-creation executor path (`engine.normalize`) produce byte-identical output — **including identical `matched_rule_ids`** — across the full shared Unicode fixture bank (`backend/tests/fixtures/unicode_fixtures.py`). A single fixture diverging in a single run counts as a full-run failure for the purpose of this SLI.
@@ -397,7 +423,7 @@ Tighten to p95 < 400ms once 30 days of production data shows we comfortably beat
 
 **Cardinality discipline:** The `endpoint` label is bounded to ~5 stats endpoints; `granularity` is bounded to 3 values (`total`, `day`, `none`). Combined ceiling is ~15 series per bucket × ~15 buckets = ~225 series. No `user_id` label on the metric (the URL path `{user_id}` is the *parameterized* route pattern, not the resolved value — see observability.py for the route-template logic).
 
-**Runbook:** [`docs/runbooks/stats-v2-write-failures.md`](../runbooks/stats-v2-write-failures.md) for write-side root causes that cascade into query slowness; new stats-v2-query-specific runbook may follow in a future bead once we see real query-side incidents.
+**Runbook:** [`docs/runbooks/stats-v2-query-latency.md`](../runbooks/stats-v2-query-latency.md) — covers the query-latency failure modes (table growth past index, WAL checkpoint stall, missing index, N+1 frontend pattern). For write-side root causes that cascade into query slowness, see also [`docs/runbooks/stats-v2-write-failures.md`](../runbooks/stats-v2-write-failures.md).
 
 ---
 
@@ -565,32 +591,6 @@ ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success
 
 ---
 
-## SLO-4: Readiness Sub-check Latency (informational)
-
-**SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).
-
-**Prometheus expression (per check):**
-```promql
-histogram_quantile(
-  0.95,
-  sum by (le, check) (
-    rate(ecm_health_ready_check_duration_seconds_bucket[5m])
-  )
-)
-```
-
-**SLO target (soft / informational only):**
-
-- `database` sub-check p95 < 50ms
-- `dispatcharr` sub-check p95 < 500ms
-- `ffprobe` sub-check p95 < 100ms
-
-**Why informational only:** These are diagnostic signals — a slow readiness sub-check is a leading indicator for SLO-1 and SLO-2, but users don't directly experience readiness probe latency. We alert **warning** (not page) on breach so on-call gets situational awareness without being woken up.
-
-**Runbook:** [`docs/runbooks/readiness_subcheck_latency.md`](../runbooks/readiness_subcheck_latency.md)
-
----
-
 ## Error-budget policy
 
 What happens when the error budget burns? The rules below apply per-SLO; burns are evaluated weekly.
@@ -628,6 +628,8 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 - **No SLO for long-running tasks.** Task success rate matters (restore jobs, auto-creation runs) but has no metric today. Separate bead.
 
 ## Changelog
+
+- **2026-05-25 (bd-31u6u / bd-zppgx):** SLO-4 (Readiness Sub-check Latency) moved to its numeric position between SLO-3 and SLO-5 (was appended after Capacity planning sections; cosmetic order fix, no contract change). New runbook `stats-v2-query-latency.md` authored for SLO-9 query-latency failure modes (table growth, WAL stall, missing index, N+1 pattern). `ECMStatsQueryLatencyHigh` and `ECMStatsQueryLatencyP99High` alerts in `prometheus_rules.yaml` updated to point at the new runbook (previously pointed at `stats-v2-write-failures.md` by mistake). SLO-9 runbook reference in this file updated accordingly.
 
 - **2026-05-16 (bd-ft3hk / BD-M):** Added **SLO-10: Channel Deduplication** for the v0.17.1 dedup epic (bd-1v4ht). Three SLIs: SLI-10a candidate lookup p99 latency (<500ms / 7d / 99%), SLI-10b pending merge resolution rate (95% within 24h), SLI-10c merge API error rate (<1% / 5m / 99%). New alert group `ecm_dedup` in `prometheus_rules.yaml` with corresponding alerts (`ECMDedupCandidateLookupLatencyHigh` warn, `ECMDedupPendingMergeResolutionStale` warn, `ECMDedupMergeApiErrorRateHigh` page). Metrics `ecm_dedup_candidate_lookup_duration_seconds`, `ecm_dedup_merge_requests_total{status}`, `ecm_pending_merges_queue_depth_added_total` are spec'd here; emission lands with BD-D/E/F — alert rules are intentionally vacuous until then so engineers wiring the emitters have a contract to match. Three runbook stubs at `docs/runbooks/dedup-*.md`. **Also resolves the v0.17.0 deploy-gated alert:** `ECMTaskSchedulerNextRunNull` is uncommented in `prometheus_rules.yaml` now that v0.17.0's Bundle H heal (bd-1weac) has shipped to operators. The "Deploy order" note in the Task scheduler health entry is updated accordingly.
 

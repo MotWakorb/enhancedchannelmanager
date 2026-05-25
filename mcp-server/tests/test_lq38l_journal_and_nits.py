@@ -100,7 +100,11 @@ class TestJournalEnvelope:
 
         text = result[0][0].text
         assert "No journal entries found." not in text
-        assert "Recent journal entries (2)" in text
+        # bd-0hjrk.1 reworded the header to "Journal entries (showing N of M
+        # total):" (M = envelope count) when pagination landed. The behaviour
+        # this test guards (results unwrapped, rows + names + descriptions
+        # rendered, None-safe) is unchanged.
+        assert "Journal entries (showing 2 of 2 total)" in text
         assert "ESPN" in text
         assert "Created channel ESPN" in text
         # entity_name is appended for usefulness
@@ -129,6 +133,53 @@ class TestJournalEnvelope:
             result = await mcp.call_tool("get_journal", {})
         assert "m3u/refresh: Prov" in result[0][0].text
 
+    @pytest.mark.asyncio
+    async def test_batch_id_passed_through_to_backend_query(self):
+        """bd-0emgo.5: get_journal(batch_id=...) filters by the run's
+        execution_id so an operator can recover a bad auto-creation merge."""
+        mcp = _register("system")
+        envelope = {
+            "count": 1,
+            "page": 1,
+            "page_size": 20,
+            "total_pages": 1,
+            "results": [
+                {
+                    "id": 9,
+                    "timestamp": "2026-05-22T12:00:00Z",
+                    "category": "auto_creation",
+                    "action_type": "merge_stream",
+                    "entity_id": 1,
+                    "entity_name": "ESPN",
+                    "description": "Merged stream 201 into channel 'ESPN'",
+                    "batch_id": "555",
+                },
+            ],
+        }
+        mock_client = _client(return_value=envelope)
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "get_journal", {"limit": 20, "batch_id": "555"}
+            )
+
+        # The batch_id must reach the backend journal_list query.
+        _, call_kwargs = mock_client.call_endpoint.call_args
+        assert call_kwargs["query"]["batch_id"] == "555"
+        # And the merge row renders.
+        text = result[0][0].text
+        assert "auto_creation/merge_stream: ESPN" in text
+
+    @pytest.mark.asyncio
+    async def test_batch_id_omitted_when_not_provided(self):
+        """No batch_id arg means no batch_id key in the backend query."""
+        mcp = _register("system")
+        mock_client = _client(return_value={"count": 0, "results": []})
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("get_journal", {"limit": 5})
+
+        _, call_kwargs = mock_client.call_endpoint.call_args
+        assert "batch_id" not in call_kwargs["query"]
+
 
 # ===========================================================================
 # lq38l.13 #1 — channel numbers render as ints (no trailing .0)
@@ -145,7 +196,10 @@ class TestChannelNumberFormatting:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_channels", {})
         text = result[0][0].text
-        assert "#10440:" in text
+        # bd-0emgo.6: non-compact line now reads "#<num> (id=<cid>): <name>" so
+        # the channel number isn't mistaken for the API id. The float-suffix
+        # check (the point of this test) still holds on the channel number.
+        assert "#10440 (id=5):" in text
         assert "10440.0" not in text
 
     @pytest.mark.asyncio
@@ -224,6 +278,62 @@ class TestStreamGroupProviderResolution:
         text = result[0][0].text
         assert "provider 99" in text
         assert "group 88" in text
+
+
+# ===========================================================================
+# bd-8w1ba — get_streams_for_channel surfaces a clean not-found message when the
+# backend now returns 404 for a non-existent channel id (the backend fix maps the
+# upstream Dispatcharr 404 instead of an opaque 500). The MCP client wraps that
+# 404 in a RuntimeError chained from the original httpx.HTTPStatusError.
+# ===========================================================================
+
+class TestStreamsForChannelNotFound:
+    @staticmethod
+    def _not_found_runtime_error() -> RuntimeError:
+        """Mirror ecm_client._http_error(...) raise-from for a 404: a
+        RuntimeError chained (__cause__) to the httpx.HTTPStatusError."""
+        import httpx
+
+        request = httpx.Request(
+            "GET", "http://ecm/api/channels/999999/streams"
+        )
+        response = httpx.Response(
+            404, request=request, text='{"detail": "Not found."}'
+        )
+        status_err = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=response
+        )
+        err = RuntimeError(
+            "GET /api/channels/999999/streams -> HTTP 404 Not Found: Not found."
+        )
+        err.__cause__ = status_err
+        return err
+
+    @pytest.mark.asyncio
+    async def test_not_found_returns_clean_message(self):
+        mcp = _register("streams")
+        mock_client = _client(side_effect=self._not_found_runtime_error())
+        with patch("tools.streams.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "get_streams_for_channel", {"channel_id": 999999}
+            )
+        text = result[0][0].text
+        assert "Channel 999999 not found" in text
+        assert "internal channel id" in text
+        # the not-found message replaces the opaque "Error getting streams" wrap
+        assert "Error getting streams" not in text
+
+    @pytest.mark.asyncio
+    async def test_non_404_error_keeps_generic_wrap(self):
+        mcp = _register("streams")
+        mock_client = _client(side_effect=RuntimeError("upstream exploded"))
+        with patch("tools.streams.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "get_streams_for_channel", {"channel_id": 5}
+            )
+        text = result[0][0].text
+        assert "Error getting streams for channel 5" in text
+        assert "not found" not in text
 
 
 # ===========================================================================

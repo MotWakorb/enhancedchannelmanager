@@ -349,3 +349,145 @@ class TestEmbyTestConnectionSsrfMitigation:
         assert response.status_code == 200, response.json()
         assert response.json() == {"ok": True}
         assert captured["base_url"] == "https://emby.example.com:8920"
+
+
+class TestEmbyTestConnectionLoopbackDenylist:
+    """Loopback / link-local SSRF denylist — security finding SEC-2
+    follow-up (bd-fbc50).
+
+    The scheme allowlist alone still permitted an authenticated admin to
+    point Test Connection at the ECM host's own loopback services or at
+    the cloud instance-metadata IP (169.254.169.254). This suite is the
+    regression target for the host denylist added to
+    ``_sanitize_base_url``. RFC1918 LAN ranges are intentionally LEFT
+    reachable (Plex/Emby/Jellyfin run on the operator's LAN) — see the
+    ``Allowed`` cases below.
+
+    Denial coverage lives here on the shared helper (Emby path). Plex and
+    Jellyfin get a single smoke each in their own files, since all three
+    endpoints call the same ``_sanitize_base_url``.
+    """
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "http://169.254.169.254/latest/meta-data/",  # cloud metadata IMDS
+            "http://localhost",
+            "http://localhost:8096",
+            "http://127.0.0.1",
+            "http://127.0.0.5:8096",  # anywhere in 127.0.0.0/8
+            "http://[::1]",
+            "http://[fe80::1]",  # IPv6 link-local
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_loopback_and_link_local(self, async_client, base_url):
+        """Loopback / link-local hosts are rejected inline before
+        EmbyClient is ever constructed — no HTTP probe is issued."""
+        emby_constructor = AsyncMock()
+        with patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": base_url, "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is False
+        assert "host" in body["error"].lower()
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_metadata_ip_explicitly(self, async_client):
+        """Explicit guard on the cloud instance-metadata IP — the
+        canonical SSRF-to-credential-theft pivot."""
+        emby_constructor = AsyncMock()
+        with patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": "http://169.254.169.254", "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "http://192.168.1.50:8096",  # 192.168.0.0/16
+            "http://10.0.0.5:8096",  # 10.0.0.0/8
+            "http://172.16.3.4:8920",  # 172.16.0.0/12
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_allows_rfc1918_private_ranges(self, async_client, base_url):
+        """RFC1918 LAN ranges MUST remain reachable — Plex / Emby /
+        Jellyfin legitimately run on the operator's local network.
+        Blocking these would break the primary use case."""
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[])
+        mock_client.close = AsyncMock()
+
+        captured: dict = {}
+
+        def constructor_spy(base_url_arg, api_key):
+            captured["base_url"] = base_url_arg
+            return mock_client
+
+        with patch("routers.settings.EmbyClient", side_effect=constructor_spy):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": base_url, "api_key": "k"},
+            )
+
+        assert response.status_code == 200, response.json()
+        assert response.json() == {"ok": True}
+        assert captured["base_url"] == base_url
+
+    @pytest.mark.asyncio
+    async def test_allows_public_host(self, async_client):
+        """A normal public host passes the denylist (sanity)."""
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[])
+        mock_client.close = AsyncMock()
+
+        captured: dict = {}
+
+        def constructor_spy(base_url_arg, api_key):
+            captured["base_url"] = base_url_arg
+            return mock_client
+
+        with patch("routers.settings.EmbyClient", side_effect=constructor_spy):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={
+                    "base_url": "https://emby.example.com:8920",
+                    "api_key": "k",
+                },
+            )
+
+        assert response.status_code == 200, response.json()
+        assert response.json() == {"ok": True}
+        assert captured["base_url"] == "https://emby.example.com:8920"
+
+    @pytest.mark.asyncio
+    async def test_resolved_name_pointing_at_loopback_is_blocked(self, async_client):
+        """A hostname that RESOLVES to a loopback/link-local IP is blocked
+        too (defense against DNS pointing an innocuous name at 127.0.0.1).
+        We patch getaddrinfo so the test does not depend on live DNS."""
+        emby_constructor = AsyncMock()
+        fake_getaddrinfo = lambda *a, **k: [  # noqa: E731 — test stub
+            (2, 1, 6, "", ("127.0.0.1", 0)),
+        ]
+        with patch("routers.settings.EmbyClient", side_effect=emby_constructor), patch(
+            "routers.settings.socket.getaddrinfo", side_effect=fake_getaddrinfo
+        ):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": "http://sneaky.attacker.example", "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        emby_constructor.assert_not_called()

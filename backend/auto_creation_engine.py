@@ -10,6 +10,7 @@ The main orchestrator for the auto-creation pipeline. Coordinates:
 - Conflict detection and resolution
 """
 import asyncio
+import json
 import logging
 import re
 from collections import defaultdict
@@ -17,12 +18,14 @@ from datetime import datetime
 from typing import Optional
 
 import safe_regex
+import journal
 from config import get_settings
 from database import get_session
 from models import (
     AutoCreationRule,
     AutoCreationExecution,
     AutoCreationConflict,
+    AutoCreationSnapshot,
     StreamStats
 )
 from auto_creation_schema import (
@@ -171,6 +174,17 @@ class AutoCreationEngine:
                 triggered_by=triggered_by
             )
 
+        # ADR-010 §D2: capture a pre-run snapshot of the manual
+        # (non-Dispatcharr-auto-created) channel<->stream state BEFORE any
+        # mutation, so a full whole-run revert is possible. Gated on
+        # ``not dry_run`` (mode=="execute") — a dry run mutates nothing, so
+        # there is nothing to revert and a snapshot would only consume
+        # storage. This runs AFTER _load_existing_data (the in-memory channel
+        # list is already populated — no N+1) and BEFORE _process_streams
+        # (the single call that performs all mutation).
+        if not dry_run:
+            await self._capture_snapshot(execution.id)
+
         # Process streams through rules
         results = await self._process_streams(
             streams, rules, execution, dry_run, triggered_by=triggered_by
@@ -191,6 +205,11 @@ class AutoCreationEngine:
         execution.channels_updated = results["channels_updated"]
         execution.groups_created = results["groups_created"]
         execution.streams_merged = results["streams_merged"]
+        # bd-0emgo.4: persist distinct-channels-merged so the polled execution
+        # record (what the MCP/API surface read) reports it. Without a column it
+        # was computed in-memory but dropped on save, so a dry-run reported
+        # streams_merged=26 but channels_touched=0.
+        execution.channels_touched = results.get("channels_touched", 0)
         execution.streams_skipped = results["streams_skipped"]
         execution.streams_excluded = results.get("streams_excluded", 0)
         execution.set_created_entities(results["created_entities"])
@@ -256,16 +275,50 @@ class AutoCreationEngine:
             execution_id=execution_id,
         )
 
-    async def rollback_execution(self, execution_id: int, rolled_back_by: str = "manual") -> dict:
+    async def rollback_execution(
+        self,
+        execution_id: int,
+        rolled_back_by: str = "manual",
+        confirm: bool = False,
+    ) -> dict:
         """
-        Rollback changes from a specific execution.
+        Rollback changes from a specific execution (ADR-010 §D8, uc51o.5).
+
+        UNIFIED REVERT. This is the single revert entry point and chooses its
+        behaviour from whether the execution has a pre-run snapshot:
+
+        * **Snapshot present** — delegates to :meth:`restore_snapshot` for the
+          FULL whole-run revert (re-adds streams the run removed, removes
+          streams it added, restores drifted metadata). This is an OPTIMISTIC
+          OVERWRITE (ADR-010 §D5) that can clobber edits made AFTER the run, so
+          it requires ``confirm=True`` — the same acknowledgement the
+          ``/restore-snapshot`` endpoint demands. Without it, the call is
+          refused with ``requires_confirm=True`` and ``has_snapshot=True`` so
+          the router can surface the overwrite warning (HTTP 409). This is the
+          ONLY behaviour change for existing callers, and it ONLY affects runs
+          that have a snapshot (i.e. runs created after the snapshot feature
+          shipped).
+
+        * **No snapshot** — the legacy delete-created-only path, BYTE-COMPATIBLE
+          with the pre-uc51o.5 behaviour: deletes run-created entities, prefers
+          the surgical journal-driven un-merge, else restores ``modified``
+          entities. It does NOT require ``confirm`` (true backward compat for
+          legacy / dry-run-then-claimed / capture-failure runs that have no
+          snapshot to overwrite from).
 
         Args:
             execution_id: ID of the execution to rollback
             rolled_back_by: Who/what initiated the rollback
+            confirm: Acknowledgement of the optimistic-overwrite warning. Only
+                consulted when a snapshot is present; ignored on the legacy
+                no-snapshot path.
 
         Returns:
-            Dict with rollback results
+            Dict with rollback results. The snapshot path returns the
+            :meth:`restore_snapshot` shape (``removed_channels`` /
+            ``restored_channels`` / ``failed_channels``); the legacy path
+            returns the unchanged ``entities_removed`` / ``entities_restored``
+            shape.
         """
         session = get_session()
         try:
@@ -282,17 +335,110 @@ class AutoCreationEngine:
             if execution.mode == "dry_run":
                 return {"success": False, "error": "Cannot rollback a dry-run execution"}
 
+            # --- uc51o.5: unify on the snapshot when one exists ---------------
+            # If this execution has a pre-run snapshot, the FULL restore is the
+            # right revert (the legacy path cannot re-add streams the run
+            # removed — ADR-010 Context). Because restore is an optimistic
+            # overwrite that can clobber post-run edits (§D5), it requires the
+            # SAME confirm acknowledgement as /restore-snapshot. Refuse without
+            # it rather than silently widening the blast radius; the no-snapshot
+            # path below is untouched and keeps its no-confirm semantics.
+            has_snapshot = session.query(AutoCreationSnapshot.id).filter(
+                AutoCreationSnapshot.execution_id == execution_id
+            ).first() is not None
+
+            if has_snapshot:
+                if not confirm:
+                    logger.info(
+                        "[AUTO-CREATE-ENGINE] Rollback of execution %s has a "
+                        "snapshot; refusing without confirm (would overwrite "
+                        "post-run edits)",
+                        execution_id,
+                    )
+                    return {
+                        "success": False,
+                        "has_snapshot": True,
+                        "requires_confirm": True,
+                        "error": (
+                            f"Execution {execution_id} has a pre-run snapshot, "
+                            f"so rollback performs a FULL restore that "
+                            f"overwrites the current stream assignments of "
+                            f"every snapshot channel with the pre-run state — "
+                            f"any changes made after the run will be lost. "
+                            f"Re-send with confirm=true (or use "
+                            f"/restore-snapshot) to acknowledge."
+                        ),
+                    }
+                # Confirmed: delegate to the full snapshot-restore. Close this
+                # session first — restore_snapshot opens its own.
+                logger.info(
+                    "[AUTO-CREATE-ENGINE] Rollback of execution %s delegating "
+                    "to snapshot-restore (snapshot present, confirmed)",
+                    execution_id,
+                )
+                session.close()
+                return await self.restore_snapshot(
+                    execution_id, restored_by=rolled_back_by
+                )
+
             logger.info("[AUTO-CREATE-ENGINE] Rolling back execution %s", execution_id)
 
-            # Rollback created entities (in reverse order)
             created = execution.get_created_entities()
+            modified = execution.get_modified_entities()
+
+            # Refuse (rather than silently no-op) when there is nothing to undo.
+            # An execution with ZERO created AND ZERO modified entities has no
+            # recorded restore data — either it predates entity tracking (a
+            # legacy run) or it genuinely changed nothing. Marking such a run
+            # "rolled_back" with entities_removed=0/entities_restored=0 LOOKS
+            # like a clean rollback but guarantees nothing. Leave status
+            # untouched and tell the caller why. Runs that created OR modified
+            # anything fall through and roll back normally (only the both-empty
+            # case refuses); the already-rolled-back and dry-run guards above
+            # still take precedence.
+            if not created and not modified:
+                logger.warning(
+                    "[AUTO-CREATE-ENGINE] Refusing rollback of execution %s: "
+                    "no recorded created or modified entities",
+                    execution_id,
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        f"No recorded created or modified entities for execution "
+                        f"{execution_id}; cannot guarantee a rollback (the run "
+                        f"predates entity tracking or made no changes). Refusing "
+                        f"to mark it rolled_back."
+                    ),
+                }
+
+            # Rollback created entities (in reverse order)
             for entity in reversed(created):
                 await self._rollback_created_entity(entity)
 
-            # Restore modified entities
-            modified = execution.get_modified_entities()
-            for entity in modified:
-                await self._rollback_modified_entity(entity)
+            # jnzst Q4: prefer the SURGICAL journal-driven un-merge for stream
+            # merges — it removes ONLY the stream IDs this run added and
+            # preserves streams a concurrent edit added afterward. It is
+            # attempted first; if the run has merge_stream journal entries it
+            # handles all the stream-list changes and the snapshot restore below
+            # is SKIPPED (running it too would clobber the concurrent edits the
+            # surgical pass just preserved). When the journal has no merge
+            # entries for the batch (legacy runs), handled is False and we fall
+            # back to the snapshot restore.
+            handled, _surgical_touched = await self._journal_driven_unmerge(execution_id)
+
+            if not handled:
+                # Restore modified entities in REVERSE order (bd-a7okb). Restore is
+                # last-write-wins: _rollback_modified_entity overwrites the channel
+                # from each entry's pre-change `previous` snapshot. When a run merged
+                # several streams into the SAME pre-existing channel, the snapshots
+                # are cumulative ([A] before B, [A,B] before C, ...). Forward order
+                # would apply the earliest (true original) first and let a later
+                # snapshot win, leaving all-but-the-last merged stream behind.
+                # Reversing makes the earliest snapshot win — restoring the original
+                # — exactly as created-entity teardown is reversed above.
+                for entity in reversed(modified):
+                    await self._rollback_modified_entity(entity)
 
             # Mark execution as rolled back
             execution.status = "rolled_back"
@@ -313,6 +459,191 @@ class AutoCreationEngine:
         except Exception as e:
             session.rollback()
             logger.error("[AUTO-CREATE-ENGINE] Rollback failed: %s", e)
+            return {"success": False, "error": str(e)}
+        finally:
+            session.close()
+
+    async def restore_snapshot(self, execution_id: int, restored_by: str = "manual") -> dict:
+        """Whole-run revert via the pre-run AutoCreationSnapshot (ADR-010 §D8).
+
+        SAFETY-CRITICAL: this mutates live Dispatcharr channels. It performs an
+        OPTIMISTIC OVERWRITE (ADR-010 §D5) — it unconditionally writes the
+        snapshot's stream-set + key metadata back to each channel, clobbering
+        ANY changes made (manual edits, Dispatcharr drift) AFTER the run but
+        BEFORE this revert. The caller MUST surface the §D5 pre-revert warning;
+        the endpoint requires an explicit ``confirm=true`` so a raw API call
+        cannot skip the acknowledgement.
+
+        Algorithm (ADR-010 §D8):
+          1. Load the snapshot for ``execution_id`` (404-equivalent — returns
+             ``{"success": False, "error": ...}`` with a ``no_snapshot`` flag so
+             the router can map to 404 and tell the caller to use /rollback).
+             Refuse a dry-run execution or one already in a terminal revert
+             state, mirroring the rollback guards.
+          2. Delete run-CREATED channels/groups first (via the existing
+             ``_rollback_created_entity`` path) so channels that did not exist
+             at snapshot time do not survive as orphans.
+          3. For each snapshot channel, full-REPLACE its stream set
+             (``update_channel(streams=[ids])`` — the §D1 IDs-only primitive)
+             and restore key metadata (name, channel_group_id, epg_data_id,
+             tvg_id) in one PATCH.
+          4. Idempotent: re-running re-issues the same PATCHes / deletes →
+             same end state. A second call after a clean first call finds the
+             created channels already gone (delete 404 swallowed by
+             ``_rollback_created_entity``) and re-writes the same stream-sets.
+          5. Partial failures are COLLECTED and SURFACED, never silent and
+             never fatal mid-run: a snapshot channel that 404s in Dispatcharr
+             (deleted since the run) or a metadata/stream write that fails is
+             recorded in ``failed_channels`` and the loop CONTINUES. The result
+             reports ``restored_channels`` / ``removed_channels`` counts plus
+             the per-item ``failed_channels`` list. ``success`` is True only
+             when nothing failed; a run that failed on some items returns
+             ``success=False`` (success-with-warnings) carrying the failures —
+             NEVER a blanket success that hides them.
+
+        Args:
+            execution_id: ID of the execution whose pre-run state to restore.
+            restored_by: Who/what initiated the restore (recorded on the row).
+
+        Returns:
+            On no-snapshot / guard failure: ``{"success": False, "error": ...,
+            "no_snapshot": bool}``. On a restore attempt: ``{"success": bool,
+            "execution_id", "rule_name", "removed_channels", "restored_channels",
+            "failed_channels": [{"id", "name", "error"}]}``.
+        """
+        session = get_session()
+        try:
+            execution = session.query(AutoCreationExecution).filter(
+                AutoCreationExecution.id == execution_id
+            ).first()
+
+            if not execution:
+                return {"success": False, "error": "Execution not found"}
+
+            if execution.mode == "dry_run":
+                # A dry run mutates nothing and has no snapshot anyway.
+                return {
+                    "success": False,
+                    "error": "Cannot restore a dry-run execution",
+                }
+
+            if execution.status == "rolled_back":
+                return {
+                    "success": False,
+                    "error": "Execution already reverted",
+                }
+
+            snapshot = session.query(AutoCreationSnapshot).filter(
+                AutoCreationSnapshot.execution_id == execution_id
+            ).first()
+
+            if not snapshot:
+                # No snapshot to restore from — the caller should use the legacy
+                # /rollback path (delete-created-only) instead. Flagged so the
+                # router can map to 404 with that guidance.
+                return {
+                    "success": False,
+                    "no_snapshot": True,
+                    "error": (
+                        f"No snapshot for execution {execution_id}; use "
+                        f"/rollback instead (this run predates snapshotting, "
+                        f"was a dry-run, or its capture failed)."
+                    ),
+                }
+
+            logger.info(
+                "[AUTO-CREATE-ENGINE] Restoring snapshot for execution %s "
+                "(OPTIMISTIC OVERWRITE — post-run edits will be lost)",
+                execution_id,
+            )
+
+            # --- Step 2: delete run-created channels/groups first -------------
+            # Reuse the rollback's created-entity teardown verbatim so a
+            # channel that did NOT exist at snapshot time (and therefore is not
+            # in the snapshot) is removed rather than left as an orphan. Deletes
+            # in reverse order, mirroring rollback. _rollback_created_entity
+            # swallows a 404 (already-deleted) so a SECOND restore is safe.
+            created = execution.get_created_entities()
+            removed_channels = 0
+            for entity in reversed(created):
+                await self._rollback_created_entity(entity)
+                if entity.get("type") == "channel":
+                    removed_channels += 1
+
+            # --- Step 3-5: full-replace each snapshot channel -----------------
+            channels = snapshot.get_channels_data().get("channels", [])
+            restored_channels = 0
+            failed_channels: list[dict] = []
+
+            for ch in channels:
+                channel_id = ch.get("id")
+                channel_name = ch.get("name")
+                try:
+                    # Full-REPLACE primitive (§D1 IDs-only) + key metadata in
+                    # one PATCH. Including ``streams`` makes update_channel
+                    # overwrite the entire stream set to the snapshot order;
+                    # the metadata keys restore drift on name / group / epg /
+                    # tvg.
+                    payload = {
+                        "streams": list(ch.get("stream_ids") or []),
+                        "name": channel_name,
+                        "channel_group_id": ch.get("channel_group_id"),
+                        "epg_data_id": ch.get("epg_data_id"),
+                        "tvg_id": ch.get("tvg_id"),
+                    }
+                    await self.client.update_channel(channel_id, payload)
+                    restored_channels += 1
+                except Exception as e:
+                    # Collect-and-continue: a deleted channel (404), a
+                    # vanished referenced stream id (IDs-only can't recreate a
+                    # deleted stream — ADR-010 negative consequence #2), or any
+                    # write error is recorded and the loop proceeds. NEVER
+                    # abort on the first failure; NEVER report blanket success.
+                    logger.warning(
+                        "[AUTO-CREATE-ENGINE] Restore failed for channel %s (%s): %s",
+                        channel_id, channel_name, e,
+                    )
+                    failed_channels.append({
+                        "id": channel_id,
+                        "name": channel_name,
+                        "error": str(e),
+                    })
+
+            # --- Step 7: mark terminal state + return -------------------------
+            # Share the ``rolled_back`` terminal state with the legacy rollback
+            # (ADR-010 §D8 step 7 leaves the exact name to this bead; reusing
+            # the existing state keeps the idempotency guard — already-reverted
+            # → refuse — consistent across both revert surfaces). Only mark
+            # terminal when NOTHING failed, so a partial restore stays
+            # re-runnable (idempotent retry after a partial failure, §D5).
+            if not failed_channels:
+                execution.status = "rolled_back"
+                execution.rolled_back_at = datetime.utcnow()
+                execution.rolled_back_by = restored_by
+            session.commit()
+
+            logger.info(
+                "[AUTO-CREATE-ENGINE] Restore complete for execution %s: "
+                "%s created channel(s) removed, %s channel(s) restored, "
+                "%s failed",
+                execution_id, removed_channels, restored_channels,
+                len(failed_channels),
+            )
+
+            return {
+                # success-with-warnings: False when any item failed so the
+                # caller never mistakes a partial restore for a clean one.
+                "success": not failed_channels,
+                "execution_id": execution_id,
+                "rule_name": execution.rule_name or f"Execution {execution_id}",
+                "removed_channels": removed_channels,
+                "restored_channels": restored_channels,
+                "failed_channels": failed_channels,
+            }
+
+        except Exception as e:
+            session.rollback()
+            logger.error("[AUTO-CREATE-ENGINE] Restore failed: %s", e)
             return {"success": False, "error": str(e)}
         finally:
             session.close()
@@ -693,7 +1024,8 @@ class AutoCreationEngine:
         results: dict,
         dry_run: bool,
         settings=None,
-        stream_m3u_map: dict = None
+        stream_m3u_map: dict = None,
+        custom_stream_ids: set[int] | None = None,
     ):
         """
         Pass 3.5: Reorder streams within channels using smart sort.
@@ -704,6 +1036,8 @@ class AutoCreationEngine:
         """
         if stream_m3u_map is None:
             stream_m3u_map = {}
+        if custom_stream_ids is None:
+            custom_stream_ids = set()
 
         for rule in rules:
             if not rule.stream_sort_field:
@@ -775,6 +1109,7 @@ class AutoCreationEngine:
                     stream_m3u_map,
                     channel_name,
                     settings,
+                    custom_stream_ids=custom_stream_ids,
                 )
 
                 # Skip if order didn't change
@@ -991,10 +1326,15 @@ class AutoCreationEngine:
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG sources: %s", e)
 
-        # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups
+        # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups,
+        # and a set of operator-added custom stream IDs (Dispatcharr is_custom) for
+        # the "custom_streams" Smart Sort criterion (bead ap1ud / GH #244).
         stream_m3u_map = {}
+        custom_stream_ids: set[int] = set()
         for s in streams:
             stream_m3u_map[s.stream_id] = s.m3u_account_id
+            if getattr(s, "is_custom", False):
+                custom_stream_ids.add(s.stream_id)
 
         executor = ActionExecutor(
             self.client, self._existing_channels, self._existing_groups,
@@ -1007,6 +1347,11 @@ class AutoCreationEngine:
             # the bulk-M3U dedup hook in _execute_create_channel only
             # fires for the M3U-refresh path per ADR-008 §D1.
             triggered_by=triggered_by,
+            # bd-0emgo.5: thread the execution_id so each LIVE merge writes
+            # a journal entry tagged batch_id=str(execution_id), giving an
+            # operator a queryable (channel_id, stream_id) audit trail to
+            # recover from a bad run via get_journal(batch_id=...).
+            execution_id=execution.id,
         )
 
         # Results tracking
@@ -1017,6 +1362,10 @@ class AutoCreationEngine:
             "channels_updated": 0,
             "groups_created": 0,
             "streams_merged": 0,
+            # Count of distinct channels that received at least one merge this
+            # run. Set after Pass 2 from len(channels_touched_ids), unioned from
+            # the add_result chokepoint (exec_ctx.merged_channel_ids).
+            "channels_touched": 0,
             "streams_skipped": 0,
             "streams_removed": 0,
             "channels_removed": 0,
@@ -1239,6 +1588,11 @@ class AutoCreationEngine:
         # Pass 2: Execute actions on sorted matches
         # =====================================================================
         logger.debug("[AUTO-CREATE-ENGINE] Executing actions for %s matched streams", len(sorted_entries))
+        # Distinct channels merged into across the whole run. Unioned from each
+        # stream's exec_ctx.merged_channel_ids (populated at the add_result
+        # chokepoint), so it stays consistent with streams_merged no matter which
+        # path produced the merge (bd-0emgo.4).
+        channels_touched_ids: set = set()
         for stream, winning_rule, losing_rules, stream_rules_log in sorted_entries:
             # Skip struck-out streams if the winning rule has skip_struck_streams enabled
             if getattr(winning_rule, 'skip_struck_streams', False) and stream.stream_id in self._struck_stream_ids:
@@ -1292,7 +1646,8 @@ class AutoCreationEngine:
                     action, stream, exec_ctx, winning_rule.target_group_id,
                     normalization_group_ids=winning_rule.get_normalization_group_ids(),
                     match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False)),
-                    rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None)
+                    rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None),
+                    rule_id=winning_rule.id,
                 )
 
                 action_entry = {
@@ -1349,6 +1704,9 @@ class AutoCreationEngine:
             results["streams_merged"] += exec_ctx.streams_merged
             results["streams_skipped"] += exec_ctx.streams_skipped
             results["streams_removed"] += exec_ctx.streams_removed
+            # Union this stream's merged-into channels into the run-wide set
+            # (bd-0emgo.4); len() becomes channels_touched after the loop.
+            channels_touched_ids.update(exec_ctx.merged_channel_ids)
             # BD-F (bd-a5lb2): aggregate per-stream pending-merge enqueues
             # so the pipeline result surfaces a total the M3U-refresh
             # response can pass to BD-J's toast handler. Includes both
@@ -1440,6 +1798,19 @@ class AutoCreationEngine:
         # =====================================================================
         await executor.prune_merge_streams(results, dry_run)
 
+        # Distinct-channel count: how many channels had at least one stream
+        # merged into them this run. Unioned across streams from the add_result
+        # chokepoint (exec_ctx.merged_channel_ids), which fires for EVERY
+        # merge_stream result — merge_streams action AND create_channel
+        # if_exists=merge AND any future merge path — so it can never drift from
+        # streams_merged (bd-0emgo.4: a live dry-run reported streams_merged=26
+        # but channels_touched=0 when the count was derived from a scattered
+        # call-site dict that the create_channel merge path missed). This is the
+        # honest label for "Channels touched by merges" as opposed to
+        # channels_updated, which counts only genuine property updates
+        # (logo/tvg/epg/number/etc.).
+        results["channels_touched"] = len(channels_touched_ids)
+
         # =====================================================================
         # Pass 3: Re-sort existing channels for rules with sort_field
         # =====================================================================
@@ -1515,7 +1886,8 @@ class AutoCreationEngine:
         logger.debug("[AUTO-CREATE-ENGINE] Starting stream reorder within channels")
         await self._reorder_channel_streams(
             rules, rule_channel_order_streams, results, dry_run,
-            settings=settings, stream_m3u_map=stream_m3u_map
+            settings=settings, stream_m3u_map=stream_m3u_map,
+            custom_stream_ids=custom_stream_ids,
         )
 
         # =====================================================================
@@ -2298,6 +2670,78 @@ class AutoCreationEngine:
         finally:
             session.close()
 
+    async def _capture_snapshot(self, execution_id: int) -> None:
+        """Persist a pre-run AutoCreationSnapshot for ``execution_id`` (ADR-010).
+
+        Serializes the manual (non-Dispatcharr-auto-created) channel<->stream
+        state from the already-loaded in-memory ``self._existing_channels`` —
+        no per-channel API call, no N+1 (ADR-010 §D2). One row per execution,
+        linked 1:1 via FK.
+
+        Per-channel payload (STREAM IDS ONLY — never URLs, §D1):
+        ``{id, name, channel_group_id, epg_data_id, tvg_id, stream_ids:[int]}``
+
+        Channels where ``auto_created`` is truthy are EXCLUDED (§D3) — they are
+        Dispatcharr-owned, regenerable state that Dispatcharr re-derives on
+        every refresh; restoring them would fight Dispatcharr's own sync and
+        bloat the snapshot. The filter mirrors ``channels.py:614``'s
+        ``not ch.get("auto_created", False)``.
+
+        Capture-failure policy (ADR-010 §D2, uc51o.2 v1 default):
+        LOG-AND-PROCEED. A capture failure must NOT abort the mutating run —
+        it logs a WARNING and the run continues with NO snapshot (the run is
+        still revertible via the legacy entity-rollback). It does NOT raise.
+        """
+        try:
+            channels = []
+            for ch in (self._existing_channels or []):
+                # §D3: exclude Dispatcharr-auto-created-from-groups channels.
+                if ch.get("auto_created", False):
+                    continue
+                # §D1: stream IDs only. Match the executor's own coercion
+                # (executor.py:918) — Dispatcharr embeds streams as a list of
+                # IDs (or, defensively, dicts carrying an "id").
+                stream_ids = [
+                    s["id"] if isinstance(s, dict) else s
+                    for s in ch.get("streams", [])
+                ]
+                channels.append({
+                    "id": ch.get("id"),
+                    "name": ch.get("name"),
+                    "channel_group_id": ch.get("channel_group_id"),
+                    "epg_data_id": ch.get("epg_data_id"),
+                    "tvg_id": ch.get("tvg_id"),
+                    "stream_ids": stream_ids,
+                })
+
+            session = get_session()
+            try:
+                snapshot = AutoCreationSnapshot(
+                    execution_id=execution_id,
+                    snapshot_time=datetime.utcnow(),
+                    channel_count=len(channels),
+                )
+                snapshot.set_channels_data({"channels": channels})
+                session.add(snapshot)
+                session.commit()
+                logger.info(
+                    "[AUTO-CREATE-ENGINE] Captured pre-run snapshot for "
+                    "execution_id=%s (%s manual channels)",
+                    execution_id, len(channels),
+                )
+            finally:
+                session.close()
+        except Exception as e:
+            # Log-and-proceed: never abort the mutating run on a capture
+            # failure. The run remains revertible via the legacy
+            # entity-rollback; the execution simply has no snapshot.
+            logger.warning(
+                "[AUTO-CREATE-ENGINE] Failed to capture pre-run snapshot for "
+                "execution_id=%s; run proceeds WITHOUT a snapshot (legacy "
+                "rollback still available): %s",
+                execution_id, e,
+            )
+
     async def _record_conflict(
         self,
         execution: AutoCreationExecution,
@@ -2359,7 +2803,14 @@ class AutoCreationEngine:
             logger.error("[AUTO-CREATE-ENGINE] Failed to rollback %s %s: %s", entity_type, entity_id, e)
 
     async def _rollback_modified_entity(self, entity: dict):
-        """Rollback a modified entity by restoring its previous state."""
+        """Rollback a modified entity by restoring its previous state.
+
+        WARNING: this is the SNAPSHOT-restore path — it overwrites the channel's
+        FULL stream list from the pre-change snapshot, clobbering any streams a
+        concurrent edit added after the merge. ``_journal_driven_unmerge``
+        (jnzst Q4) is the surgical alternative and is preferred when journal
+        provenance is available; this remains the fallback when it is not.
+        """
         entity_type = entity.get("type")
         entity_id = entity.get("id")
         previous = entity.get("previous", {})
@@ -2371,6 +2822,99 @@ class AutoCreationEngine:
         except Exception as e:
             logger.error("[AUTO-CREATE-ENGINE] Failed to restore %s %s: %s", entity_type, entity_id, e)
 
+    @staticmethod
+    def _added_stream_ids(before_value: dict | None, after_value: dict | None) -> list[int]:
+        """The stream IDs a single journaled merge ADDED (after - before).
+
+        Reads the ``{"stream_ids": [...]}`` lists ``_journal_merge`` wrote.
+        Order-preserving set difference so a re-add of an already-present id is
+        not double-counted. Returns [] when either side is missing/malformed.
+        """
+        try:
+            before = set(before_value.get("stream_ids", []) if before_value else [])
+            after = list(after_value.get("stream_ids", []) if after_value else [])
+        except (AttributeError, TypeError):
+            return []
+        return [sid for sid in after if sid not in before]
+
+    async def _journal_driven_unmerge(self, execution_id: int) -> tuple[bool, int]:
+        """Surgically un-merge a run's fuzzy stream merges (jnzst Q4).
+
+        Reads every ``merge_stream`` journal entry tagged
+        ``batch_id=str(execution_id)``, computes the stream IDs each merge
+        ADDED (after - before), and removes ONLY those from each channel's
+        CURRENT live stream list — preserving streams a concurrent edit added
+        after the merge. This is the un-clobbering alternative to the snapshot
+        restore in ``_rollback_modified_entity``.
+
+        Returns ``(handled, channels_touched)``. ``handled`` is False when no
+        merge journal entries exist for the batch (caller falls back to the
+        snapshot restore); the per-channel before/after lists are then missing,
+        so snapshot restore is the only option.
+        """
+        try:
+            page = journal.get_entries(
+                page=1, page_size=1000,
+                action_type="merge_stream",
+                batch_id=str(execution_id),
+            )
+        except Exception as e:
+            logger.warning(
+                "[AUTO-CREATE-ENGINE] Journal read failed for surgical unmerge "
+                "of execution %s: %s", execution_id, e,
+            )
+            return False, 0
+
+        entries = page.get("results", []) if isinstance(page, dict) else []
+        if not entries:
+            return False, 0
+
+        # Aggregate the stream IDs added per channel across all merges in the run.
+        added_by_channel: dict[int, set[int]] = defaultdict(set)
+        for entry in entries:
+            cid = entry.get("entity_id")
+            if cid is None:
+                continue
+            before = entry.get("before_value")
+            after = entry.get("after_value")
+            # journal.get_entries returns to_dict() form where before/after are
+            # already-parsed dicts; tolerate raw JSON strings defensively too.
+            if isinstance(before, str):
+                before = json.loads(before) if before else None
+            if isinstance(after, str):
+                after = json.loads(after) if after else None
+            for sid in self._added_stream_ids(before, after):
+                added_by_channel[cid].add(sid)
+
+        channels_touched = 0
+        for channel_id, added in added_by_channel.items():
+            if not added:
+                continue
+            try:
+                # Fetch the CURRENT live stream list (not the snapshot) so a
+                # concurrently-added stream survives.
+                channel = await self.client.get_channel(channel_id)
+                current = [
+                    s["id"] if isinstance(s, dict) else s
+                    for s in (channel.get("streams") or [])
+                ]
+                remaining = [sid for sid in current if sid not in added]
+                if remaining != current:
+                    await self.client.update_channel(channel_id, {"streams": remaining})
+                    channels_touched += 1
+                    logger.info(
+                        "[AUTO-CREATE-ENGINE] Surgical unmerge: removed %d stream(s) "
+                        "from channel %s, kept %d (concurrent edits preserved)",
+                        len(current) - len(remaining), channel_id, len(remaining),
+                    )
+            except Exception as e:
+                logger.error(
+                    "[AUTO-CREATE-ENGINE] Surgical unmerge failed for channel %s: %s",
+                    channel_id, e,
+                )
+
+        return True, channels_touched
+
 
 # =============================================================================
 # Sort Helpers
@@ -2381,7 +2925,8 @@ def _smart_sort_streams(
     stats_cache: dict,
     stream_m3u_map: dict,
     channel_name: str = "unknown",
-    settings=None
+    settings=None,
+    custom_stream_ids: set[int] | None = None,
 ) -> list[int]:
     """
     Sort stream IDs using smart sort logic (mirrors stream_prober._smart_sort_streams).
@@ -2395,7 +2940,12 @@ def _smart_sort_streams(
         stream_m3u_map: stream_id -> m3u_account_id
         channel_name: For logging
         settings: DispatcharrSettings instance
+        custom_stream_ids: Set of operator-added custom stream IDs (Dispatcharr
+            is_custom). Drives the ``custom_streams`` criterion. When None/omitted
+            the criterion is inert (scores 0 everywhere) so callers degrade gracefully.
     """
+    if custom_stream_ids is None:
+        custom_stream_ids = set()
     if settings is None:
         # Fallback: resolution-only sort (descending)
         def fallback_key(sid):
@@ -2469,15 +3019,16 @@ def _smart_sort_streams(
             elif criterion == "m3u_priority":
                 # m3u_priority does NOT require a successful probe — it comes
                 # from the m3u account map, so it's always meaningful.
-                # bd-sgtmx / GH #244: custom streams (no m3u_account_id) fall
-                # back to the "custom" key in m3u_priorities so operators can
-                # assign an explicit priority to operator-added streams.
+                # Streams with no M3U account (m3u_account_id is None) use the
+                # "custom" key in m3u_priorities as a defensive fallback. Operator-added
+                # custom streams carry the real "custom" M3U account id and are ranked
+                # by the dedicated "custom_streams" criterion instead (bead ap1ud / GH #244).
                 m3u_priority_value = 0
                 m3u_account_id = stream_m3u_map.get(sid)
                 if m3u_account_id is not None:
                     m3u_priority_value = m3u_priorities.get(str(m3u_account_id), 0)
                 else:
-                    # Custom stream — not backed by an M3U account.
+                    # Account-less stream — defensive "custom" fallback.
                     m3u_priority_value = m3u_priorities.get("custom", 0)
                 values.append(-m3u_priority_value)
 
@@ -2489,6 +3040,13 @@ def _smart_sort_streams(
                 from stream_prober import get_codec_rank
                 codec_value = get_codec_rank(stats.get("video_codec")) if stats else 0
                 values.append(-codec_value)
+
+            elif criterion == "custom_streams":
+                # Binary criterion: 1 if the stream is an operator-added custom
+                # stream (Dispatcharr is_custom), else 0. Negate so custom streams
+                # sort first when ranked highest. Inert if custom_stream_ids not supplied.
+                custom_value = 1 if sid in custom_stream_ids else 0
+                values.append(-custom_value)
 
         return values
 
@@ -2515,7 +3073,15 @@ def _smart_sort_streams(
             return (1, rank) + tuple(compute_criteria_values(stats, sid))
 
         if not stats or stats.get("probe_status") != "success":
-            return (0, 0) + tuple(0 for _ in active_criteria)
+            # custom_streams is a binary criterion that does not require a probe,
+            # so compute it even for unprobed streams (mirrors the prober's
+            # unprobed-stream path). m3u_priority behaviour here is intentionally
+            # left as-is (zeroed when unprobed and deprioritize_failed is off).
+            unprobed_values = [
+                -(1 if sid in custom_stream_ids else 0) if criterion == "custom_streams" else 0
+                for criterion in active_criteria
+            ]
+            return (0, 0) + tuple(unprobed_values)
 
         sort_values = [0, 0]  # 0 = successful stream, 0 = sub-rank (unused)
         sort_values.extend(compute_criteria_values(stats, sid))
@@ -2559,10 +3125,13 @@ def _m3u_account_priority_value(
 ) -> int:
     """Numeric ECM M3U priority for *sid* (0 when unknown).
 
-    Custom streams (operator-added, not from any M3U account) fall back to
-    ``m3u_account_priorities["custom"]`` so the same key used by Smart Sort's
-    ``compute_criteria_values`` applies uniformly across provider-order and
-    quality-tie-break paths that consume this helper (bd-sgtmx, GH #244).
+    Streams with no M3U account (m3u_account_id is None) fall back to the
+    ``m3u_account_priorities["custom"]`` key — a vestigial defensive fallback
+    for account-less streams. Operator-added custom streams belong to the real
+    Dispatcharr "custom" M3U account and are ranked by the dedicated
+    "custom_streams" Smart Sort criterion (bead ap1ud / GH #244), not by this
+    helper. The same key is consumed by Smart Sort's ``compute_criteria_values``
+    and the provider-order / quality-tie-break paths for consistency.
     """
     pri_map = getattr(settings, "m3u_account_priorities", None) or {} if settings is not None else {}
     aid = (stream_m3u_map or {}).get(sid)
@@ -2735,6 +3304,7 @@ def _reorder_streams_for_rule(
     stream_m3u_map: dict,
     channel_name: str,
     settings,
+    custom_stream_ids: set[int] | None = None,
 ) -> list[int]:
     """Dispatch stream reordering based on rule.stream_sort_field."""
     field = (getattr(rule, "stream_sort_field", None) or "").strip()
@@ -2758,7 +3328,8 @@ def _reorder_streams_for_rule(
 
     if not field or field == "smart_sort":
         return _smart_sort_streams(
-            stream_ids, stats_cache, stream_m3u_map, channel_name, settings
+            stream_ids, stats_cache, stream_m3u_map, channel_name, settings,
+            custom_stream_ids=custom_stream_ids,
         )
 
     if field == "provider_order":
@@ -2794,7 +3365,8 @@ def _reorder_streams_for_rule(
         channel_name, field,
     )
     return _smart_sort_streams(
-        stream_ids, stats_cache, stream_m3u_map, channel_name, settings
+        stream_ids, stats_cache, stream_m3u_map, channel_name, settings,
+        custom_stream_ids=custom_stream_ids,
     )
 
 

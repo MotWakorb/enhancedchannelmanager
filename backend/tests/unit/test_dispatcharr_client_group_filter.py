@@ -113,3 +113,97 @@ async def test_unknown_group_id_does_not_silently_return_all():
         request_mock.assert_not_awaited()
     finally:
         await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_group_filter_zero_includes_channel_group_param():
+    """channel_group=0 must NOT be silently dropped (bd-d5z9u).
+
+    The original ``if channel_group:`` guard is falsy for 0, so
+    ``get_channels(channel_group=0)`` behaved identically to
+    ``get_channels()`` and fetched ALL groups. The fix uses
+    ``if channel_group is not None:`` so that 0 is a valid filter value."""
+    client = _make_client()
+    try:
+        request_mock = AsyncMock(
+            return_value=_response(200, {"results": [{"id": 10}], "count": 1})
+        )
+        groups_mock = AsyncMock(
+            return_value=[
+                {"id": 0, "name": "Uncategorized"},
+                {"id": 1, "name": "Sports"},
+            ]
+        )
+
+        with patch.object(client, "_request", request_mock), \
+             patch.object(client, "get_channel_groups", groups_mock):
+            result = await client.get_channels(channel_group=0)
+
+        params = request_mock.await_args.kwargs["params"]
+        assert params["channel_group"] == "Uncategorized"
+        assert result["count"] == 1
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_group_filter_none_omits_channel_group_param():
+    """channel_group=None (the default) must omit the channel_group param
+    entirely, matching the pre-existing no-filter behaviour (bd-d5z9u)."""
+    client = _make_client()
+    try:
+        request_mock = AsyncMock(
+            return_value=_response(200, {"results": [], "count": 0})
+        )
+        groups_mock = AsyncMock(return_value=[{"id": 0, "name": "Uncategorized"}])
+
+        with patch.object(client, "_request", request_mock), \
+             patch.object(client, "get_channel_groups", groups_mock):
+            await client.get_channels(channel_group=None)
+
+        groups_mock.assert_not_awaited()
+        params = request_mock.await_args.kwargs["params"]
+        assert "channel_group" not in params
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_streams_m3u_account_zero_includes_param():
+    """get_streams(m3u_account=0) must NOT be silently dropped (bd-o529v).
+
+    The original ``if m3u_account:`` guard is falsy for 0, so a stream query
+    for provider id 0 behaved like an unfiltered query and returned ALL
+    streams. The fix uses ``if m3u_account is not None:`` (same class as the
+    bd-d5z9u channel_group=0 bug) so 0 is forwarded as a real filter value."""
+    client = _make_client()
+    try:
+        request_mock = AsyncMock(
+            return_value=_response(200, {"results": [{"id": 1}], "count": 1})
+        )
+        with patch.object(client, "_request", request_mock):
+            result = await client.get_streams(m3u_account=0)
+
+        params = request_mock.await_args.kwargs["params"]
+        assert params["m3u_account"] == 0
+        assert result["count"] == 1
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_streams_m3u_account_none_omits_param():
+    """get_streams(m3u_account=None) (the default) must omit the m3u_account
+    param entirely, matching the pre-existing no-filter behaviour (bd-o529v)."""
+    client = _make_client()
+    try:
+        request_mock = AsyncMock(
+            return_value=_response(200, {"results": [], "count": 0})
+        )
+        with patch.object(client, "_request", request_mock):
+            await client.get_streams(m3u_account=None)
+
+        params = request_mock.await_args.kwargs["params"]
+        assert "m3u_account" not in params
+    finally:
+        await client._client.aclose()

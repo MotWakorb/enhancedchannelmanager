@@ -229,3 +229,211 @@ and we don't want a runtime import dependency in the analyzer.
 `test_users_sports_rule_grouping` lock the contract; if the
 evaluator's grouping algorithm ever changes, the analyzer must
 change with it.
+
+---
+
+## Group protection: stream-side fire gate vs merge-target filter
+
+Two distinct mechanisms protect specific channel groups from unwanted
+merges. They are NOT interchangeable — each applies at a different
+point in the pipeline.
+
+| Mechanism | Kind | When it applies | What it checks | Primary use case |
+|---|---|---|---|---|
+| `normalized_name_in_group` / `normalized_name_not_in_group` | **Condition** (stream-side fire gate) | Evaluated before the rule fires | Whether the triggering stream's normalized name IS (or is NOT) already present as a channel in group N | Skip the whole rule for a stream if a same-name channel already exists (or doesn't) in a specific group |
+| `target_channel_in_group` / `target_channel_not_in_group` | **`merge_streams` action param** (merge-target filter) | Applied after the merge target channel is resolved | Whether the resolved target channel's group is in (or not in) the provided list | Keep merges OUT of (or ONLY into) specific groups, regardless of how the stream or rule fired |
+
+### Stream-side fire gate (`normalized_name_[not_]in_group`)
+
+These are **condition types** on the rule's condition list. When
+the evaluator reaches one of these, it checks whether a channel
+whose normalized name matches the triggering stream's normalized
+name already exists inside group N:
+
+- `normalized_name_in_group` — fires the rule only when such a
+  channel **exists** in group N.
+- `normalized_name_not_in_group` — fires the rule only when no
+  such channel exists in group N.
+
+**Critical limitation.** These conditions gate whether the rule
+fires at all. Once the rule fires, they have no further effect.
+They do NOT constrain which existing channel a `merge_streams`
+action eventually targets — the merge resolution runs independently
+and may land the stream in any group.
+
+### Merge-target filter (`target_channel_[not_]in_group`)
+
+These are **parameters on a `merge_streams` action dict**, applied
+post-resolution. After the executor resolves a candidate target
+channel (via `target=auto`, `name_exact`, `name_regex`, or
+`tvg_id`), it checks the resolved channel's `channel_group_id`
+against the filter list:
+
+- `target_channel_not_in_group` — **skip** the merge if the
+  resolved channel's group is in this list.
+- `target_channel_in_group` — **skip** the merge if the resolved
+  channel's group is NOT in this list.
+
+Both default to absent (no filter), preserving existing behavior for
+rules that predate this feature. Provide an empty list (`[]`) to
+explicitly no-op one direction while setting the other. Values must
+be integer group IDs; `bool` values are rejected by the schema
+validator.
+
+Action dict example:
+
+```json
+{
+  "type": "merge_streams",
+  "target": "auto",
+  "target_channel_not_in_group": [42, 99]
+}
+```
+
+### Concrete worked example
+
+Scenario: a rule's condition list includes
+`normalized_name_not_in_group=5` (only fire for streams whose
+normalized name is not yet a channel in group 5). The `merge_streams`
+action has `target_channel_not_in_group=[5]` (skip any merge that
+would land in group 5).
+
+1. Stream "Sky Sport 1" arrives. Its normalized name "sky sport 1"
+   is NOT in group 5 — the **stream-side gate passes**, so the rule
+   fires.
+2. The executor resolves the auto merge target and finds an existing
+   channel named "Sky Sport 1" in group 5.
+3. The **merge-target filter** fires: the resolved channel is in
+   group 5, which is excluded. The merge is **skipped** with
+   `skipped=True`; the stream is left unattached.
+
+Without `target_channel_not_in_group`, step 3 would have merged the
+stream into the group-5 channel — the stream-side condition alone
+could not prevent it, because it only checked whether the name
+existed, not whether the merge itself would land there.
+
+> **Cross-reference.** Both parameters are also documented in the
+> `create_auto_creation_rule` MCP tool docstring
+> (`mcp-server/tools/auto_creation.py`, conditions block and
+> `merge_streams` actions block).
+
+---
+
+## Scored-fuzzy rule path (`loose_name_match` + `min_score`)
+
+Shipped in v0.17.3-0006 (bead jnzst). This path adds a callsign-aware, confidence-scored stream→channel matching mode on top of the existing `loose_name_match` boolean. It is opt-in — a `loose_name_match` rule without `min_score` keeps running the legacy fuzzy cascade exactly as before.
+
+### How to activate it
+
+Add `min_score` to a `merge_streams` action that already has `loose_name_match: true`:
+
+```json
+{
+  "type": "merge_streams",
+  "target": "auto",
+  "loose_name_match": true,
+  "min_score": 0.75,
+  "target_channel_in_group": [14, 22],
+  "allow_no_callsign": false
+}
+```
+
+When `min_score` is present, the executor delegates to the unified scoring core (`services.dedup_matcher.score_all`) instead of the legacy cascade. The score is a normalized float in [0.0, 1.0] produced by RapidFuzz `token_set_ratio` on LOCALS-cleaned names, with two override rungs (callsign exact match → 1.0, tvg_id callsign equality → 1.0) that take precedence.
+
+### Required fields and validation
+
+| Field | Type | Required | Notes |
+|-|-|-|-|
+| `loose_name_match` | boolean | Yes (`true`) | Must be `true`; `min_score` has no meaning on the exact path. |
+| `min_score` | float [0.0–1.0] | Yes (to activate scored path) | Floored at `CONFIDENCE_FLOOR` (0.60). A value below the floor is rejected at write time with a `400`. |
+| `target_channel_in_group` | list of integer group IDs | **Yes — non-empty** | A scored-fuzzy rule with no `target_channel_in_group` allowlist is rejected by the schema validator (`400`). This is an intentional safety constraint: an unscoped fuzzy rule was the root cause of a 1,341-false-positive merge incident. |
+| `allow_no_callsign` | boolean | No (default `false`) | Opt-in to matching pairs where at least one side has no parseable callsign. When `true`, such pairs are admitted only at score ≥ 0.90. |
+
+### Scoring precedence (shared core)
+
+The scoring core applies a hard precedence ladder — the same ladder the `fuzzy-preview` endpoint uses:
+
+1. **M1 callsign hard-reject.** If both the stream name and the channel name parse a callsign (e.g. `WBAY`/`WGBA`) and they differ, the pair is rejected unconditionally — score 0.0, verdict `"conflict"`. This fires before any threshold and cannot be overridden.
+2. **tvg_id callsign override.** If the stream's `tvg_id` (or its name) and the channel's `tvg_id` (or its name) parse the same callsign, the score is set to 1.0 (`tvg_id-override`). Only reached when M1 did not fire.
+3. **LOCALS-cleaned fuzzy.** RapidFuzz `token_set_ratio` on names cleaned with the LOCALS cleaner (strips `US |` / state-code / `CITY:` / `DIREC TV` prefixes, dotted sub-channel numbers, superscripts, quality tags like `RAW`/`HD`, and run-together market tokens like `GREENBAY → GREEN BAY`).
+
+### No-callsign opt-in (`allow_no_callsign`)
+
+The default policy requires a parseable FCC callsign on both sides of a match. This is the safe default — without a callsign cross-check, `WGBA 2 (NBC)` scored 0.889 against `WBAY` in the spike that motivated the callsign gate.
+
+Set `allow_no_callsign: true` to admit pairs where at least one side lacks a parseable callsign, subject to the 0.90 floor (`NO_CALLSIGN_FLOOR`). Even with the opt-in, an M1 conflict (different callsigns on both sides) is still never admitted.
+
+### Journal provenance
+
+For each stream matched via the scored-fuzzy path, the executor writes a journal entry with:
+
+- The match `score` (float)
+- `callsign_verdict` (`"match"` or `"absent"`)
+- `signal` — which scoring rung fired (`"callsign-exact"`, `"tvg_id-override"`, `"fuzzy-with-callsign"`, `"fuzzy-no-callsign-floor"`)
+- The stream and channel callsigns (when parsed)
+
+This lets you audit exactly why a merge fired — accessible in the ECM journal tab or via `GET /api/journal`.
+
+### Rollback
+
+Auto-creation executions are rollback-able via `POST /api/auto-creation/executions/{id}/rollback` regardless of whether the run used the scored-fuzzy path or the exact path.
+
+### What is unchanged
+
+- The global exact-match rule path is unchanged. Rules without `min_score` run as before.
+- `match_by` remains a validated no-op (see below).
+- `CONFIDENCE_FLOOR` (0.60) is the same floor used by the interactive stream deduplication (ADR-008 §D2). Both import the constant from `services.dedup_matcher` so they cannot drift.
+
+### Previewing before committing
+
+Use the `GET /api/auto-creation/fuzzy-preview` endpoint (or the `preview_fuzzy_matches` MCP tool) to inspect scored triples before enabling a rule. The preview applies the identical scoring core and admission policy, so it shows exactly what the rule would do. See [`docs/api.md`](api.md) for the endpoint reference.
+
+---
+
+## Matching: `loose_name_match` vs the deprecated `match_by`
+
+### `loose_name_match` (the real control)
+
+`loose_name_match` is a **boolean parameter on a `merge_streams`
+action** (default `false`). It controls whether `target=auto`
+matching uses strict or fuzzy resolution:
+
+- `false` (default) — merge into an existing channel only on
+  **exact normalized-name equality** (case-insensitive). The stream's
+  normalized name must equal the channel's normalized name character
+  for character.
+- `true` — restore the **legacy fuzzy cascade**: core-name
+  match → deparenthesize → word-prefix containment → call-sign
+  lookup. Use when you explicitly want the older broad-matching
+  behavior.
+
+The strict default (`false`) was introduced to fix production
+over-matching where the word-prefix step caused unrelated streams
+(e.g., 75 "Sky Sport *" variants) to be absorbed by a single "Sky
+Sport 4K" channel.
+
+Action dict example:
+
+```json
+{
+  "type": "merge_streams",
+  "target": "auto",
+  "loose_name_match": true
+}
+```
+
+### `match_by` (validated, runtime no-op — back-compat only)
+
+There is **no `exact_match` or `match_strict` parameter** — a common
+misconception. `match_by` accepts `"tvg_id"`, `"normalized_name"`,
+or `"stream_group"` and is validated by the schema, but **it is
+never consumed by the executor at runtime**. It is retained solely
+for backward compatibility of stored rules; changing it does not
+change matching behavior. Use `loose_name_match` to control fuzzy
+vs exact matching.
+
+> **Cross-reference.** Both parameters are documented in the
+> `create_auto_creation_rule` MCP tool docstring
+> (`mcp-server/tools/auto_creation.py`, `merge_streams` actions
+> block, including the explicit `NOTE: match_by is a DEPRECATED
+> no-op` callout).

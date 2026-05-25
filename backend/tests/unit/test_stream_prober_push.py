@@ -187,3 +187,8 @@ async def test_push_swallows_patch_errors():
     with patch("config.get_settings", return_value=mock_settings):
         # Must not raise — probing is never failed by a push error.
         await prober._push_stats_to_dispatcharr(42, _successful_stats())
+
+    # update_stream was actually called — the swallow path was exercised, not skipped.
+    client.update_stream.assert_awaited_once()
+    # get_stream was reached first (prerequisite for the patch attempt).
+    client.get_stream.assert_awaited_once_with(42)

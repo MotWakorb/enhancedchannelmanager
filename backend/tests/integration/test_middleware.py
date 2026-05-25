@@ -70,9 +70,20 @@ class TestRequestTimingMiddleware:
 
     @pytest.mark.asyncio
     async def test_requests_succeed_through_middleware(self, async_client):
-        """Requests should pass through timing middleware without error."""
+        """Timing middleware is transparent: it must not corrupt or swallow responses.
+
+        Distinct from the auth and timeout tests: this assertion verifies the
+        *timing-middleware* property — the middleware passes the handler's response
+        through unchanged (status code and body intact), without altering the
+        response or raising an unhandled exception.
+        """
         response = await async_client.get("/api/health")
         assert response.status_code == 200
+        # Timing-middleware-specific check: the handler's response body must
+        # arrive intact — the middleware must not consume or corrupt it.
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert "service" in data
 
     @pytest.mark.asyncio
     async def test_multiple_requests_succeed(self, async_client):

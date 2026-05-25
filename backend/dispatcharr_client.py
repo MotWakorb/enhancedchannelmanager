@@ -290,7 +290,7 @@ class DispatcharrClient:
         params = {"page": page, "page_size": page_size}
         if search:
             params["search"] = search
-        if channel_group:
+        if channel_group is not None:
             group_name = await self._channel_group_name_for_id(channel_group)
             if group_name is None:
                 logger.warning(
@@ -431,7 +431,10 @@ class DispatcharrClient:
             params["search"] = search
         if channel_group_name:
             params["channel_group_name"] = channel_group_name
-        if m3u_account:
+        # Use `is not None` so m3u_account=0 (a valid provider id) is not silently
+        # dropped by a falsy guard (bd-o529v; same class as the bd-d5z9u
+        # channel_group=0 bug in get_channels).
+        if m3u_account is not None:
             params["m3u_account"] = m3u_account
 
         response = await self._request("GET", "/api/channels/streams/", params=params)

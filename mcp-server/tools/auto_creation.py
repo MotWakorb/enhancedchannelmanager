@@ -215,6 +215,8 @@ def register(mcp: FastMCP):
                 f"  Channels {'would be ' if dry_run else ''}created: "
                 f"{result.get('channels_created', 0)}"
             )
+            lines.append(f"  Stream merges: {result.get('streams_merged', 0)}")
+            lines.append(f"  Channels touched: {result.get('channels_touched', 0)}")
             lines.append(f"  Channels updated: {result.get('channels_updated', 0)}")
             lines.append(f"  Groups created: {result.get('groups_created', 0)}")
             lines.append(f"  Streams skipped: {result.get('streams_skipped', 0)}")
@@ -446,7 +448,13 @@ def register(mcp: FastMCP):
                   has_channel — stream already assigned to a channel
                   channel_exists_with_name — exact channel name exists
                   channel_exists_matching — regex match on existing channels
-                  normalized_name_in_group / normalized_name_not_in_group
+                  normalized_name_in_group / normalized_name_not_in_group —
+                    STREAM-side: fire only when the triggering stream's
+                    normalized name IS (or is NOT) already present in group N.
+                    These gate whether the rule FIRES; they do NOT constrain
+                    which existing channel a merge_streams action targets. To
+                    keep merges OUT of a group, use the merge_streams action's
+                    target_channel_not_in_group param (see actions below).
                   normalized_name_exists / normalized_name_not_exists
                   always / never — always or never matches
                 Example: [{"type": "stream_group_contains", "value": "USA | Entertainment", "connector": "and"}]
@@ -455,7 +463,35 @@ def register(mcp: FastMCP):
                   create_group — params: name_template, if_exists (skip/use_existing)
                   create_channel — params: name_template, if_exists (skip/merge/merge_only/update),
                                    channel_number (e.g. "800-99999" for range)
-                  merge_streams — params: name_template, match_by (tvg_id/normalized_name/stream_group)
+                  merge_streams — params: target (auto/existing_channel/new_channel),
+                                   find_channel_by (name_exact/name_regex/tvg_id) + find_channel_value,
+                                   max_streams_per_channel, remove_non_matching (bool),
+                                   loose_name_match (bool, default false). With target=auto the
+                                   stream merges into an existing channel only on EXACT normalized-
+                                   name equality; set loose_name_match=true to restore the legacy
+                                   fuzzy cascade (core-name/deparen/word-prefix/call-sign).
+                                   SCORED FUZZY (OTA/callsign locals): set loose_name_match=true AND
+                                   min_score (float, 0.60-1.00) to use the unified scoring core
+                                   instead of the legacy cascade. The scored path applies a callsign
+                                   HARD-REJECT (a WBAY stream never merges into a WGBA channel
+                                   regardless of name similarity), a tvg_id-callsign override, and a
+                                   Locals fuzzy fallback. A scored-fuzzy rule REQUIRES a non-empty
+                                   target_channel_in_group allowlist (it is refused otherwise) and,
+                                   by default, a parseable callsign on BOTH sides; set
+                                   allow_no_callsign=true to admit no-callsign pairs (only at
+                                   score>=0.90). Optional tie_break (lowest_id/highest_score) and
+                                   max_candidates. Per-merge score + provenance is written to the
+                                   journal. Legacy loose rules WITHOUT min_score are unchanged.
+                                   NOTE: match_by is a DEPRECATED no-op (validated but never
+                                   consumed at runtime) — use loose_name_match to control matching.
+                                   target_channel_not_in_group (list[int], default absent) — TARGET-
+                                   channel group filter: after the merge target is resolved, SKIP
+                                   the merge if the resolved channel's group is in this list. This
+                                   is the "keep merges OUT of group N" guard (the stream-side
+                                   normalized_name_not_in_group condition cannot do this). Optional
+                                   complement target_channel_in_group (list[int]) only merges when
+                                   the resolved channel's group IS in the list. Both default to
+                                   absent (no filter); they ride inside the action dict.
                   assign_logo — params: value (URL or empty for stream logo)
                   assign_tvg_id — params: value
                   assign_epg — params: epg_id, set_tvg_id (bool)
@@ -573,7 +609,9 @@ def register(mcp: FastMCP):
             m3u_account_id: M3U account filter
             target_group_id: Target channel group ID
             conditions: Replacement conditions list (see create_auto_creation_rule for types)
-            actions: Replacement actions list (see create_auto_creation_rule for types)
+            actions: Replacement actions list (see create_auto_creation_rule for types,
+                including the merge_streams scored-fuzzy path: loose_name_match + min_score
+                + required target_channel_in_group allowlist + optional allow_no_callsign)
             run_on_refresh: Run automatically when M3U refreshes
             stop_on_first_match: Stop matching after first rule matches a stream
             sort_field: Field to sort channels by
@@ -620,6 +658,15 @@ def register(mcp: FastMCP):
     async def list_auto_creation_executions(limit: int = 10) -> str:
         """List recent auto-creation pipeline executions.
 
+        Each line ends with a snapshot marker (ADR-010):
+          - ``[snapshot]`` — the run captured a pre-run channel/stream snapshot,
+            so it is FULLY revertible via restore_auto_creation_snapshot (the
+            whole-run revert re-adds removed streams + restores drifted
+            metadata). rollback_auto_creation also uses the snapshot for these.
+          - ``[no snapshot]`` — a dry-run, a legacy run, or a run whose snapshot
+            capture failed. Only the narrower rollback_auto_creation applies
+            (deletes created channels, un-merges run-added streams).
+
         Args:
             limit: Number of executions to return (default 10)
         """
@@ -639,7 +686,12 @@ def register(mcp: FastMCP):
                 created = ex.get("created_at", ex.get("timestamp", "?"))
                 channels = ex.get("channels_created", ex.get("created", 0))
                 dry = " (dry run)" if ex.get("dry_run") else ""
-                lines.append(f"  #{eid}: {status} — {channels} channels{dry} ({created})")
+                # has_snapshot (ADR-010 §D6) tells the operator/agent which runs
+                # are fully revertible via restore_auto_creation_snapshot.
+                snap = "[snapshot]" if ex.get("has_snapshot") else "[no snapshot]"
+                lines.append(
+                    f"  #{eid}: {status} — {channels} channels{dry} {snap} ({created})"
+                )
 
             return "\n".join(lines)
         except Exception as e:
@@ -648,7 +700,25 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def rollback_auto_creation(execution_id: int) -> str:
-        """Rollback an auto-creation execution, deleting all channels it created.
+        """Rollback an auto-creation execution.
+
+        Undoes everything the run did:
+          - DELETES every channel (and group) the run created.
+          - UN-MERGES streams the run added to PRE-EXISTING channels — each
+            touched channel is restored to its exact pre-run stream set. If the
+            run merged several streams into the same channel, the cumulative
+            snapshots are replayed in reverse so the ORIGINAL stream list wins
+            (bd-a7okb), not an intermediate state.
+
+        Guarantee: a successful rollback returns the affected channels to their
+        pre-run state — created channels gone, merged streams removed.
+
+        Caveat — no restore data: an execution that recorded NEITHER created NOR
+        modified entities (a legacy run from before entity tracking, or a run
+        that changed nothing) cannot be guaranteed reversible. Rather than mark
+        it rolled_back and report a phantom clean rollback, the engine REFUSES
+        and this tool surfaces the refusal. The execution's status is left
+        unchanged.
 
         Args:
             execution_id: The execution ID to rollback
@@ -658,20 +728,176 @@ def register(mcp: FastMCP):
             result = await client.call_endpoint(
                 ENDPOINTS["ac_rollback"], path_args={"execution_id": execution_id}, timeout=300.0,
             )
+            # Defensive: if the engine refusal (or any failure) reaches us as a
+            # dict (success False / error) instead of an HTTP error, surface it
+            # rather than printing a phantom clean-rollback line. (The live
+            # backend turns engine refusals into HTTP 400, which arrives via the
+            # except branch below — this guards direct/changed call paths.)
+            if isinstance(result, dict) and (result.get("success") is False or result.get("error")):
+                return (
+                    f"Cannot roll back execution {execution_id}: "
+                    f"{result.get('error', 'rollback refused')}"
+                )
             # Engine returns entities_removed (channels deleted) and
-            # entities_restored (streams/entities un-merged). Neither
-            # "deleted" nor "channels_deleted" exists in the response shape
-            # — reading those keys always produced 0 (bd-1wq7z.5).
-            removed = result.get("entities_removed", 0)
-            restored = result.get("entities_restored", 0)
+            # entities_restored (channels whose pre-run stream set was put back,
+            # i.e. streams un-merged). Neither "deleted" nor "channels_deleted"
+            # exists in the response shape — reading those keys always produced
+            # 0 (bd-1wq7z.5).
+            removed = result.get("entities_removed", 0) if isinstance(result, dict) else 0
+            restored = result.get("entities_restored", 0) if isinstance(result, dict) else 0
             msg = f"Execution {execution_id} rolled back. {removed} channel(s) deleted"
             if restored:
-                msg += f", {restored} entit{'y' if restored == 1 else 'ies'} restored"
+                msg += (
+                    f", {restored} channel(s) restored to their pre-run stream "
+                    f"sets (streams un-merged)"
+                )
             msg += "."
             return msg
         except Exception as e:
+            # The backend converts the engine's no-restore-data refusal into an
+            # HTTP 400 whose detail is the refusal message; call_endpoint raises
+            # it here. Surface it clearly so the user sees WHY nothing changed.
             logger.error("[MCP] rollback_auto_creation failed: %s", e)
             return f"Error rolling back execution {execution_id}: {e}"
+
+    @mcp.tool()
+    async def restore_auto_creation_snapshot(
+        execution_id: int, confirm: bool = False
+    ) -> str:
+        """Full WHOLE-RUN revert of an auto-creation run from its pre-run snapshot (ADR-010 §D8).
+
+        This is the FULLER revert (vs rollback_auto_creation). It restores the
+        entire snapshotted channel<->stream state captured BEFORE the run mutated
+        anything: re-adds streams the run REMOVED, removes streams it added,
+        restores drifted metadata (channel group / EPG link / tvg id). Only runs
+        that captured a snapshot are eligible — check list_auto_creation_executions
+        for the ``[snapshot]`` marker first. Runs without a snapshot (dry-runs,
+        legacy runs, capture-failure runs) are NOT restorable this way; use
+        rollback_auto_creation for those (this tool returns guidance to do so).
+
+        SAFETY — OPTIMISTIC OVERWRITE, NOT UNDOABLE (ADR-010 §D5):
+        A restore spans EVERY channel in the snapshot (often hundreds). It
+        UNCONDITIONALLY OVERWRITES each channel's CURRENT stream assignments and
+        metadata with the pre-run state — any manual edit or Dispatcharr drift
+        made AFTER the run and BEFORE this revert is LOST. There is no conflict
+        detection and the restore CANNOT be undone.
+
+        Because of that blast radius this tool REQUIRES explicit confirmation:
+          - confirm=False (default) → NOTHING is restored. The tool returns the
+            warning (including how many channels would be overwritten, when the
+            snapshot was taken) and tells you to re-invoke with confirm=true.
+          - confirm=true → the restore runs. Partial failures (a channel deleted
+            since the run, a stream id that no longer resolves) are SURFACED
+            per-channel — never a silent partial success.
+
+        Args:
+            execution_id: The execution whose pre-run snapshot to restore.
+            confirm: Must be true to actually perform the (destructive,
+                non-undoable) restore. Defaults to false, which only returns the
+                warning and does NOT touch any channel.
+        """
+        client = get_ecm_client()
+
+        # confirm=False: refuse to act. Surface the §D5 warning + blast radius
+        # WITHOUT calling the restore endpoint at all. Try to read the snapshot's
+        # channel_count so the operator sees how many channels would be
+        # overwritten before re-invoking; best-effort — never block the warning.
+        if not confirm:
+            channel_count = None
+            snapshot_time = None
+            try:
+                snap = await client.call_endpoint(
+                    ENDPOINTS["ac_get_execution_snapshot"],
+                    path_args={"execution_id": execution_id},
+                )
+                if isinstance(snap, dict):
+                    channel_count = snap.get("channel_count")
+                    snapshot_time = snap.get("snapshot_time")
+            except Exception as e:
+                # No snapshot (404) is the common case here — tell the caller to
+                # use rollback_auto_creation instead, and do NOT pretend a
+                # restore is pending.
+                if "404" in str(e) or "no snapshot" in str(e).lower():
+                    return (
+                        f"Execution {execution_id} has NO pre-run snapshot, so it "
+                        f"cannot be restored with this tool. Use "
+                        f"rollback_auto_creation({execution_id}) instead (it deletes "
+                        f"channels the run created and un-merges streams it added)."
+                    )
+                logger.warning(
+                    "[MCP] restore_auto_creation_snapshot: could not read snapshot "
+                    "metadata for execution %s: %s", execution_id, e,
+                )
+
+            count_phrase = (
+                f"{channel_count} channel(s)" if channel_count is not None
+                else "every channel in the snapshot"
+            )
+            taken_phrase = f" (snapshot taken {snapshot_time})" if snapshot_time else ""
+            return (
+                f"CONFIRMATION REQUIRED — restore NOT performed.\n\n"
+                f"Restoring execution {execution_id} will OVERWRITE the current "
+                f"stream assignments and metadata of {count_phrase} with the "
+                f"pre-run state{taken_phrase}. Any changes made after the run "
+                f"(manual edits, Dispatcharr drift) WILL BE LOST. This is an "
+                f"optimistic overwrite with no conflict detection and CANNOT be "
+                f"undone.\n\n"
+                f"To proceed, re-invoke with confirm=true: "
+                f"restore_auto_creation_snapshot(execution_id={execution_id}, confirm=true)"
+            )
+
+        # confirm=True: perform the restore. ``confirm`` is a query param on the
+        # backend (ADR-010 §D8) — pass it through the contract.
+        try:
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_restore_snapshot"],
+                path_args={"execution_id": execution_id},
+                query={"confirm": True},
+                timeout=300.0,
+            )
+        except Exception as e:
+            # 404 → no snapshot: point at the narrower rollback path (§D8 step 1).
+            if "404" in str(e) or "no snapshot" in str(e).lower():
+                return (
+                    f"Execution {execution_id} has NO pre-run snapshot, so it "
+                    f"cannot be restored. Use rollback_auto_creation({execution_id}) "
+                    f"instead."
+                )
+            logger.error("[MCP] restore_auto_creation_snapshot failed: %s", e)
+            return f"Error restoring snapshot for execution {execution_id}: {e}"
+
+        if not isinstance(result, dict):
+            return f"Snapshot restore for execution {execution_id} returned an unexpected response."
+
+        # Defensive: a no_snapshot signal that arrives as a dict instead of HTTP
+        # 404 (changed/direct call paths) → same guidance, not a phantom success.
+        if result.get("no_snapshot"):
+            return (
+                f"Execution {execution_id} has NO pre-run snapshot, so it cannot "
+                f"be restored. Use rollback_auto_creation({execution_id}) instead."
+            )
+
+        removed = result.get("removed_channels", 0)
+        restored = result.get("restored_channels", 0)
+        failed_channels = result.get("failed_channels", []) or []
+
+        msg = (
+            f"Snapshot restore for execution {execution_id}: "
+            f"{restored} channel(s) restored to their pre-run state, "
+            f"{removed} run-created channel(s) deleted."
+        )
+        if failed_channels:
+            # Partial failure — surface exactly which channels failed and why.
+            detail = "; ".join(
+                f"#{fc.get('id', '?')} {fc.get('name', '')}".strip()
+                + (f" ({fc.get('error')})" if fc.get("error") else "")
+                for fc in failed_channels
+            )
+            msg += (
+                f"\nWARNING — {len(failed_channels)} channel(s) FAILED to restore "
+                f"(re-running the restore is safe and idempotent): {detail}"
+            )
+        return msg
 
     @mcp.tool()
     async def analyze_auto_creation_rules(bundle_path: str | None = None) -> str:

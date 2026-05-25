@@ -6,37 +6,46 @@ name: "ECM CodeQL Configuration"
 # CodeQL's static analysis cannot trace through Python's logging framework
 # internals, so we exclude this query to avoid false positives.
 #
-# Unused global variable (py/unused-global-variable) on Alembic migration
-# files: every migration declares module-level identifiers (`revision`,
-# `down_revision`, `branch_labels`, `depends_on`) that Alembic reads via
-# runtime module introspection (getattr on the loaded migration module).
-# CodeQL's static analysis cannot see the framework consuming these, so
-# every new migration file generates 4 note-severity false positives
-# (see PR #110, alerts 1466-1469 dismissed as false-positive). Exclusion
-# is scoped to backend/alembic/versions/** only — all other CodeQL queries
-# (including SQL injection) still run against migration files.
+# PATH-SCOPING LIMITATION (bd-aqu3f, 2026-05-25): The `paths:` sub-key under
+# `query-filters.exclude` is NOT a supported property in the CodeQL action v4
+# config schema. The official docs (customizing-your-advanced-setup-for-code-scanning)
+# document only `id` and `tags` as valid exclude properties; `paths` has no
+# effect and is silently ignored. Evidence: bd-jmi1c added a `paths:`-scoped
+# exclusion for py/weak-sensitive-data-hashing (backend/dispatcharr_client.py)
+# but the alert still fired, resolved only via per-alert API dismissal. The
+# py/unused-global-variable `paths:` entry was also silently ignored — the
+# exclusion was already functioning repo-wide. The `paths:` sub-keys are
+# removed here to make the actual behavior explicit. See §Path-scoping
+# limitation in docs/security/codeql-config.md for the full investigation.
 #
-# Weak sensitive data hashing (py/weak-sensitive-data-hashing) on the
-# Dispatcharr HTTP client (backend/dispatcharr_client.py): the rule is
-# correctly aimed at password-storage hashing — where SHA-256/SHA-512 are
-# too fast for password verification (rainbow tables, dictionary attacks).
-# This file's `_settings_hash()` does NOT store or compare passwords; it
-# derives a process-local cache key (HMAC-SHA-256 with a `secrets.token_bytes`
-# salt) used by `get_client()` to detect when settings have changed and the
-# singleton client needs rebuilding. The hash output is never persisted,
-# never displayed, and never leaves memory. Password-hashing for ECM users
-# lives in backend/auth/ (which correctly uses bcrypt) and is not affected
-# by this exclusion. Scope is `backend/dispatcharr_client.py` only — any
-# future weak-hashing of sensitive data in other files still triggers the
-# rule. See bd-jmi1c P2-3 and the inline docstring on `_settings_hash`.
+# Unused global variable (py/unused-global-variable): suppressed repo-wide.
+#
+# Original intent was Alembic migration files only — every migration declares
+# module-level identifiers (`revision`, `down_revision`, `branch_labels`,
+# `depends_on`) that Alembic reads via runtime introspection (getattr on the
+# loaded module). CodeQL cannot see the framework consuming them: 4 note-
+# severity false positives per migration file (PR #110, alerts 1466-1469,
+# dismissed as false-positive). Repo-wide suppression is safe: the global
+# one-shot latch pattern used in config.py and bandwidth_tracker.py also
+# generates false positives (bd-mqtrq) — suppression correctly covers both.
+# No real unused-global findings have been observed in ECM that would be
+# masked by this exclusion.
+#
+# Weak sensitive data hashing (py/weak-sensitive-data-hashing): suppressed
+# repo-wide.
+#
+# Original intent was backend/dispatcharr_client.py only, where `_settings_hash()`
+# derives a process-local HMAC-SHA-256 cache key (with a `secrets.token_bytes`
+# salt). The rule targets password-storage hashing; this usage does NOT store
+# or compare passwords — hash output is never persisted, never displayed, and
+# never leaves memory. Password-hashing for ECM users lives in backend/auth/
+# (correctly uses bcrypt). Per-alert API dismissal already on record (bd-jmi1c
+# P2-3). Repo-wide suppression is safe: no other ECM code hashes sensitive
+# data with a weak algorithm; the auth subsystem uses bcrypt exclusively.
 query-filters:
   - exclude:
       id: py/log-injection
   - exclude:
       id: py/unused-global-variable
-      paths:
-        - backend/alembic/versions/**
   - exclude:
       id: py/weak-sensitive-data-hashing
-      paths:
-        - backend/dispatcharr_client.py

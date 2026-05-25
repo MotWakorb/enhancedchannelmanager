@@ -24,10 +24,16 @@ NOT correlate** across the NAT boundary, so attribution cannot be an IP
 join. Instead it is a per-channel **set reconciliation**:
 
 * **Eligible connections** = Dispatcharr connections on the channel with
-  NO URL identity (no username embedded in their XC/M3U URL). Connections
-  WITH a URL username keep the bd-gy5nd provider/hostname attribution
-  path and are excluded here. This "no-URL-identity" test is the
-  discriminator that replaces the IP gate.
+  no per-client identity. The LIVE discriminator is the Dispatcharr
+  ACCOUNT identity (``has_account_identity``, bd-rools): a connection with
+  a positive ``user_id`` is a genuine direct-IPTV subscriber, keeps the
+  bd-gy5nd provider/hostname attribution path, and is excluded here. The
+  original "no-URL-identity" discriminator (``has_url_identity`` /
+  :func:`url_embeds_username`) is RETAINED-BUT-NOT-WIRED (bd-4w9w6 /
+  bd-spzeu): it is always ``False`` in production because the only URL
+  available at the call sites is the channel's SHARED upstream provider
+  URL, not a per-client signal. It is kept as dormant scaffolding for a
+  future per-client credentialed-URL signal, not deleted.
 * **Candidate users** = the distinct media-server users the resolvers
   matched to the channel.
 * **Assignment** = each user assigned to AT MOST ONE connection
@@ -136,6 +142,24 @@ _XC_BARE_PATH_RE = re.compile(
 def url_embeds_username(url: Optional[str]) -> bool:
     """True when a stream URL embeds XC/M3U credentials (a "URL identity").
 
+    **RETAINED-BUT-NOT-WIRED (bd-spzeu / dormant-code rule).** This function
+    and the ``has_url_identity`` branch of :func:`eligible_connections` are
+    PRODUCTION-DEAD: no live call site passes a per-client credentialed URL
+    into the reconciler. Both production call sites
+    (``routers.stats._build_attribution_connections`` and
+    ``bandwidth_tracker._build_persisted_connection``) hardcode
+    ``has_url_identity=False`` because bd-4w9w6 proved the only URL available
+    there is the channel's SHARED UPSTREAM provider URL — that is the
+    operator's account, NOT a per-client identity, and using it dropped every
+    media-server viewer to User #0. The live per-connection discriminator is
+    now :func:`has_dispatcharr_account_identity` (``has_account_identity``).
+
+    This def and its unit tests are intentionally KEPT, not deleted: they are
+    the ready-made discriminator for the day Dispatcharr (or a future caller)
+    surfaces a genuine PER-CLIENT credentialed stream URL. If that signal
+    appears, wire it into both call sites; until then this code is dormant by
+    design. Do NOT delete it as "dead code".
+
     Detects the two common Xtream-Codes credential surfaces:
 
     * Query form: ``...get.php?username=X&password=Y`` (the M3U-playlist
@@ -144,10 +168,12 @@ def url_embeds_username(url: Optional[str]) -> bool:
       ``movie``/``series`` variants, plus the bare
       ``/<user>/<pass>/<id>`` form without a leading type segment).
 
-    A connection whose active stream URL embeds credentials is a genuine
-    direct-IPTV client — it is attributed via the bd-gy5nd
-    provider/hostname path and EXCLUDED from media-server reconciliation.
-    This is the discriminator that replaces the IP gate.
+    A connection whose active stream URL embeds credentials would be a genuine
+    direct-IPTV client — attributed via the bd-gy5nd provider/hostname path
+    and EXCLUDED from media-server reconciliation. This was the original
+    discriminator that replaced the IP gate (bd-mlcla); it was superseded by
+    the account-identity discriminator (bd-4w9w6 / bd-rools) and is now
+    dormant per the note above.
 
     Returns ``False`` for empty / unparsable / non-XC URLs (e.g. a
     Dispatcharr proxy URL with no embedded credentials) so those
@@ -282,14 +308,17 @@ class Connection:
             :func:`eligible_connections`; this field lets the caller pass
             the full connection list and let the module do the filtering.
 
-            **bd-4w9w6 / bd-rools:** the call sites no longer derive this
-            from the channel's shared upstream URL (that conflated channel
-            SOURCE with client IDENTITY and dropped every media-server
-            viewer to User #0). The per-client discriminator is now
-            :attr:`has_account_identity`. ``has_url_identity`` is retained
-            for the pure-reconciler API and any future caller that has a
-            genuine per-connection credentialed URL, but both call sites
-            currently set it ``False``.
+            **bd-4w9w6 / bd-rools — RETAINED-BUT-NOT-WIRED (bd-spzeu):** the
+            call sites no longer derive this from the channel's shared upstream
+            URL (that conflated channel SOURCE with client IDENTITY and dropped
+            every media-server viewer to User #0). The live per-client
+            discriminator is now :attr:`has_account_identity`. This field is
+            production-dead — both call sites hardcode it ``False`` — but is
+            kept by design for the pure-reconciler API and any future caller
+            that has a genuine per-connection credentialed URL (see
+            :func:`url_embeds_username`). Do NOT delete it as dead code; it is
+            dormant scaffolding awaiting a per-client URL identity signal that
+            Dispatcharr ``/proxy/ts/status`` does not currently provide.
         has_account_identity: True when this connection carries a genuine
             Dispatcharr ACCOUNT identity — a positive ``user_id`` (and/or a
             non-empty ``username``) on the Dispatcharr ``/proxy/ts/status``
@@ -560,6 +589,15 @@ def eligible_connections(connections: list[Connection]) -> list[Connection]:
     (``has_account_identity``). Both mark a genuine direct-IPTV client
     attributed via the bd-gy5nd provider/hostname path; neither must be
     reconciled against media-server sessions.
+
+    **``has_url_identity`` filter is RETAINED-BUT-NOT-WIRED (bd-spzeu /
+    dormant-code rule).** In production ``has_url_identity`` is always
+    ``False`` (both call sites hardcode it — see :func:`url_embeds_username`
+    for why), so the ``not c.has_url_identity`` predicate below is currently
+    always-true and the LIVE discriminator is ``has_account_identity`` alone.
+    The URL-identity branch is kept intact, not deleted, so the eligibility
+    filter is ready the moment a per-client credentialed URL signal surfaces.
+    Do NOT remove it.
 
     bd-rools (re-fix for the bd-cat70 direct-client cross-attribution):
     excluding account-identity connections is what stops a genuine direct

@@ -956,3 +956,135 @@
   flex-shrink: 0;
   margin-top: 1px;
 }
+
+/* =============================================================================
+   Snapshot-Restore Affordance (ADR-010 uc51o.7)
+   Shared classes used: .action-btn (common.css), .detail-row (this file),
+   .modal-container / .modal-header / .modal-body / .modal-footer (ModalBase.css),
+   .btn-secondary / .btn-danger / .btn-primary (common.css), .spinning (common.css)
+   ============================================================================= */
+
+/* Revert button variant — same size as .action-btn, amber tint on hover
+   to signal the destructive nature before the confirm dialog. */
+.action-btn-revert:hover {
+  color: var(--status-warning, #f59e0b);
+}
+
+/* Legacy-run indicator: shown when has_snapshot=false and mode=execute.
+   Muted icon; not a button — just informational. */
+.execution-no-snapshot {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  color: var(--text-muted);
+  cursor: default;
+  font-size: 18px;
+  opacity: 0.5;
+}
+
+/* Warning banner inside the revert-confirm modal (§D5 mandatory warning). */
+.revert-warning-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  margin-bottom: 12px;
+}
+
+.revert-warning-banner p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.revert-warning-icon {
+  color: var(--status-warning, #f59e0b);
+  font-size: 20px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.revert-warning-detail {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Partial-failure warning in the result summary. */
+.revert-partial-failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  margin-bottom: 12px;
+}
+
+.revert-partial-failure p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+/* Result stat rows — reuse .detail-row defined above. */
+.revert-result-stats {
+  margin-bottom: 12px;
+}
+
+.revert-failed-count {
+  color: var(--status-error, #ef4444);
+  font-weight: 600;
+}
+
+/* Failed-channels list. */
+.revert-failed-channels {
+  margin-top: 8px;
+}
+
+.revert-failed-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 6px;
+}
+
+.revert-failed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.revert-failed-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+}
+
+.revert-failed-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.revert-failed-error {
+  color: var(--status-error, #ef4444);
+  font-style: italic;
+}
