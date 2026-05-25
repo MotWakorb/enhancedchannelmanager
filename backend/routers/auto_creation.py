@@ -1235,7 +1235,7 @@ async def get_auto_creation_executions(
     """Get auto-creation execution history."""
     logger.debug("[AUTO-CREATE] GET /executions - limit=%s offset=%s rule_id=%s status=%s", limit, offset, rule_id, status)
     try:
-        from models import AutoCreationExecution
+        from models import AutoCreationExecution, AutoCreationSnapshot
         session = get_session()
         try:
             query = session.query(AutoCreationExecution)
@@ -1250,8 +1250,32 @@ async def get_auto_creation_executions(
                 AutoCreationExecution.started_at.desc()
             ).offset(offset).limit(limit).all()
 
+            # Derive has_snapshot (ADR-010 §D6) — a boolean from the existence
+            # of an AutoCreationSnapshot row, NOT a denormalized column (which
+            # could drift from the FK truth). uc51o.6 (MCP) and uc51o.7 (UI)
+            # gate the snapshot-restore affordance on this flag. Resolve it with
+            # ONE query over the page's execution ids (an IN over the snapshot
+            # FK index) — never one query per execution (no N+1).
+            page_ids = [e.id for e in executions]
+            snapshotted_ids: set[int] = set()
+            if page_ids:
+                snapshotted_ids = {
+                    row[0]
+                    for row in session.query(
+                        AutoCreationSnapshot.execution_id
+                    ).filter(
+                        AutoCreationSnapshot.execution_id.in_(page_ids)
+                    ).all()
+                }
+
+            execution_dicts = []
+            for e in executions:
+                d = e.to_dict()
+                d["has_snapshot"] = e.id in snapshotted_ids
+                execution_dicts.append(d)
+
             return {
-                "executions": [e.to_dict() for e in executions],
+                "executions": execution_dicts,
                 "total": total,
                 "limit": limit,
                 "offset": offset
@@ -1336,9 +1360,49 @@ async def get_auto_creation_execution_snapshot(execution_id: int):
 
 
 @router.post("/executions/{execution_id}/rollback")
-async def rollback_auto_creation_execution(execution_id: int, _admin=RequireAdminIfEnabled):
-    """Rollback an auto-creation execution. Admin only."""
-    logger.debug("[AUTO-CREATE] POST /executions/%s/rollback", execution_id)
+async def rollback_auto_creation_execution(
+    execution_id: int,
+    confirm: bool = Query(
+        False,
+        description=(
+            "Acknowledgement of the optimistic-overwrite warning (ADR-010 §D5), "
+            "REQUIRED only when the execution has a pre-run snapshot. When a "
+            "snapshot exists, rollback performs a FULL restore that overwrites "
+            "the current stream assignments of every snapshot channel with the "
+            "pre-run state — any changes made after the run will be LOST. "
+            "Executions with NO snapshot ignore this flag and keep the legacy "
+            "delete-created-only behaviour (no confirm needed)."
+        ),
+    ),
+    _admin=RequireAdminIfEnabled,
+):
+    """Rollback an auto-creation execution. Admin only.
+
+    UNIFIED REVERT (ADR-010 §D8, uc51o.5). The behaviour is chosen from whether
+    the execution has a pre-run snapshot:
+
+    * **Snapshot present** — performs the FULL whole-run restore (delegates to
+      the same path as ``/restore-snapshot``): re-adds streams the run removed,
+      removes streams it added, restores drifted metadata. Because this is an
+      OPTIMISTIC OVERWRITE that can clobber edits made after the run, it
+      REQUIRES ``confirm=true``; without it the call is refused with HTTP 409
+      and a message explaining the overwrite. The response carries
+      ``removed_channels`` / ``restored_channels`` / ``failed_channels``.
+    * **No snapshot** — the legacy delete-created-only rollback, BYTE-COMPATIBLE
+      with the pre-uc51o.5 behaviour (no ``confirm`` required). The response
+      carries ``entities_removed`` / ``entities_restored``.
+
+    Status codes:
+      * 409 — the execution has a snapshot and ``confirm`` was not set.
+      * 400 — other guard failures (already rolled back, dry-run, nothing to
+        undo).
+      * 200 — rollback performed (legacy or restore shape; on the restore path
+        ``success`` is False with ``failed_channels`` when any channel failed).
+    """
+    logger.debug(
+        "[AUTO-CREATE] POST /executions/%s/rollback (confirm=%s)",
+        execution_id, confirm,
+    )
     try:
         from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
 
@@ -1348,23 +1412,56 @@ async def rollback_auto_creation_execution(execution_id: int, _admin=RequireAdmi
             client = get_client()
             engine = await init_auto_creation_engine(client)
 
-        result = await engine.rollback_execution(execution_id, rolled_back_by="api")
+        result = await engine.rollback_execution(
+            execution_id, rolled_back_by="api", confirm=confirm,
+        )
 
         if not result["success"]:
-            raise HTTPException(status_code=400, detail=result.get("error", "Rollback failed"))
+            # Snapshot present + no confirm → 409 (acknowledge the overwrite,
+            # uc51o.5). The restore path still returns success=False WITH
+            # restore counts on a partial failure; that is handled below as a
+            # 200 success-with-warnings, so only guard failures land here.
+            if result.get("requires_confirm"):
+                raise HTTPException(status_code=409, detail=result.get("error"))
+            # A restore that was ATTEMPTED returns counts even when success is
+            # False (partial failure) — let that fall through to 200. Only
+            # pre-attempt guard failures (no counts) become 400.
+            if "restored_channels" not in result:
+                raise HTTPException(
+                    status_code=400, detail=result.get("error", "Rollback failed"),
+                )
 
-        # Log to journal
+        # Journal — the description adapts to whichever revert path ran. The
+        # snapshot-restore path returns removed_channels/restored_channels; the
+        # legacy path returns entities_removed/entities_restored.
         rule_name = result.get("rule_name", f"Execution {execution_id}")
-        removed = result.get("entities_removed", 0)
-        restored = result.get("entities_restored", 0)
         session = get_session()
         try:
+            if "restored_channels" in result:
+                # Full snapshot-restore path.
+                removed = result.get("removed_channels", 0)
+                restored = result.get("restored_channels", 0)
+                failed = len(result.get("failed_channels", []))
+                description = (
+                    f"Rolled back '{rule_name}' via snapshot restore: "
+                    f"removed {removed} created channel(s), "
+                    f"restored {restored} channel(s)"
+                    + (f", {failed} failed" if failed else "")
+                )
+            else:
+                # Legacy delete-created-only path.
+                removed = result.get("entities_removed", 0)
+                restored = result.get("entities_restored", 0)
+                description = (
+                    f"Rolled back '{rule_name}': removed {removed} channel(s), "
+                    f"restored {restored} entit{'y' if restored == 1 else 'ies'}"
+                )
             journal.log_entry(
                 category="auto_creation",
                 action_type="rollback",
                 entity_id=execution_id,
                 entity_name=rule_name,
-                description=f"Rolled back '{rule_name}': removed {removed} channel(s), restored {restored} entit{'y' if restored == 1 else 'ies'}"
+                description=description,
             )
         finally:
             session.close()
