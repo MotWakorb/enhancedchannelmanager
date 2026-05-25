@@ -15,6 +15,7 @@ import type {
   ValidationResult,
   RunPipelineEnqueuedResponse,
   RollbackResponse,
+  RestoreSnapshotResponse,
   SchemaResponse,
   ConditionSchema,
   ActionSchema,
@@ -224,6 +225,32 @@ export async function rollbackAutoCreationExecution(id: number): Promise<Rollbac
   return fetchJson<RollbackResponse>(`${API_BASE}/auto-creation/executions/${id}/rollback`, {
     method: 'POST',
   });
+}
+
+/**
+ * Restore an execution from its pre-run snapshot (ADR-010 §D8).
+ *
+ * The ``confirm=true`` query param is the API-level acknowledgement of the
+ * ADR-010 §D5 optimistic-overwrite warning — the UI MUST have shown the
+ * warning before calling this. The backend enforces the param; calls without
+ * it return 400.
+ *
+ * Returns ``RestoreSnapshotResponse`` with ``success``, ``removed_channels``,
+ * ``restored_channels``, and a ``failed_channels`` list for partial failures.
+ * A 200 with ``success: false`` is a partial-failure result — the operation
+ * attempted every channel and at least one failed. The caller must NOT present
+ * this as plain success.
+ *
+ * Status codes:
+ *   - 200 — restore attempted (check ``success`` and ``failed_channels``).
+ *   - 400 — ``confirm`` not set, or the execution is a dry-run / already reverted.
+ *   - 404 — no snapshot for this execution (use ``/rollback`` instead).
+ */
+export async function restoreAutoCreationSnapshot(id: number): Promise<RestoreSnapshotResponse> {
+  return fetchJson<RestoreSnapshotResponse>(
+    `${API_BASE}/auto-creation/executions/${id}/restore-snapshot?confirm=true`,
+    { method: 'POST' },
+  );
 }
 
 // =============================================================================

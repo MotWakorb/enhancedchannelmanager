@@ -312,6 +312,28 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/auto-creation/executions/{execution_id}/rollback",
     ),
+    # ADR-010 §D8 / uc51o.4 — full whole-run snapshot restore. ``confirm`` is a
+    # QUERY param (FastAPI ``Query``), the API-level acknowledgement of the §D5
+    # optimistic-overwrite warning; the restore is refused (400) without it. The
+    # restore_auto_creation_snapshot MCP tool (uc51o.6) routes here.
+    "ac_restore_snapshot": Endpoint(
+        name="ac_restore_snapshot",
+        method="POST",
+        path="/api/auto-creation/executions/{execution_id}/restore-snapshot",
+        query_params=frozenset({"confirm"}),
+    ),
+    # ADR-010 §D6 — read-only pre-run snapshot for an execution. The
+    # restore_auto_creation_snapshot tool reads ``channel_count`` from here on
+    # the confirm=False warning path so the operator sees the blast radius
+    # (how many channels a restore would overwrite) before re-invoking.
+    "ac_get_execution_snapshot": Endpoint(
+        name="ac_get_execution_snapshot",
+        method="GET",
+        path="/api/auto-creation/executions/{execution_id}/snapshot",
+        response_fields=frozenset({
+            "id", "execution_id", "snapshot_time", "channel_count", "channels",
+        }),
+    ),
     # -- channel_groups domain --------------------------------------------
     "groups_list": Endpoint(
         name="groups_list",
