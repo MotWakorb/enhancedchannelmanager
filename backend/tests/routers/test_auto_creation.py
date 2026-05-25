@@ -1350,6 +1350,65 @@ class TestGetExecution:
         assert response.status_code == 404
 
 
+class TestGetExecutionSnapshot:
+    """Tests for GET /api/auto-creation/executions/{execution_id}/snapshot (ADR-010)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_snapshot(self, async_client, test_session):
+        """Returns the pre-run snapshot payload for an execution that has one."""
+        from models import AutoCreationSnapshot
+
+        execution = _create_execution(test_session)
+        snapshot = AutoCreationSnapshot(
+            execution_id=execution.id,
+            snapshot_time=datetime.utcnow(),
+            channel_count=2,
+        )
+        snapshot.set_channels_data({"channels": [
+            {"id": 10, "name": "ESPN", "channel_group_id": 1,
+             "epg_data_id": 99, "tvg_id": "espn.us", "stream_ids": [501, 502]},
+            {"id": 11, "name": "CNN", "channel_group_id": 2,
+             "epg_data_id": None, "tvg_id": "cnn.us", "stream_ids": [601]},
+        ]})
+        test_session.add(snapshot)
+        test_session.commit()
+
+        response = await async_client.get(
+            f"/api/auto-creation/executions/{execution.id}/snapshot"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["execution_id"] == execution.id
+        assert data["channel_count"] == 2
+        assert data["snapshot_time"] is not None
+        assert len(data["channels"]) == 2
+        espn = next(c for c in data["channels"] if c["id"] == 10)
+        assert espn["stream_ids"] == [501, 502]
+        assert espn["tvg_id"] == "espn.us"
+        # IDs only — no URL leakage anywhere in the payload.
+        assert "url" not in espn
+        assert "streams" not in espn
+
+    @pytest.mark.asyncio
+    async def test_returns_404_when_no_snapshot(self, async_client, test_session):
+        """Returns 404 when the execution exists but has no snapshot (dry-run,
+        legacy, or capture-failure run)."""
+        execution = _create_execution(test_session, mode="dry_run")
+
+        response = await async_client.get(
+            f"/api/auto-creation/executions/{execution.id}/snapshot"
+        )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_returns_404_for_nonexistent_execution(self, async_client):
+        """Returns 404 for an execution id with no snapshot row at all."""
+        response = await async_client.get(
+            "/api/auto-creation/executions/99999/snapshot"
+        )
+        assert response.status_code == 404
+
+
 class TestRollbackExecution:
     """Tests for POST /api/auto-creation/executions/{execution_id}/rollback."""
 
