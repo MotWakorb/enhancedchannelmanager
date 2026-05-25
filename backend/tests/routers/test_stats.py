@@ -538,6 +538,92 @@ class TestChannelStatsUrlProvider:
         mock_client.get_channel_streams.assert_not_called()
 
 
+class TestChannelStatsUnknownProviderCounter:
+    """Tests for ecm_stats_active_channels_unknown_provider_total counter (bd-w89ox).
+
+    Counter increments once per unattributed channel per /api/stats/channels call
+    so SLO-8 dashboards can trend the Unknown-bucket rate without scraping the UI.
+    """
+
+    @pytest.mark.asyncio
+    async def test_increments_counter_for_unattributed_channel(self, async_client):
+        """Counter increments by 1 for a channel whose m3u_account_id resolves
+        to None after the live resolver runs."""
+        import observability
+
+        observability.reset_for_tests()
+        observability.install_metrics()
+
+        mock_client = AsyncMock()
+        # Channel has no stream_id and no URL — resolver returns no attribution.
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {"channel_id": "uuid-1", "channel_name": "Unattributed", "clients": []},
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = []
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        assert ch["m3u_account_id"] is None
+
+        metric = observability.get_metric("stats_active_channels_unknown_provider_total")
+        samples = list(metric.collect())
+        total_value = None
+        for mf in samples:
+            for sample in mf.samples:
+                if sample.name == "ecm_stats_active_channels_unknown_provider_total":
+                    total_value = sample.value
+                    break
+        assert total_value is not None and total_value >= 1, (
+            "Expected ecm_stats_active_channels_unknown_provider_total to have been incremented"
+        )
+
+    @pytest.mark.asyncio
+    async def test_does_not_increment_for_attributed_channel(self, async_client):
+        """Counter does NOT increment when m3u_account_id is resolved (non-None)."""
+        import observability
+
+        observability.reset_for_tests()
+        observability.install_metrics()
+
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {"channel_id": "uuid-1", "stream_id": 555, "clients": []},
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 555, "name": "US: ESPN", "m3u_account": 6},
+        ]
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 6, "name": "Provider A"},
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        # Attributed channels must not increment the unknown counter.
+        assert ch["m3u_account_id"] is not None
+
+        metric = observability.get_metric("stats_active_channels_unknown_provider_total")
+        samples = list(metric.collect())
+        total_value = 0.0
+        for mf in samples:
+            for sample in mf.samples:
+                if sample.name == "ecm_stats_active_channels_unknown_provider_total":
+                    total_value = sample.value
+                    break
+        assert total_value == 0.0, (
+            f"Expected counter at 0 for attributed channel, got {total_value}"
+        )
+
+
 class TestChannelStatsDetail:
     """Tests for GET /api/stats/channels/{channel_id}."""
 
