@@ -1,7 +1,7 @@
 /**
  * Unit tests for API service.
  */
-import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { server } from '../test/mocks/server';
 import { http, HttpResponse } from 'msw';
 import {
@@ -11,6 +11,7 @@ import {
   removeStreamFromChannel,
   reorderChannelStreams,
   deleteChannel,
+  bulkCommit,
   getChannelMergeCandidates,
   // Compute sort
   computeSort,
@@ -289,6 +290,133 @@ describe('API Service', () => {
       );
 
       await expect(deleteChannel(999)).rejects.toThrow('Channel not found');
+    });
+  });
+
+  describe('bulkCommit (bd-ggxks 202+poll)', () => {
+    // Speed-up: the api client sleeps 750ms between polls. Stubbing
+    // setTimeout makes each await synchronous so the tests still cover the
+    // running→completed transition without taking seconds per case.
+    beforeEach(() => {
+      vi.stubGlobal(
+        'setTimeout',
+        ((fn: () => void) => {
+          fn();
+          return 0;
+        }) as unknown as typeof setTimeout
+      );
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('validateOnly path: synchronous POST returns the response body untouched', async () => {
+      let getCallCount = 0;
+      server.use(
+        http.post('/api/channels/bulk-commit', async ({ request }) => {
+          const body = (await request.json()) as { validateOnly?: boolean };
+          expect(body.validateOnly).toBe(true);
+          return HttpResponse.json(
+            {
+              success: true,
+              operationsApplied: 0,
+              operationsFailed: 0,
+              errors: [],
+              tempIdMap: {},
+              groupIdMap: {},
+              validationPassed: true,
+              validationIssues: [],
+            },
+            { status: 200 }
+          );
+        }),
+        http.get('/api/channels/bulk-commit/:jobId', () => {
+          getCallCount++;
+          return HttpResponse.json({ status: 'running' });
+        })
+      );
+
+      const result = await bulkCommit({ operations: [], validateOnly: true });
+
+      expect(result.success).toBe(true);
+      expect(result.validationPassed).toBe(true);
+      // Sync path must never poll — that's the whole point of keeping it sync.
+      expect(getCallCount).toBe(0);
+    });
+
+    it('async path: 202 enqueue then polls GET until completed, returns result', async () => {
+      let postCallCount = 0;
+      const pollResponses = [
+        { status: 'running' },
+        { status: 'running' },
+        {
+          status: 'completed',
+          result: {
+            success: true,
+            operationsApplied: 3,
+            operationsFailed: 0,
+            errors: [],
+            tempIdMap: { '-1': 100 },
+            groupIdMap: {},
+          },
+        },
+      ];
+      let pollIdx = 0;
+
+      server.use(
+        http.post('/api/channels/bulk-commit', () => {
+          postCallCount++;
+          return HttpResponse.json(
+            { job_id: 'abc123', status: 'running' },
+            { status: 202 }
+          );
+        }),
+        http.get('/api/channels/bulk-commit/:jobId', ({ params }) => {
+          expect(params.jobId).toBe('abc123');
+          const body = pollResponses[Math.min(pollIdx, pollResponses.length - 1)];
+          pollIdx += 1;
+          return HttpResponse.json({ job_id: 'abc123', ...body });
+        })
+      );
+
+      const result = await bulkCommit({
+        operations: [
+          {
+            type: 'createChannel',
+            tempId: -1,
+            name: 'SiriusXM Hits 1',
+          },
+        ],
+      });
+
+      expect(postCallCount).toBe(1);
+      // Loop ran until "completed" — three polls drained from the array.
+      expect(pollIdx).toBe(3);
+      expect(result.success).toBe(true);
+      expect(result.operationsApplied).toBe(3);
+      expect(result.tempIdMap).toEqual({ '-1': 100 });
+    });
+
+    it('async path: failed status raises with the backend error message', async () => {
+      server.use(
+        http.post('/api/channels/bulk-commit', () =>
+          HttpResponse.json({ job_id: 'fail', status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/channels/bulk-commit/:jobId', () =>
+          HttpResponse.json({
+            job_id: 'fail',
+            status: 'failed',
+            error: 'dispatcharr unreachable',
+          })
+        )
+      );
+
+      await expect(
+        bulkCommit({
+          operations: [{ type: 'createChannel', tempId: -1, name: 'X' }],
+        })
+      ).rejects.toThrow(/dispatcharr unreachable/);
     });
   });
 

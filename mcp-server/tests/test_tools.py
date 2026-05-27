@@ -572,6 +572,96 @@ class TestBulkCommitChannelsErrorDetail:
         assert "channelId" in text
 
 
+class TestBulkCommitWithWaitPolling:
+    """The bd-ggxks 202+poll helper unwraps the job envelope so callers see
+    the BulkCommitResponse shape regardless of which path the backend took.
+
+    Three cases exercised: validateOnly sync (no job_id), async run that
+    transitions running→completed, and async run that lands on failed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sync_validate_only_response_passed_through(self, monkeypatch):
+        """When the backend returns a BulkCommitResponse inline (validateOnly
+        path), the helper returns it untouched — no extra polls fired."""
+        from tools import channels as tools_channels
+
+        client = AsyncMock()
+        client.call_endpoint.return_value = {
+            "success": True,
+            "operationsApplied": 0,
+            "validationPassed": True,
+        }
+
+        result = await tools_channels._bulk_commit_with_wait(
+            client, {"operations": [], "validateOnly": True}
+        )
+
+        assert result["success"] is True
+        # No status polls — the sync path skips the GET entirely.
+        client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_job_polls_until_completed(self, monkeypatch):
+        """A 202 + running status drives the helper to GET until completed,
+        and the helper returns the unwrapped result."""
+        from tools import channels as tools_channels
+
+        # Make sleep effectively a no-op so the test doesn't take seconds.
+        monkeypatch.setattr(tools_channels, "_BULK_COMMIT_POLL_INTERVAL_S", 0)
+
+        client = AsyncMock()
+        client.call_endpoint.return_value = {
+            "job_id": "abc", "status": "running",
+            "message": "queued",
+        }
+        # Two running polls before completion so we prove the loop runs.
+        completed_result = {
+            "success": True,
+            "operationsApplied": 3,
+            "tempIdMap": {"-1": 100},
+        }
+        client.get.side_effect = [
+            {"job_id": "abc", "status": "running"},
+            {"job_id": "abc", "status": "running"},
+            {"job_id": "abc", "status": "completed", "result": completed_result},
+        ]
+
+        result = await tools_channels._bulk_commit_with_wait(
+            client, {"operations": []}
+        )
+
+        assert result == completed_result
+        # POST once, GET three times.
+        assert client.call_endpoint.await_count == 1
+        assert client.get.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_async_job_failure_raises_with_error_message(self, monkeypatch):
+        """A failed terminal status surfaces as a RuntimeError carrying the
+        backend's error message so the tool's outer except can format it."""
+        from tools import channels as tools_channels
+
+        monkeypatch.setattr(tools_channels, "_BULK_COMMIT_POLL_INTERVAL_S", 0)
+
+        client = AsyncMock()
+        client.call_endpoint.return_value = {
+            "job_id": "abc", "status": "running",
+        }
+        client.get.return_value = {
+            "job_id": "abc",
+            "status": "failed",
+            "error": "dispatcharr exploded",
+        }
+
+        with pytest.raises(RuntimeError) as exc_info:
+            await tools_channels._bulk_commit_with_wait(
+                client, {"operations": []}
+            )
+
+        assert "dispatcharr exploded" in str(exc_info.value)
+
+
 class TestECMClientHTTPErrorDetail:
     """ECMClient.post surfaces the response body's detail on HTTPStatusError (bd-mjtxn / GH #224)."""
 
