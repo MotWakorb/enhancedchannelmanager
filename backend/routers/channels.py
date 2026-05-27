@@ -4,6 +4,7 @@ number assignment, bulk-commit, and clear-auto-created endpoints.
 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
+import asyncio
 import logging
 import os
 import re
@@ -14,6 +15,7 @@ from typing import Optional, Literal, Union
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from auth import RequireAdminIfEnabled
@@ -1118,23 +1120,173 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     return consolidated
 
 
+# -----------------------------------------------------------------------------
+# Bulk-commit background jobs (bd-ggxks)
+# -----------------------------------------------------------------------------
+# Each Dispatcharr write inside a bulk commit is a sequential HTTP call
+# (~0.7s/channel for createChannel). A 441-op SiriusXM batch easily exceeds
+# the 30s ECM_REQUEST_TIMEOUT_SECONDS middleware budget, returning 504 to the
+# operator while the handler keeps running in the background. The operator
+# retries, piling duplicates into Dispatcharr.
+#
+# Architecture (matches bd-cns7j debug-bundle and bd-enfsy /auto-creation/run):
+#   POST /bulk-commit           → 202 + {job_id, status: "running"}; supervised
+#                                 background task does the work. validateOnly
+#                                 stays SYNCHRONOUS — pre-validation is fast
+#                                 and the frontend uses it for instant feedback
+#                                 before commit, where a poll round-trip would
+#                                 add latency for no gain.
+#   GET  /bulk-commit/{job_id}  → JSON status: running | failed (with error) |
+#                                 completed (with the full BulkCommitResponse
+#                                 envelope under ``result``). Completed jobs
+#                                 are evicted on first read so RAM is freed.
+#
+# Job state lives in-memory because the result envelope is small (a few KB
+# even for 1000+ ops) and the bulk commit is operator-triggered. TTL prune
+# on every new POST keeps the dict bounded if a client abandons polling.
+
+_BULK_COMMIT_JOB_TTL_SECONDS = 1800  # 30 min — matches debug-bundle TTL
+_BULK_COMMIT_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+class _BulkCommitJob:
+    """In-memory state for one bulk-commit run (bd-ggxks)."""
+
+    __slots__ = ("status", "created_at", "completed_at", "error", "result")
+
+    def __init__(self) -> None:
+        self.status: str = "running"  # running | completed | failed
+        self.created_at: float = time.time()
+        self.completed_at: Optional[float] = None
+        self.error: Optional[str] = None
+        self.result: Optional[dict] = None
+
+
+_BULK_COMMIT_JOBS: dict[str, _BulkCommitJob] = {}
+
+
+def _prune_old_bulk_commit_jobs() -> None:
+    """Drop bulk-commit jobs older than the TTL so the dict can't grow unbounded."""
+    cutoff = time.time() - _BULK_COMMIT_JOB_TTL_SECONDS
+    stale = [jid for jid, job in _BULK_COMMIT_JOBS.items() if job.created_at < cutoff]
+    for jid in stale:
+        _BULK_COMMIT_JOBS.pop(jid, None)
+    if stale:
+        logger.debug("[CHANNELS-BULK] Pruned %s expired bulk-commit jobs", len(stale))
+
+
 @router.post("/bulk-commit")
 async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdminIfEnabled):
     """
-    Process multiple channel operations in a single request. Admin only
-    (bulk operator op, bd-um30y).
+    Process multiple channel operations. Admin only (bulk operator op, bd-um30y).
 
-    This endpoint is optimized for bulk changes (1000+ operations) by:
-    - Processing all operations in a single HTTP request
-    - Tracking temp ID -> real ID mappings for newly created channels
-    - Creating groups before processing channel operations that reference them
-    - Pre-validating that referenced channels/streams exist
+    Two response shapes (bd-ggxks):
+
+    - ``validateOnly: true`` → **200 sync** with the full BulkCommitResponse.
+      Validation runs entirely against ECM-cached lookups + a single
+      Dispatcharr page fetch, so it fits comfortably inside the 30s request
+      budget and the frontend uses it for instant pre-commit feedback.
+    - ``validateOnly: false`` (default) → **202** with
+      ``{job_id, status: "running"}``. The actual work runs in a supervised
+      background task; the client polls
+      ``GET /api/channels/bulk-commit/{job_id}`` until the status is terminal
+      (``completed`` carries the full BulkCommitResponse under ``result``;
+      ``failed`` carries an ``error`` string).
 
     Options:
     - validateOnly: If true, only validate without executing
     - continueOnError: If true, continue processing even when operations fail
+    - consolidate: If true, server-side dedup of redundant ops
+    """
+    # Validate-only is fast — keep it sync so the frontend gets pre-commit
+    # feedback in one round-trip instead of POST+poll.
+    if request.validateOnly:
+        return await _run_bulk_commit(request)
 
-    Returns a response with success status, ID mappings, and validation issues.
+    # Enqueue the actual commit as a supervised background task.
+    _prune_old_bulk_commit_jobs()
+    job_id = uuid.uuid4().hex
+    _BULK_COMMIT_JOBS[job_id] = _BulkCommitJob()
+    op_count = len(request.operations)
+
+    async def _runner() -> None:
+        job = _BULK_COMMIT_JOBS.get(job_id)
+        if job is None:
+            logger.warning("[CHANNELS-BULK] Job %s missing before start", job_id)
+            return
+        try:
+            result = await _run_bulk_commit(request)
+            job.result = result
+            job.status = "completed"
+            job.completed_at = time.time()
+            logger.info(
+                "[CHANNELS-BULK] Job %s completed: applied=%s failed=%s",
+                job_id, result.get("operationsApplied"), result.get("operationsFailed"),
+            )
+        except asyncio.CancelledError:
+            job.status = "failed"
+            job.error = "Background task cancelled"
+            job.completed_at = time.time()
+            logger.warning("[CHANNELS-BULK] Job %s cancelled", job_id)
+            raise
+        except Exception as e:  # noqa: BLE001 — supervisor must catch broadly
+            job.status = "failed"
+            job.error = f"{type(e).__name__}: {e}"
+            job.completed_at = time.time()
+            logger.exception("[CHANNELS-BULK] Job %s failed: %s", job_id, e)
+
+    task = asyncio.create_task(_runner(), name=f"bulk-commit-{job_id}")
+    _BULK_COMMIT_BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BULK_COMMIT_BACKGROUND_TASKS.discard)
+
+    logger.info("[CHANNELS-BULK] Job %s enqueued (%s operations)", job_id, op_count)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "running",
+            "message": (
+                f"Bulk commit started; poll /api/channels/bulk-commit/{job_id} "
+                "for status"
+            ),
+        },
+    )
+
+
+@router.get("/bulk-commit/{job_id}")
+async def get_bulk_commit_status(job_id: str):
+    """Poll a bulk-commit job (bd-ggxks).
+
+    - ``running``   → ``{job_id, status: "running"}``
+    - ``failed``    → ``{job_id, status: "failed", error}`` (job stays in the
+      dict until TTL prune so the operator can re-poll and see the error)
+    - ``completed`` → ``{job_id, status: "completed", result: <BulkCommitResponse>}``
+      and the job is evicted on read (single-shot retrieval).
+    - missing job   → 404
+    """
+    job = _BULK_COMMIT_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Bulk commit job not found")
+    if job.status == "running":
+        return {"job_id": job_id, "status": "running"}
+    if job.status == "failed":
+        return {
+            "job_id": job_id,
+            "status": "failed",
+            "error": job.error or "unknown error",
+        }
+    # completed — drop on read so RAM is freed.
+    result = job.result or {}
+    _BULK_COMMIT_JOBS.pop(job_id, None)
+    return {"job_id": job_id, "status": "completed", "result": result}
+
+
+async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
+    """Execute a bulk-commit request and return the result envelope.
+
+    Pure work function — no HTTP / endpoint awareness. Invoked synchronously by
+    POST /bulk-commit when ``validateOnly=true``, and from the supervised
+    background task dispatched by POST /bulk-commit otherwise (bd-ggxks).
     """
     client = get_client()
     batch_id = str(uuid.uuid4())[:8]
