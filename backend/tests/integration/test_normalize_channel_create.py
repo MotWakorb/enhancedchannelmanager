@@ -178,9 +178,10 @@ class TestBulkCommitWithNormalize:
                     ],
                 },
             )
-            # Should accept the normalize flag without validation error
-            # May fail for other reasons (no dispatcharr connection, etc)
-            assert response.status_code in (200, 500)
+            # Non-validateOnly path returns 202 + job_id (bd-ggxks); the schema
+            # would have raised 422 BEFORE the dispatch if the normalize field
+            # were rejected, so the 202 here proves acceptance.
+            assert response.status_code in (202, 500)
 
     @pytest.mark.asyncio
     async def test_bulk_commit_createchannel_schema_includes_normalize(self, async_client):
