@@ -433,15 +433,67 @@ export interface BulkCommitResponse {
   validationPassed?: boolean;
 }
 
+// 202+poll envelope for the async bulk-commit path (bd-ggxks). validateOnly
+// stays synchronous on the backend, so this typing applies only to the
+// non-validateOnly POST + the subsequent status polls.
+
+interface BulkCommitJobAccepted {
+  job_id: string;
+  status: 'running';
+  message?: string;
+}
+
+type BulkCommitJobStatus =
+  | { job_id: string; status: 'running' }
+  | { job_id: string; status: 'failed'; error: string }
+  | { job_id: string; status: 'completed'; result: BulkCommitResponse };
+
+const BULK_COMMIT_POLL_INTERVAL_MS = 750;
+// Hard ceiling well above the backend's 30-min job TTL — a job that genuinely
+// hangs longer than this needs operator attention, not silent waiting.
+const BULK_COMMIT_POLL_MAX_DURATION_MS = 60 * 60 * 1000;
+
+async function pollBulkCommitJob(jobId: string): Promise<BulkCommitResponse> {
+  const started = Date.now();
+  while (Date.now() - started < BULK_COMMIT_POLL_MAX_DURATION_MS) {
+    const status = await fetchJson<BulkCommitJobStatus>(
+      `${API_BASE}/channels/bulk-commit/${encodeURIComponent(jobId)}`,
+    );
+    if (status.status === 'completed') {
+      return status.result;
+    }
+    if (status.status === 'failed') {
+      throw new Error(`Bulk commit failed: ${status.error}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, BULK_COMMIT_POLL_INTERVAL_MS));
+  }
+  throw new Error(`Bulk commit polling exceeded ${BULK_COMMIT_POLL_MAX_DURATION_MS / 1000}s`);
+}
+
 /**
- * Commit multiple channel operations in a single request.
- * This is much more efficient than making individual API calls for 1000+ operations.
+ * Commit multiple channel operations.
+ *
+ * Two paths (bd-ggxks):
+ * - validateOnly: synchronous POST returning the full response in one round-trip.
+ *   Used by useEditMode.validate() for instant pre-commit feedback.
+ * - default (validateOnly=false): POST returns 202 + {job_id}; this function
+ *   polls GET /api/channels/bulk-commit/{job_id} until the job terminates,
+ *   so callers still receive the same BulkCommitResponse on success and a
+ *   thrown Error on failure. The hop is invisible to existing callers.
  */
 export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommitResponse> {
-  return fetchJson(`${API_BASE}/channels/bulk-commit`, {
+  if (request.validateOnly) {
+    return fetchJson(`${API_BASE}/channels/bulk-commit`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  const accepted = await fetchJson<BulkCommitJobAccepted>(`${API_BASE}/channels/bulk-commit`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
+  return pollBulkCommitJob(accepted.job_id);
 }
 
 // Stream-to-channel deduplication (ADR-008 / bd-1v4ht epic) ----------------

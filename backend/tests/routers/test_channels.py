@@ -920,8 +920,46 @@ class TestAssignNumbers:
         mock_client.assign_channel_numbers.assert_called_once_with([1], 100)
 
 
+async def _commit_and_wait(async_client, body, *, max_polls=50):
+    """POST a bulk commit and poll until terminal, returning the result envelope.
+
+    Mirrors what the frontend client does (POST → 202 → poll). The shape
+    returned here matches the pre-bd-ggxks synchronous response body, so the
+    existing assertions on per-operation execution still apply unchanged.
+    """
+    import asyncio as _asyncio
+
+    response = await async_client.post("/api/channels/bulk-commit", json=body)
+    if response.status_code == 200:
+        # validateOnly path is still synchronous.
+        return response, response.json()
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+    for _ in range(max_polls):
+        await _asyncio.sleep(0)
+        poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+        assert poll.status_code == 200, poll.text
+        payload = poll.json()
+        if payload["status"] == "completed":
+            return response, payload["result"]
+        if payload["status"] == "failed":
+            return response, payload
+    raise AssertionError(f"bulk-commit job {job_id} did not terminate in {max_polls} polls")
+
+
 class TestBulkCommit:
-    """Tests for POST /api/channels/bulk-commit."""
+    """Tests for POST /api/channels/bulk-commit (202+poll, bd-ggxks)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        # Each test starts with an empty job dict so state never leaks across
+        # tests (the dict is module-level by design so the in-memory job
+        # lookup survives between requests within a single process).
+        from routers import channels as router_module
+
+        router_module._BULK_COMMIT_JOBS.clear()
+        yield
+        router_module._BULK_COMMIT_JOBS.clear()
 
     @pytest.mark.asyncio
     async def test_empty_operations(self, async_client):
@@ -930,18 +968,15 @@ class TestBulkCommit:
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
-            response = await async_client.post("/api/channels/bulk-commit", json={
-                "operations": [],
-            })
+            response, data = await _commit_and_wait(async_client, {"operations": []})
 
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 202
         assert data["success"] is True
         assert data["operationsApplied"] == 0
 
     @pytest.mark.asyncio
     async def test_validate_only(self, async_client):
-        """Returns validation results without executing."""
+        """Returns validation results synchronously without executing."""
         mock_client = AsyncMock()
         mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
         mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
@@ -955,9 +990,9 @@ class TestBulkCommit:
                 "validateOnly": True,
             })
 
+        # Validate-only stays sync — single round-trip, no job_id envelope.
         assert response.status_code == 200
         data = response.json()
-        # Validate-only doesn't execute operations
         assert data["operationsApplied"] == 0
 
     @pytest.mark.asyncio
@@ -974,14 +1009,13 @@ class TestBulkCommit:
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
-            response = await async_client.post("/api/channels/bulk-commit", json={
+            response, data = await _commit_and_wait(async_client, {
                 "operations": [
                     {"type": "deleteChannel", "channelId": 1},
                 ],
             })
 
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 202
         assert data["success"] is True
 
     @pytest.mark.asyncio
@@ -1004,15 +1038,14 @@ class TestBulkCommit:
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
-            response = await async_client.post("/api/channels/bulk-commit", json={
+            response, data = await _commit_and_wait(async_client, {
                 "operations": [
                     {"type": "reorderChannelStreams", "channelId": 1,
                      "streamIds": [5003, 5001, 5002]},
                 ],
             })
 
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 202
         assert data["success"] is True
         assert data["operationsApplied"] == 1
         assert data["operationsFailed"] == 0
@@ -1043,7 +1076,7 @@ class TestBulkCommit:
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
-            response = await async_client.post("/api/channels/bulk-commit", json={
+            response, data = await _commit_and_wait(async_client, {
                 "operations": [
                     # Omits 5001 -> would detach it under replace-semantics.
                     {"type": "reorderChannelStreams", "channelId": 1,
@@ -1052,8 +1085,7 @@ class TestBulkCommit:
                 "continueOnError": True,
             })
 
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 202
         # The lossy op is rejected: reported as an error, not applied.
         assert data["operationsApplied"] == 0
         assert data["operationsFailed"] == 1
@@ -1065,6 +1097,237 @@ class TestBulkCommit:
             assert written.get("streams") != [5002]
         # Strongest assertion: no replace happened at all for this channel.
         mock_client.update_channel.assert_not_awaited()
+
+
+class TestBulkCommitAsync:
+    """Tests for the 202+poll lifecycle of POST /api/channels/bulk-commit
+    and its sibling GET /api/channels/bulk-commit/{job_id} (bd-ggxks).
+
+    The bulk commit was previously synchronous and bounded by the 30s
+    ECM_REQUEST_TIMEOUT_SECONDS middleware budget. On a 441-channel SiriusXM
+    batch the timeout fired mid-flight, returning 504 to the operator while
+    the handler kept running — duplicates piled up across retries. The new
+    pattern returns 202 + job_id immediately so a slow batch can never hit
+    the request-budget cliff.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        from routers import channels as router_module
+
+        router_module._BULK_COMMIT_JOBS.clear()
+        yield
+        router_module._BULK_COMMIT_JOBS.clear()
+
+    @pytest.mark.asyncio
+    async def test_post_returns_202_with_job_id_and_running_status(self, async_client):
+        """A non-validateOnly POST immediately returns 202 + {job_id, status}."""
+        import asyncio as _asyncio
+
+        mock_client = AsyncMock()
+        gate = _asyncio.Event()
+
+        async def slow_run(req):
+            await gate.wait()
+            return {
+                "success": True,
+                "operationsApplied": 0,
+                "operationsFailed": 0,
+                "errors": [],
+                "tempIdMap": {},
+                "groupIdMap": {},
+            }
+
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels._run_bulk_commit", side_effect=slow_run):
+                response = await async_client.post(
+                    "/api/channels/bulk-commit", json={"operations": []}
+                )
+                assert response.status_code == 202
+                body = response.json()
+                assert body["job_id"]
+                assert body["status"] == "running"
+
+                # Job is registered as still running before the worker finishes.
+                from routers.channels import _BULK_COMMIT_JOBS
+                assert body["job_id"] in _BULK_COMMIT_JOBS
+                assert _BULK_COMMIT_JOBS[body["job_id"]].status == "running"
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_get_while_running_returns_running_status(self, async_client):
+        """GET /{job_id} reports running until the worker finishes."""
+        import asyncio as _asyncio
+
+        mock_client = AsyncMock()
+        gate = _asyncio.Event()
+
+        async def slow_run(req):
+            await gate.wait()
+            return {
+                "success": True,
+                "operationsApplied": 0,
+                "operationsFailed": 0,
+                "errors": [],
+                "tempIdMap": {},
+                "groupIdMap": {},
+            }
+
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels._run_bulk_commit", side_effect=slow_run):
+                enqueue = await async_client.post(
+                    "/api/channels/bulk-commit", json={"operations": []}
+                )
+                job_id = enqueue.json()["job_id"]
+
+                poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+                assert poll.status_code == 200
+                body = poll.json()
+                assert body["job_id"] == job_id
+                assert body["status"] == "running"
+                # Running poll envelope must NOT leak a result yet.
+                assert "result" not in body
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_get_after_completion_returns_result_and_evicts_job(self, async_client):
+        """Once the worker completes, GET returns the full BulkCommitResponse
+        and the job row is dropped from the dict (single-shot retrieval)."""
+        import asyncio as _asyncio
+
+        mock_client = AsyncMock()
+
+        async def fast_run(req):
+            return {
+                "success": True,
+                "operationsApplied": 3,
+                "operationsFailed": 0,
+                "errors": [],
+                "tempIdMap": {-1: 100, -2: 101},
+                "groupIdMap": {},
+            }
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels._run_bulk_commit", side_effect=fast_run):
+            enqueue = await async_client.post(
+                "/api/channels/bulk-commit", json={"operations": []}
+            )
+            job_id = enqueue.json()["job_id"]
+            for _ in range(50):
+                await _asyncio.sleep(0)
+
+            poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+            assert poll.status_code == 200
+            body = poll.json()
+            assert body["status"] == "completed"
+            assert body["result"]["operationsApplied"] == 3
+            assert body["result"]["tempIdMap"] == {"-1": 100, "-2": 101}
+
+            # Second GET of the same job returns 404 — the job was evicted
+            # so RAM stays bounded for short-lived ops.
+            from routers.channels import _BULK_COMMIT_JOBS
+            assert job_id not in _BULK_COMMIT_JOBS
+            second = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+            assert second.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_failed_job_returns_failed_status(self, async_client):
+        """A worker that raises is marked failed and exposed via GET status."""
+        import asyncio as _asyncio
+
+        mock_client = AsyncMock()
+
+        async def boom(req):
+            raise RuntimeError("dispatcharr unreachable")
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels._run_bulk_commit", side_effect=boom):
+            enqueue = await async_client.post(
+                "/api/channels/bulk-commit", json={"operations": []}
+            )
+            job_id = enqueue.json()["job_id"]
+            for _ in range(50):
+                await _asyncio.sleep(0)
+
+            poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+            assert poll.status_code == 200
+            body = poll.json()
+            assert body["status"] == "failed"
+            assert "dispatcharr unreachable" in body["error"]
+            # Failed jobs stay in the dict until TTL prune so the operator
+            # can re-poll and read the error (matches debug-bundle pattern).
+            from routers.channels import _BULK_COMMIT_JOBS
+            assert job_id in _BULK_COMMIT_JOBS
+
+    @pytest.mark.asyncio
+    async def test_get_unknown_job_id_returns_404(self, async_client):
+        response = await async_client.get("/api/channels/bulk-commit/does-not-exist")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_post_returns_within_timeout_budget(self, async_client):
+        """The handler itself must return fast — a slow worker must never
+        block the enqueue path. The whole point of bd-ggxks is to make
+        bulk-commit not synchronous on large batches."""
+        import asyncio as _asyncio
+        import time as _time
+
+        mock_client = AsyncMock()
+        gate = _asyncio.Event()
+
+        async def slow_run(req):
+            await gate.wait()
+            return {
+                "success": True,
+                "operationsApplied": 0,
+                "operationsFailed": 0,
+                "errors": [],
+                "tempIdMap": {},
+                "groupIdMap": {},
+            }
+
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels._run_bulk_commit", side_effect=slow_run):
+                start = _time.monotonic()
+                response = await async_client.post(
+                    "/api/channels/bulk-commit", json={"operations": []}
+                )
+                elapsed = _time.monotonic() - start
+
+            assert response.status_code == 202
+            assert elapsed < 5.0, (
+                f"enqueue took {elapsed:.2f}s — handler is not async-enqueuing"
+            )
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    def test_prune_drops_expired_jobs(self):
+        """_prune_old_bulk_commit_jobs evicts jobs older than the TTL."""
+        from routers import channels as router_module
+
+        old = router_module._BulkCommitJob()
+        old.created_at = (
+            router_module.time.time() - (router_module._BULK_COMMIT_JOB_TTL_SECONDS + 60)
+        )
+        fresh = router_module._BulkCommitJob()
+        router_module._BULK_COMMIT_JOBS["old"] = old
+        router_module._BULK_COMMIT_JOBS["fresh"] = fresh
+
+        router_module._prune_old_bulk_commit_jobs()
+
+        assert "old" not in router_module._BULK_COMMIT_JOBS
+        assert "fresh" in router_module._BULK_COMMIT_JOBS
 
 
 class TestClearAutoCreated:
