@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- **`POST /api/channels/bulk-commit` returned 504 mid-flight on large batches while the handler kept running, producing duplicates on retry (bd-ggxks, build 0001).** The endpoint was synchronous and pinned behind the 30s `ECM_REQUEST_TIMEOUT_SECONDS` middleware. A 441-op SiriusXM batch (~6 min of sequential Dispatcharr POSTs) caused the middleware to fire `504 Gateway Timeout` to the operator while the handler kept running in the background; the operator retried, each retry committed another ~30 partial channels, and Dispatcharr accumulated duplicates. Fix: bulk-commit now follows the bd-cns7j / bd-enfsy 202+poll pattern. Non-`validateOnly` `POST /api/channels/bulk-commit` returns `202 + {job_id, status: "running"}` immediately and dispatches a supervised background task; clients poll `GET /api/channels/bulk-commit/{job_id}` until the status is terminal (`completed` with the full `BulkCommitResponse` under `result`, or `failed` with an `error` message). `validateOnly` stays synchronous (200 with the response body inline) because pre-commit validation is fast and the frontend uses it for instant feedback. Frontend `bulkCommit()` and the MCP `bulk_commit_channels` / `build_channel_lineup` tools drive the new POST→poll loop transparently — their public shapes are unchanged so all three `useEditMode` call sites and existing MCP consumers keep working. Job state is in-memory with a 30-min TTL prune on every new POST; completed jobs are evicted on first read so RAM stays bounded; failed jobs persist until the TTL so operators can re-poll the error message. (bd-ggxks, build 0001)
+
 ## [0.17.3] — 2026-05-25
 
 ### Removed
