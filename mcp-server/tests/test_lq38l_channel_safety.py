@@ -251,11 +251,17 @@ class TestBuildChannelLineupCreatedOnly:
             {"id": 555, "name": "MCPTEST Lineup ESPN", "channel_number": 901, "streams": []},
         ]
 
-        async def post_side_effect(path, **kwargs):
-            if path == "/api/channels/bulk-commit":
-                # tempId -1 -> realId 555 (the only channel this call created)
+        # bd-ggxks: bulk-commit moved to 202+poll. The lineup builder now
+        # routes through tools.channels._bulk_commit_with_wait, which calls
+        # client.call_endpoint(..., "/api/channels/bulk-commit") and may poll
+        # client.get("/api/channels/bulk-commit/{job_id}") until completed.
+        async def call_endpoint_side_effect(endpoint, **kwargs):
+            if endpoint.path == "/api/channels/bulk-commit":
+                # tempId -1 -> realId 555 (the only channel this call created).
+                # Returning the BulkCommitResponse shape directly emulates the
+                # synchronous fast-path (the helper unwraps 202 envelopes too,
+                # but the sync return value is the cleanest mock surface).
                 return {"success": True, "tempIdMap": {"-1": 555}}
-            # add-stream: nothing matched in this scenario
             return {}
 
         async def get_side_effect(path, **kwargs):
@@ -266,7 +272,7 @@ class TestBuildChannelLineupCreatedOnly:
             return {}
 
         client = AsyncMock()
-        client.post.side_effect = post_side_effect
+        client.call_endpoint.side_effect = call_endpoint_side_effect
         client.get.side_effect = get_side_effect
 
         with patch("tools.channels.get_ecm_client", return_value=client):
@@ -300,9 +306,9 @@ class TestBuildChannelLineupCreatedOnly:
             {"id": 700, "name": "New One", "channel_number": 700, "streams": []},
         ]
 
-        async def post_side_effect(path, **kwargs):
-            if path == "/api/channels/bulk-commit":
-                return {"success": True}  # no tempIdMap
+        async def call_endpoint_side_effect(endpoint, **kwargs):
+            if endpoint.path == "/api/channels/bulk-commit":
+                return {"success": True}  # no tempIdMap — fallback path
             return {}
 
         async def get_side_effect(path, **kwargs):
@@ -313,7 +319,7 @@ class TestBuildChannelLineupCreatedOnly:
             return {}
 
         client = AsyncMock()
-        client.post.side_effect = post_side_effect
+        client.call_endpoint.side_effect = call_endpoint_side_effect
         client.get.side_effect = get_side_effect
 
         with patch("tools.channels.get_ecm_client", return_value=client):
