@@ -1317,6 +1317,7 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
         "groupIdMap": {},  # group name -> real ID
         "validationIssues": [],
         "validationPassed": True,
+        "partial": False,  # bd-5xciq: some-applied-some-failed outcome
     }
 
     # Helper to resolve temp IDs to real IDs
@@ -1572,6 +1573,60 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                         return result
             logger.debug("[CHANNELS-BULK] Group creation complete: %s groups mapped", len(result['groupIdMap']))
 
+        # Per-run logo index (bd-raehx). Previously every createChannel op with
+        # a logoUrl + no logoId called find_logo_by_url(), which re-paginated
+        # the ENTIRE Dispatcharr logo catalog (~25 pages for large installs).
+        # That made the createChannel path O(channels * catalog_pages) — 859
+        # logo GETs for a 113-channel batch — exhausting the request budget.
+        #
+        # Instead we paginate the catalog ONCE, lazily (only the first time a
+        # createChannel op actually needs a logo lookup, so validateOnly and
+        # logo-free batches pay nothing), and build a {url -> logo} index that
+        # every subsequent op reuses. New logos created mid-batch are inserted
+        # into the index so a later op sharing the same logoUrl reuses them
+        # instead of creating a duplicate.
+        #
+        # The index is per-run state (closure-local) by design — a long-lived
+        # process cache would go stale against Dispatcharr.
+        logo_index: Optional[dict[str, dict]] = None
+
+        async def resolve_logo_id(logo_url: str, logo_name: str) -> Optional[int]:
+            """Return a logo id for ``logo_url``, building the per-run index on
+            first use and creating (and caching) a new logo when absent.
+
+            Raises on a hard failure (pagination error, create error) so the
+            caller's try/except can preserve the existing "create the channel
+            without a logo" fallthrough behavior.
+            """
+            nonlocal logo_index
+            if logo_index is None:
+                # First need this run — paginate the full catalog once.
+                logo_index = {}
+                page = 1
+                page_size = 500
+                while True:
+                    page_result = await client.get_logos(page=page, page_size=page_size)
+                    for logo in page_result.get("results", []):
+                        url = logo.get("url")
+                        # First occurrence of a url wins (matches find_logo_by_url,
+                        # which returned the first match).
+                        if url and url not in logo_index:
+                            logo_index[url] = logo
+                    if not page_result.get("next"):
+                        break
+                    page += 1
+                logger.debug("[CHANNELS-BULK] Built logo index: %s logos across %s page(s)", len(logo_index), page)
+
+            existing = logo_index.get(logo_url)
+            if existing is not None:
+                return existing["id"]
+
+            new_logo = await client.create_logo({"name": logo_name, "url": logo_url})
+            # Cache by url so a later op with the same logoUrl reuses it
+            # (fixes a latent duplicate-logo bug too).
+            logo_index[logo_url] = new_logo
+            return new_logo["id"]
+
         # Phase 2: Process operations sequentially
         logger.debug("[CHANNELS-BULK] Phase 2: Processing %s operations", len(request.operations))
         for idx, op in enumerate(request.operations):
@@ -1657,21 +1712,15 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                             logger.warning("[CHANNELS-BULK] Failed to normalize channel name '%s': %s", op.name, norm_err)
                             # Continue with original name
 
-                    # Handle logo - if logoUrl provided but no logoId, try to find/create logo
+                    # Handle logo - if logoUrl provided but no logoId, resolve
+                    # via the per-run logo index (bd-raehx) instead of
+                    # re-paginating the whole catalog per channel.
                     logo_id = op.logoId
                     if not logo_id and op.logoUrl:
                         try:
-                            logger.debug("[CHANNELS-BULK] Looking for logo by URL for channel '%s'", op.name)
-                            # Try to find existing logo by URL
-                            existing_logo = await client.find_logo_by_url(op.logoUrl)
-                            if existing_logo:
-                                logo_id = existing_logo["id"]
-                                logger.debug("[CHANNELS-BULK] Found existing logo ID %s", logo_id)
-                            else:
-                                # Create new logo
-                                new_logo = await client.create_logo({"name": channel_name, "url": op.logoUrl})
-                                logo_id = new_logo["id"]
-                                logger.debug("[CHANNELS-BULK] Created new logo ID %s", logo_id)
+                            logger.debug("[CHANNELS-BULK] Resolving logo by URL for channel '%s'", op.name)
+                            logo_id = await resolve_logo_id(op.logoUrl, channel_name)
+                            logger.debug("[CHANNELS-BULK] Resolved logo ID %s for channel '%s'", logo_id, op.name)
                         except Exception as logo_err:
                             logger.warning("[CHANNELS-BULK] Failed to create/find logo for channel '%s': %s", channel_name, logo_err)
                             # Continue without logo
@@ -1788,6 +1837,13 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
             result["success"] = result["operationsFailed"] == 0 or result["operationsApplied"] > 0
         else:
             result["success"] = result["operationsFailed"] == 0
+
+        # Partial outcome flag (bd-5xciq): some ops committed AND some failed.
+        # The frontend uses this to render "X applied, Y failed" distinctly so
+        # the operator reconciles via tempIdMap instead of blindly retrying and
+        # piling up duplicate channels. A full success or a total failure
+        # (nothing applied) is NOT partial.
+        result["partial"] = result["operationsApplied"] > 0 and result["operationsFailed"] > 0
 
         # Log summary
         logger.debug("[CHANNELS-BULK] Phase 2 complete: %s applied, %s failed", result['operationsApplied'], result['operationsFailed'])
