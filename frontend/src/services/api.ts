@@ -431,6 +431,13 @@ export interface BulkCommitResponse {
   validationIssues?: ValidationIssue[];
   /** Whether validation passed (no errors, may have warnings) */
   validationPassed?: boolean;
+  /**
+   * bd-5xciq: true when some operations committed AND some failed. Lets the UI
+   * render a distinct partial-success state ("X applied, Y failed") so the
+   * operator reconciles via tempIdMap instead of retrying and creating
+   * duplicates. False for full success and for total failure (nothing applied).
+   */
+  partial?: boolean;
 }
 
 // 202+poll envelope for the async bulk-commit path (bd-ggxks). validateOnly
