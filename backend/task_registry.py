@@ -218,7 +218,21 @@ class TaskRegistry:
             db_task.schedule_time = instance.schedule_config.schedule_time or None
             db_task.timezone = instance.schedule_config.timezone or None
             db_task.last_run_at = instance._last_run
-            db_task.next_run_at = instance._next_run
+            # Do NOT clobber a DB-managed next_run_at with the in-memory value.
+            # For tasks driven by the multi-schedule system (``task_schedules``
+            # rows), next_run_at is maintained by the schedule endpoints and
+            # task_engine from the child schedules. ``instance._next_run`` only
+            # refreshes at startup, so writing it here can overwrite a correct
+            # value with a stale ``None`` — leaving the UI stuck on "Never" even
+            # across restarts (issue #468 / bd-a80u2).
+            has_schedules = (
+                session.query(TaskSchedule.id)
+                .filter(TaskSchedule.task_id == instance.task_id)
+                .first()
+                is not None
+            )
+            if not has_schedules:
+                db_task.next_run_at = instance._next_run
             db_task.updated_at = datetime.utcnow()
         else:
             # Create new

@@ -418,6 +418,14 @@ async def list_tasks():
                             day_of_month=schedule.day_of_month,
                         )
                         task['schedules'].append(schedule_dict)
+
+                    # Source "Next Run" from the child schedule rows (the real
+                    # firing source) instead of the registry's stale in-memory
+                    # value (issue #468 / bd-a80u2). Only override when schedule
+                    # rows exist — legacy/manual tasks with none keep the
+                    # in-memory fallback.
+                    if schedules:
+                        task['next_run'] = _earliest_enabled_next_run(schedules)
         finally:
             session.close()
 
@@ -478,6 +486,12 @@ async def get_task(task_id: str):
                     day_of_month=schedule.day_of_month,
                 )
                 status['schedules'].append(schedule_dict)
+
+            # Source "Next Run" from the child schedule rows (the real firing
+            # source) instead of the registry's stale in-memory value
+            # (issue #468 / bd-a80u2).
+            if schedules:
+                status['next_run'] = _earliest_enabled_next_run(schedules)
         finally:
             session.close()
 
@@ -952,6 +966,23 @@ async def delete_task_schedule(task_id: str, schedule_id: int):
 # -------------------------------------------------------------------------
 # Helper functions
 # -------------------------------------------------------------------------
+
+def _earliest_enabled_next_run(schedules) -> Optional[str]:
+    """Return the earliest enabled schedule's ``next_run_at`` as an ISO-8601 'Z' string.
+
+    The "Next Run" the UI shows must reflect the rows the task engine actually
+    fires from (``task_schedules``), NOT the registry's in-memory
+    ``instance._next_run`` — that value only refreshes at startup
+    (``sync_from_database``), so for tasks whose schedule is added/edited at
+    runtime it goes stale and the UI shows "Never" (issue #468 / bd-a80u2).
+
+    Returns ``None`` when no enabled schedule has a ``next_run_at`` set.
+    """
+    candidates = [s.next_run_at for s in schedules if s.enabled and s.next_run_at is not None]
+    if not candidates:
+        return None
+    return min(candidates).isoformat() + "Z"
+
 
 def _update_task_next_run(session, task_id: str) -> None:
     """Update a task's next_run_at based on its schedules."""
