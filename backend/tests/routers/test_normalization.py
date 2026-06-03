@@ -183,6 +183,60 @@ class TestDeleteGroup:
         response = await async_client.delete("/api/normalization/groups/99999")
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_strips_group_ref_from_auto_creation_rules(self, async_client, test_session):
+        """Deleting a group removes its id from auto-creation rules that reference it,
+        leaving other referenced ids intact (GH #465 / bd-miut3)."""
+        import json
+        from models import AutoCreationRule
+
+        doomed = _create_group(test_session, name="Doomed")
+        kept = _create_group(test_session, name="Kept")
+        rule = AutoCreationRule(
+            name="Rule using both groups",
+            conditions="[]",
+            actions="[]",
+            normalization_group_ids=json.dumps([doomed.id, kept.id]),
+        )
+        test_session.add(rule)
+        test_session.commit()
+        rule_id = rule.id
+        doomed_id = doomed.id
+
+        response = await async_client.delete(f"/api/normalization/groups/{doomed_id}")
+        assert response.status_code == 200
+        assert response.json()["rules_cleaned"] == 1
+
+        test_session.expire_all()
+        healed = test_session.query(AutoCreationRule).get(rule_id)
+        assert healed.get_normalization_group_ids() == [kept.id]
+
+    @pytest.mark.asyncio
+    async def test_delete_leaves_unrelated_rules_untouched(self, async_client, test_session):
+        """A rule that doesn't reference the deleted group is not modified."""
+        import json
+        from models import AutoCreationRule
+
+        doomed = _create_group(test_session, name="Doomed")
+        other = _create_group(test_session, name="Other")
+        rule = AutoCreationRule(
+            name="Unrelated rule",
+            conditions="[]",
+            actions="[]",
+            normalization_group_ids=json.dumps([other.id]),
+        )
+        test_session.add(rule)
+        test_session.commit()
+        rule_id = rule.id
+
+        response = await async_client.delete(f"/api/normalization/groups/{doomed.id}")
+        assert response.status_code == 200
+        assert response.json()["rules_cleaned"] == 0
+
+        test_session.expire_all()
+        healed = test_session.query(AutoCreationRule).get(rule_id)
+        assert healed.get_normalization_group_ids() == [other.id]
+
 
 class TestReorderGroups:
     """Tests for POST /api/normalization/groups/reorder."""
