@@ -1917,6 +1917,11 @@ class AutoCreationEngine:
                 results["probe_stream_ids"], streams, results, dry_run
             )
 
+        # Flush any buffered journal rows from live merges before we return.
+        # This keeps the WAL smaller than per-merge commits while preserving
+        # the per-execution audit trail.
+        executor._flush_journal_buffer()
+
         # Clean up non-serializable set before returning
         del results["probe_stream_ids"]
 
