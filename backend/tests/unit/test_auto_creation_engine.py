@@ -2160,7 +2160,7 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
             ("FOX", 921),
         ])
 
-        with patch("auto_creation_executor.journal.log_entry"):
+        with patch("auto_creation_executor.journal.log_entries"):
             result = self._run(rule, streams, dry_run=False)
 
         assert result["streams_merged"] == 3, (

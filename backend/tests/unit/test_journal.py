@@ -131,6 +131,87 @@ class TestLogEntry:
             assert result is None
 
 
+class TestLogEntries:
+    """Tests for log_entries() batch logging."""
+
+    def test_log_entries_empty_batch_noops(self):
+        """Empty batches succeed without opening a database session."""
+        with patch("journal.get_session") as mock_get_session:
+            from journal import log_entries
+
+            result = log_entries([])
+
+        assert result is True
+        mock_get_session.assert_not_called()
+
+    def test_log_entries_creates_records_in_one_batch(self, test_session):
+        """log_entries creates all requested journal rows."""
+        from models import JournalEntry
+
+        entries = [
+            {
+                "category": "auto_creation",
+                "action_type": "merge_stream",
+                "entity_id": 1,
+                "entity_name": "ESPN",
+                "description": "Merged stream 201 into channel 'ESPN'",
+                "before_value": {"stream_ids": [101]},
+                "after_value": {"stream_ids": [101, 201]},
+                "user_initiated": False,
+                "batch_id": "42",
+            },
+            {
+                "category": "auto_creation",
+                "action_type": "merge_stream",
+                "entity_id": 2,
+                "entity_name": "CNN",
+                "description": "Merged stream 202 into channel 'CNN'",
+                "before_value": {"stream_ids": []},
+                "after_value": {"stream_ids": [202]},
+                "user_initiated": False,
+                "batch_id": "42",
+            },
+        ]
+
+        with patch("journal.get_session", return_value=test_session):
+            from journal import log_entries
+
+            result = log_entries(entries)
+
+        assert result is True
+        rows = (
+            test_session.query(JournalEntry)
+            .filter(JournalEntry.batch_id == "42")
+            .order_by(JournalEntry.entity_id)
+            .all()
+        )
+        assert len(rows) == 2
+        assert rows[0].entity_name == "ESPN"
+        assert rows[0].before_value == json.dumps({"stream_ids": [101]})
+        assert rows[0].after_value == json.dumps({"stream_ids": [101, 201]})
+        assert rows[0].user_initiated is False
+        assert rows[1].entity_name == "CNN"
+
+    def test_log_entries_rolls_back_on_error(self):
+        """A batch logging failure rolls back and reports False."""
+        mock_session = MagicMock()
+        mock_session.add_all.side_effect = Exception("Database error")
+
+        with patch("journal.get_session", return_value=mock_session):
+            from journal import log_entries
+
+            result = log_entries([{
+                "category": "auto_creation",
+                "action_type": "merge_stream",
+                "entity_name": "ESPN",
+                "description": "Merged stream",
+            }])
+
+        assert result is False
+        mock_session.rollback.assert_called_once()
+        mock_session.close.assert_called_once()
+
+
 class TestGetEntries:
     """Tests for get_entries() function."""
 
@@ -300,7 +381,7 @@ class TestAutoCreationMergeJournalRoundTrip:
     """bd-0emgo.5: end-to-end round-trip — a LIVE auto-creation merge writes a
     real journal entry recoverable via get_entries(batch_id=...).
 
-    Unlike the executor unit tests (which mock journal.log_entry), this drives
+    Unlike the executor unit tests (which mock journal.log_entries), this drives
     the executor against the real journal module + a test DB session, then
     queries by batch_id to confirm the (channel_id, stream_id) audit trail an
     operator would use to recover from a bad run.
@@ -332,9 +413,11 @@ class TestAutoCreationMergeJournalRoundTrip:
             "find_channel_by": "name_exact",
             "find_channel_value": "ESPN",
         }
-        return asyncio.get_event_loop().run_until_complete(
+        result = asyncio.get_event_loop().run_until_complete(
             executor.execute(action, stream_ctx, ExecutionContext())
         )
+        executor._flush_journal_buffer()
+        return result
 
     def test_live_merge_round_trips_through_journal_by_batch_id(self, test_session):
         """A live merge entry is queryable by its execution_id batch_id."""
