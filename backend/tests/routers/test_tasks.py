@@ -76,6 +76,48 @@ class TestListTasks:
         assert len(data["tasks"]) == 1
         assert data["tasks"][0]["task_id"] == "stream_probe"
 
+    @pytest.mark.asyncio
+    async def test_next_run_sourced_from_schedules_not_stale_instance(self, async_client, test_session):
+        """Next Run comes from the child schedule rows, not the registry's stale
+        in-memory value (issue #468 / bd-a80u2). The registry reports next_run=None
+        (the bug condition) but an enabled schedule has a real next_run_at."""
+        _create_scheduled_task(test_session, task_id="stream_probe")
+        nr = datetime(2026, 6, 3, 8, 0, 0)
+        _create_task_schedule(test_session, task_id="stream_probe", enabled=True, next_run_at=nr)
+
+        mock_registry = MagicMock()
+        mock_registry.get_all_task_statuses.return_value = [
+            {"task_id": "stream_probe", "status": "idle", "task_name": "Stream Probe", "next_run": None},
+        ]
+
+        with patch("task_registry.get_registry", return_value=mock_registry), \
+             patch("schedule_calculator.describe_schedule", MagicMock(return_value="Daily")):
+            response = await async_client.get("/api/tasks")
+
+        assert response.status_code == 200
+        assert response.json()["tasks"][0]["next_run"] == nr.isoformat() + "Z"
+
+    @pytest.mark.asyncio
+    async def test_next_run_ignores_disabled_schedule(self, async_client, test_session):
+        """A disabled schedule's next_run_at must NOT surface as the Next Run."""
+        _create_scheduled_task(test_session, task_id="stream_probe")
+        _create_task_schedule(
+            test_session, task_id="stream_probe", enabled=False,
+            next_run_at=datetime(2026, 6, 3, 8, 0, 0),
+        )
+
+        mock_registry = MagicMock()
+        mock_registry.get_all_task_statuses.return_value = [
+            {"task_id": "stream_probe", "status": "idle", "task_name": "Stream Probe", "next_run": None},
+        ]
+
+        with patch("task_registry.get_registry", return_value=mock_registry), \
+             patch("schedule_calculator.describe_schedule", MagicMock(return_value="Daily")):
+            response = await async_client.get("/api/tasks")
+
+        assert response.status_code == 200
+        assert response.json()["tasks"][0]["next_run"] is None
+
 
 class TestGetTask:
     """Tests for GET /api/tasks/{task_id}."""
@@ -98,6 +140,26 @@ class TestGetTask:
 
         assert response.status_code == 200
         assert response.json()["task_id"] == "stream_probe"
+
+    @pytest.mark.asyncio
+    async def test_next_run_sourced_from_schedules(self, async_client, test_session):
+        """GET /api/tasks/{id} reports Next Run from the child schedule rows, not
+        the registry's stale in-memory value (issue #468 / bd-a80u2)."""
+        _create_scheduled_task(test_session, task_id="stream_probe")
+        nr = datetime(2026, 6, 3, 8, 0, 0)
+        _create_task_schedule(test_session, task_id="stream_probe", enabled=True, next_run_at=nr)
+
+        mock_registry = MagicMock()
+        mock_registry.get_task_status.return_value = {
+            "task_id": "stream_probe", "status": "idle", "next_run": None,
+        }
+
+        with patch("task_registry.get_registry", return_value=mock_registry), \
+             patch("schedule_calculator.describe_schedule", MagicMock(return_value="Daily")):
+            response = await async_client.get("/api/tasks/stream_probe")
+
+        assert response.status_code == 200
+        assert response.json()["next_run"] == nr.isoformat() + "Z"
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown(self, async_client):
