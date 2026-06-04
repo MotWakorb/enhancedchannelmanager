@@ -38,6 +38,7 @@ import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModa
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { FindDuplicatesModal } from './FindDuplicatesModal';
 import { naturalCompare } from '../utils/naturalSort';
+import { getDateLocale } from '../utils/formatting';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useDropdown } from '../hooks/useDropdown';
@@ -5759,7 +5760,7 @@ export function ChannelsPane({
                       <div>
                         <div style={{ fontWeight: 'bold' }}>{group.name}</div>
                         <div style={{ fontSize: '0.9em', color: '#888' }}>
-                          Hidden {new Date(group.hidden_at).toLocaleDateString()}
+                          Hidden {new Date(group.hidden_at).toLocaleDateString(getDateLocale())}
                         </div>
                       </div>
                       <button

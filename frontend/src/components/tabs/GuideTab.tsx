@@ -5,6 +5,7 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
 import { PrintGuideModal } from '../PrintGuideModal';
 import { CustomSelect } from '../CustomSelect';
+import { getDateLocale } from '../../utils/formatting';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -411,7 +412,7 @@ export function GuideTab({
 
   // Format time for display
   const formatTime = (date: Date): string => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString(getDateLocale(), { hour: '2-digit', minute: '2-digit' });
   };
 
   // Get available date options (today + previous 2 days + next 5 days)
@@ -423,7 +424,7 @@ export function GuideTab({
       const date = new Date(today);
       date.setDate(date.getDate() + i);
       const value = getLocalDateString(date);
-      const label = i === 0 ? 'Today' : i === -1 ? 'Yesterday' : i === 1 ? 'Tomorrow' : date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+      const label = i === 0 ? 'Today' : i === -1 ? 'Yesterday' : i === 1 ? 'Tomorrow' : date.toLocaleDateString(getDateLocale(), { weekday: 'short', month: 'short', day: 'numeric' });
       options.push({ value, label });
     }
 
