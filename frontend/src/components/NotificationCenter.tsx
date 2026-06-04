@@ -3,6 +3,7 @@ import * as api from '../services/api';
 import type { Notification } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { logger } from '../utils/logger';
+import { getDateLocale } from '../utils/formatting';
 import { decoratePendingMergesToast } from './pendingMergesToast';
 import { PENDING_MERGES_EVENT } from './tabs/ChannelManagerTab';
 import './NotificationCenter.css';
@@ -363,7 +364,7 @@ export function NotificationCenter({
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
+    return date.toLocaleDateString(getDateLocale());
   };
 
   const getIcon = (type: string) => {

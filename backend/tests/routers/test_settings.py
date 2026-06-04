@@ -37,6 +37,7 @@ def _mock_settings(**overrides):
         "hide_m3u_urls": True,
         "gracenote_conflict_mode": "prefer_gracenote",
         "theme": "dark",
+        "date_format": "auto",
         "default_channel_profile_ids": [],
         "linked_m3u_accounts": [],
         "epg_auto_match_threshold": 80,
@@ -133,6 +134,18 @@ class TestGetSettings:
         assert data["configured"] is True
         assert "password" not in data
 
+    @pytest.mark.asyncio
+    async def test_exposes_date_format(self, async_client):
+        """GET exposes the global date_format preference (bd-8j47e)."""
+        mock = _mock_settings(date_format="dmy")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["date_format"] == "dmy"
+
 
 class TestUpdateSettings:
     """Tests for POST /api/settings."""
@@ -156,6 +169,28 @@ class TestUpdateSettings:
 
         assert response.status_code == 200
         assert response.json()["status"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_persists_date_format(self, async_client):
+        """POST threads date_format into the saved settings (bd-8j47e)."""
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings") as mock_save, \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                "date_format": "iso",
+            })
+
+        assert response.status_code == 200
+        saved = mock_save.call_args[0][0]
+        assert saved.date_format == "iso"
 
     @pytest.mark.asyncio
     async def test_requires_password_when_changing_url(self, async_client):
