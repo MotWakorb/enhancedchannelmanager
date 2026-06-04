@@ -16,6 +16,7 @@ import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
+import { setDateFormatLocale, formatDateCompact, type DateFormatPref } from '../../utils/formatting';
 import { normalizeSmtpRecipientsPaste, parseSmtpRecipients } from '../../utils/smtpRecipients';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
@@ -415,6 +416,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [gracenoteConflictMode, setGracenoteConflictMode] = useState<GracenoteConflictMode>('ask');
   const [theme, setTheme] = useState<Theme>('dark');
+  const [dateFormat, setDateFormat] = useState<DateFormatPref>('auto');
   const [vlcOpenBehavior, setVlcOpenBehavior] = useState<'protocol_only' | 'm3u_fallback' | 'm3u_only'>('m3u_fallback');
   const [streamPreviewMode, setStreamPreviewMode] = useState<StreamPreviewMode>('passthrough');
 
@@ -810,6 +812,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setHideM3uUrls(settings.hide_m3u_urls ?? false);
       setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setTheme(settings.theme || 'dark');
+      setDateFormat((settings.date_format as DateFormatPref) || 'auto');
       const vlcBehavior = settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only';
       setVlcOpenBehavior(vlcBehavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
@@ -1211,6 +1214,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         hide_m3u_urls: hideM3uUrls,
         gracenote_conflict_mode: gracenoteConflictMode,
         theme: theme,
+        date_format: dateFormat,
         default_channel_profile_ids: defaultChannelProfileIds,
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
@@ -2082,6 +2086,40 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="theme-label">High Contrast</span>
             <span className="theme-description">Maximum contrast for accessibility</span>
           </label>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">calendar_month</span>
+          <h3>Date Format</h3>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="dateFormat">How dates are displayed</label>
+          <CustomSelect
+            value={dateFormat}
+            onChange={(val) => {
+              setDateFormat(val as DateFormatPref);
+              // Apply immediately so the preview below and the rest of the
+              // UI reflect the choice without waiting for a save/reload.
+              setDateFormatLocale(val);
+            }}
+            options={[
+              { value: 'auto', label: 'Automatic — match my device/browser' },
+              { value: 'mdy', label: 'Month/Day/Year — 06/04/2026' },
+              { value: 'dmy', label: 'Day/Month/Year — 04/06/2026' },
+              { value: 'iso', label: 'Year-Month-Day (ISO) — 2026-06-04' },
+            ]}
+          />
+          <p className="form-hint">
+            Applies to every date and time shown across the app. This is an
+            instance-wide setting shared by all users. "Automatic" uses each
+            viewer's own browser locale (which is why dates can look different
+            for different people); the other options pin one consistent order.
+            <br />
+            Preview: <strong>{formatDateCompact('2026-06-04T14:30:00Z')}</strong>
+          </p>
         </div>
       </div>
 

@@ -1009,6 +1009,7 @@ export interface SettingsResponse {
   hide_m3u_urls: boolean;
   gracenote_conflict_mode: GracenoteConflictMode;
   theme: Theme;
+  date_format: string;  // Global UI date format: "auto", "mdy", "dmy", or "iso" (bd-8j47e)
   default_channel_profile_ids: number[];
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
   epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
@@ -1133,6 +1134,7 @@ export async function saveSettings(settings: {
   hide_m3u_urls?: boolean;  // Optional - defaults to false
   gracenote_conflict_mode?: GracenoteConflictMode;  // Optional - defaults to 'ask'
   theme?: Theme;  // Optional - defaults to 'dark'
+  date_format?: string;  // Optional - "auto" | "mdy" | "dmy" | "iso", defaults to 'auto' (bd-8j47e)
   default_channel_profile_ids?: number[];  // Optional - empty array means no defaults
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
   epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
