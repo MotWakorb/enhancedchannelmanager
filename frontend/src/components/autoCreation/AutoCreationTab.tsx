@@ -18,6 +18,7 @@ import { RuleBuilder } from './RuleBuilder';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 import * as autoCreationApi from '../../services/autoCreationApi';
 import { copyToClipboard } from '../../utils/clipboard';
+import { getDateLocale } from '../../utils/formatting';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
 import '../ModalBase.css';
@@ -923,7 +924,7 @@ export function AutoCreationTab() {
                       {runningSingleRule ? 'Single Rule' : 'Pipeline'}
                     </span>
                     <span className="execution-date">
-                      {new Date().toLocaleString()}
+                      {new Date().toLocaleString(getDateLocale())}
                     </span>
                     <span className="execution-stats">
                       Processing...
@@ -941,7 +942,7 @@ export function AutoCreationTab() {
                       {execution.mode === 'dry_run' ? 'Dry Run' : 'Execute'}
                     </span>
                     <span className="execution-date">
-                      {new Date(execution.started_at).toLocaleString()}
+                      {new Date(execution.started_at).toLocaleString(getDateLocale())}
                     </span>
                     <span className="execution-stats">
                       {execution.streams_matched} matched
@@ -1115,7 +1116,7 @@ export function AutoCreationTab() {
                 <p>
                   <strong>This will overwrite the current stream assignments</strong> of all
                   channels with the state captured before this run on{' '}
-                  <strong>{new Date(showRevertConfirm.started_at).toLocaleString()}</strong>.
+                  <strong>{new Date(showRevertConfirm.started_at).toLocaleString(getDateLocale())}</strong>.
                 </p>
               </div>
               <p className="revert-warning-detail">
@@ -1317,12 +1318,12 @@ export function AutoCreationTab() {
               </div>
               <div className="detail-row">
                 <span className="detail-label">Started:</span>
-                <span>{new Date(details.started_at).toLocaleString()}</span>
+                <span>{new Date(details.started_at).toLocaleString(getDateLocale())}</span>
               </div>
               {details.completed_at && (
                 <div className="detail-row">
                   <span className="detail-label">Completed:</span>
-                  <span>{new Date(details.completed_at).toLocaleString()}</span>
+                  <span>{new Date(details.completed_at).toLocaleString(getDateLocale())}</span>
                 </div>
               )}
               {details.duration_seconds != null && (

@@ -44,7 +44,7 @@ import {
 import { useAuth } from '../../hooks/useAuth';
 import * as api from '../../services/api';
 import { HttpError } from '../../services/httpClient';
-import { streamLabel } from '../../utils/formatting';
+import { streamLabel, getDateLocale } from '../../utils/formatting';
 import type {
   WatchTimeUserTotalRow,
   WatchTimeUserDayRow,
@@ -82,7 +82,7 @@ function formatLastWatched(iso: string | null): string {
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    return d.toLocaleDateString(getDateLocale(), { year: 'numeric', month: 'short', day: 'numeric' });
   } catch {
     return '—';
   }
@@ -132,7 +132,7 @@ export function formatLocalDayLabel(
   // the operator's tz is the bucket's most-overlapping local day.
   const anchor = new Date(`${utcDayStr}T12:00:00Z`);
   if (Number.isNaN(anchor.getTime())) return utcDayStr;
-  return new Intl.DateTimeFormat(locale, {
+  return new Intl.DateTimeFormat(locale ?? getDateLocale(), {
     month: 'short',
     day: 'numeric',
     timeZone,

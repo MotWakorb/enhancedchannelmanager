@@ -56,6 +56,7 @@ import {
   formatSpeed,
   formatFps,
   streamLabel,
+  getDateLocale,
 } from '../../utils/formatting';
 
 // Check if event type is streaming-related (not login, refresh, etc.)
@@ -172,7 +173,7 @@ function prepareBandwidthChartData(dailyHistory: Array<{ date: string; bytes_tra
   for (let i = 6; i >= 0; i--) {
     const date = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
     const dateStr = formatDate(date);
-    const dayLabel = date.toLocaleDateString('en-US', { weekday: 'short' });
+    const dayLabel = date.toLocaleDateString(getDateLocale(), { weekday: 'short' });
     const bytes = dataMap.get(dateStr) || 0;
 
     result.push({

@@ -130,6 +130,7 @@ const settingsBase = {
   dispatcharr_api_key_configured: false,
   api_key_configured: false,
   theme: 'dark' as const,
+  date_format: 'auto',
   auto_rename_channel_number: false,
   include_channel_number_in_name: false,
   channel_number_separator: '-',
