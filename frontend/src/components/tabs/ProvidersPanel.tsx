@@ -85,7 +85,7 @@ import * as api from '../../services/api';
 import { HttpError } from '../../services/httpClient';
 import { Heatmap } from '../charts/Heatmap';
 import { paletteColorAt } from '../../utils/chartPalette';
-import { streamLabel } from '../../utils/formatting';
+import { streamLabel, getDateLocale } from '../../utils/formatting';
 import type {
   ProviderStatsWindow,
   ProviderStatsBucket,
@@ -292,12 +292,12 @@ export function formatBucketTick(
 
   if (granularity === 'hour') {
     // Render as "MM/DD HH:mm" in the operator's local timezone.
-    const datePart = new Intl.DateTimeFormat(locale ?? 'en-US', {
+    const datePart = new Intl.DateTimeFormat(locale ?? getDateLocale(), {
       month: '2-digit',
       day: '2-digit',
       timeZone,
     }).format(d);
-    const timePart = new Intl.DateTimeFormat(locale ?? 'en-US', {
+    const timePart = new Intl.DateTimeFormat(locale ?? getDateLocale(), {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
@@ -307,7 +307,7 @@ export function formatBucketTick(
   }
 
   // granularity === 'day': render as "MM/DD" in the operator's local timezone.
-  return new Intl.DateTimeFormat(locale ?? 'en-US', {
+  return new Intl.DateTimeFormat(locale ?? getDateLocale(), {
     month: '2-digit',
     day: '2-digit',
     timeZone,

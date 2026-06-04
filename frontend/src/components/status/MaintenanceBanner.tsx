@@ -5,6 +5,7 @@
  */
 import { useState } from 'react';
 import type { MaintenanceWindow } from '../../types';
+import { getDateLocale } from '../../utils/formatting';
 import './MaintenanceBanner.css';
 
 export interface MaintenanceBannerProps {
@@ -19,14 +20,14 @@ function formatTimeRange(start: string, end: string): string {
   const now = new Date();
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', {
+    return date.toLocaleTimeString(getDateLocale(), {
       hour: 'numeric',
       minute: '2-digit',
     });
   };
 
   const formatDate = (date: Date) => {
-    return date.toLocaleDateString('en-US', {
+    return date.toLocaleDateString(getDateLocale(), {
       month: 'short',
       day: 'numeric',
     });
