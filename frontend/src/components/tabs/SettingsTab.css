@@ -1130,6 +1130,22 @@
   gap: 0.5rem;
 }
 
+/* Clear Emby Logos type checkboxes (GH #475, bd-v9tp7) */
+.emby-clear-logos-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.emby-clear-logos-types .checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
 .integration-test-result {
   font-size: 0.875rem;
 }

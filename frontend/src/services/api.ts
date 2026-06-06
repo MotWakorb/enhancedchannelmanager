@@ -431,17 +431,76 @@ export interface BulkCommitResponse {
   validationIssues?: ValidationIssue[];
   /** Whether validation passed (no errors, may have warnings) */
   validationPassed?: boolean;
+  /**
+   * bd-5xciq: true when some operations committed AND some failed. Lets the UI
+   * render a distinct partial-success state ("X applied, Y failed") so the
+   * operator reconciles via tempIdMap instead of retrying and creating
+   * duplicates. False for full success and for total failure (nothing applied).
+   */
+  partial?: boolean;
+}
+
+// 202+poll envelope for the async bulk-commit path (bd-ggxks). validateOnly
+// stays synchronous on the backend, so this typing applies only to the
+// non-validateOnly POST + the subsequent status polls.
+
+interface BulkCommitJobAccepted {
+  job_id: string;
+  status: 'running';
+  message?: string;
+}
+
+type BulkCommitJobStatus =
+  | { job_id: string; status: 'running' }
+  | { job_id: string; status: 'failed'; error: string }
+  | { job_id: string; status: 'completed'; result: BulkCommitResponse };
+
+const BULK_COMMIT_POLL_INTERVAL_MS = 750;
+// Hard ceiling well above the backend's 30-min job TTL — a job that genuinely
+// hangs longer than this needs operator attention, not silent waiting.
+const BULK_COMMIT_POLL_MAX_DURATION_MS = 60 * 60 * 1000;
+
+async function pollBulkCommitJob(jobId: string): Promise<BulkCommitResponse> {
+  const started = Date.now();
+  while (Date.now() - started < BULK_COMMIT_POLL_MAX_DURATION_MS) {
+    const status = await fetchJson<BulkCommitJobStatus>(
+      `${API_BASE}/channels/bulk-commit/${encodeURIComponent(jobId)}`,
+    );
+    if (status.status === 'completed') {
+      return status.result;
+    }
+    if (status.status === 'failed') {
+      throw new Error(`Bulk commit failed: ${status.error}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, BULK_COMMIT_POLL_INTERVAL_MS));
+  }
+  throw new Error(`Bulk commit polling exceeded ${BULK_COMMIT_POLL_MAX_DURATION_MS / 1000}s`);
 }
 
 /**
- * Commit multiple channel operations in a single request.
- * This is much more efficient than making individual API calls for 1000+ operations.
+ * Commit multiple channel operations.
+ *
+ * Two paths (bd-ggxks):
+ * - validateOnly: synchronous POST returning the full response in one round-trip.
+ *   Used by useEditMode.validate() for instant pre-commit feedback.
+ * - default (validateOnly=false): POST returns 202 + {job_id}; this function
+ *   polls GET /api/channels/bulk-commit/{job_id} until the job terminates,
+ *   so callers still receive the same BulkCommitResponse on success and a
+ *   thrown Error on failure. The hop is invisible to existing callers.
  */
 export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommitResponse> {
-  return fetchJson(`${API_BASE}/channels/bulk-commit`, {
+  if (request.validateOnly) {
+    return fetchJson(`${API_BASE}/channels/bulk-commit`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  const accepted = await fetchJson<BulkCommitJobAccepted>(`${API_BASE}/channels/bulk-commit`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
+  return pollBulkCommitJob(accepted.job_id);
 }
 
 // Stream-to-channel deduplication (ADR-008 / bd-1v4ht epic) ----------------
@@ -950,6 +1009,7 @@ export interface SettingsResponse {
   hide_m3u_urls: boolean;
   gracenote_conflict_mode: GracenoteConflictMode;
   theme: Theme;
+  date_format: string;  // Global UI date format: "auto", "mdy", "dmy", or "iso" (bd-8j47e)
   default_channel_profile_ids: number[];
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
   epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
@@ -1074,6 +1134,7 @@ export async function saveSettings(settings: {
   hide_m3u_urls?: boolean;  // Optional - defaults to false
   gracenote_conflict_mode?: GracenoteConflictMode;  // Optional - defaults to 'ask'
   theme?: Theme;  // Optional - defaults to 'dark'
+  date_format?: string;  // Optional - "auto" | "mdy" | "dmy" | "iso", defaults to 'auto' (bd-8j47e)
   default_channel_profile_ids?: number[];  // Optional - empty array means no defaults
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
   epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
@@ -1177,6 +1238,48 @@ export async function testEmbyConnection(
     method: 'POST',
     body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
   });
+}
+
+// Emby Clear Logos (GH #475, bd-v9tp7). POST enqueues a background job
+// (202 + {job_id}); poll the status endpoint until terminal. Reuses the saved
+// Emby connection on the backend — no credentials cross the wire here.
+export const EMBY_LOGO_TYPES = ['Primary', 'LogoLight', 'LogoLightColor'] as const;
+export type EmbyLogoType = (typeof EMBY_LOGO_TYPES)[number];
+
+export interface ClearEmbyLogosEnqueueResult {
+  job_id: string;
+  status: string;
+  message?: string;
+}
+
+export interface ClearEmbyLogosSummary {
+  channels_processed: number;
+  images_deleted: number;
+  images_missing: number;
+  errors: number;
+  logo_types: string[];
+}
+
+export interface ClearEmbyLogosStatusResult {
+  job_id: string;
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+  result?: ClearEmbyLogosSummary;
+}
+
+export async function clearEmbyLogos(
+  logoTypes: EmbyLogoType[],
+): Promise<ClearEmbyLogosEnqueueResult> {
+  return fetchJson(`${API_BASE}/emby/clear-logos`, {
+    method: 'POST',
+    body: JSON.stringify({ logo_types: logoTypes }),
+  });
+}
+
+export async function getClearEmbyLogosStatus(
+  jobId: string,
+): Promise<ClearEmbyLogosStatusResult> {
+  return fetchJson(`${API_BASE}/emby/clear-logos/${encodeURIComponent(jobId)}`);
 }
 
 // Plex Settings UI test-connection (bd-r5f0c.5 / W5). Same shape as Emby.

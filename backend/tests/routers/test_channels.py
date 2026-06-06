@@ -920,8 +920,46 @@ class TestAssignNumbers:
         mock_client.assign_channel_numbers.assert_called_once_with([1], 100)
 
 
+async def _commit_and_wait(async_client, body, *, max_polls=50):
+    """POST a bulk commit and poll until terminal, returning the result envelope.
+
+    Mirrors what the frontend client does (POST → 202 → poll). The shape
+    returned here matches the pre-bd-ggxks synchronous response body, so the
+    existing assertions on per-operation execution still apply unchanged.
+    """
+    import asyncio as _asyncio
+
+    response = await async_client.post("/api/channels/bulk-commit", json=body)
+    if response.status_code == 200:
+        # validateOnly path is still synchronous.
+        return response, response.json()
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+    for _ in range(max_polls):
+        await _asyncio.sleep(0)
+        poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+        assert poll.status_code == 200, poll.text
+        payload = poll.json()
+        if payload["status"] == "completed":
+            return response, payload["result"]
+        if payload["status"] == "failed":
+            return response, payload
+    raise AssertionError(f"bulk-commit job {job_id} did not terminate in {max_polls} polls")
+
+
 class TestBulkCommit:
-    """Tests for POST /api/channels/bulk-commit."""
+    """Tests for POST /api/channels/bulk-commit (202+poll, bd-ggxks)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        # Each test starts with an empty job dict so state never leaks across
+        # tests (the dict is module-level by design so the in-memory job
+        # lookup survives between requests within a single process).
+        from routers import channels as router_module
+
+        router_module._BULK_COMMIT_JOBS.clear()
+        yield
+        router_module._BULK_COMMIT_JOBS.clear()
 
     @pytest.mark.asyncio
     async def test_empty_operations(self, async_client):
@@ -930,18 +968,15 @@ class TestBulkCommit:
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
-            response = await async_client.post("/api/channels/bulk-commit", json={
-                "operations": [],
-            })
+            response, data = await _commit_and_wait(async_client, {"operations": []})
 
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 202
         assert data["success"] is True
         assert data["operationsApplied"] == 0
 
     @pytest.mark.asyncio
     async def test_validate_only(self, async_client):
-        """Returns validation results without executing."""
+        """Returns validation results synchronously without executing."""
         mock_client = AsyncMock()
         mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
         mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
@@ -955,9 +990,9 @@ class TestBulkCommit:
                 "validateOnly": True,
             })
 
+        # Validate-only stays sync — single round-trip, no job_id envelope.
         assert response.status_code == 200
         data = response.json()
-        # Validate-only doesn't execute operations
         assert data["operationsApplied"] == 0
 
     @pytest.mark.asyncio
@@ -974,14 +1009,13 @@ class TestBulkCommit:
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
-            response = await async_client.post("/api/channels/bulk-commit", json={
+            response, data = await _commit_and_wait(async_client, {
                 "operations": [
                     {"type": "deleteChannel", "channelId": 1},
                 ],
             })
 
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 202
         assert data["success"] is True
 
     @pytest.mark.asyncio
@@ -1004,15 +1038,14 @@ class TestBulkCommit:
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
-            response = await async_client.post("/api/channels/bulk-commit", json={
+            response, data = await _commit_and_wait(async_client, {
                 "operations": [
                     {"type": "reorderChannelStreams", "channelId": 1,
                      "streamIds": [5003, 5001, 5002]},
                 ],
             })
 
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 202
         assert data["success"] is True
         assert data["operationsApplied"] == 1
         assert data["operationsFailed"] == 0
@@ -1043,7 +1076,7 @@ class TestBulkCommit:
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
-            response = await async_client.post("/api/channels/bulk-commit", json={
+            response, data = await _commit_and_wait(async_client, {
                 "operations": [
                     # Omits 5001 -> would detach it under replace-semantics.
                     {"type": "reorderChannelStreams", "channelId": 1,
@@ -1052,8 +1085,7 @@ class TestBulkCommit:
                 "continueOnError": True,
             })
 
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 202
         # The lossy op is rejected: reported as an error, not applied.
         assert data["operationsApplied"] == 0
         assert data["operationsFailed"] == 1
@@ -1065,6 +1097,584 @@ class TestBulkCommit:
             assert written.get("streams") != [5002]
         # Strongest assertion: no replace happened at all for this channel.
         mock_client.update_channel.assert_not_awaited()
+
+
+class TestBulkCommitLogoIndex:
+    """Tests for the per-run logo index in _run_bulk_commit (bd-raehx).
+
+    Previously every createChannel op with logoUrl + no logoId called
+    find_logo_by_url(), which re-paginated the ENTIRE Dispatcharr logo
+    catalog. For an N-channel batch against a ~25-page catalog that was
+    O(N * pages) GET calls — the 30s budget was exhausted around op 10-15.
+
+    The fix builds a url->logo index ONCE per run (lazily, on first need),
+    so the catalog is paginated a single time and reused for every op.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        from routers import channels as router_module
+
+        router_module._BULK_COMMIT_JOBS.clear()
+        yield
+        router_module._BULK_COMMIT_JOBS.clear()
+
+    @staticmethod
+    def _paginated_logos(pages):
+        """Build a get_logos side_effect that returns ``pages`` catalog pages.
+
+        Each element of ``pages`` is the ``results`` list for that page; the
+        ``next`` field is set on every page but the last, mirroring how
+        find_logo_by_url follows pagination.
+        """
+        responses = []
+        for i, results in enumerate(pages):
+            is_last = i == len(pages) - 1
+            responses.append({
+                "results": results,
+                "count": sum(len(p) for p in pages),
+                "next": None if is_last else f"page-{i + 2}",
+            })
+
+        async def _side_effect(page=1, page_size=500, search=None):
+            # 1-indexed pages, matching the client.
+            return responses[page - 1]
+
+        return _side_effect
+
+    @pytest.mark.asyncio
+    async def test_catalog_paginated_once_for_n_channels(self, async_client):
+        """N createChannel ops (all logoUrl, no logoId) paginate the catalog
+        ONCE — get_logos is called once per catalog PAGE, not N * pages."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        # 3-page catalog; none of the requested URLs exist in it.
+        mock_client.get_logos.side_effect = self._paginated_logos([
+            [{"id": 1, "url": "http://logos/existing-a.png"}],
+            [{"id": 2, "url": "http://logos/existing-b.png"}],
+            [{"id": 3, "url": "http://logos/existing-c.png"}],
+        ])
+        created_logo_ids = iter(range(1000, 2000))
+        mock_client.create_logo.side_effect = (
+            lambda data: {"id": next(created_logo_ids), "url": data["url"]}
+        )
+        created_channel_ids = iter(range(1, 1000))
+        mock_client.create_channel.side_effect = (
+            lambda data: {"id": next(created_channel_ids), "name": data["name"]}
+        )
+
+        ops = [
+            {"type": "createChannel", "tempId": -(i + 1), "name": f"Ch{i}",
+             "logoUrl": f"http://logos/new-{i}.png"}
+            for i in range(5)
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 5
+        # Catalog has 3 pages -> exactly 3 get_logos calls for the WHOLE batch,
+        # not 3 * 5 = 15 (the old per-channel re-pagination).
+        assert mock_client.get_logos.await_count == 3
+        # Each new URL was created exactly once.
+        assert mock_client.create_logo.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_shared_logo_url_created_once(self, async_client):
+        """Two createChannel ops sharing the same logoUrl create the logo only
+        once — the second op reuses the index entry inserted by the first."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        # Empty catalog (single page) — URL is not pre-existing.
+        mock_client.get_logos.side_effect = self._paginated_logos([[]])
+        mock_client.create_logo.return_value = {"id": 7777, "url": "http://logos/shared.png"}
+        created_channel_ids = iter(range(1, 1000))
+        mock_client.create_channel.side_effect = (
+            lambda data: {"id": next(created_channel_ids), "name": data["name"]}
+        )
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "A",
+             "logoUrl": "http://logos/shared.png"},
+            {"type": "createChannel", "tempId": -2, "name": "B",
+             "logoUrl": "http://logos/shared.png"},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 2
+        # Catalog paginated once, logo created once despite two channels.
+        assert mock_client.get_logos.await_count == 1
+        assert mock_client.create_logo.await_count == 1
+        # Both channels were created with the same shared logo_id.
+        logo_ids = [
+            call.args[0].get("logo_id")
+            for call in mock_client.create_channel.await_args_list
+        ]
+        assert logo_ids == [7777, 7777]
+
+    @pytest.mark.asyncio
+    async def test_existing_logo_reused_without_create(self, async_client):
+        """A createChannel op whose logoUrl already exists in the catalog uses
+        the existing logo id and does NOT call create_logo."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_logos.side_effect = self._paginated_logos([
+            [{"id": 42, "url": "http://logos/espn.png"}],
+        ])
+        mock_client.create_channel.return_value = {"id": 1, "name": "ESPN"}
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "ESPN",
+             "logoUrl": "http://logos/espn.png"},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 1
+        assert mock_client.get_logos.await_count == 1
+        mock_client.create_logo.assert_not_awaited()
+        assert mock_client.create_channel.await_args.args[0].get("logo_id") == 42
+
+    @pytest.mark.asyncio
+    async def test_validate_only_never_fetches_logos(self, async_client):
+        """validateOnly batches build no logo index — get_logos is never
+        called (lazy build only fires on a real createChannel logo lookup)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "A",
+             "logoUrl": "http://logos/a.png"},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": ops, "validateOnly": True,
+            })
+
+        assert response.status_code == 200
+        mock_client.get_logos.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_only_without_logos_never_fetches_logos(self, async_client):
+        """createChannel ops with no logoUrl never trigger a catalog fetch."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        created_channel_ids = iter(range(1, 1000))
+        mock_client.create_channel.side_effect = (
+            lambda data: {"id": next(created_channel_ids), "name": data["name"]}
+        )
+
+        ops = [
+            {"type": "createChannel", "tempId": -(i + 1), "name": f"Ch{i}"}
+            for i in range(3)
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 3
+        mock_client.get_logos.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_logo_failure_still_creates_channel(self, async_client):
+        """If logo resolution raises, the channel is still created without a
+        logo (preserves the existing try/except fallthrough behavior)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        # Pagination itself fails -> index build raises -> fall through, no logo.
+        mock_client.get_logos.side_effect = Exception("Dispatcharr 500")
+        mock_client.create_channel.return_value = {"id": 1, "name": "A"}
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "A",
+             "logoUrl": "http://logos/a.png"},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 1
+        # Channel created with NO logo_id key (logo step swallowed the error).
+        assert "logo_id" not in mock_client.create_channel.await_args.args[0]
+
+
+class TestBulkCommitPartialSuccess:
+    """Tests for partial-success result semantics in _run_bulk_commit (bd-5xciq).
+
+    A continueOnError batch where some ops apply and some fail must surface a
+    distinct PARTIAL outcome — applied/failed counts, the errors list, and a
+    ``partial`` flag — so the frontend can render it as 'X applied, Y failed'
+    instead of a flat failure that prompts duplicate-creating retries.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        from routers import channels as router_module
+
+        router_module._BULK_COMMIT_JOBS.clear()
+        yield
+        router_module._BULK_COMMIT_JOBS.clear()
+
+    @pytest.mark.asyncio
+    async def test_partial_success_envelope(self, async_client):
+        """Mixed success/failure with continueOnError returns applied + failed
+        counts, a populated errors list, the tempIdMap of what committed, and a
+        ``partial`` flag — NOT a flat success=false-with-nothing-applied."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+
+        # First create succeeds, second raises, third succeeds.
+        results = iter([
+            {"id": 101, "name": "A"},
+            Exception("Dispatcharr rejected B"),
+            {"id": 103, "name": "C"},
+        ])
+
+        def _create(data):
+            nxt = next(results)
+            if isinstance(nxt, Exception):
+                raise nxt
+            return nxt
+
+        mock_client.create_channel.side_effect = _create
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "A"},
+            {"type": "createChannel", "tempId": -2, "name": "B"},
+            {"type": "createChannel", "tempId": -3, "name": "C"},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 2
+        assert data["operationsFailed"] == 1
+        assert len(data["errors"]) == 1
+        # The two channels that committed are in the tempIdMap so the client
+        # can reconcile what's already in Dispatcharr (no blind retry).
+        assert data["tempIdMap"] == {"-1": 101, "-3": 103}
+        # Distinct partial outcome, not a flat failure.
+        assert data["partial"] is True
+
+    @pytest.mark.asyncio
+    async def test_full_success_not_partial(self, async_client):
+        """An all-succeed batch reports success=True and partial=False."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        created = iter(range(1, 100))
+        mock_client.create_channel.side_effect = (
+            lambda data: {"id": next(created), "name": data["name"]}
+        )
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "A"},
+            {"type": "createChannel", "tempId": -2, "name": "B"},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["success"] is True
+        assert data["operationsFailed"] == 0
+        assert data["partial"] is False
+
+    @pytest.mark.asyncio
+    async def test_total_failure_not_partial(self, async_client):
+        """A batch where every op fails reports partial=False (nothing applied),
+        so the client treats it as a true failure, not a partial."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.create_channel.side_effect = Exception("Dispatcharr down")
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "A"},
+            {"type": "createChannel", "tempId": -2, "name": "B"},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 0
+        assert data["operationsFailed"] == 2
+        assert data["success"] is False
+        assert data["partial"] is False
+
+
+class TestBulkCommitAsync:
+    """Tests for the 202+poll lifecycle of POST /api/channels/bulk-commit
+    and its sibling GET /api/channels/bulk-commit/{job_id} (bd-ggxks).
+
+    The bulk commit was previously synchronous and bounded by the 30s
+    ECM_REQUEST_TIMEOUT_SECONDS middleware budget. On a 441-channel SiriusXM
+    batch the timeout fired mid-flight, returning 504 to the operator while
+    the handler kept running — duplicates piled up across retries. The new
+    pattern returns 202 + job_id immediately so a slow batch can never hit
+    the request-budget cliff.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        from routers import channels as router_module
+
+        router_module._BULK_COMMIT_JOBS.clear()
+        yield
+        router_module._BULK_COMMIT_JOBS.clear()
+
+    @pytest.mark.asyncio
+    async def test_post_returns_202_with_job_id_and_running_status(self, async_client):
+        """A non-validateOnly POST immediately returns 202 + {job_id, status}."""
+        import asyncio as _asyncio
+
+        mock_client = AsyncMock()
+        gate = _asyncio.Event()
+
+        async def slow_run(req):
+            await gate.wait()
+            return {
+                "success": True,
+                "operationsApplied": 0,
+                "operationsFailed": 0,
+                "errors": [],
+                "tempIdMap": {},
+                "groupIdMap": {},
+            }
+
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels._run_bulk_commit", side_effect=slow_run):
+                response = await async_client.post(
+                    "/api/channels/bulk-commit", json={"operations": []}
+                )
+                assert response.status_code == 202
+                body = response.json()
+                assert body["job_id"]
+                assert body["status"] == "running"
+
+                # Job is registered as still running before the worker finishes.
+                from routers.channels import _BULK_COMMIT_JOBS
+                assert body["job_id"] in _BULK_COMMIT_JOBS
+                assert _BULK_COMMIT_JOBS[body["job_id"]].status == "running"
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_get_while_running_returns_running_status(self, async_client):
+        """GET /{job_id} reports running until the worker finishes."""
+        import asyncio as _asyncio
+
+        mock_client = AsyncMock()
+        gate = _asyncio.Event()
+
+        async def slow_run(req):
+            await gate.wait()
+            return {
+                "success": True,
+                "operationsApplied": 0,
+                "operationsFailed": 0,
+                "errors": [],
+                "tempIdMap": {},
+                "groupIdMap": {},
+            }
+
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels._run_bulk_commit", side_effect=slow_run):
+                enqueue = await async_client.post(
+                    "/api/channels/bulk-commit", json={"operations": []}
+                )
+                job_id = enqueue.json()["job_id"]
+
+                poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+                assert poll.status_code == 200
+                body = poll.json()
+                assert body["job_id"] == job_id
+                assert body["status"] == "running"
+                # Running poll envelope must NOT leak a result yet.
+                assert "result" not in body
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_get_after_completion_returns_result_and_evicts_job(self, async_client):
+        """Once the worker completes, GET returns the full BulkCommitResponse
+        and the job row is dropped from the dict (single-shot retrieval)."""
+        import asyncio as _asyncio
+
+        mock_client = AsyncMock()
+
+        async def fast_run(req):
+            return {
+                "success": True,
+                "operationsApplied": 3,
+                "operationsFailed": 0,
+                "errors": [],
+                "tempIdMap": {-1: 100, -2: 101},
+                "groupIdMap": {},
+            }
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels._run_bulk_commit", side_effect=fast_run):
+            enqueue = await async_client.post(
+                "/api/channels/bulk-commit", json={"operations": []}
+            )
+            job_id = enqueue.json()["job_id"]
+            for _ in range(50):
+                await _asyncio.sleep(0)
+
+            poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+            assert poll.status_code == 200
+            body = poll.json()
+            assert body["status"] == "completed"
+            assert body["result"]["operationsApplied"] == 3
+            assert body["result"]["tempIdMap"] == {"-1": 100, "-2": 101}
+
+            # Second GET of the same job returns 404 — the job was evicted
+            # so RAM stays bounded for short-lived ops.
+            from routers.channels import _BULK_COMMIT_JOBS
+            assert job_id not in _BULK_COMMIT_JOBS
+            second = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+            assert second.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_failed_job_returns_failed_status(self, async_client):
+        """A worker that raises is marked failed and exposed via GET status."""
+        import asyncio as _asyncio
+
+        mock_client = AsyncMock()
+
+        async def boom(req):
+            raise RuntimeError("dispatcharr unreachable")
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels._run_bulk_commit", side_effect=boom):
+            enqueue = await async_client.post(
+                "/api/channels/bulk-commit", json={"operations": []}
+            )
+            job_id = enqueue.json()["job_id"]
+            for _ in range(50):
+                await _asyncio.sleep(0)
+
+            poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+            assert poll.status_code == 200
+            body = poll.json()
+            assert body["status"] == "failed"
+            assert "dispatcharr unreachable" in body["error"]
+            # Failed jobs stay in the dict until TTL prune so the operator
+            # can re-poll and read the error (matches debug-bundle pattern).
+            from routers.channels import _BULK_COMMIT_JOBS
+            assert job_id in _BULK_COMMIT_JOBS
+
+    @pytest.mark.asyncio
+    async def test_get_unknown_job_id_returns_404(self, async_client):
+        response = await async_client.get("/api/channels/bulk-commit/does-not-exist")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_post_returns_within_timeout_budget(self, async_client):
+        """The handler itself must return fast — a slow worker must never
+        block the enqueue path. The whole point of bd-ggxks is to make
+        bulk-commit not synchronous on large batches."""
+        import asyncio as _asyncio
+        import time as _time
+
+        mock_client = AsyncMock()
+        gate = _asyncio.Event()
+
+        async def slow_run(req):
+            await gate.wait()
+            return {
+                "success": True,
+                "operationsApplied": 0,
+                "operationsFailed": 0,
+                "errors": [],
+                "tempIdMap": {},
+                "groupIdMap": {},
+            }
+
+        try:
+            with patch("routers.channels.get_client", return_value=mock_client), \
+                 patch("routers.channels._run_bulk_commit", side_effect=slow_run):
+                start = _time.monotonic()
+                response = await async_client.post(
+                    "/api/channels/bulk-commit", json={"operations": []}
+                )
+                elapsed = _time.monotonic() - start
+
+            assert response.status_code == 202
+            assert elapsed < 5.0, (
+                f"enqueue took {elapsed:.2f}s — handler is not async-enqueuing"
+            )
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    def test_prune_drops_expired_jobs(self):
+        """_prune_old_bulk_commit_jobs evicts jobs older than the TTL."""
+        from routers import channels as router_module
+
+        old = router_module._BulkCommitJob()
+        old.created_at = (
+            router_module.time.time() - (router_module._BULK_COMMIT_JOB_TTL_SECONDS + 60)
+        )
+        fresh = router_module._BulkCommitJob()
+        router_module._BULK_COMMIT_JOBS["old"] = old
+        router_module._BULK_COMMIT_JOBS["fresh"] = fresh
+
+        router_module._prune_old_bulk_commit_jobs()
+
+        assert "old" not in router_module._BULK_COMMIT_JOBS
+        assert "fresh" in router_module._BULK_COMMIT_JOBS
 
 
 class TestClearAutoCreated:

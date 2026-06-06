@@ -7,13 +7,13 @@ import type { WatchHistoryResponse } from '../../types';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import './WatchHistoryPanel.css';
-import { formatDuration, formatRelativeTime } from '../../utils/formatting';
+import { formatDuration, formatRelativeTime, getDateLocale } from '../../utils/formatting';
 
 // Format timestamp to readable date/time, or "Still watching" if null
 function formatTimestamp(isoString: string | null): string {
   if (!isoString) return 'Still watching';
   const date = new Date(isoString);
-  return date.toLocaleString();
+  return date.toLocaleString(getDateLocale());
 }
 
 interface WatchHistoryPanelProps {

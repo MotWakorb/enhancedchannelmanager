@@ -20,7 +20,7 @@ import type {
 } from '../../types';
 import * as api from '../../services/api';
 import './EnhancedStatsPanel.css';
-import { formatBytes, formatWatchTime } from '../../utils/formatting';
+import { formatBytes, formatWatchTime, getDateLocale } from '../../utils/formatting';
 
 // Custom tooltip for charts
 interface TooltipPayload {
@@ -104,7 +104,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
 
   // Prepare chart data for daily unique viewers
   const dailyChartData = uniqueViewers?.daily_unique.map(d => ({
-    date: new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' }),
+    date: new Date(d.date).toLocaleDateString(getDateLocale(), { weekday: 'short' }),
     unique_count: d.unique_count,
   })) || [];
 

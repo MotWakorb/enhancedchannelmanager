@@ -1504,6 +1504,68 @@ class TestTemplateContext:
         assert template_ctx["stream_name"] == "ESPN"
 
 
+class TestNormalizedNameAcrossActions:
+    """GH #466 / bd-6gvt8: {normalized_name} reflects the rule's normalization
+    groups in EVERY action, not just create_channel.
+
+    Mirrors the reporter's scenario: a "Strip country prefix" group turns
+    "US | ESPN" into "ESPN". Before the fix, {normalized_name} resolved to the
+    raw stream name everywhere except create_channel (which alone re-normalized
+    its expanded name), so Assign TVG-ID saw "US | ESPN".
+    """
+
+    def _engine_with_strip_us(self, test_session):
+        from normalization_engine import NormalizationEngine
+        from tests.fixtures.factories import (
+            create_normalization_rule_group, create_normalization_rule,
+        )
+        group = create_normalization_rule_group(test_session, name="Strip US prefix", enabled=True)
+        create_normalization_rule(
+            test_session, group_id=group.id, name="strip 'US | '",
+            condition_type="contains", condition_value="US | ",
+            action_type="remove", enabled=True,
+        )
+        return NormalizationEngine(test_session), group.id
+
+    def test_build_context_normalizes_with_rule_groups(self, test_session):
+        """{normalized_name} = rule-normalized name when the rule has groups."""
+        engine, gid = self._engine_with_strip_us(test_session)
+        executor = ActionExecutor(MagicMock(), normalization_engine=engine)
+        ctx = StreamContext(stream_id=1, stream_name="US | ESPN", m3u_account_id=1)
+
+        tctx = executor._build_template_context(ctx, None, normalization_group_ids=[gid])
+
+        assert tctx["normalized_name"] == "ESPN"
+
+    def test_build_context_raw_when_no_groups(self, test_session):
+        """Back-compat: no normalization groups -> raw stream name (unchanged)."""
+        engine, gid = self._engine_with_strip_us(test_session)
+        executor = ActionExecutor(MagicMock(), normalization_engine=engine)
+        ctx = StreamContext(stream_id=1, stream_name="US | ESPN", m3u_account_id=1)
+
+        tctx = executor._build_template_context(ctx, None)
+
+        assert tctx["normalized_name"] == "US | ESPN"
+
+    def test_assign_tvg_id_uses_rule_normalized_name(self, test_session):
+        """{normalized_name} in an Assign TVG-ID value resolves to the
+        rule-normalized name — the same value create_channel produces."""
+        engine, gid = self._engine_with_strip_us(test_session)
+        executor = ActionExecutor(MagicMock(), normalization_engine=engine)
+        ctx = StreamContext(stream_id=1, stream_name="US | ESPN", m3u_account_id=1)
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 999
+        action = {"type": "assign_tvg_id", "value": "{normalized_name}"}
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, ctx, exec_ctx, normalization_group_ids=[gid])
+        )
+
+        assert result.success is True
+        assert "ESPN" in result.description
+        assert "US |" not in result.description
+
+
 class TestNameTransform:
     """Tests for name transform on create_channel and create_group."""
 

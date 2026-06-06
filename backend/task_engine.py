@@ -628,6 +628,9 @@ class TaskEngine:
             # Get notification settings from database
             show_notifications = True  # Default to true
             send_alerts = True  # Default to true
+            # alert_on_info defaults to False to match the ScheduledTask column
+            # default — info-level external alerts are opt-in.
+            alert_on_info = False
             try:
                 session = get_session()
                 try:
@@ -638,19 +641,30 @@ class TaskEngine:
                     if scheduled_task:
                         show_notifications = scheduled_task.show_notifications
                         send_alerts = scheduled_task.send_alerts
+                        alert_on_info = scheduled_task.alert_on_info
                 finally:
                     session.close()
             except Exception as e:
                 logger.warning("[%s] Failed to get notification settings: %s", task_id, e)
 
-            # Set notification callbacks on the task instance
+            # Set notification callbacks on the task instance.
+            #
+            # The start/progress notification (_create_progress_notification) is
+            # always an "info"-level message ("<task> starting..."). Its external
+            # alert dispatch must therefore respect alert_on_info — NOT just the
+            # master send_alerts toggle. Without this gate, a task with only
+            # warning/error alerts enabled still Telegram-spammed a "starting"
+            # message on every run (GH #462 / bd-on4sr). The completion alert is
+            # dispatched separately with full per-level gating (see
+            # check_and_run_tasks), so this only narrows the start notification.
+            progress_send_alerts = send_alerts and alert_on_info
             if self._create_notification_callback:
                 instance.set_notification_callbacks(
                     create_callback=self._create_notification_callback,
                     update_callback=self._update_notification_callback,
                     delete_callback=self._delete_notification_callback,
                     show_notifications=show_notifications,
-                    send_alerts=send_alerts,
+                    send_alerts=progress_send_alerts,
                 )
 
             # Log task start to journal
