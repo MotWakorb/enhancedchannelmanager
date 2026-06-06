@@ -83,6 +83,37 @@ class EmbySession:
     channel_number: str | None = None
 
 
+@dataclass(frozen=True)
+class EmbyLiveTvChannel:
+    """A single Emby Live TV channel as exposed by ``GET /LiveTv/Channels``.
+
+    Deliberately minimal — the "Clear Emby Logos" feature (GH #475, bd-v9tp7)
+    only needs the item ``Id`` to address the image endpoint and the ``Name``
+    for operator-facing progress/logging.
+
+    Attributes:
+        channel_id: Emby item id (``Id``). Addresses
+            ``DELETE /Items/{channel_id}/Images/{type}``.
+        name: Display name (``Name``), e.g. ``"ESPN"``. Logging only.
+        channel_number: ``ChannelNumber`` if present (string, verbatim), used
+            only to label progress and to support an optional future
+            channel-number filter — never parsed.
+    """
+
+    channel_id: str
+    name: str
+    channel_number: str | None = None
+
+
+# Emby channel-logo image types the clear-logos feature may target. Mirrors
+# Channel Identifiarr's whitelist (GH #475): the primary logo plus the two
+# "light" theme variants Emby stores separately. Used to reject arbitrary
+# operator-supplied image types before issuing any DELETE.
+VALID_LOGO_IMAGE_TYPES: frozenset[str] = frozenset(
+    {"Primary", "LogoLight", "LogoLightColor"}
+)
+
+
 class EmbyClientError(Exception):
     """Raised by :class:`EmbyClient` on any auth / network / non-2xx
     failure.
@@ -183,6 +214,113 @@ class EmbyClient:
         logger.debug("[EMBY] /Sessions returned %d sessions", len(sessions))
         return sessions
 
+    async def get_livetv_channels(self) -> list[EmbyLiveTvChannel]:
+        """Fetch the operator's Emby Live TV channel list.
+
+        Backs the "Clear Emby Logos" feature (GH #475, bd-v9tp7): the returned
+        item ids address ``DELETE /Items/{id}/Images/{type}``. This call is also
+        the auth gate for the clear-logos job — a bad/expired key surfaces here
+        as an :class:`EmbyClientError` (401) so the job aborts before issuing a
+        single delete.
+
+        Returns:
+            List of :class:`EmbyLiveTvChannel`. Empty list when Emby reports no
+            Live TV channels (a configured-but-empty server, not an error).
+
+        Raises:
+            EmbyClientError: On 401 (bad/expired API key), any non-2xx
+                response, or any underlying network failure.
+        """
+        url = f"{self.base_url}/LiveTv/Channels"
+        headers = {"X-Emby-Token": self.api_key}
+
+        logger.debug("[EMBY] GET %s", url)
+        try:
+            response = await self._client.request("GET", url, headers=headers)
+        except httpx.HTTPError as exc:
+            logger.warning("[EMBY] /LiveTv/Channels request failed: %s", exc)
+            raise EmbyClientError(f"Emby request failed: {exc}") from exc
+
+        if response.status_code == 401:
+            logger.warning("[EMBY] /LiveTv/Channels returned 401 unauthorized")
+            raise EmbyClientError(
+                "Emby /LiveTv/Channels returned 401 unauthorized — check API key"
+            )
+        if response.status_code >= 400:
+            logger.warning(
+                "[EMBY] /LiveTv/Channels returned non-2xx: status=%s",
+                response.status_code,
+            )
+            raise EmbyClientError(
+                f"Emby /LiveTv/Channels returned {response.status_code}"
+            )
+
+        payload = response.json() or {}
+        # Emby wraps the list in ``{"Items": [...], "TotalRecordCount": N}``.
+        items = payload.get("Items", []) if isinstance(payload, dict) else []
+        channels = [
+            _map_livetv_channel(item)
+            for item in items
+            if item.get("Id")  # skip malformed rows with no addressable id
+        ]
+        logger.debug("[EMBY] /LiveTv/Channels returned %d channels", len(channels))
+        return channels
+
+    async def delete_item_image(self, item_id: str, image_type: str) -> bool:
+        """Delete one cached image from an Emby item (GH #475, bd-v9tp7).
+
+        Issues ``DELETE /Items/{item_id}/Images/{image_type}`` — the same call
+        Channel Identifiarr uses to flush a stale channel logo so Emby
+        re-fetches it from its source on next access. No request body, no query
+        params, no index suffix (deletes the whole image type).
+
+        Args:
+            item_id: Emby item id (a Live TV channel id).
+            image_type: One of :data:`VALID_LOGO_IMAGE_TYPES`. Validated by the
+                caller; passed through verbatim into the path.
+
+        Returns:
+            ``True`` if Emby deleted the image (2xx). ``False`` if the item had
+            no image of that type (404) — a normal, non-fatal skip.
+
+        Raises:
+            EmbyClientError: On 401 (auth) or any other non-2xx, or on a
+                network-level failure. Callers iterating many channels catch
+                this per-channel and continue; the up-front
+                :meth:`get_livetv_channels` call is the auth gate, so a 401 here
+                is unexpected (key revoked mid-run).
+        """
+        url = f"{self.base_url}/Items/{item_id}/Images/{image_type}"
+        headers = {"X-Emby-Token": self.api_key}
+
+        logger.debug("[EMBY] DELETE %s", url)
+        try:
+            response = await self._client.request("DELETE", url, headers=headers)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "[EMBY] image delete failed item=%s type=%s: %s",
+                item_id, image_type, exc,
+            )
+            raise EmbyClientError(f"Emby image delete failed: {exc}") from exc
+
+        if response.status_code == 404:
+            # No image of this type on this channel — nothing to clear. Normal.
+            return False
+        if response.status_code == 401:
+            logger.warning("[EMBY] image delete returned 401 unauthorized")
+            raise EmbyClientError(
+                "Emby image delete returned 401 unauthorized — check API key"
+            )
+        if response.status_code >= 400:
+            logger.warning(
+                "[EMBY] image delete returned non-2xx item=%s type=%s status=%s",
+                item_id, image_type, response.status_code,
+            )
+            raise EmbyClientError(
+                f"Emby image delete returned {response.status_code}"
+            )
+        return True
+
     async def test_connection(self) -> bool:
         """Verify the configured URL + API key reach a working Emby server.
 
@@ -217,6 +355,20 @@ class EmbyClient:
 # ---------------------------------------------------------------------------
 # Mapping helpers
 # ---------------------------------------------------------------------------
+
+
+def _map_livetv_channel(item: dict) -> EmbyLiveTvChannel:
+    """Map one raw Emby Live TV channel dict to :class:`EmbyLiveTvChannel`.
+
+    ``ChannelNumber`` is preserved verbatim as a string (Emby surfaces it that
+    way and we never parse it) and defaults to ``None`` when absent.
+    """
+    channel_number_raw = item.get("ChannelNumber")
+    return EmbyLiveTvChannel(
+        channel_id=str(item.get("Id", "")),
+        name=item.get("Name", "") or "",
+        channel_number=channel_number_raw if channel_number_raw is not None else None,
+    )
 
 
 def _map_session(item: dict) -> EmbySession:
