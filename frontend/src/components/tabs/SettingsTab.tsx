@@ -63,6 +63,11 @@ const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label
 
 const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps'];
 
+// Emby channel-logo image types for the Clear Logos control (GH #475, bd-v9tp7).
+// Defined locally (not read from the api module at render time) so the
+// Integrations page renders even in tests that mock `api` without this export.
+const EMBY_LOGO_TYPES: readonly api.EmbyLogoType[] = ['Primary', 'LogoLight', 'LogoLightColor'];
+
 // All known sort criteria - used to merge new criteria into saved settings
 const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams'];
 
@@ -368,6 +373,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   //   'error' — last test failed; ``message`` carries the operator-facing string
   const [embyTestStatus, setEmbyTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [embyTestMessage, setEmbyTestMessage] = useState('');
+
+  // Clear Emby Logos (GH #475, bd-v9tp7). Per-type checkboxes default to all
+  // three so the common "flush everything" case is one click. ``status``
+  // drives the inline message the same way the test-connection block does.
+  const [embyClearLogoTypes, setEmbyClearLogoTypes] = useState<Record<api.EmbyLogoType, boolean>>({
+    Primary: true,
+    LogoLight: true,
+    LogoLightColor: true,
+  });
+  const [embyClearStatus, setEmbyClearStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
+  const [embyClearMessage, setEmbyClearMessage] = useState('');
 
   // Plex integration (bd-r5f0c.5 / W5). plex_token uses preserve-on-omit.
   const [plexEnabled, setPlexEnabled] = useState(false);
@@ -1074,6 +1090,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       logger.error('Failed to test Emby connection', err);
       setEmbyTestStatus('error');
       setEmbyTestMessage(err instanceof Error ? err.message : 'Connection failed');
+    }
+  };
+
+  // Clear Emby Logos (GH #475, bd-v9tp7). Kicks off the backend background job
+  // (fire-and-forget). Live progress + the final result render in the
+  // NotificationCenter as a progress notification (source task_clear_emby_logos),
+  // exactly like stream probe — so the button only confirms the run started.
+  const handleClearEmbyLogos = async () => {
+    const selectedTypes = EMBY_LOGO_TYPES.filter(
+      (t) => embyClearLogoTypes[t],
+    );
+    if (selectedTypes.length === 0) {
+      setEmbyClearStatus('error');
+      setEmbyClearMessage('Select at least one logo type to clear');
+      return;
+    }
+    setEmbyClearStatus('running');
+    setEmbyClearMessage('');
+    try {
+      await api.clearEmbyLogos(selectedTypes);
+      setEmbyClearStatus('success');
+      setEmbyClearMessage('Started — watch the Notifications panel for progress.');
+    } catch (err) {
+      logger.error('Failed to clear Emby logos', err);
+      setEmbyClearStatus('error');
+      setEmbyClearMessage(err instanceof Error ? err.message : 'Clear logos failed');
     }
   };
 
@@ -3557,6 +3599,69 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 ✗ {embyTestMessage}
               </span>
             )}
+          </div>
+
+          {/* Clear Emby Logos (GH #475, bd-v9tp7) */}
+          <div className="form-group-vertical" data-testid="emby-clear-logos">
+            <label className="form-label">Clear Cached Logos</label>
+            <span className="form-description">
+              Emby caches channel logos and keeps showing the old image even after the logo
+              changes in Dispatcharr. This deletes the cached image from every Emby Live TV
+              channel for the selected types; Emby re-downloads the logo on next access. Uses
+              your saved Emby connection.
+            </span>
+
+            <div className="emby-clear-logos-types">
+              {EMBY_LOGO_TYPES.map((t) => (
+                <label key={t} className="checkbox-inline">
+                  <input
+                    type="checkbox"
+                    checked={embyClearLogoTypes[t]}
+                    onChange={(e) =>
+                      setEmbyClearLogoTypes((prev) => ({ ...prev, [t]: e.target.checked }))
+                    }
+                    data-testid={`emby-clear-type-${t}`}
+                  />
+                  <span>{t}</span>
+                </label>
+              ))}
+            </div>
+
+            <div className="integration-test-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleClearEmbyLogos}
+                disabled={embyClearStatus === 'running' || !embyApiKeyConfigured}
+                title={
+                  !embyApiKeyConfigured
+                    ? 'Configure and save your Emby connection first'
+                    : undefined
+                }
+                data-testid="emby-clear-logos-btn"
+              >
+                <span className="material-icons">
+                  {embyClearStatus === 'running' ? 'sync' : 'refresh'}
+                </span>
+                {embyClearStatus === 'running' ? 'Clearing…' : 'Clear Emby Logos'}
+              </button>
+              {embyClearStatus === 'success' && (
+                <span
+                  className="integration-test-result integration-test-result--success"
+                  data-testid="emby-clear-result-success"
+                >
+                  ✓ {embyClearMessage}
+                </span>
+              )}
+              {embyClearStatus === 'error' && (
+                <span
+                  className="integration-test-result integration-test-result--error"
+                  data-testid="emby-clear-result-error"
+                >
+                  ✗ {embyClearMessage}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>
