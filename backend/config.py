@@ -75,6 +75,10 @@ class DispatcharrSettings(BaseModel):
     hide_m3u_urls: bool = False  # Hide M3U URLs in M3U Manager tab
     gracenote_conflict_mode: str = "ask"  # Gracenote ID conflict handling: "ask", "skip", or "overwrite"
     theme: str = "dark"  # Theme: "dark", "light", or "high-contrast"
+    # Global date-format preference for the UI (bd-8j47e). Applies to all
+    # users since settings are instance-wide. "auto" defers to each viewer's
+    # browser locale; "mdy"/"dmy"/"iso" pin the date ordering app-wide.
+    date_format: str = "auto"  # Date format: "auto", "mdy", "dmy", or "iso"
     # Default channel profiles for new channels (empty list means no defaults)
     default_channel_profile_ids: list[int] = []
     # Linked M3U accounts - groups of account IDs that should sync group settings

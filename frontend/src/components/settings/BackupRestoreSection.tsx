@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { BackupRestoreModal } from '../BackupRestoreModal';
+import { getDateLocale } from '../../utils/formatting';
 import './BackupRestoreSection.css';
 
 interface Props {
@@ -284,7 +285,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
                   <div>
                     <div className="saved-backup-name">{backup.filename}</div>
                     <div className="saved-backup-meta">
-                      {new Date(backup.created_at).toLocaleString()} &middot; {formatBytes(backup.size_bytes)}
+                      {new Date(backup.created_at).toLocaleString(getDateLocale())} &middot; {formatBytes(backup.size_bytes)}
                     </div>
                   </div>
                 </div>

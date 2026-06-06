@@ -4,6 +4,53 @@
  * Consolidated from duplicate implementations across components.
  */
 
+/**
+ * Date-format preference (bd-8j47e).
+ *
+ * ECM stores a single GLOBAL date-format preference (Settings > Appearance).
+ * All date formatting routes through the locale resolved here, so the
+ * m/d/y vs d/m/y ordering is consistent across the whole UI instead of
+ * silently varying with each viewer's browser locale.
+ *
+ *   - ``auto`` → browser/device locale (the historical behavior; default)
+ *   - ``mdy``  → en-US  → 6/4/2026
+ *   - ``dmy``  → en-GB  → 04/06/2026
+ *   - ``iso``  → en-CA  → 2026-06-04
+ *
+ * The explicit modes pin a locale that yields the desired numeric order
+ * while keeping English month names ("Jun"), so named-month displays stay
+ * readable. ``undefined`` (auto) means "let the browser decide".
+ */
+export type DateFormatPref = 'auto' | 'mdy' | 'dmy' | 'iso';
+
+const LOCALE_BY_FORMAT: Record<DateFormatPref, string | undefined> = {
+  auto: undefined, // browser/device locale
+  mdy: 'en-US',
+  dmy: 'en-GB',
+  iso: 'en-CA',
+};
+
+let activeDateLocale: string | undefined; // undefined ⇒ browser locale
+
+/**
+ * Set the active date-format preference. Called once on app init from the
+ * loaded settings, and again when the operator changes it in Settings >
+ * Appearance so the change previews live without a reload.
+ */
+export function setDateFormatLocale(format: string | null | undefined): void {
+  activeDateLocale = LOCALE_BY_FORMAT[(format ?? 'auto') as DateFormatPref] ?? undefined;
+}
+
+/**
+ * Resolve the locale to pass to ``toLocaleString``/``Intl.DateTimeFormat``.
+ * ``undefined`` means "use the browser/device locale". Components that
+ * format dates with their own options should pass this as the locale
+ * argument so they honor the global preference.
+ */
+export function getDateLocale(): string | undefined {
+  return activeDateLocale;
+}
+
 /** Format bytes to human-readable string (e.g. "1.5 GB"). */
 export function formatBytes(bytes: number | undefined): string {
   if (!bytes) return '0 B';
@@ -33,7 +80,7 @@ export function formatBitrate(bps: number): string {
 /** Format date string to weekday abbreviation (e.g. "Mon"). */
 export function formatDateLabel(dateStr: string): string {
   const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', { weekday: 'short' });
+  return date.toLocaleDateString(getDateLocale(), { weekday: 'short' });
 }
 
 /**
@@ -44,7 +91,7 @@ export function formatTimestamp(isoString: string): string {
   const date = new Date(isoString);
   const now = new Date();
 
-  return date.toLocaleDateString('en-US', {
+  return date.toLocaleDateString(getDateLocale(), {
     month: 'short',
     day: 'numeric',
     year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
@@ -72,7 +119,7 @@ export function formatRelativeTime(isoString: string, capitalize = false): strin
   if (diffHours < 24) return `${diffHours}h ago`;
   if (diffDays < 7) return `${diffDays}d ago`;
 
-  return date.toLocaleDateString('en-US', {
+  return date.toLocaleDateString(getDateLocale(), {
     month: 'short',
     day: 'numeric',
     year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
@@ -84,7 +131,7 @@ export function formatRelativeTime(isoString: string, capitalize = false): strin
 /** Format ISO timestamp to HH:MM:SS time string. */
 export function formatEventTime(isoString: string): string {
   const date = new Date(isoString);
-  return date.toLocaleTimeString('en-US', {
+  return date.toLocaleTimeString(getDateLocale(), {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -98,7 +145,7 @@ export function formatEventTime(isoString: string): string {
 export function formatDateTime(isoString: string | null): string {
   if (!isoString) return 'Never';
   const date = new Date(isoString);
-  return date.toLocaleString();
+  return date.toLocaleString(getDateLocale());
 }
 
 /**
@@ -108,7 +155,7 @@ export function formatDateTime(isoString: string | null): string {
 export function formatDateCompact(isoString: string | null): string {
   if (!isoString) return 'Never';
   const date = new Date(isoString);
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString(getDateLocale(), {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

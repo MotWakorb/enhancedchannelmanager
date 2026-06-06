@@ -16,6 +16,7 @@ import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
+import { setDateFormatLocale, formatDateCompact, type DateFormatPref } from '../../utils/formatting';
 import { normalizeSmtpRecipientsPaste, parseSmtpRecipients } from '../../utils/smtpRecipients';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
@@ -61,6 +62,11 @@ const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label
 };
 
 const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps'];
+
+// Emby channel-logo image types for the Clear Logos control (GH #475, bd-v9tp7).
+// Defined locally (not read from the api module at render time) so the
+// Integrations page renders even in tests that mock `api` without this export.
+const EMBY_LOGO_TYPES: readonly api.EmbyLogoType[] = ['Primary', 'LogoLight', 'LogoLightColor'];
 
 // All known sort criteria - used to merge new criteria into saved settings
 const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams'];
@@ -368,6 +374,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [embyTestStatus, setEmbyTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [embyTestMessage, setEmbyTestMessage] = useState('');
 
+  // Clear Emby Logos (GH #475, bd-v9tp7). Per-type checkboxes default to all
+  // three so the common "flush everything" case is one click. ``status``
+  // drives the inline message the same way the test-connection block does.
+  const [embyClearLogoTypes, setEmbyClearLogoTypes] = useState<Record<api.EmbyLogoType, boolean>>({
+    Primary: true,
+    LogoLight: true,
+    LogoLightColor: true,
+  });
+  const [embyClearStatus, setEmbyClearStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
+  const [embyClearMessage, setEmbyClearMessage] = useState('');
+
   // Plex integration (bd-r5f0c.5 / W5). plex_token uses preserve-on-omit.
   const [plexEnabled, setPlexEnabled] = useState(false);
   const [plexBaseUrl, setPlexBaseUrl] = useState('');
@@ -415,6 +432,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [gracenoteConflictMode, setGracenoteConflictMode] = useState<GracenoteConflictMode>('ask');
   const [theme, setTheme] = useState<Theme>('dark');
+  const [dateFormat, setDateFormat] = useState<DateFormatPref>('auto');
   const [vlcOpenBehavior, setVlcOpenBehavior] = useState<'protocol_only' | 'm3u_fallback' | 'm3u_only'>('m3u_fallback');
   const [streamPreviewMode, setStreamPreviewMode] = useState<StreamPreviewMode>('passthrough');
 
@@ -810,6 +828,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setHideM3uUrls(settings.hide_m3u_urls ?? false);
       setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setTheme(settings.theme || 'dark');
+      setDateFormat((settings.date_format as DateFormatPref) || 'auto');
       const vlcBehavior = settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only';
       setVlcOpenBehavior(vlcBehavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
@@ -1074,6 +1093,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  // Clear Emby Logos (GH #475, bd-v9tp7). Kicks off the backend background job
+  // (fire-and-forget). Live progress + the final result render in the
+  // NotificationCenter as a progress notification (source task_clear_emby_logos),
+  // exactly like stream probe — so the button only confirms the run started.
+  const handleClearEmbyLogos = async () => {
+    const selectedTypes = EMBY_LOGO_TYPES.filter(
+      (t) => embyClearLogoTypes[t],
+    );
+    if (selectedTypes.length === 0) {
+      setEmbyClearStatus('error');
+      setEmbyClearMessage('Select at least one logo type to clear');
+      return;
+    }
+    setEmbyClearStatus('running');
+    setEmbyClearMessage('');
+    try {
+      await api.clearEmbyLogos(selectedTypes);
+      setEmbyClearStatus('success');
+      setEmbyClearMessage('Started — watch the Notifications panel for progress.');
+    } catch (err) {
+      logger.error('Failed to clear Emby logos', err);
+      setEmbyClearStatus('error');
+      setEmbyClearMessage(err instanceof Error ? err.message : 'Clear logos failed');
+    }
+  };
+
   // Plex test-connection (bd-r5f0c.5 / W5). Mirrors Emby pattern.
   // SEC-1: uses server-local Plex token (operator-entered), not plex.tv account token.
   const handleTestPlexConnection = async () => {
@@ -1211,6 +1256,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         hide_m3u_urls: hideM3uUrls,
         gracenote_conflict_mode: gracenoteConflictMode,
         theme: theme,
+        date_format: dateFormat,
         default_channel_profile_ids: defaultChannelProfileIds,
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
@@ -2082,6 +2128,40 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="theme-label">High Contrast</span>
             <span className="theme-description">Maximum contrast for accessibility</span>
           </label>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">calendar_month</span>
+          <h3>Date Format</h3>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="dateFormat">How dates are displayed</label>
+          <CustomSelect
+            value={dateFormat}
+            onChange={(val) => {
+              setDateFormat(val as DateFormatPref);
+              // Apply immediately so the preview below and the rest of the
+              // UI reflect the choice without waiting for a save/reload.
+              setDateFormatLocale(val);
+            }}
+            options={[
+              { value: 'auto', label: 'Automatic — match my device/browser' },
+              { value: 'mdy', label: 'Month/Day/Year — 06/04/2026' },
+              { value: 'dmy', label: 'Day/Month/Year — 04/06/2026' },
+              { value: 'iso', label: 'Year-Month-Day (ISO) — 2026-06-04' },
+            ]}
+          />
+          <p className="form-hint">
+            Applies to every date and time shown across the app. This is an
+            instance-wide setting shared by all users. "Automatic" uses each
+            viewer's own browser locale (which is why dates can look different
+            for different people); the other options pin one consistent order.
+            <br />
+            Preview: <strong>{formatDateCompact('2026-06-04T14:30:00Z')}</strong>
+          </p>
         </div>
       </div>
 
@@ -3519,6 +3599,69 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 ✗ {embyTestMessage}
               </span>
             )}
+          </div>
+
+          {/* Clear Emby Logos (GH #475, bd-v9tp7) */}
+          <div className="form-group-vertical" data-testid="emby-clear-logos">
+            <label className="form-label">Clear Cached Logos</label>
+            <span className="form-description">
+              Emby caches channel logos and keeps showing the old image even after the logo
+              changes in Dispatcharr. This deletes the cached image from every Emby Live TV
+              channel for the selected types; Emby re-downloads the logo on next access. Uses
+              your saved Emby connection.
+            </span>
+
+            <div className="emby-clear-logos-types">
+              {EMBY_LOGO_TYPES.map((t) => (
+                <label key={t} className="checkbox-inline">
+                  <input
+                    type="checkbox"
+                    checked={embyClearLogoTypes[t]}
+                    onChange={(e) =>
+                      setEmbyClearLogoTypes((prev) => ({ ...prev, [t]: e.target.checked }))
+                    }
+                    data-testid={`emby-clear-type-${t}`}
+                  />
+                  <span>{t}</span>
+                </label>
+              ))}
+            </div>
+
+            <div className="integration-test-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleClearEmbyLogos}
+                disabled={embyClearStatus === 'running' || !embyApiKeyConfigured}
+                title={
+                  !embyApiKeyConfigured
+                    ? 'Configure and save your Emby connection first'
+                    : undefined
+                }
+                data-testid="emby-clear-logos-btn"
+              >
+                <span className="material-icons">
+                  {embyClearStatus === 'running' ? 'sync' : 'refresh'}
+                </span>
+                {embyClearStatus === 'running' ? 'Clearing…' : 'Clear Emby Logos'}
+              </button>
+              {embyClearStatus === 'success' && (
+                <span
+                  className="integration-test-result integration-test-result--success"
+                  data-testid="emby-clear-result-success"
+                >
+                  ✓ {embyClearMessage}
+                </span>
+              )}
+              {embyClearStatus === 'error' && (
+                <span
+                  className="integration-test-result integration-test-result--error"
+                  data-testid="emby-clear-result-error"
+                >
+                  ✗ {embyClearMessage}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>

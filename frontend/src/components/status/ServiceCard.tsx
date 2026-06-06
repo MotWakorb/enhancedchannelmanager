@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import type { ServiceWithStatus } from '../../types';
 import { StatusIndicator } from './StatusIndicator';
+import { getDateLocale } from '../../utils/formatting';
 import './ServiceCard.css';
 
 export interface ServiceCardProps {
@@ -37,7 +38,7 @@ function formatLastCheck(timestamp: string | null | undefined): string {
   if (diffSec < 60) return 'Just now';
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString(getDateLocale());
 }
 
 export function ServiceCard({

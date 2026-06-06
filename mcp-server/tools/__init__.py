@@ -16,6 +16,7 @@ from . import (
     profiles,
     normalization,
     dedup,
+    emby,
 )
 
 _MODULES = [
@@ -33,6 +34,7 @@ _MODULES = [
     profiles,
     normalization,
     dedup,
+    emby,
 ]
 
 

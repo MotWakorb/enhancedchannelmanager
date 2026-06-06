@@ -374,8 +374,11 @@ class ActionExecutor:
                 error=f"Unknown action type: {action.type}"
             )
 
-        # Build template context for variable expansion
-        template_ctx = self._build_template_context(stream_ctx, exec_ctx)
+        # Build template context for variable expansion. Pass the rule's
+        # normalization groups so {normalized_name} is consistent across every
+        # action, not just create_channel (GH #466 / bd-6gvt8).
+        template_ctx = self._build_template_context(
+            stream_ctx, exec_ctx, normalization_group_ids=normalization_group_ids)
 
         # Execute based on action type
         if action_type == ActionType.CREATE_CHANNEL:
@@ -459,8 +462,24 @@ class ActionExecutor:
         exec_ctx.add_result(result)
         return result
 
-    def _build_template_context(self, stream_ctx: StreamContext, exec_ctx: ExecutionContext = None) -> dict:
-        """Build template variable context from stream context."""
+    def _build_template_context(self, stream_ctx: StreamContext, exec_ctx: ExecutionContext = None,
+                                normalization_group_ids: list[int] = None) -> dict:
+        """Build template variable context from stream context.
+
+        ``{normalized_name}`` is the stream name after the firing rule's
+        normalization groups are applied — the documented "Name after
+        normalization rules" contract. It is computed here, at the single
+        per-action chokepoint, so EVERY action that expands ``{normalized_name}``
+        (Assign TVG-ID, Set Variable, Assign Logo, …) gets the same value the
+        create_channel action does (GH #466 / bd-6gvt8). Previously the variable
+        resolved to ``stream_ctx.normalized_name`` — never populated during a run
+        — so it fell back to the raw stream name everywhere except create_channel,
+        which alone re-normalized its expanded name afterward.
+
+        When the rule has no normalization groups (or no engine), it falls back
+        to the raw stream name — unchanged from prior behavior, so the only rules
+        affected are those that actually opted into normalization.
+        """
         quality_str = None
         if stream_ctx.resolution_height:
             if stream_ctx.resolution_height >= 2160:
@@ -474,6 +493,21 @@ class ActionExecutor:
             else:
                 quality_str = f"{stream_ctx.resolution_height}p"
 
+        # Resolve {normalized_name} = stream name after the rule's normalization
+        # groups. Prefer a normalized_name already stamped on the context; else
+        # compute it from the rule's groups; else fall back to the raw name.
+        normalized_name = stream_ctx.normalized_name
+        if not normalized_name and normalization_group_ids and self._normalization_engine:
+            try:
+                norm_result = self._normalization_engine.normalize(
+                    stream_ctx.stream_name, group_ids=normalization_group_ids)
+                normalized_name = norm_result.normalized
+            except Exception as e:
+                logger.warning(
+                    "[AUTO-CREATE-EXEC] Failed to normalize {normalized_name} for '%s': %s",
+                    stream_ctx.stream_name, e)
+        normalized_name = normalized_name or stream_ctx.stream_name
+
         ctx = {
             TemplateVariables.STREAM_NAME: stream_ctx.stream_name,
             TemplateVariables.STREAM_GROUP: stream_ctx.group_name or "",
@@ -483,7 +517,7 @@ class ActionExecutor:
             TemplateVariables.QUALITY_RAW: stream_ctx.resolution_height or "",
             TemplateVariables.PROVIDER: stream_ctx.m3u_account_name or "",
             TemplateVariables.PROVIDER_ID: stream_ctx.m3u_account_id or "",
-            TemplateVariables.NORMALIZED_NAME: stream_ctx.normalized_name or stream_ctx.stream_name,
+            TemplateVariables.NORMALIZED_NAME: normalized_name,
         }
 
         # Add custom variables with var: prefix

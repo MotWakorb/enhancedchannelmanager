@@ -289,6 +289,34 @@ async def update_normalization_group(group_id: int, request: UpdateRuleGroupRequ
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _strip_normalization_group_ref(session, group_id: int) -> int:
+    """Remove ``group_id`` from every AutoCreationRule.normalization_group_ids.
+
+    Called when a NormalizationRuleGroup is deleted (GH #465 / bd-miut3) so no
+    auto-creation rule is left holding a dangling reference. Operates on the
+    caller's session WITHOUT committing — the caller owns the transaction.
+
+    Returns the number of rules that were modified.
+    """
+    from models import AutoCreationRule
+
+    # Prefilter on the JSON text column to avoid loading every rule. The id can
+    # appear as a list element in any position, so match the digits and verify
+    # precisely with the parsed list below (the LIKE is only a cheap narrowing).
+    candidates = session.query(AutoCreationRule).filter(
+        AutoCreationRule.normalization_group_ids.isnot(None),
+        AutoCreationRule.normalization_group_ids.like(f"%{group_id}%"),
+    ).all()
+
+    cleaned = 0
+    for rule in candidates:
+        ids = rule.get_normalization_group_ids()
+        if group_id in ids:
+            rule.set_normalization_group_ids([i for i in ids if i != group_id])
+            cleaned += 1
+    return cleaned
+
+
 @router.delete("/groups/{group_id}")
 async def delete_normalization_group(group_id: int):
     """Delete a normalization rule group and all its rules."""
@@ -310,9 +338,23 @@ async def delete_normalization_group(group_id: int):
 
             # Delete the group
             session.delete(group)
+
+            # Cascade-clean the deleted id out of every auto-creation rule that
+            # references it via normalization_group_ids (GH #465 / bd-miut3).
+            # Without this the rule keeps a dangling id; the rule editor reloads
+            # it but can't render a checkbox for the now-missing group, and the
+            # write-time validator (_validate_normalization_group_ids) then
+            # rejects any save with 422 — the operator can only recover by
+            # "Clear all + re-select". Same transaction as the delete so the
+            # group removal and the reference cleanup commit atomically.
+            cleaned_rules = _strip_normalization_group_ref(session, group_id)
+
             session.commit()
-            logger.info("[NORMALIZE] Deleted group id=%s", group_id)
-            return {"status": "deleted", "id": group_id}
+            logger.info(
+                "[NORMALIZE] Deleted group id=%s (cleaned %d auto-creation rule reference(s))",
+                group_id, cleaned_rules,
+            )
+            return {"status": "deleted", "id": group_id, "rules_cleaned": cleaned_rules}
         finally:
             session.close()
     except HTTPException:
