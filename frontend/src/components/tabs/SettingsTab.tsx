@@ -63,6 +63,11 @@ const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label
 
 const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps'];
 
+// Emby channel-logo image types for the Clear Logos control (GH #475, bd-v9tp7).
+// Defined locally (not read from the api module at render time) so the
+// Integrations page renders even in tests that mock `api` without this export.
+const EMBY_LOGO_TYPES: readonly api.EmbyLogoType[] = ['Primary', 'LogoLight', 'LogoLightColor'];
+
 // All known sort criteria - used to merge new criteria into saved settings
 const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams'];
 
@@ -1093,7 +1098,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // NotificationCenter as a progress notification (source task_clear_emby_logos),
   // exactly like stream probe — so the button only confirms the run started.
   const handleClearEmbyLogos = async () => {
-    const selectedTypes = (api.EMBY_LOGO_TYPES as readonly api.EmbyLogoType[]).filter(
+    const selectedTypes = EMBY_LOGO_TYPES.filter(
       (t) => embyClearLogoTypes[t],
     );
     if (selectedTypes.length === 0) {
@@ -3607,7 +3612,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </span>
 
             <div className="emby-clear-logos-types">
-              {(api.EMBY_LOGO_TYPES as readonly api.EmbyLogoType[]).map((t) => (
+              {EMBY_LOGO_TYPES.map((t) => (
                 <label key={t} className="checkbox-inline">
                   <input
                     type="checkbox"
