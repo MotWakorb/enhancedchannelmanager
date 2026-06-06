@@ -991,4 +991,14 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="DELETE",
         path="/api/tasks/{task_id}/schedules/{schedule_id}",
     ),
+    # -- emby domain --------------------------------------------------------
+    # POST returns 202 {job_id, status}; the status-poll GET
+    # /api/emby/clear-logos/{job_id} is a raw contract-exempt client.get
+    # (mirrors the bulk-commit 202+poll shape, bd-ggxks / GH #475).
+    "emby_clear_logos": Endpoint(
+        name="emby_clear_logos",
+        method="POST",
+        path="/api/emby/clear-logos",
+        request_fields=frozenset({"logo_types", "channel_ids"}),
+    ),
 }

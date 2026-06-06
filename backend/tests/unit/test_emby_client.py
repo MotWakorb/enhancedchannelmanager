@@ -17,7 +17,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from emby_client import EmbyClient, EmbyClientError, EmbySession
+from emby_client import (
+    EmbyClient,
+    EmbyClientError,
+    EmbyLiveTvChannel,
+    EmbySession,
+    VALID_LOGO_IMAGE_TYPES,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -307,3 +313,167 @@ async def test_test_connection_returns_false_on_network_error():
         assert ok is False
     finally:
         await client.close()
+
+
+# ---------------------------------------------------------------------------
+# get_livetv_channels (GH #475 / bd-v9tp7 — Clear Emby Logos)
+# ---------------------------------------------------------------------------
+
+
+def _livetv_channels_payload() -> dict:
+    """Canned Emby /LiveTv/Channels response. Emby wraps the rows in an
+    ``Items`` array with a ``TotalRecordCount`` sibling — PascalCase, as
+    upstream."""
+    return {
+        "Items": [
+            {"Id": "ch-1", "Name": "ESPN", "ChannelNumber": "206"},
+            {"Id": "ch-2", "Name": "CNN", "ChannelNumber": "202"},
+            # Malformed row with no Id — must be skipped, not crash.
+            {"Name": "Ghost Channel"},
+        ],
+        "TotalRecordCount": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_livetv_channels_maps_items_and_skips_idless_rows():
+    """The ``Items`` array is mapped to ``EmbyLiveTvChannel`` and any row
+    without an addressable ``Id`` is dropped (can't DELETE an image on it)."""
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="k")
+    try:
+        fake_resp = _response(200, _livetv_channels_payload())
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            channels = await client.get_livetv_channels()
+
+        assert len(channels) == 2  # ghost row dropped
+        assert isinstance(channels[0], EmbyLiveTvChannel)
+        assert channels[0].channel_id == "ch-1"
+        assert channels[0].name == "ESPN"
+        assert channels[0].channel_number == "206"
+        assert channels[1].channel_id == "ch-2"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_livetv_channels_hits_path_and_sends_token():
+    """Targets ``<base>/LiveTv/Channels`` with the ``X-Emby-Token`` header."""
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="key-xyz")
+    try:
+        fake_resp = _response(200, {"Items": []})
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            await client.get_livetv_channels()
+        call = request_mock.await_args
+        assert call.args[0] == "GET"
+        assert call.args[1] == "http://emby.local:8096/LiveTv/Channels"
+        assert call.kwargs["headers"]["X-Emby-Token"] == "key-xyz"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_livetv_channels_empty_items_returns_empty_list():
+    """A configured-but-empty Emby (no Live TV channels) yields ``[]``."""
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="k")
+    try:
+        fake_resp = _response(200, {"Items": [], "TotalRecordCount": 0})
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            channels = await client.get_livetv_channels()
+        assert channels == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_livetv_channels_raises_on_401():
+    """A 401 (bad key) surfaces as ``EmbyClientError`` — this call is the
+    auth gate for the clear-logos job, so the job aborts before any DELETE."""
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="bad")
+    try:
+        fake_resp = _response(401, {"error": "unauthorized"})
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            with pytest.raises(EmbyClientError) as exc_info:
+                await client.get_livetv_channels()
+        assert "401" in str(exc_info.value)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_livetv_channels_raises_on_network_error():
+    """Transport failures wrap into ``EmbyClientError`` with cause preserved."""
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="k")
+    try:
+        underlying = httpx.ConnectError("refused")
+        request_mock = AsyncMock(side_effect=underlying)
+        with patch.object(client._client, "request", request_mock):
+            with pytest.raises(EmbyClientError) as exc_info:
+                await client.get_livetv_channels()
+        assert exc_info.value.__cause__ is underlying
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# delete_item_image (GH #475 / bd-v9tp7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_item_image_returns_true_on_2xx():
+    """A 2xx (200/204) means Emby deleted the cached image → ``True``."""
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="k")
+    try:
+        fake_resp = _response(204)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            deleted = await client.delete_item_image("ch-1", "Primary")
+        assert deleted is True
+        call = request_mock.await_args
+        assert call.args[0] == "DELETE"
+        assert call.args[1] == "http://emby.local:8096/Items/ch-1/Images/Primary"
+        assert call.kwargs["headers"]["X-Emby-Token"] == "k"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_item_image_returns_false_on_404():
+    """A 404 means the channel had no image of that type — a normal skip,
+    returned as ``False`` (never raised) so a bulk run continues."""
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="k")
+    try:
+        fake_resp = _response(404)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            deleted = await client.delete_item_image("ch-1", "LogoLight")
+        assert deleted is False
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_item_image_raises_on_401_and_500():
+    """Auth (401) and other non-2xx (e.g. 500) surface as ``EmbyClientError``
+    so the orchestrator can count/abort rather than silently 'succeed'."""
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="k")
+    try:
+        for status in (401, 500):
+            fake_resp = _response(status)
+            request_mock = AsyncMock(return_value=fake_resp)
+            with patch.object(client._client, "request", request_mock):
+                with pytest.raises(EmbyClientError):
+                    await client.delete_item_image("ch-1", "Primary")
+    finally:
+        await client.close()
+
+
+def test_valid_logo_image_types_whitelist():
+    """The whitelist is exactly the three Emby channel-logo image types CI
+    targets — guards against an accidental widening that would let an
+    arbitrary image type through to the DELETE path."""
+    assert VALID_LOGO_IMAGE_TYPES == {"Primary", "LogoLight", "LogoLightColor"}
