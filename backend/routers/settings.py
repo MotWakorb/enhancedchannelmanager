@@ -76,6 +76,7 @@ class SettingsRequest(BaseModel):
     hide_m3u_urls: bool = False
     gracenote_conflict_mode: str = "ask"
     theme: str = "dark"
+    date_format: str = "auto"
     default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
     epg_auto_match_threshold: int = 80
@@ -202,6 +203,7 @@ class SettingsResponse(BaseModel):
     hide_m3u_urls: bool
     gracenote_conflict_mode: str
     theme: str
+    date_format: str
     default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
     epg_auto_match_threshold: int
@@ -404,6 +406,7 @@ async def get_current_settings():
         hide_m3u_urls=settings.hide_m3u_urls,
         gracenote_conflict_mode=settings.gracenote_conflict_mode,
         theme=settings.theme,
+        date_format=settings.date_format,
         default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
         epg_auto_match_threshold=settings.epg_auto_match_threshold,
@@ -621,6 +624,7 @@ async def update_settings(request: SettingsRequest):
         hide_m3u_urls=request.hide_m3u_urls,
         gracenote_conflict_mode=request.gracenote_conflict_mode,
         theme=request.theme,
+        date_format=request.date_format,
         default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
         epg_auto_match_threshold=request.epg_auto_match_threshold,

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ChangeRecord, SavePoint } from '../types';
 import { ModalOverlay } from './ModalOverlay';
+import { getDateLocale } from '../utils/formatting';
 import './HistoryToolbar.css';
 
 interface HistoryToolbarProps {
@@ -86,7 +87,7 @@ export function HistoryToolbar({
   };
 
   const formatTime = (timestamp: number) => {
-    return new Date(timestamp).toLocaleTimeString([], {
+    return new Date(timestamp).toLocaleTimeString(getDateLocale(), {
       hour: '2-digit',
       minute: '2-digit',
     });

@@ -770,6 +770,10 @@ def _run_migrations(engine) -> None:
             # Heal task_schedules rows with NULL next_run_at (v0.17.0 - bd-1weac / bd-p5b8i)
             _heal_task_schedules_null_next_run_at(conn)
 
+            # Strip dangling normalization-group ids from auto_creation_rules
+            # orphaned by pre-fix group deletions (GH #465 - bd-miut3)
+            _heal_orphaned_normalization_group_refs(conn)
+
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception("[DATABASE] Migration failed: %s", e)
@@ -2472,6 +2476,83 @@ def _migrate_cleanup_task_manual_to_cron(conn) -> None:
             update.rowcount,
         )
         conn.commit()
+
+
+def _heal_orphaned_normalization_group_refs(conn) -> None:
+    """Strip dangling normalization-group ids from auto_creation_rules (GH #465 / bd-miut3).
+
+    Before bd-miut3, deleting a NormalizationRuleGroup did not remove its id
+    from any ``auto_creation_rules.normalization_group_ids`` JSON list, so a rule
+    could be left referencing a group that no longer exists. The rule editor
+    reloads the full id list but cannot render a checkbox for the missing group,
+    and the write-time validator (``_validate_normalization_group_ids``) then
+    rejects every save with 422 — the operator could only recover via
+    "Clear all + re-select". bd-miut3 fixes the delete path going forward; this
+    heal repairs rows orphaned by deletions that happened *before* the fix
+    shipped (e.g. the GH #465 reporter, whose group is already gone).
+
+    Healed in ``_run_migrations`` rather than via Alembic for the same reason as
+    the task_schedules heal: the bd-5w6jz smart-bootstrap fast-path stamps
+    ``alembic_version`` forward when the live schema covers the model shape, so
+    an Alembic data migration would be silently skipped on existing installs.
+
+    Idempotency: a healed row holds only valid ids, so subsequent calls find
+    nothing to change. One INFO log per call when N > 0; silent otherwise.
+    """
+    import json
+    from sqlalchemy import text
+
+    # Both tables must exist (fresh DBs run this before some tables are created
+    # on certain bootstrap paths).
+    for table in ("auto_creation_rules", "normalization_rule_groups"):
+        exists = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=:t"
+        ), {"t": table}).fetchone()
+        if not exists:
+            logger.debug(
+                "[DATABASE] %s table doesn't exist yet, skipping orphaned-norm-group-ref heal",
+                table,
+            )
+            return
+
+    valid_ids = {
+        row[0] for row in conn.execute(text("SELECT id FROM normalization_rule_groups")).fetchall()
+    }
+
+    rows = conn.execute(text(
+        "SELECT id, normalization_group_ids FROM auto_creation_rules "
+        "WHERE normalization_group_ids IS NOT NULL"
+    )).fetchall()
+
+    healed = 0
+    for row_id, raw in rows:
+        try:
+            ids = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(ids, list):
+            continue
+
+        kept = [i for i in ids if i in valid_ids]
+        if len(kept) == len(ids):
+            continue  # no orphans in this row
+
+        # Mirror AutoCreationRule.set_normalization_group_ids: sorted/de-duped,
+        # NULL when empty so "no normalization" stays a single canonical shape.
+        new_value = json.dumps(sorted(set(kept))) if kept else None
+        conn.execute(text(
+            "UPDATE auto_creation_rules SET normalization_group_ids = :v WHERE id = :id"
+        ), {"v": new_value, "id": row_id})
+        healed += 1
+
+    if healed:
+        logger.info(
+            "[DATABASE] Healed %d auto_creation_rules row(s) with orphaned "
+            "normalization_group_ids (GH #465 / bd-miut3)",
+            healed,
+        )
+    else:
+        logger.debug("[DATABASE] No auto_creation_rules rows need orphaned-norm-group-ref heal")
 
 
 def _heal_task_schedules_null_next_run_at(conn) -> None:

@@ -1,4 +1,5 @@
 """Channel management tools."""
+import asyncio
 import logging
 
 from mcp.server.fastmcp import FastMCP
@@ -7,6 +8,47 @@ from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
+
+# bd-ggxks: bulk-commit moved to a 202+poll contract. validateOnly stays
+# synchronous (200 with the BulkCommitResponse body); every other call now
+# returns 202 + {job_id, status: "running"} and the client must poll
+# GET /api/channels/bulk-commit/{job_id} until terminal.
+_BULK_COMMIT_POLL_INTERVAL_S = 1.0
+_BULK_COMMIT_POLL_MAX_WAIT_S = 1800.0  # 30 min — matches backend job TTL
+
+
+async def _bulk_commit_with_wait(client, payload: dict) -> dict:
+    """POST /api/channels/bulk-commit and unwrap the 202+poll envelope (bd-ggxks).
+
+    Returns a BulkCommitResponse-shaped dict for both the sync (validateOnly)
+    and async paths so callers can stay agnostic. Raises on poll timeout or
+    backend-reported failure.
+    """
+    response = await client.call_endpoint(
+        ENDPOINTS["channels_bulk_commit"], body=payload
+    )
+    if not isinstance(response, dict) or response.get("status") != "running":
+        return response if isinstance(response, dict) else {}
+
+    job_id = response.get("job_id")
+    if not job_id:
+        raise RuntimeError("Bulk commit returned 202 without a job_id")
+
+    deadline = asyncio.get_event_loop().time() + _BULK_COMMIT_POLL_MAX_WAIT_S
+    while asyncio.get_event_loop().time() < deadline:
+        status = await client.get(f"/api/channels/bulk-commit/{job_id}")  # contract-exempt: status-poll for bd-ggxks
+        if not isinstance(status, dict):
+            raise RuntimeError(f"Bulk commit poll returned non-dict: {type(status).__name__}")
+        if status.get("status") == "completed":
+            return status.get("result") or {}
+        if status.get("status") == "failed":
+            raise RuntimeError(
+                f"Bulk commit failed: {status.get('error', 'unknown error')}"
+            )
+        await asyncio.sleep(_BULK_COMMIT_POLL_INTERVAL_S)
+    raise TimeoutError(
+        f"Bulk commit {job_id} did not terminate within {_BULK_COMMIT_POLL_MAX_WAIT_S}s"
+    )
 
 
 def _fmt_channel_number(value) -> str:
@@ -942,7 +984,9 @@ def register(mcp: FastMCP):
                 "validateOnly": validate_only,
                 "continueOnError": continue_on_error,
             }
-            result = await client.call_endpoint(ENDPOINTS["channels_bulk_commit"], body=payload)
+            # bd-ggxks: helper handles both the validateOnly sync path and
+            # the default 202+poll path so this site keeps a single shape.
+            result = await _bulk_commit_with_wait(client, payload)
             success = result.get("success", False)
             # Per-operation result list is available at result["errors"] but not
             # surfaced in the response below — the operator gets aggregate status,
@@ -1074,7 +1118,10 @@ def register(mcp: FastMCP):
                     "channelNumber": ch["number"],
                     "groupId": group_id,
                 })
-            bulk_result = await client.post("/api/channels/bulk-commit", json_data={  # contract-exempt: see above
+            # bd-ggxks: route through the 202+poll helper so a slow batch
+            # (the lineup builder commits everything in one go) never
+            # surfaces the bare 202 envelope as "missing success".
+            bulk_result = await _bulk_commit_with_wait(client, {
                 "operations": operations,
                 "continueOnError": True,
             })

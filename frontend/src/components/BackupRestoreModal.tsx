@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { ModalOverlay } from './ModalOverlay';
 import * as api from '../services/api';
 import type { BackupValidation, BackupRestoreResult } from '../services/api';
+import { getDateLocale } from '../utils/formatting';
 import './ModalBase.css';
 import './BackupRestoreModal.css';
 
@@ -155,7 +156,7 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
                   <div className="brm-file-meta">
                     ECM v{validation.version}
                     {validation.exported_at && (
-                      <> &middot; {new Date(validation.exported_at).toLocaleString()}</>
+                      <> &middot; {new Date(validation.exported_at).toLocaleString(getDateLocale())}</>
                     )}
                   </div>
                 </div>
