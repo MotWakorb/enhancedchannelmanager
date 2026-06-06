@@ -37,6 +37,9 @@ vi.mock('../../services/api', () => ({
   testEmbyConnection: vi.fn(),
   testPlexConnection: vi.fn(),
   testJellyfinConnection: vi.fn(),
+  clearEmbyLogos: vi.fn(),
+  getClearEmbyLogosStatus: vi.fn(),
+  EMBY_LOGO_TYPES: ['Primary', 'LogoLight', 'LogoLightColor'],
 }));
 
 vi.mock('../../services/autoCreationApi', () => ({
@@ -399,6 +402,79 @@ describe('EmbyIntegrationSection (bd-8wc6q, epic bd-2cenq)', () => {
         }),
       );
     });
+  });
+
+  // --- Clear Emby Logos (GH #475, bd-v9tp7) ---
+
+  it('renders the Clear Logos controls with all three type checkboxes', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect(screen.getByTestId('emby-clear-logos')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('emby-clear-type-Primary')).toBeInTheDocument();
+    expect(screen.getByTestId('emby-clear-type-LogoLight')).toBeInTheDocument();
+    expect(screen.getByTestId('emby-clear-type-LogoLightColor')).toBeInTheDocument();
+    // All checked by default.
+    expect((screen.getByTestId('emby-clear-type-Primary') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('emby-clear-type-LogoLightColor') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('disables the Clear Logos button until an Emby key is configured', async () => {
+    renderOnIntegrations(); // default fixture: emby_api_key_configured = false
+    await waitFor(() => {
+      expect(screen.getByTestId('emby-clear-logos-btn')).toBeInTheDocument();
+    });
+    expect((screen.getByTestId('emby-clear-logos-btn') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('clicking Clear Logos calls api.clearEmbyLogos with the selected types', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      emby_enabled: true,
+      emby_base_url: 'http://emby.local:8096',
+      emby_api_key_configured: true,
+    }));
+    vi.mocked(api.clearEmbyLogos).mockResolvedValue({ job_id: 'j1', status: 'running' });
+
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect((screen.getByTestId('emby-clear-logos-btn') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    // Deselect LogoLight so we prove the type filter is honored.
+    fireEvent.click(screen.getByTestId('emby-clear-type-LogoLight'));
+    fireEvent.click(screen.getByTestId('emby-clear-logos-btn'));
+
+    await waitFor(() => {
+      expect(api.clearEmbyLogos).toHaveBeenCalledWith(['Primary', 'LogoLightColor']);
+    });
+    // Operator gets the "started, watch notifications" confirmation inline.
+    await waitFor(() => {
+      expect(screen.getByTestId('emby-clear-result-success').textContent).toMatch(/notifications/i);
+    });
+  });
+
+  it('blocks the clear with an inline error when no logo type is selected', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      emby_enabled: true,
+      emby_base_url: 'http://emby.local:8096',
+      emby_api_key_configured: true,
+    }));
+
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect((screen.getByTestId('emby-clear-logos-btn') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    // Uncheck all three.
+    fireEvent.click(screen.getByTestId('emby-clear-type-Primary'));
+    fireEvent.click(screen.getByTestId('emby-clear-type-LogoLight'));
+    fireEvent.click(screen.getByTestId('emby-clear-type-LogoLightColor'));
+    fireEvent.click(screen.getByTestId('emby-clear-logos-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('emby-clear-result-error').textContent?.toLowerCase()).toContain('logo type');
+    });
+    expect(api.clearEmbyLogos).not.toHaveBeenCalled();
   });
 
   it('omits emby_api_key from the save payload when the field is blank (preserve-on-omit)', async () => {

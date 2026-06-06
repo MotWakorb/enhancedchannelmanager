@@ -37,7 +37,7 @@ interface ProbeProgress {
   skipped: number;
   black_screen: number;
   low_fps: number;
-  status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord';
+  status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord' | 'clearing';
   current_stream: string;
 }
 
@@ -63,7 +63,7 @@ const getProbeProgress = (n: Notification): ProbeProgress | null => {
 
 // Helper to check if task is actively running (not completed, failed, or idle)
 const isProbeActive = (status: ProbeProgress['status']): boolean => {
-  return ['probing', 'fetching', 'refreshing', 'reordering', 'starting', 'fetching_sources', 'fetching_accounts', 'building_digest', 'sending_email', 'sending_discord'].includes(status);
+  return ['probing', 'fetching', 'refreshing', 'reordering', 'starting', 'fetching_sources', 'fetching_accounts', 'building_digest', 'sending_email', 'sending_discord', 'clearing'].includes(status);
 };
 
 // Sources that should auto-show toasts when new notifications arrive
