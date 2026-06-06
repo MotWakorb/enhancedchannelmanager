@@ -1240,6 +1240,48 @@ export async function testEmbyConnection(
   });
 }
 
+// Emby Clear Logos (GH #475, bd-v9tp7). POST enqueues a background job
+// (202 + {job_id}); poll the status endpoint until terminal. Reuses the saved
+// Emby connection on the backend — no credentials cross the wire here.
+export const EMBY_LOGO_TYPES = ['Primary', 'LogoLight', 'LogoLightColor'] as const;
+export type EmbyLogoType = (typeof EMBY_LOGO_TYPES)[number];
+
+export interface ClearEmbyLogosEnqueueResult {
+  job_id: string;
+  status: string;
+  message?: string;
+}
+
+export interface ClearEmbyLogosSummary {
+  channels_processed: number;
+  images_deleted: number;
+  images_missing: number;
+  errors: number;
+  logo_types: string[];
+}
+
+export interface ClearEmbyLogosStatusResult {
+  job_id: string;
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+  result?: ClearEmbyLogosSummary;
+}
+
+export async function clearEmbyLogos(
+  logoTypes: EmbyLogoType[],
+): Promise<ClearEmbyLogosEnqueueResult> {
+  return fetchJson(`${API_BASE}/emby/clear-logos`, {
+    method: 'POST',
+    body: JSON.stringify({ logo_types: logoTypes }),
+  });
+}
+
+export async function getClearEmbyLogosStatus(
+  jobId: string,
+): Promise<ClearEmbyLogosStatusResult> {
+  return fetchJson(`${API_BASE}/emby/clear-logos/${encodeURIComponent(jobId)}`);
+}
+
 // Plex Settings UI test-connection (bd-r5f0c.5 / W5). Same shape as Emby.
 export interface PlexTestConnectionResult {
   ok: boolean;
