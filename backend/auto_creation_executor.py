@@ -1132,6 +1132,8 @@ class ActionExecutor:
 
             if updates:
                 await self.client.update_channel(channel_id, updates)
+                # Update simulated state so subsequent actions see the changes
+                channel.update(updates)
 
             return ActionResult(
                 success=True,
@@ -1636,6 +1638,7 @@ class ActionExecutor:
                 )
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"logo_id": logo_id})
+            channel["logo_id"] = logo_id
 
             return ActionResult(
                 success=True,
@@ -1699,6 +1702,7 @@ class ActionExecutor:
             previous_state = {"tvg_id": channel.get("tvg_id")}
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"tvg_id": tvg_id})
+            channel["tvg_id"] = tvg_id
 
             return ActionResult(
                 success=True,
@@ -1816,6 +1820,7 @@ class ActionExecutor:
                 payload["tvg_id"] = epg_tvg_id
 
             await self.client.update_channel(exec_ctx.current_channel_id, payload)
+            channel.update(payload)
 
             # Track for post-execution verification if channel was just created
             newly_created_ids = {c["id"] for c in self._created_channels.values()}
@@ -2104,6 +2109,7 @@ class ActionExecutor:
             previous_state = {"stream_profile_id": channel.get("stream_profile_id")}
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"stream_profile_id": profile_id})
+            channel["stream_profile_id"] = profile_id
 
             return ActionResult(
                 success=True,
@@ -2218,6 +2224,7 @@ class ActionExecutor:
             previous_state = {"channel_number": channel.get("channel_number")}
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"channel_number": channel_number})
+            channel["channel_number"] = channel_number
             self._used_channel_numbers.add(channel_number)
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
 
@@ -2612,6 +2619,7 @@ class ActionExecutor:
             channel_name = channel.get("name", f"ID:{channel_id}")
 
             await self.client.update_channel(channel_id, {"channel_group_id": None})
+            channel["channel_group_id"] = None
             logger.info("[AUTO-CREATE-EXEC] Moved orphaned channel %s (%s) to Uncategorized", channel_id, channel_name)
 
             return ActionResult(
