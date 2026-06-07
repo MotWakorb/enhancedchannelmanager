@@ -2095,6 +2095,11 @@ class ActionExecutor:
             )
 
         if exec_ctx.dry_run:
+            # Update simulated state so subsequent actions in this dry run
+            # preview against the new profile (mirrors the real-run path).
+            simulated = self._channel_by_id.get(exec_ctx.current_channel_id)
+            if simulated is not None:
+                simulated["stream_profile_id"] = profile_id
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -2210,6 +2215,11 @@ class ActionExecutor:
 
         if exec_ctx.dry_run:
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
+            # Update simulated state so subsequent actions in this dry run
+            # preview against the new number (mirrors the real-run path).
+            simulated = self._channel_by_id.get(exec_ctx.current_channel_id)
+            if simulated is not None:
+                simulated["channel_number"] = channel_number
             return ActionResult(
                 success=True,
                 action_type=action.type,

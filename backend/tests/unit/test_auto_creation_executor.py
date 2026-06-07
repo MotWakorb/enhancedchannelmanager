@@ -1329,6 +1329,169 @@ class TestActionExecutorPropertyActions:
         self.client.update_channel.assert_called_with(1, {"channel_number": 999})
 
 
+class TestSimulatedChannelStateAfterActions:
+    """Regression tests for PR #483 — action handlers must update the in-memory
+    simulated channel (``_channel_by_id``) after a successful API update, so a
+    later action in the same rule operates on fresh state instead of stale
+    values. The headline bug: assign_tvg_id wrote the API but not the simulated
+    channel, so a following assign_epg matched on the old (None) tvg_id and fell
+    back to incorrect fuzzy matching.
+    """
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        self.client.create_logo = AsyncMock(return_value={"id": 42})
+        self.client.find_logo_by_url = AsyncMock(return_value=None)
+
+        self.channels = [
+            {
+                "id": 1,
+                "name": "ESPN",
+                "logo_url": None,
+                "tvg_id": None,
+                "stream_profile_id": None,
+                "channel_number": None,
+                "channel_group_id": 7,
+            },
+        ]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+        )
+
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="ESPN HD",
+            m3u_account_id=1,
+            logo_url="http://example.com/espn.png",
+            tvg_id="ESPN.US",
+        )
+
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def test_assign_logo_updates_simulated_state(self):
+        action = {"type": "assign_logo", "value": "from_stream"}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["logo_id"] == 42
+
+    def test_assign_tvg_id_updates_simulated_state(self):
+        action = {"type": "assign_tvg_id", "value": "from_stream"}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["tvg_id"] == "ESPN.US"
+
+    def test_assign_epg_updates_simulated_state(self):
+        epg_data = [{"id": 42, "tvg_id": "ESPN.US", "epg_source": 5}]
+        executor = ActionExecutor(
+            self.client, existing_channels=self.channels, epg_data=epg_data
+        )
+        action = {"type": "assign_epg", "epg_id": 5, "set_tvg_id": True}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert executor._channel_by_id[1]["epg_data_id"] == 42
+        assert executor._channel_by_id[1]["tvg_id"] == "ESPN.US"
+
+    def test_assign_profile_updates_simulated_state(self):
+        action = {"type": "assign_profile", "profile_id": 3}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["stream_profile_id"] == 3
+
+    def test_set_channel_number_updates_simulated_state(self):
+        action = {"type": "set_channel_number", "value": 999}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["channel_number"] == 999
+
+    def test_move_channel_to_uncategorized_updates_simulated_state(self):
+        assert self.executor._channel_by_id[1]["channel_group_id"] == 7
+
+        result = self._run(self.executor.move_channel_to_uncategorized(1))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["channel_group_id"] is None
+
+    def test_assign_tvg_id_then_assign_epg_uses_fresh_tvg_id(self):
+        """End-to-end of the PR #483 bug: assign_tvg_id then assign_epg.
+
+        Entry A is reachable ONLY via exact tvg_id match; entry B is a fuzzy
+        name-match trap. Without the simulated-state update, assign_epg would
+        read the stale tvg_id (None), skip the exact-match path, and wrongly
+        pick entry B. With the fix it exact-matches entry A.
+        """
+        epg_data = [
+            {"id": 100, "tvg_id": "ESPN.US", "epg_source": 5, "name": "Sports Channel A"},
+            {"id": 200, "tvg_id": "WRONG.US", "epg_source": 5, "name": "ESPN"},
+        ]
+        executor = ActionExecutor(
+            self.client, existing_channels=self.channels, epg_data=epg_data
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        # Step 1: stamp the tvg_id from the stream onto the channel.
+        r1 = self._run(executor.execute(
+            {"type": "assign_tvg_id", "value": "from_stream"}, self.stream_ctx, exec_ctx
+        ))
+        assert r1.success is True
+        assert executor._channel_by_id[1]["tvg_id"] == "ESPN.US"
+
+        # Step 2: assign EPG — must exact-match entry A via the fresh tvg_id.
+        r2 = self._run(executor.execute(
+            {"type": "assign_epg", "epg_id": 5}, self.stream_ctx, exec_ctx
+        ))
+        assert r2.success is True
+        self.client.update_channel.assert_called_with(1, {"epg_data_id": 100})
+
+    def test_assign_profile_dry_run_updates_simulated_state(self):
+        """Dry-run consistency follow-up: profile preview reflects in sim state."""
+        action = {"type": "assign_profile", "profile_id": 3}
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["stream_profile_id"] == 3
+        self.client.update_channel.assert_not_called()
+
+    def test_set_channel_number_dry_run_updates_simulated_state(self):
+        """Dry-run consistency follow-up: number preview reflects in sim state."""
+        action = {"type": "set_channel_number", "value": 999}
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["channel_number"] == 999
+        self.client.update_channel.assert_not_called()
+
+
 class TestActionExecutorDryRun:
     """Tests for dry run mode across all actions."""
 
