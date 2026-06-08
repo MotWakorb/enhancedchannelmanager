@@ -275,116 +275,8 @@
   font-size: 18px;
 }
 
-/* Modal */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background-color: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-overlay);
-}
-
-.epg-modal-content {
-  background-color: var(--bg-tertiary);
-  border-radius: 12px;
-  width: 100%;
-  max-width: 480px;
-  max-height: 90vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--border-primary);
-}
-
-.modal-header h2 {
-  margin: 0;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  font-size: 1.5rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-}
-
-.close-btn:hover {
-  color: var(--text-primary);
-}
-
-.modal-body {
-  padding: 1.5rem;
-  overflow-y: auto;
-}
-
-/* .form-group and .form-hint are defined in shared/common.css */
-
-.form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-
-.checkbox-group {
-  margin-top: 1rem;
-}
-
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-}
-
-.checkbox-label input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--accent-primary);
-  cursor: pointer;
-}
-
-.error-message {
-  padding: 0.75rem;
-  background-color: var(--error-bg);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: var(--radius-lg);
-  color: var(--error);
-  font-size: 0.875rem;
-  margin-top: 1rem;
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  padding: 1rem 1.5rem;
-  border-top: 1px solid var(--border-primary);
-}
-
-.modal-footer button {
-  padding: 0.625rem 1.25rem;
-  border: none;
-  border-radius: var(--radius-lg);
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s, opacity 0.15s;
-}
-
-/* .btn-primary, .btn-secondary are defined in shared/common.css */
+/* Modal chrome (overlay, container, header/body/footer, form rows, buttons,
+   error banner) now comes from the shared ModalBase.css — see EPGSourceModal. */
 
 /* Responsive */
 @media (max-width: 900px) {
@@ -519,4 +411,118 @@
 .dummy-actions {
   display: flex;
   gap: 0.25rem;
+}
+
+/* --- Schedules Direct (SD) source UI --- */
+.sd-rate-note {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.sd-lineup-manager {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-primary);
+}
+
+.sd-changes-remaining {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.sd-lineup-list {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.sd-lineup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  background-color: var(--bg-secondary);
+  border-radius: var(--radius-md);
+}
+
+.sd-lineup-name {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.sd-lineup-id {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.sd-lineup-meta {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.sd-lineup-added {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Country + postal + Search button: widen the shared 2-col modal-form-row to 3. */
+.sd-lineup-search-row {
+  grid-template-columns: 1fr 1fr auto;
+  align-items: end;
+}
+
+.sd-search-btn-group {
+  display: flex;
+  align-items: flex-end;
+}
+
+.sd-search-results {
+  margin-top: 0.5rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* SD station-logo-style picker: clickable preview thumbnails (ESPN sample). */
+.sd-logo-style-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.sd-logo-style-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem;
+  background: transparent;
+  border: 2px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.sd-logo-style-option:hover {
+  border-color: var(--accent-primary);
+}
+
+.sd-logo-style-option.selected {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.sd-logo-style-option img {
+  /* Neutral mid-gray so both dark and white logo variants stay visible. */
+  width: 84px;
+  height: 48px;
+  object-fit: contain;
+  background-color: #808080;
+  border-radius: var(--radius-sm);
+  padding: 2px;
 }
