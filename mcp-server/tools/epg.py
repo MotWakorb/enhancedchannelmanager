@@ -245,21 +245,39 @@ def register(mcp: FastMCP):
             return f"Error linking channel {channel_id} to EPG: {e}"
 
     @mcp.tool()
-    async def create_epg_source(name: str, url: str, source_type: str = "xmltv") -> str:
+    async def create_epg_source(
+        name: str,
+        url: str | None = None,
+        source_type: str = "xmltv",
+        username: str | None = None,
+        password: str | None = None,
+    ) -> str:
         """Create a new EPG data source.
 
         Args:
             name: Display name for the EPG source
-            url: URL of the XMLTV EPG feed
-            source_type: EPG source type — "xmltv" (default, standard XMLTV format)
+            url: URL of the XMLTV EPG feed (required for source_type="xmltv")
+            source_type: "xmltv" (default, standard XMLTV format) or
+                "schedules_direct" (Schedules Direct JSON API).
+            username: Schedules Direct account username (source_type="schedules_direct").
+            password: Schedules Direct account password (source_type="schedules_direct").
+                After creating an SD source, add lineups with add_sd_lineup before
+                refreshing — an SD source with no lineups pulls no data.
         """
         try:
             client = get_ecm_client()
             # source_type is required by Dispatcharr; omitting it → HTTP 400 (bd-1wq7z.9)
-            result = await client.call_endpoint(
-                ENDPOINTS["epg_create_source"],
-                body={"name": name, "url": url, "source_type": source_type},
-            )
+            body: dict = {"name": name, "source_type": source_type}
+            if source_type == "schedules_direct":
+                if not username or not password:
+                    return "Schedules Direct sources require username and password."
+                body["username"] = username
+                body["password"] = password
+            else:
+                if not url:
+                    return f"source_type '{source_type}' requires a url."
+                body["url"] = url
+            result = await client.call_endpoint(ENDPOINTS["epg_create_source"], body=body)
             sid = result.get("id", "?") if isinstance(result, dict) else "?"
             rname = result.get("name", name) if isinstance(result, dict) else name
             return f"EPG source created: {rname} (id={sid})"
@@ -272,6 +290,8 @@ def register(mcp: FastMCP):
         source_id: int,
         name: str | None = None,
         url: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
     ) -> str:
         """Update an existing EPG source.
 
@@ -279,6 +299,9 @@ def register(mcp: FastMCP):
             source_id: The EPG source ID to update
             name: New display name
             url: New XMLTV feed URL
+            username: New Schedules Direct username
+            password: New Schedules Direct password (omit to keep the existing one —
+                the stored password is never returned).
         """
         try:
             client = get_ecm_client()
@@ -287,6 +310,10 @@ def register(mcp: FastMCP):
                 payload["name"] = name
             if url is not None:
                 payload["url"] = url
+            if username is not None:
+                payload["username"] = username
+            if password is not None:
+                payload["password"] = password
 
             if not payload:
                 return "No changes specified."
@@ -302,6 +329,112 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] update_epg_source failed: %s", e)
             return f"Error updating EPG source {source_id}: {e}"
+
+    @mcp.tool()
+    async def list_sd_lineups(source_id: int) -> str:
+        """List the active Schedules Direct lineups for an SD EPG source.
+
+        Args:
+            source_id: The Schedules Direct EPG source ID.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["epg_sd_lineups_list"], path_args={"source_id": source_id},
+            )
+            if not isinstance(result, dict):
+                return f"Unexpected response listing SD lineups for source {source_id}."
+            lineups = result.get("lineups", []) or []
+            max_lineups = result.get("max_lineups", "?")
+            remaining = result.get("changes_remaining", "?")
+            if not lineups:
+                return (
+                    f"No SD lineups configured for source {source_id} "
+                    f"(0/{max_lineups}; changes remaining: {remaining}). "
+                    "Use search_sd_lineups then add_sd_lineup."
+                )
+            lines = [f"SD lineups for source {source_id} ({len(lineups)}/{max_lineups}, "
+                     f"changes remaining: {remaining}):"]
+            for lu in lineups:
+                if isinstance(lu, dict):
+                    lines.append(f"  {lu.get('lineup', lu.get('id', '?'))} — {lu.get('name', '')}")
+                else:
+                    lines.append(f"  {lu}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] list_sd_lineups failed: %s", e)
+            return f"Error listing SD lineups for source {source_id}: {e}"
+
+    @mcp.tool()
+    async def search_sd_lineups(source_id: int, country: str, postalcode: str) -> str:
+        """Search Schedules Direct headends/lineups by country + postal code.
+
+        Args:
+            source_id: The Schedules Direct EPG source ID.
+            country: ISO-3166 alpha-3 country code (e.g. "USA", "CAN", "GBR").
+            postalcode: Postal/ZIP code to search near.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["epg_sd_lineups_search"],
+                path_args={"source_id": source_id},
+                body={"country": country, "postalcode": postalcode},
+            )
+            lineups = result.get("lineups", []) if isinstance(result, dict) else []
+            if not lineups:
+                return f"No SD lineups found for {country}/{postalcode}."
+            lines = [f"Found {len(lineups)} SD lineups for {country}/{postalcode}:"]
+            for lu in lineups:
+                lines.append(
+                    f"  {lu.get('lineup', '?')} — {lu.get('name', '')} "
+                    f"[{lu.get('transport', '')}] {lu.get('location', '')}"
+                )
+            lines.append("Add one with add_sd_lineup(source_id, lineup).")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] search_sd_lineups failed: %s", e)
+            return f"Error searching SD lineups for source {source_id}: {e}"
+
+    @mcp.tool()
+    async def add_sd_lineup(source_id: int, lineup: str) -> str:
+        """Add a Schedules Direct lineup to the account (rate-limited: ~6/24h).
+
+        Args:
+            source_id: The Schedules Direct EPG source ID.
+            lineup: The lineup id from search_sd_lineups (e.g. "USA-NJ29486-X").
+        """
+        try:
+            client = get_ecm_client()
+            await client.call_endpoint(
+                ENDPOINTS["epg_sd_lineup_add"],
+                path_args={"source_id": source_id},
+                body={"lineup": lineup},
+            )
+            return f"Added SD lineup '{lineup}' to source {source_id}."
+        except Exception as e:
+            logger.error("[MCP] add_sd_lineup failed: %s", e)
+            return f"Error adding SD lineup '{lineup}' to source {source_id}: {e}"
+
+    @mcp.tool()
+    async def remove_sd_lineup(source_id: int, lineup: str) -> str:
+        """Remove a Schedules Direct lineup from the account.
+
+        Args:
+            source_id: The Schedules Direct EPG source ID.
+            lineup: The lineup id to remove (e.g. "USA-NJ29486-X").
+        """
+        try:
+            client = get_ecm_client()
+            await client.call_endpoint(
+                ENDPOINTS["epg_sd_lineup_remove"],
+                path_args={"source_id": source_id},
+                body={"lineup": lineup},
+            )
+            return f"Removed SD lineup '{lineup}' from source {source_id}."
+        except Exception as e:
+            logger.error("[MCP] remove_sd_lineup failed: %s", e)
+            return f"Error removing SD lineup '{lineup}' from source {source_id}: {e}"
 
     @mcp.tool()
     async def delete_epg_source(source_id: int) -> str:
