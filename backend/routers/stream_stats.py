@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from config import get_settings
 from database import get_session
 from dispatcharr_client import get_client
+from services.notification_service import task_start_alerts_enabled
 from stream_prober import StreamProber, ensure_prober
 
 logger = logging.getLogger(__name__)
@@ -411,11 +412,15 @@ async def probe_bulk_streams(request: BulkProbeRequest):
             "message": "A probe is already in progress; check /probe/progress",
         }
 
+    # The "probe started" alert is info-level; a manual probe should only push it
+    # externally when the stream_probe task opted into info alerts (GH #462).
+    start_send_alerts = task_start_alerts_enabled("stream_probe")
+
     async def run_bulk_probe_with_logging():
         """Wrapper to catch and log any errors from the background bulk probe."""
         try:
             logger.info("[STREAM-STATS-PROBE] Background bulk probe task starting (%d streams)...", len(request.stream_ids))
-            await prober.probe_streams_by_ids(request.stream_ids)
+            await prober.probe_streams_by_ids(request.stream_ids, start_send_alerts=start_send_alerts)
             logger.info("[STREAM-STATS-PROBE] Background bulk probe task completed successfully")
         except Exception as e:
             logger.exception("[STREAM-STATS-PROBE] Background bulk probe task failed: %s", e)
@@ -451,6 +456,10 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
         logger.warning("[STREAM-STATS-PROBE] Probe state shows in_progress - resetting before starting new probe")
         prober.force_reset_probe_state()
 
+    # Info-level "probe started" alert: gate external dispatch on the stream_probe
+    # task's (send_alerts AND alert_on_info), even for this manual trigger (GH #462).
+    start_send_alerts = task_start_alerts_enabled("stream_probe")
+
     async def run_probe_with_logging():
         """Wrapper to catch and log any errors from the probe task."""
         try:
@@ -458,7 +467,8 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
             await prober.probe_all_streams(
                 channel_groups_override=request.channel_groups or None,
                 skip_m3u_refresh=request.skip_m3u_refresh,
-                stream_ids_filter=request.stream_ids or None
+                stream_ids_filter=request.stream_ids or None,
+                start_send_alerts=start_send_alerts,
             )
             logger.info("[STREAM-STATS-PROBE] Background probe task completed successfully")
         except Exception as e:

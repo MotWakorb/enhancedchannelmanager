@@ -341,7 +341,11 @@ class TestProbeBulkStreams:
         assert response.status_code == 200
         # Drive the captured background coroutine to completion.
         await captured["coro"]
-        mock_prober.probe_streams_by_ids.assert_awaited_once_with([10, 11])
+        # start_send_alerts is the gated value for the stream_probe task; with no
+        # ScheduledTask row seeded it defaults to False (info alerts opt-in, GH #462).
+        mock_prober.probe_streams_by_ids.assert_awaited_once_with(
+            [10, 11], start_send_alerts=False
+        )
 
     @pytest.mark.asyncio
     async def test_returns_503_when_prober_unavailable(self, async_client):
