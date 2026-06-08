@@ -17,7 +17,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { EPGSource, EPGSourceType } from '../../types';
+import type { EPGSource, EPGSourceType, SDCustomProperties, SDLineup } from '../../types';
 import * as api from '../../services/api';
 import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
 import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
@@ -25,6 +25,7 @@ import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
+import '../ModalBase.css';
 import './EPGManagerTab.css';
 
 interface SortableEPGSourceRowProps {
@@ -214,23 +215,57 @@ interface EPGSourceModalProps {
   onSave: (data: api.CreateEPGSourceRequest) => Promise<void>;
 }
 
+// Schedules Direct enforces a ~200-request/2h limit; Dispatcharr refuses
+// refreshes more often than every 2 hours. Surface that as the SD minimum.
+const SD_MIN_REFRESH_HOURS = 2;
+
+// Logo-style previews. Each shows SD's ESPN HD station (s32645) rendered in that
+// style, straight from SD's public logo bucket — same images Dispatcharr uses so
+// operators can eyeball the variants before choosing.
+// Base ends at the station id; each style is a filename suffix (no extra path
+// segment) — matches Dispatcharr exactly: .../stationLogos/s32645_dark_360w_270h.png
+const SD_LOGO_PREVIEW_BASE =
+  'https://schedulesdirect-api20141201-logos.s3.dualstack.us-east-1.amazonaws.com/stationLogos/s32645';
+const SD_LOGO_STYLES: { value: NonNullable<SDCustomProperties['logo_style']>; label: string; url: string }[] = [
+  { value: 'dark', label: 'Dark', url: `${SD_LOGO_PREVIEW_BASE}_dark_360w_270h.png` },
+  { value: 'white', label: 'White', url: `${SD_LOGO_PREVIEW_BASE}_white_360w_270h.png` },
+  { value: 'gray', label: 'Gray', url: `${SD_LOGO_PREVIEW_BASE}_gray_360w_270h.png` },
+  { value: 'light', label: 'Light', url: `${SD_LOGO_PREVIEW_BASE}_light_360w_270h.png` },
+];
+
 function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps) {
   const [name, setName] = useState('');
   const [sourceType, setSourceType] = useState<EPGSourceType>('xmltv');
   const [url, setUrl] = useState('');
-  const [apiKey, setApiKey] = useState('');
+  // Schedules Direct credentials. Password is write-only: blank means "keep
+  // existing" on edit (preserve-on-omit), mirroring smtp_password / emby_api_key.
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  // Schedules Direct settings (persisted into custom_properties).
+  const [logoStyle, setLogoStyle] = useState<NonNullable<SDCustomProperties['logo_style']>>('dark');
+  const [autoApplyLogos, setAutoApplyLogos] = useState(false);
+  const [fetchPosters, setFetchPosters] = useState(false);
+  const [posterStyle, setPosterStyle] = useState('sd_recommended');
   const [refreshInterval, setRefreshInterval] = useState(24);
   const [priority, setPriority] = useState(0);
   const [isActive, setIsActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isSD = sourceType === 'schedules_direct';
+
   useEffect(() => {
     if (source) {
       setName(source.name);
       setSourceType(source.source_type);
       setUrl(source.url || '');
-      setApiKey(source.api_key || '');
+      setUsername(source.username || '');
+      setPassword('');
+      const cp = (source.custom_properties || {}) as SDCustomProperties;
+      setLogoStyle(cp.logo_style || 'dark');
+      setAutoApplyLogos(!!cp.auto_apply_epg_logos);
+      setFetchPosters(!!cp.fetch_posters);
+      setPosterStyle(cp.poster_style || 'sd_recommended');
       setRefreshInterval(source.refresh_interval);
       setPriority(source.priority);
       setIsActive(source.is_active);
@@ -238,7 +273,12 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
       setName('');
       setSourceType('xmltv');
       setUrl('');
-      setApiKey('');
+      setUsername('');
+      setPassword('');
+      setLogoStyle('dark');
+      setAutoApplyLogos(false);
+      setFetchPosters(false);
+      setPosterStyle('sd_recommended');
       setRefreshInterval(24);
       setPriority(0);
       setIsActive(true);
@@ -260,17 +300,46 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
       return;
     }
 
+    if (isSD) {
+      if (!username.trim()) {
+        setError('Username is required for Schedules Direct sources');
+        return;
+      }
+      // Password required on create; on edit a blank field keeps the stored one.
+      if (!source && !password.trim()) {
+        setError('Password is required for Schedules Direct sources');
+        return;
+      }
+      if (refreshInterval > 0 && refreshInterval < SD_MIN_REFRESH_HOURS) {
+        setError(`Schedules Direct refresh interval must be at least ${SD_MIN_REFRESH_HOURS} hours`);
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      await onSave({
+      const payload: api.CreateEPGSourceRequest = {
         name: name.trim(),
         source_type: sourceType,
         url: sourceType === 'xmltv' ? url.trim() : null,
-        api_key: sourceType === 'schedules_direct' ? apiKey.trim() : null,
         refresh_interval: refreshInterval,
         priority,
         is_active: isActive,
-      });
+      };
+      if (isSD) {
+        payload.username = username.trim();
+        // Preserve-on-omit: only send password when the user typed one.
+        if (password.trim()) {
+          payload.password = password.trim();
+        }
+        payload.custom_properties = {
+          logo_style: logoStyle,
+          auto_apply_epg_logos: autoApplyLogos,
+          fetch_posters: fetchPosters,
+          poster_style: posterStyle,
+        } satisfies SDCustomProperties;
+      }
+      await onSave(payload);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save EPG source');
@@ -283,16 +352,18 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="epg-modal-content">
+      <div className="modal-container modal-lg epg-source-modal">
         <div className="modal-header">
           <h2>{source ? 'Edit EPG Source' : 'Add Standard EPG'}</h2>
-          <button className="close-btn" onClick={onClose}>&times;</button>
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
+          </button>
         </div>
 
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
-            <div className="form-group">
-              <label htmlFor="name">Name</label>
+            <div className="modal-form-group">
+              <label htmlFor="name">Name <span className="modal-required">*</span></label>
               <input
                 id="name"
                 type="text"
@@ -303,7 +374,7 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
               />
             </div>
 
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="sourceType">Source Type</label>
               <CustomSelect
                 value={sourceType}
@@ -320,8 +391,8 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
             </div>
 
             {sourceType === 'xmltv' && (
-              <div className="form-group">
-                <label htmlFor="url">XMLTV URL</label>
+              <div className="modal-form-group">
+                <label htmlFor="url">XMLTV URL <span className="modal-required">*</span></label>
                 <input
                   id="url"
                   type="url"
@@ -332,34 +403,114 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
               </div>
             )}
 
-            {sourceType === 'schedules_direct' && (
-              <div className="form-group">
-                <label htmlFor="apiKey">API Key</label>
-                <input
-                  id="apiKey"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Your Schedules Direct API key"
-                />
-              </div>
+            {isSD && (
+              <>
+                <p className="form-hint sd-rate-note">
+                  Schedules Direct is a paid account with strict rate limits
+                  (lineup changes ~6/24h, refresh no more than every {SD_MIN_REFRESH_HOURS} hours).
+                </p>
+                <div className="modal-form-group">
+                  <label htmlFor="sdUsername">Username <span className="modal-required">*</span></label>
+                  <input
+                    id="sdUsername"
+                    type="text"
+                    autoComplete="off"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Your Schedules Direct username"
+                  />
+                </div>
+                <div className="modal-form-group">
+                  <label htmlFor="sdPassword">
+                    Password {!source && <span className="modal-required">*</span>}
+                  </label>
+                  <input
+                    id="sdPassword"
+                    type="password"
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={source ? 'Leave blank to keep current password' : 'Your Schedules Direct password'}
+                  />
+                </div>
+                <div className="modal-form-group">
+                  <label>Station Logo Style</label>
+                  <div className="sd-logo-style-row" role="radiogroup" aria-label="Station logo style">
+                    {SD_LOGO_STYLES.map((style) => (
+                      <button
+                        key={style.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={logoStyle === style.value}
+                        className={`sd-logo-style-option${logoStyle === style.value ? ' selected' : ''}`}
+                        onClick={() => setLogoStyle(style.value)}
+                      >
+                        <img
+                          src={style.url}
+                          alt={`${style.label} logo example`}
+                          loading="lazy"
+                          onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+                        />
+                        <span>{style.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="modal-form-group">
+                  <label className="modal-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={autoApplyLogos}
+                      onChange={(e) => setAutoApplyLogos(e.target.checked)}
+                    />
+                    <span>Auto-apply EPG logos to channels</span>
+                  </label>
+                </div>
+                <div className="modal-form-group">
+                  <label className="modal-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={fetchPosters}
+                      onChange={(e) => setFetchPosters(e.target.checked)}
+                    />
+                    <span>Fetch program posters (uses extra SD API requests)</span>
+                  </label>
+                </div>
+                {fetchPosters && (
+                  <div className="modal-form-group">
+                    <label htmlFor="sdPosterStyle">Poster Style</label>
+                    <CustomSelect
+                      value={posterStyle}
+                      onChange={(val) => setPosterStyle(val)}
+                      options={[
+                        { value: 'sd_recommended', label: 'SD Recommended' },
+                        { value: 'poster', label: 'Poster (2x3)' },
+                        { value: 'banner', label: 'Banner' },
+                        { value: 'banner-l1', label: 'Banner L1' },
+                      ]}
+                    />
+                  </div>
+                )}
+              </>
             )}
 
-            <div className="form-row">
-              <div className="form-group">
+            <div className="modal-form-row">
+              <div className="modal-form-group">
                 <label htmlFor="refreshInterval">Refresh Interval (hours)</label>
                 <input
                   id="refreshInterval"
                   type="number"
-                  min="0"
+                  min={isSD ? SD_MIN_REFRESH_HOURS : 0}
                   max="168"
                   value={refreshInterval}
                   onChange={(e) => setRefreshInterval(parseInt(e.target.value))}
                 />
-                <span className="form-hint">0 = manual refresh only</span>
+                <span className="form-hint">
+                  {isSD ? `0 = manual; min ${SD_MIN_REFRESH_HOURS}h, 24h recommended` : '0 = manual refresh only'}
+                </span>
               </div>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="priority">Priority</label>
                 <input
                   id="priority"
@@ -372,8 +523,8 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
               </div>
             </div>
 
-            <div className="form-group checkbox-group">
-              <label className="checkbox-label">
+            <div className="modal-form-group">
+              <label className="modal-checkbox-label">
                 <input
                   type="checkbox"
                   checked={isActive}
@@ -383,20 +534,240 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
               </label>
             </div>
 
-            {error && <div className="error-message">{error}</div>}
+            {error && <div className="modal-error-banner">{error}</div>}
+
+            {source && isSD && <SDLineupManager sourceId={source.id} />}
           </div>
 
           <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>
+            <button type="button" className="modal-btn modal-btn-secondary" onClick={onClose} disabled={saving}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary" disabled={saving}>
+            <button type="submit" className="modal-btn modal-btn-primary" disabled={saving}>
               {saving ? 'Saving...' : source ? 'Save Changes' : 'Add EPG'}
             </button>
           </div>
         </form>
       </div>
     </ModalOverlay>
+  );
+}
+
+// ISO-3166 alpha-3 countries Schedules Direct supports lineup search for.
+// Mirrors Dispatcharr's hardcoded fallback list (SD has no client-facing
+// country-list proxy endpoint, so ECM ships the list rather than add a hop).
+const SD_COUNTRIES: { value: string; label: string }[] = [
+  { value: 'USA', label: 'United States' },
+  { value: 'CAN', label: 'Canada' },
+  { value: 'GBR', label: 'United Kingdom' },
+  { value: 'IRL', label: 'Ireland' },
+  { value: 'AUS', label: 'Australia' },
+  { value: 'NZL', label: 'New Zealand' },
+  { value: 'MEX', label: 'Mexico' },
+  { value: 'BRA', label: 'Brazil' },
+  { value: 'DEU', label: 'Germany' },
+  { value: 'NLD', label: 'Netherlands' },
+];
+
+interface SDLineupManagerProps {
+  sourceId: number;
+}
+
+// Live Schedules Direct lineup manager. Lineups live on the SD account, not in
+// Dispatcharr's DB, so every action here authenticates to SD through Dispatcharr
+// and counts against SD's rate limits — no auto-refresh/polling loops.
+function SDLineupManager({ sourceId }: SDLineupManagerProps) {
+  const notifications = useNotifications();
+  const [lineups, setLineups] = useState<SDLineup[]>([]);
+  const [maxLineups, setMaxLineups] = useState<number | null>(null);
+  const [changesRemaining, setChangesRemaining] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busyLineup, setBusyLineup] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const [country, setCountry] = useState('USA');
+  const [postalcode, setPostalcode] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<SDLineup[]>([]);
+  const [searched, setSearched] = useState(false);
+
+  const loadLineups = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.getSDLineups(sourceId);
+      setLineups(data.lineups || []);
+      setMaxLineups(data.max_lineups ?? null);
+      setChangesRemaining(data.changes_remaining ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load lineups');
+    } finally {
+      setLoading(false);
+    }
+  }, [sourceId]);
+
+  useEffect(() => {
+    loadLineups();
+  }, [loadLineups]);
+
+  const handleSearch = async () => {
+    if (!postalcode.trim()) {
+      setError('Postal code is required to search');
+      return;
+    }
+    setSearching(true);
+    setError(null);
+    setSearched(true);
+    try {
+      const data = await api.searchSDLineups(sourceId, country, postalcode.trim());
+      setResults(data.lineups || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Lineup search failed');
+      setResults([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const activeIds = new Set(lineups.map((l) => l.lineup));
+
+  const handleAdd = async (lineup: string) => {
+    setBusyLineup(lineup);
+    setError(null);
+    try {
+      await api.addSDLineup(sourceId, lineup);
+      notifications.success(`Added lineup ${lineup}`, 'Schedules Direct');
+      await loadLineups();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to add lineup';
+      setError(msg);
+      notifications.error(msg, 'Schedules Direct');
+    } finally {
+      setBusyLineup(null);
+    }
+  };
+
+  const handleRemove = async (lineup: string) => {
+    setBusyLineup(lineup);
+    setError(null);
+    try {
+      await api.deleteSDLineup(sourceId, lineup);
+      notifications.success(`Removed lineup ${lineup}`, 'Schedules Direct');
+      await loadLineups();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to remove lineup';
+      setError(msg);
+      notifications.error(msg, 'Schedules Direct');
+    } finally {
+      setBusyLineup(null);
+    }
+  };
+
+  const atMax = maxLineups != null && lineups.length >= maxLineups;
+  const noChangesLeft = changesRemaining != null && changesRemaining <= 0;
+
+  return (
+    <div className="sd-lineup-manager">
+      <h3 className="modal-section-title">
+        Lineups{maxLineups != null ? ` (${lineups.length}/${maxLineups})` : ''}
+        {changesRemaining != null && (
+          <span className="sd-changes-remaining"> · {changesRemaining} changes left today</span>
+        )}
+      </h3>
+
+      {error && <div className="modal-error-banner">{error}</div>}
+      {noChangesLeft && (
+        <p className="form-hint sd-rate-note">
+          Daily Schedules Direct lineup-change limit reached. Try again later.
+        </p>
+      )}
+
+      {loading ? (
+        <p className="form-hint">Loading lineups…</p>
+      ) : lineups.length === 0 ? (
+        <p className="form-hint">No lineups added yet. Search below to add one.</p>
+      ) : (
+        <ul className="sd-lineup-list">
+          {lineups.map((l) => (
+            <li key={l.lineup} className="sd-lineup-row">
+              <span className="sd-lineup-name">
+                {l.name || l.lineup}
+                <span className="sd-lineup-id"> ({l.lineup})</span>
+              </span>
+              <button
+                type="button"
+                className="modal-btn modal-btn-secondary modal-btn-small"
+                disabled={busyLineup === l.lineup || noChangesLeft}
+                onClick={() => handleRemove(l.lineup)}
+              >
+                {busyLineup === l.lineup ? '…' : 'Remove'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="sd-lineup-search">
+        <div className="modal-form-row sd-lineup-search-row">
+          <div className="modal-form-group">
+            <label htmlFor="sdCountry">Country</label>
+            <CustomSelect value={country} onChange={setCountry} options={SD_COUNTRIES} />
+          </div>
+          <div className="modal-form-group">
+            <label htmlFor="sdPostal">Postal Code</label>
+            <input
+              id="sdPostal"
+              type="text"
+              value={postalcode}
+              onChange={(e) => setPostalcode(e.target.value)}
+              placeholder="e.g. 90210"
+            />
+          </div>
+          <div className="modal-form-group sd-search-btn-group">
+            <button
+              type="button"
+              className="modal-btn modal-btn-secondary"
+              onClick={handleSearch}
+              disabled={searching}
+            >
+              {searching ? 'Searching…' : 'Search'}
+            </button>
+          </div>
+        </div>
+
+        {searched && !searching && results.length === 0 && (
+          <p className="form-hint">No lineups found for that location.</p>
+        )}
+
+        {results.length > 0 && (
+          <ul className="sd-lineup-list sd-search-results">
+            {results.map((l) => (
+              <li key={l.lineup} className="sd-lineup-row">
+                <span className="sd-lineup-name">
+                  {l.name || l.lineup}
+                  {l.transport && <span className="sd-lineup-meta"> [{l.transport}]</span>}
+                  {l.location && <span className="sd-lineup-meta"> {l.location}</span>}
+                  <span className="sd-lineup-id"> ({l.lineup})</span>
+                </span>
+                {activeIds.has(l.lineup) ? (
+                  <span className="sd-lineup-added">Added</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="modal-btn modal-btn-primary modal-btn-small"
+                    disabled={busyLineup === l.lineup || atMax || noChangesLeft}
+                    onClick={() => handleAdd(l.lineup)}
+                    title={atMax ? 'Maximum lineups reached' : undefined}
+                  >
+                    {busyLineup === l.lineup ? '…' : 'Add'}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }
 

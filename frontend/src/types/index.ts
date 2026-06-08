@@ -72,12 +72,25 @@ export interface DummyEPGCustomProperties {
   global_lookup_ids?: number[];                             // IDs from /api/lookup-tables to attach
 }
 
+// Custom properties for Schedules Direct EPG sources.
+// Persisted into the source's custom_properties bag (mirrors Dispatcharr).
+export interface SDCustomProperties {
+  logo_style?: 'dark' | 'white' | 'gray' | 'light';   // Station logo variant (default 'dark')
+  poster_style?: string;                               // Program poster style (default 'sd_recommended')
+  auto_apply_epg_logos?: boolean;                      // Auto-apply SD station logos to channels
+  fetch_posters?: boolean;                             // Pull program poster art (costs extra SD requests)
+  // Read-only SD rate-limit state surfaced by the sd-lineups GET.
+  sd_changes_remaining?: number;
+  sd_changes_reset_at?: string | null;
+}
+
 export interface EPGSource {
   id: number;
   name: string;
   source_type: EPGSourceType;
   url: string | null;
   api_key: string | null;
+  username: string | null;   // Schedules Direct account username (SD only; password is write-only)
   is_active: boolean;
   file_path: string | null;
   refresh_interval: number;
@@ -86,8 +99,24 @@ export interface EPGSource {
   last_message: string | null;
   created_at: string;
   updated_at: string | null;
-  custom_properties: DummyEPGCustomProperties | Record<string, unknown> | null;
+  custom_properties: DummyEPGCustomProperties | SDCustomProperties | Record<string, unknown> | null;
   epg_data_count: string;
+}
+
+// One Schedules Direct lineup, either active on the account or a search result.
+export interface SDLineup {
+  lineup: string;           // Lineup id, e.g. "USA-NJ29486-X"
+  name?: string;
+  transport?: string;       // e.g. "Cable", "Antenna", "Satellite"
+  location?: string;
+  headend?: string;
+}
+
+export interface SDLineupsResponse {
+  lineups: SDLineup[];
+  max_lineups?: number;
+  changes_remaining?: number;
+  changes_reset_at?: string | null;
 }
 
 export interface EPGData {
