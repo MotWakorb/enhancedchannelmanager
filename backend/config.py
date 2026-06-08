@@ -79,6 +79,13 @@ class DispatcharrSettings(BaseModel):
     # users since settings are instance-wide. "auto" defers to each viewer's
     # browser locale; "mdy"/"dmy"/"iso" pin the date ordering app-wide.
     date_format: str = "auto"  # Date format: "auto", "mdy", "dmy", or "iso"
+    # Internal bookkeeping (not a user setting): records that the one-time league
+    # strip require_delimiter heal (bd-0emgo.2) has run. Gates the startup heal so
+    # it applies once for upgrading operators and NEVER re-flips a value the user
+    # later changed (GH #484). A persistent marker is required because the heal
+    # cannot be an Alembic data migration — ECM's smart-bootstrap stamps forward
+    # past data-only migrations when the schema already matches (bd-5w6jz).
+    league_delimiter_heal_applied: bool = False
     # Default channel profiles for new channels (empty list means no defaults)
     default_channel_profile_ids: list[int] = []
     # Linked M3U accounts - groups of account IDs that should sync group settings
