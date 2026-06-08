@@ -188,6 +188,10 @@ class StreamProbeTask(TaskScheduler):
                 self._prober.probe_all_streams(
                     channel_groups_override=channel_groups,
                     skip_m3u_refresh=False,  # Scheduled probes should refresh
+                    # The "probe started" alert is info-level; only dispatch it
+                    # externally when this task opted into info alerts. self._send_alerts
+                    # is the engine-gated (send_alerts AND alert_on_info) value (GH #462).
+                    start_send_alerts=self._send_alerts,
                 )
             )
 
