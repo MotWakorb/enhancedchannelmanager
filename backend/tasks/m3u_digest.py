@@ -19,6 +19,14 @@ from m3u_digest_template import M3UDigestTemplate
 
 logger = logging.getLogger(__name__)
 
+# Hard cap on how many change rows a single digest run will load into memory.
+# The email/Discord templates only render the 20 most-recent items per
+# account-and-type, so loading more than this never affects the rendered output —
+# it only risks OOM. An unbounded .all() over the change log (each row can carry
+# its own stream-name JSON blob) drove RSS to ~18.5 GiB and corrupted the SQLite
+# DB on a large deployment (GH #473). 5000 is far above any sane digest size.
+MAX_DIGEST_CHANGES = 5000
+
 
 class _FilteredChange:
     """Proxy that wraps an M3UChangeLog to override stream names/count after filtering."""
@@ -169,12 +177,28 @@ class M3UDigestTask(TaskScheduler):
 
             self._set_progress(status="fetching_changes")
 
-            # Get changes since last digest
+            # Get changes since last digest.
+            # Bounded load (MAX_DIGEST_CHANGES): the templates only show the 20
+            # newest items per account-and-type, so an unbounded .all() here is
+            # pure memory risk with no effect on the rendered digest (GH #473).
             query = db.query(M3UChangeLog).filter(M3UChangeLog.change_time >= since)
             if m3u_account_id:
                 query = query.filter(M3UChangeLog.m3u_account_id == m3u_account_id)
 
-            changes = query.order_by(M3UChangeLog.change_time.desc()).all()
+            total_changes = query.count()
+            if total_changes > MAX_DIGEST_CHANGES:
+                logger.warning(
+                    "[%s] %s changes since %s exceeds cap of %s — digest will "
+                    "summarize the %s most-recent changes only",
+                    self.task_id, total_changes, since.isoformat(),
+                    MAX_DIGEST_CHANGES, MAX_DIGEST_CHANGES,
+                )
+
+            changes = (
+                query.order_by(M3UChangeLog.change_time.desc())
+                .limit(MAX_DIGEST_CHANGES)
+                .all()
+            )
 
             # Filter by settings
             if not settings.include_group_changes:
