@@ -2819,6 +2819,39 @@ class TestMergeJournalEntry:
         batch_ids = {entry["batch_id"] for entry in entries}
         assert batch_ids == {"7"}
 
+    def test_merge_journal_flushes_at_threshold(self):
+        """The default 100-entry buffer threshold flushes and clears itself."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=99,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        stream_ctxs = [
+            StreamContext(stream_id=sid, stream_name=f"S{sid}",
+                          m3u_account_id=1, tvg_id="ESPN.US")
+            for sid in range(300, 400)
+        ]
+
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+            for sc in stream_ctxs:
+                result = asyncio.get_event_loop().run_until_complete(
+                    executor.execute(action, sc, exec_ctx)
+                )
+                assert result.success is True
+
+        mock_log.assert_called_once()
+        entries = mock_log.call_args.kwargs["entries"]
+        assert len(entries) == executor._journal_flush_threshold == 100
+        assert {entry["batch_id"] for entry in entries} == {"99"}
+        assert executor._journal_buffer == []
+
     def test_no_execution_id_skips_journal(self):
         """Without an execution_id (direct-construct callers) no entry is written.
 

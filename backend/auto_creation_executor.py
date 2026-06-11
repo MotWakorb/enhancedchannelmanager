@@ -1083,10 +1083,10 @@ class ActionExecutor:
         Tags the entry with ``batch_id=str(execution_id)`` so an operator can
         list every ``(channel_id, stream_id)`` pair a run touched and recover
         from a bad merge. ``before_value``/``after_value`` carry STREAM IDs
-        ONLY — never URLs/objects, which embed provider credentials. A failed
-        journal write must never break the merge, so entries are buffered and
-        flushed via ``journal.log_entries`` to reduce commit churn during large
-        auto-creation runs.
+        ONLY — never URLs/objects, which embed provider credentials. Entries are
+        buffered and flushed via ``journal.log_entries`` to reduce commit churn
+        during large auto-creation runs; ``JournalEntry.timestamp`` is stamped
+        when the buffer flushes, not when each merge is queued.
 
         enhancedchannelmanager-jnzst: when a scored-fuzzy ``provenance`` dict is
         supplied, it is folded into ``after_value`` alongside the stream IDs
