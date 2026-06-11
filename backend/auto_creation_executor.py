@@ -310,12 +310,35 @@ class ActionExecutor:
 
         self._logo_cache = {}  # logo_url -> logo_id
 
+        # Buffer per-merge journal entries so long runs do not commit one row
+        # at a time. This keeps the audit trail but reduces WAL churn.
+        self._journal_buffer: list[dict] = []
+        self._journal_flush_threshold = 100
+
         # Channel number tracking
         self._used_channel_numbers = set()
         for c in self.existing_channels:
             if c.get("channel_number"):
                 self._used_channel_numbers.add(c["channel_number"])
         self._channel_assigned_numbers = {}  # channel_id -> number (set_channel_number dedup)
+
+    def _flush_journal_buffer(self) -> None:
+        """Flush buffered journal entries in one transaction."""
+        if not self._journal_buffer:
+            return
+
+        pending = list(self._journal_buffer)
+        if journal.log_entries(entries=pending):
+            logger.debug(
+                "[AUTO-CREATE-EXEC] Flushed %s buffered journal entries",
+                len(pending),
+            )
+            self._journal_buffer.clear()
+        else:
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Failed to flush %s buffered journal entries",
+                len(pending),
+            )
 
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
@@ -1060,10 +1083,10 @@ class ActionExecutor:
         Tags the entry with ``batch_id=str(execution_id)`` so an operator can
         list every ``(channel_id, stream_id)`` pair a run touched and recover
         from a bad merge. ``before_value``/``after_value`` carry STREAM IDs
-        ONLY — never URLs/objects, which embed provider credentials. A failed
-        journal write must never break the merge, so failures are logged and
-        swallowed (``journal.log_entry`` already does this internally; this is
-        defense-in-depth).
+        ONLY — never URLs/objects, which embed provider credentials. Entries are
+        buffered and flushed via ``journal.log_entries`` to reduce commit churn
+        during large auto-creation runs; ``JournalEntry.timestamp`` is stamped
+        when the buffer flushes, not when each merge is queued.
 
         enhancedchannelmanager-jnzst: when a scored-fuzzy ``provenance`` dict is
         supplied, it is folded into ``after_value`` alongside the stream IDs
@@ -1080,23 +1103,19 @@ class ActionExecutor:
             # Fold provenance into the after_value JSON. Keep stream_ids the
             # leading key so existing batch-recovery readers are unaffected.
             after_value["match"] = provenance
-        try:
-            journal.log_entry(
-                category="auto_creation",
-                action_type="merge_stream",
-                entity_id=channel_id,
-                entity_name=channel_name,
-                description="Merged stream %s into channel '%s'" % (stream_id, channel_name),
-                before_value={"stream_ids": list(before_ids)},
-                after_value=after_value,
-                user_initiated=False,
-                batch_id=str(self._execution_id),
-            )
-        except Exception as e:
-            logger.warning(
-                "[AUTO-CREATE-EXEC] Failed to journal merge of stream %s into channel '%s': %s",
-                stream_id, channel_name, e,
-            )
+        self._journal_buffer.append({
+            "category": "auto_creation",
+            "action_type": "merge_stream",
+            "entity_id": channel_id,
+            "entity_name": channel_name,
+            "description": "Merged stream %s into channel '%s'" % (stream_id, channel_name),
+            "before_value": {"stream_ids": list(before_ids)},
+            "after_value": after_value,
+            "user_initiated": False,
+            "batch_id": str(self._execution_id),
+        })
+        if len(self._journal_buffer) >= self._journal_flush_threshold:
+            self._flush_journal_buffer()
 
     async def _update_channel(self, channel: dict, stream_ctx: StreamContext,
                                exec_ctx: ExecutionContext, params: dict) -> ActionResult:

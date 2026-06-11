@@ -2828,9 +2828,9 @@ class TestCreateChannelSuperscriptStripping:
 
 
 class TestMergeJournalEntry:
-    """bd-0emgo.5: per-merge journal entry for lightweight recoverability.
+    """bd-0emgo.5: per-merge journal entries for lightweight recoverability.
 
-    Each LIVE merge in ``_add_stream_to_channel`` must write one
+    Each LIVE merge in ``_add_stream_to_channel`` must queue one
     ``auto_creation``/``merge_stream`` journal entry tagged with
     ``batch_id=str(execution_id)`` so an operator can later list every
     ``(channel_id, stream_id)`` pair a run touched via
@@ -2868,57 +2868,59 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext()  # dry_run defaults to False (live)
-        return asyncio.get_event_loop().run_until_complete(
+        result = asyncio.get_event_loop().run_until_complete(
             executor.execute(action, self.stream_ctx, exec_ctx)
         )
+        executor._flush_journal_buffer()
+        return result
 
-    def test_live_merge_writes_one_journal_entry(self):
-        """A live merge writes exactly one auto_creation/merge_stream entry."""
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+    def test_live_merge_flushes_one_journal_entry(self):
+        """A live merge flushes exactly one auto_creation/merge_stream entry."""
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             result = self._run_live_merge(execution_id=42)
 
         assert result.success is True
         assert result.modified is True
         mock_log.assert_called_once()
-        kwargs = mock_log.call_args.kwargs
-        assert kwargs["category"] == "auto_creation"
-        assert kwargs["action_type"] == "merge_stream"
-        assert kwargs["entity_id"] == 1  # channel_id
-        assert kwargs["entity_name"] == "ESPN"
-        assert kwargs["user_initiated"] is False
+        entry = mock_log.call_args.kwargs["entries"][0]
+        assert entry["category"] == "auto_creation"
+        assert entry["action_type"] == "merge_stream"
+        assert entry["entity_id"] == 1  # channel_id
+        assert entry["entity_name"] == "ESPN"
+        assert entry["user_initiated"] is False
 
     def test_journal_batch_id_is_execution_id(self):
         """batch_id carries the run's execution_id (as a string)."""
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
-        kwargs = mock_log.call_args.kwargs
-        assert kwargs["batch_id"] == "42"
+        entry = mock_log.call_args.kwargs["entries"][0]
+        assert entry["batch_id"] == "42"
 
     def test_journal_before_after_carry_stream_ids_only(self):
         """before/after hold stream IDs only — never URLs/objects (creds)."""
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
-        kwargs = mock_log.call_args.kwargs
-        before = kwargs["before_value"]
-        after = kwargs["after_value"]
+        entry = mock_log.call_args.kwargs["entries"][0]
+        before = entry["before_value"]
+        after = entry["after_value"]
         assert before == {"stream_ids": [101]}
         assert after == {"stream_ids": [101, 201]}
         # Credential safety: the provider token must not leak anywhere.
-        serialized = repr(kwargs)
+        serialized = repr(entry)
         assert "secret-token" not in serialized
         assert "http" not in serialized
 
     def test_journal_round_trip_recovers_channel_stream_pair(self):
         """The (channel_id, stream_id) pair is recoverable from the entry."""
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
-        kwargs = mock_log.call_args.kwargs
-        channel_id = kwargs["entity_id"]
-        before_ids = set(kwargs["before_value"]["stream_ids"])
-        after_ids = set(kwargs["after_value"]["stream_ids"])
+        entry = mock_log.call_args.kwargs["entries"][0]
+        channel_id = entry["entity_id"]
+        before_ids = set(entry["before_value"]["stream_ids"])
+        after_ids = set(entry["after_value"]["stream_ids"])
         merged_stream_ids = after_ids - before_ids
         assert channel_id == 1
         assert merged_stream_ids == {201}
@@ -2937,18 +2939,19 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext(dry_run=True)
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, self.stream_ctx, exec_ctx)
             )
+            executor._flush_journal_buffer()
 
         assert result.success is True
         assert "Would add" in result.description
         self.client.update_channel.assert_not_called()
         mock_log.assert_not_called()
 
-    def test_multi_merge_run_writes_one_entry_per_merge(self):
-        """A run merging N streams writes N entries, all sharing batch_id."""
+    def test_multi_merge_run_flushes_one_entry_per_merge(self):
+        """A run merging N streams flushes N entries, all sharing batch_id."""
         executor = ActionExecutor(
             self.client,
             existing_channels=self.channels,
@@ -2966,15 +2969,51 @@ class TestMergeJournalEntry:
                           m3u_account_id=1, tvg_id="ESPN.US")
             for sid in (301, 302, 303)
         ]
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             for sc in stream_ctxs:
                 asyncio.get_event_loop().run_until_complete(
                     executor.execute(action, sc, exec_ctx)
                 )
+            executor._flush_journal_buffer()
 
-        assert mock_log.call_count == 3
-        batch_ids = {c.kwargs["batch_id"] for c in mock_log.call_args_list}
+        mock_log.assert_called_once()
+        entries = mock_log.call_args.kwargs["entries"]
+        assert len(entries) == 3
+        batch_ids = {entry["batch_id"] for entry in entries}
         assert batch_ids == {"7"}
+
+    def test_merge_journal_flushes_at_threshold(self):
+        """The default 100-entry buffer threshold flushes and clears itself."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=99,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        stream_ctxs = [
+            StreamContext(stream_id=sid, stream_name=f"S{sid}",
+                          m3u_account_id=1, tvg_id="ESPN.US")
+            for sid in range(300, 400)
+        ]
+
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+            for sc in stream_ctxs:
+                result = asyncio.get_event_loop().run_until_complete(
+                    executor.execute(action, sc, exec_ctx)
+                )
+                assert result.success is True
+
+        mock_log.assert_called_once()
+        entries = mock_log.call_args.kwargs["entries"]
+        assert len(entries) == executor._journal_flush_threshold == 100
+        assert {entry["batch_id"] for entry in entries} == {"99"}
+        assert executor._journal_buffer == []
 
     def test_no_execution_id_skips_journal(self):
         """Without an execution_id (direct-construct callers) no entry is written.
@@ -2994,10 +3033,11 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, self.stream_ctx, exec_ctx)
             )
+            executor._flush_journal_buffer()
 
         assert result.success is True
         mock_log.assert_not_called()
@@ -3022,10 +3062,11 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
+            executor._flush_journal_buffer()
 
         assert result.success is True
         assert result.skipped is True
@@ -3066,7 +3107,7 @@ class TestMergeCountLabels:
             m3u_account_id=1,
         )
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entry"):
+        with patch("auto_creation_executor.journal.log_entries"):
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
@@ -3231,7 +3272,7 @@ class TestChannelsTouchedDryRun:
             m3u_account_id=1,
         )
         exec_ctx = ExecutionContext(dry_run=False)
-        with patch("auto_creation_executor.journal.log_entry"):
+        with patch("auto_creation_executor.journal.log_entries"):
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
