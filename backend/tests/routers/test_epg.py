@@ -492,3 +492,125 @@ class TestLinkChannelToEPG:
             )
 
         assert response.status_code == 500
+
+
+class TestSDLineups:
+    """Tests for the Schedules Direct lineup proxy endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_lists_lineups(self, async_client):
+        """GET forwards to the client and returns Dispatcharr's payload."""
+        mock_client = AsyncMock()
+        mock_client.get_sd_lineups.return_value = {
+            "lineups": [{"lineup": "USA-NJ29486-X", "name": "Comcast NJ"}],
+            "max_lineups": 4,
+            "changes_remaining": 5,
+        }
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/sources/1/sd-lineups")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["max_lineups"] == 4
+        assert body["lineups"][0]["lineup"] == "USA-NJ29486-X"
+        mock_client.get_sd_lineups.assert_called_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_adds_lineup_forwards_body(self, async_client):
+        """POST forwards the lineup id and journals the change."""
+        mock_client = AsyncMock()
+        mock_client.add_sd_lineup.return_value = {"success": True}
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.post(
+                "/api/epg/sources/1/sd-lineups", json={"lineup": "USA-NJ29486-X"},
+            )
+
+        assert response.status_code == 200
+        mock_client.add_sd_lineup.assert_called_once_with(1, "USA-NJ29486-X")
+
+    @pytest.mark.asyncio
+    async def test_removes_lineup_forwards_body(self, async_client):
+        """DELETE forwards the lineup id."""
+        mock_client = AsyncMock()
+        mock_client.delete_sd_lineup.return_value = {"success": True}
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.request(
+                "DELETE", "/api/epg/sources/1/sd-lineups", json={"lineup": "USA-NJ29486-X"},
+            )
+
+        assert response.status_code == 200
+        mock_client.delete_sd_lineup.assert_called_once_with(1, "USA-NJ29486-X")
+
+    @pytest.mark.asyncio
+    async def test_searches_lineups_forwards_location(self, async_client):
+        """POST search forwards country + postalcode."""
+        mock_client = AsyncMock()
+        mock_client.search_sd_lineups.return_value = {"lineups": []}
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/epg/sources/1/sd-lineups/search",
+                json={"country": "USA", "postalcode": "07030"},
+            )
+
+        assert response.status_code == 200
+        mock_client.search_sd_lineups.assert_called_once_with(1, "USA", "07030")
+
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_as_4xx(self, async_client):
+        """A Dispatcharr 4xx (e.g. SD daily add limit) maps to a 4xx, not 500."""
+        mock_client = AsyncMock()
+        request = httpx.Request("POST", "http://disp/api/epg/sources/1/sd-lineups/")
+        upstream = httpx.Response(
+            400, request=request, text='{"detail": "Daily lineup change limit reached"}',
+        )
+        mock_client.add_sd_lineup.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.post(
+                "/api/epg/sources/1/sd-lineups", json={"lineup": "USA-NJ29486-X"},
+            )
+
+        assert response.status_code == 400
+        assert "limit" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error stays a 500."""
+        mock_client = AsyncMock()
+        mock_client.get_sd_lineups.side_effect = RuntimeError("boom")
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/sources/1/sd-lineups")
+
+        assert response.status_code == 500
+
+
+class TestProgramPoster:
+    """Tests for GET /api/epg/programs/{program_id}/poster."""
+
+    @pytest.mark.asyncio
+    async def test_proxies_poster_bytes_and_content_type(self, async_client):
+        """Streams Dispatcharr's bytes through with its Content-Type."""
+        mock_client = AsyncMock()
+        upstream = httpx.Response(
+            200, content=b"\xff\xd8\xff-image-bytes",
+            headers={"content-type": "image/png"},
+        )
+        mock_client.get_program_poster.return_value = upstream
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/programs/42/poster")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert response.content == b"\xff\xd8\xff-image-bytes"
+        mock_client.get_program_poster.assert_called_once_with(42)

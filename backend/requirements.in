@@ -25,7 +25,9 @@ sqlalchemy>=2.0.0
 alembic>=1.13.0
 aiofiles>=23.0.0
 croniter>=2.0.0
-aiohttp>=3.9.0
+# 3.14.0 fixes CVE-2026-34993 + CVE-2026-47265 (flagged by pip-audit at the
+# v0.17.4 release cut). Floor raised so the lock can't regress below the fix.
+aiohttp>=3.14.0
 
 # ReDoS-guarded regex wrapper (backend/safe_regex.py, bd-eio04.5)
 regex>=2024.5.15

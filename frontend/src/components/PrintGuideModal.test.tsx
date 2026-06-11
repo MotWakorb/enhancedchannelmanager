@@ -474,6 +474,73 @@ describe('generatePrintHtml — empty-slot placeholders with per-group range (bd
       expect(html).not.toContain(`>${rangeEnd}<`);
     });
 
+    // bd-szsb2: float/decimal channel numbers (e.g. 2.1, 5.1) must render with
+    // empty slots on. The old integer-walk lookup skipped every float channel and
+    // emitted only greyed-out integer placeholders.
+    describe('float channel numbers (bd-szsb2)', () => {
+      const FLOAT_GROUP: ChannelGroup = { id: 7, name: 'OTA', channel_count: 4 };
+      // 2.1, 5.1, 38.5 — sparse decimals
+      const FLOAT_CHANNELS = [
+        makeChannelForHtml(1, 2.1, 7, 'ABC'),
+        makeChannelForHtml(2, 5.1, 7, 'NBC'),
+        makeChannelForHtml(3, 38.5, 7, 'PBS'),
+      ];
+
+      it('renders real float channels (not skipped) with empty slots on', () => {
+        const rangeMap: GroupRangeMap = { 7: { from: 2.1, to: 38.5 } };
+        const html = generatePrintHtml(
+          FLOAT_CHANNELS,
+          [FLOAT_GROUP],
+          [makeGroupSettings(7)],
+          'Test Guide',
+          rangeMap,
+          true,
+        );
+        expect(html).toContain('>2.1<');
+        expect(html).toContain('>5.1<');
+        expect(html).toContain('>38.5<');
+        expect(html).toContain('ABC');
+        expect(html).toContain('NBC');
+        expect(html).toContain('PBS');
+      });
+
+      it('skips integer gap-fill entirely for a float group (no placeholder rows)', () => {
+        // PO decision: a group with any float channel renders only its real
+        // channels — the integer gaps (3, 4 between 2.1 and 5.1) are unused
+        // major numbers, not "missing channels", so no placeholders appear.
+        const rangeMap: GroupRangeMap = { 7: { from: 2.1, to: 5.1 } };
+        const html = generatePrintHtml(
+          FLOAT_CHANNELS.slice(0, 2),
+          [FLOAT_GROUP],
+          [makeGroupSettings(7)],
+          'Test Guide',
+          rangeMap,
+          true,
+        );
+        // Real float channels present
+        expect(html).toContain('>2.1<');
+        expect(html).toContain('>5.1<');
+        // No empty-slot placeholders at all
+        expect(html).not.toContain('class="ch-slot-label"');
+        expect(html).not.toContain('>3<');
+        expect(html).not.toContain('>4<');
+      });
+
+      it('includes the highest float channel (no parseInt truncation of To bound)', () => {
+        // Regression for the secondary bug: To=38.5 must include channel 38.5
+        const rangeMap: GroupRangeMap = { 7: { from: 2.1, to: 38.5 } };
+        const html = generatePrintHtml(
+          FLOAT_CHANNELS,
+          [FLOAT_GROUP],
+          [makeGroupSettings(7, true, 'detailed', '2.1', '38.5')],
+          'Test Guide',
+          rangeMap,
+          false,
+        );
+        expect(html).toContain('>38.5<');
+      });
+    });
+
     it('deselected group produces no output even with showEmptySlots=true', () => {
       const rangeMap: GroupRangeMap = { 1: { from: 100, to: 115 } };
       const html = generatePrintHtml(
