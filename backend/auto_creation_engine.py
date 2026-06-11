@@ -1880,52 +1880,53 @@ class AutoCreationEngine:
                         }]
                     })
 
-        # =====================================================================
-        # Pass 3.5: Reorder streams within channels by smart sort
-        # =====================================================================
-        logger.debug("[AUTO-CREATE-ENGINE] Starting stream reorder within channels")
-        await self._reorder_channel_streams(
-            rules, rule_channel_order_streams, results, dry_run,
-            settings=settings, stream_m3u_map=stream_m3u_map,
-            custom_stream_ids=custom_stream_ids,
-        )
-
-        # =====================================================================
-        # Pass 4: Reconcile — clean up orphaned channels
-        # =====================================================================
-        logger.debug("[AUTO-CREATE-ENGINE] Starting orphan reconciliation")
-        await self._reconcile_orphans(
-            rules, rule_channel_order, executor, execution, results, dry_run,
-            settings=settings
-        )
-
-        # =====================================================================
-        # Pass 5: Dummy EPG refresh + retry deferred assign_epg
-        # =====================================================================
-        if executor._deferred_epg_assignments:
-            logger.info(
-                "[AUTO-CREATE-ENGINE] Pass 5: %s deferred EPG assignments to retry",
-                len(executor._deferred_epg_assignments)
-            )
-            await self._refresh_dummy_epg_and_retry(executor, results, epg_sources, dry_run)
-
-        # =====================================================================
-        # Pass 6: Batch probe streams queued by probe_streams actions
-        # =====================================================================
-        if results["probe_stream_ids"]:
-            await self._batch_probe_streams(
-                results["probe_stream_ids"], streams, results, dry_run
+        try:
+            # =================================================================
+            # Pass 3.5: Reorder streams within channels by smart sort
+            # =================================================================
+            logger.debug("[AUTO-CREATE-ENGINE] Starting stream reorder within channels")
+            await self._reorder_channel_streams(
+                rules, rule_channel_order_streams, results, dry_run,
+                settings=settings, stream_m3u_map=stream_m3u_map,
+                custom_stream_ids=custom_stream_ids,
             )
 
-        # Flush any buffered journal rows from live merges before we return.
-        # This keeps the WAL smaller than per-merge commits while preserving
-        # the per-execution audit trail.
-        executor._flush_journal_buffer()
+            # =================================================================
+            # Pass 4: Reconcile — clean up orphaned channels
+            # =================================================================
+            logger.debug("[AUTO-CREATE-ENGINE] Starting orphan reconciliation")
+            await self._reconcile_orphans(
+                rules, rule_channel_order, executor, execution, results, dry_run,
+                settings=settings
+            )
 
-        # Clean up non-serializable set before returning
-        del results["probe_stream_ids"]
+            # =================================================================
+            # Pass 5: Dummy EPG refresh + retry deferred assign_epg
+            # =================================================================
+            if executor._deferred_epg_assignments:
+                logger.info(
+                    "[AUTO-CREATE-ENGINE] Pass 5: %s deferred EPG assignments to retry",
+                    len(executor._deferred_epg_assignments)
+                )
+                await self._refresh_dummy_epg_and_retry(executor, results, epg_sources, dry_run)
 
-        return results
+            # =================================================================
+            # Pass 6: Batch probe streams queued by probe_streams actions
+            # =================================================================
+            if results["probe_stream_ids"]:
+                await self._batch_probe_streams(
+                    results["probe_stream_ids"], streams, results, dry_run
+                )
+
+            # Clean up non-serializable set before returning
+            del results["probe_stream_ids"]
+
+            return results
+        finally:
+            # Flush buffered live-merge journal rows even when a later pipeline
+            # pass raises. The flush helper no-ops on empty buffers and logs its
+            # own failures so it does not mask the original exception.
+            executor._flush_journal_buffer()
 
     # =========================================================================
     # Pass 6: Batch probe streams queued by probe_streams actions
