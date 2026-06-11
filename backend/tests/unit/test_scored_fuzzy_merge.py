@@ -133,15 +133,16 @@ class TestNoCallsignPolicy:
 class TestJournalProvenance:
     def test_journal_records_score_and_provenance(self):
         client, ex = _make_executor([_wbay_channel()])
-        with patch("auto_creation_executor.journal.log_entry") as log_entry:
+        with patch("auto_creation_executor.journal.log_entries") as log_entries:
             result = _run(ex.execute(
                 _scored_action(), _stream("WI | Green Bay | ABC 2 WBAY"),
                 ExecutionContext(), normalization_group_ids=[1],
             ))
+            ex._flush_journal_buffer()
         assert result.modified is True
-        log_entry.assert_called_once()
-        kwargs = log_entry.call_args.kwargs
-        after = kwargs["after_value"]
+        log_entries.assert_called_once()
+        entry = log_entries.call_args.kwargs["entries"][0]
+        after = entry["after_value"]
         assert "stream_ids" in after
         match = after["match"]
         assert 0.0 <= match["score"] <= 1.0
@@ -157,20 +158,21 @@ class TestJournalProvenance:
         # without one (this test path); the threaded case is pinned below.
         assert "rule_id" in match
         assert match["rule_id"] is None
-        assert kwargs["batch_id"] == "555"
+        assert entry["batch_id"] == "555"
 
     def test_journal_records_threaded_rule_id(self):
         # FIX 4: the firing rule's id (threaded from the engine via execute)
         # lands in provenance["rule_id"] for M7 completeness.
         client, ex = _make_executor([_wbay_channel()])
-        with patch("auto_creation_executor.journal.log_entry") as log_entry:
+        with patch("auto_creation_executor.journal.log_entries") as log_entries:
             result = _run(ex.execute(
                 _scored_action(), _stream("WI | Green Bay | ABC 2 WBAY"),
                 ExecutionContext(), normalization_group_ids=[1],
                 rule_id=4242,
             ))
+            ex._flush_journal_buffer()
         assert result.modified is True
-        match = log_entry.call_args.kwargs["after_value"]["match"]
+        match = log_entries.call_args.kwargs["entries"][0]["after_value"]["match"]
         assert match["rule_id"] == 4242
 
     def test_legacy_merge_journal_has_no_match_provenance(self):
@@ -180,9 +182,10 @@ class TestJournalProvenance:
              "channel_number": 100, "channel_group_id": 42, "streams": []},
         ])
         action = {"type": "merge_streams", "target": "auto"}
-        with patch("auto_creation_executor.journal.log_entry") as log_entry:
+        with patch("auto_creation_executor.journal.log_entries") as log_entries:
             _run(ex.execute(action, _stream("ESPN", sid=900),
                             ExecutionContext(), normalization_group_ids=[1]))
-        if log_entry.called:
-            after = log_entry.call_args.kwargs["after_value"]
+            ex._flush_journal_buffer()
+        if log_entries.called:
+            after = log_entries.call_args.kwargs["entries"][0]["after_value"]
             assert "match" not in after
