@@ -120,7 +120,19 @@ export function CustomSelect({
 
     switch (event.key) {
       case 'Enter':
+        event.preventDefault();
+        if (!isOpen) {
+          setIsOpen(true);
+        } else if (highlightedIndex >= 0 && filteredOptions[highlightedIndex]) {
+          handleSelect(filteredOptions[highlightedIndex].value);
+        }
+        break;
       case ' ':
+        // GH #489: a space typed in the search field must insert a literal
+        // space, not select the highlighted option. handleKeyDown is bound on
+        // the container, so keystrokes bubble up from the search input — only
+        // treat Space as open/select when focus is on the trigger button.
+        if (event.target === searchInputRef.current) break;
         event.preventDefault();
         if (!isOpen) {
           setIsOpen(true);
