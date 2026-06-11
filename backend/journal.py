@@ -14,6 +14,65 @@ from models import JournalEntry
 logger = logging.getLogger(__name__)
 
 
+def _build_journal_entry(
+    category: str,
+    action_type: str,
+    entity_name: str,
+    description: str,
+    entity_id: Optional[int] = None,
+    before_value: Optional[dict] = None,
+    after_value: Optional[dict] = None,
+    user_initiated: bool = True,
+    batch_id: Optional[str] = None,
+) -> JournalEntry:
+    return JournalEntry(
+        timestamp=datetime.utcnow(),
+        category=category,
+        action_type=action_type,
+        entity_id=entity_id,
+        entity_name=entity_name,
+        description=description,
+        before_value=json.dumps(before_value) if before_value else None,
+        after_value=json.dumps(after_value) if after_value else None,
+        user_initiated=user_initiated,
+        batch_id=batch_id,
+    )
+
+
+def log_entries(entries: list[dict[str, Any]]) -> bool:
+    """Log multiple change entries in one transaction."""
+    if not entries:
+        return True
+
+    session: Session = get_session()
+    try:
+        journal_entries = [
+            _build_journal_entry(
+                category=entry.get("category"),
+                action_type=entry.get("action_type"),
+                entity_name=entry.get("entity_name"),
+                description=entry.get("description"),
+                entity_id=entry.get("entity_id"),
+                before_value=entry.get("before_value"),
+                after_value=entry.get("after_value"),
+                user_initiated=entry.get("user_initiated", True),
+                batch_id=entry.get("batch_id"),
+            )
+            for entry in entries
+        ]
+        logger.debug("[JOURNAL] Creating batch entries: count=%s", len(journal_entries))
+        session.add_all(journal_entries)
+        session.commit()
+        logger.debug("[JOURNAL] Batch logged: count=%s", len(journal_entries))
+        return True
+    except Exception as e:
+        logger.exception("[JOURNAL] Failed to log journal entries batch: %s", e)
+        session.rollback()
+        return False
+    finally:
+        session.close()
+
+
 def log_entry(
     category: str,
     action_type: str,
@@ -49,15 +108,14 @@ def log_entry(
             category, action_type, entity_name, entity_id, user_initiated,
             (" batch_id=%s" % batch_id) if batch_id else ""
         )
-        entry = JournalEntry(
-            timestamp=datetime.utcnow(),
+        entry = _build_journal_entry(
             category=category,
             action_type=action_type,
-            entity_id=entity_id,
             entity_name=entity_name,
             description=description,
-            before_value=json.dumps(before_value) if before_value else None,
-            after_value=json.dumps(after_value) if after_value else None,
+            entity_id=entity_id,
+            before_value=before_value,
+            after_value=after_value,
             user_initiated=user_initiated,
             batch_id=batch_id,
         )
