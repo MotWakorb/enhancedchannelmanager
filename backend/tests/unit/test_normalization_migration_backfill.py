@@ -15,6 +15,7 @@ and verifies that after the migration the strips fire and the acronym survives.
 import pytest
 
 from normalization_migration import (
+    apply_league_strip_require_delimiter_once,
     backfill_tag_group_rule_ids,
     ensure_abbreviation_tags_acronyms,
     set_league_strip_require_delimiter,
@@ -610,3 +611,75 @@ class TestSetLeagueStripRequireDelimiter:
         test_session.refresh(league_rule)
         assert country_rule.require_delimiter is False
         assert league_rule.require_delimiter is True
+
+
+# ---------------------------------------------------------------------------
+# apply_league_strip_require_delimiter_once — marker-gated one-time heal (GH #484)
+# ---------------------------------------------------------------------------
+
+class TestApplyLeagueStripRequireDelimiterOnce:
+    """The heal must run once for upgraders and NEVER re-flip a value the
+    operator later changed. Gated by settings.league_delimiter_heal_applied."""
+
+    def _make_league_rule(self, session, require_delimiter=False):
+        league = create_tag_group(session, name="League Tags")
+        create_tag(session, group_id=league.id, value="NFL")
+        rule_group = create_normalization_rule_group(
+            session, name="Strip League Prefixes", enabled=True, priority=3,
+        )
+        rule = create_normalization_rule(
+            session,
+            group_id=rule_group.id,
+            name="Match League Tags",
+            condition_type="tag_group",
+            condition_value=None,
+            action_type="strip_prefix",
+            tag_group_id=league.id,
+            tag_match_position="prefix",
+            require_delimiter=require_delimiter,
+        )
+        return rule
+
+    def test_uses_real_settings_field(self):
+        """The marker field exists on the real settings model (defaults False)."""
+        from config import DispatcharrSettings
+        assert DispatcharrSettings().league_delimiter_heal_applied is False
+
+    def test_applies_once_and_sets_marker(self, test_session):
+        from config import DispatcharrSettings
+        rule = self._make_league_rule(test_session, require_delimiter=False)
+        settings = DispatcharrSettings()
+
+        result = apply_league_strip_require_delimiter_once(test_session, settings)
+
+        assert result == {"updated": 1, "applied": True}
+        assert settings.league_delimiter_heal_applied is True
+        test_session.refresh(rule)
+        assert rule.require_delimiter is True
+
+    def test_skips_when_marker_already_set(self, test_session):
+        """GH #484 regression: a user who re-disabled the option is not clobbered."""
+        from config import DispatcharrSettings
+        rule = self._make_league_rule(test_session, require_delimiter=False)
+        settings = DispatcharrSettings(league_delimiter_heal_applied=True)
+
+        result = apply_league_strip_require_delimiter_once(test_session, settings)
+
+        assert result == {"updated": 0, "applied": False}
+        test_session.refresh(rule)
+        # Marker already set -> heal skipped -> the user's False is preserved.
+        assert rule.require_delimiter is False
+
+    def test_already_true_rule_still_sets_marker(self, test_session):
+        """Reporter's state (already True): heal is a no-op but marker is set so
+        a subsequent user edit to False sticks on the next boot."""
+        from config import DispatcharrSettings
+        rule = self._make_league_rule(test_session, require_delimiter=True)
+        settings = DispatcharrSettings()
+
+        result = apply_league_strip_require_delimiter_once(test_session, settings)
+
+        assert result == {"updated": 0, "applied": True}
+        assert settings.league_delimiter_heal_applied is True
+        test_session.refresh(rule)
+        assert rule.require_delimiter is True

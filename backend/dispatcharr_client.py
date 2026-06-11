@@ -933,6 +933,60 @@ class DispatcharrClient:
         }
 
     # -------------------------------------------------------------------------
+    # Schedules Direct (SD)
+    # -------------------------------------------------------------------------
+    # SD lineups live on the SD account, not in Dispatcharr's DB. Dispatcharr
+    # authenticates to SD live on each of these calls and is rate-limited by SD
+    # (lineup adds 6/24h). ECM is a thin proxy — it must NOT retry these on top
+    # of Dispatcharr or it amplifies the SD call count.
+
+    async def get_sd_lineups(self, source_id: int) -> dict:
+        """List the SD account's active lineups for a Schedules Direct source.
+
+        Returns Dispatcharr's payload: ``{lineups, max_lineups,
+        changes_remaining, changes_reset_at}``.
+        """
+        response = await self._request("GET", f"/api/epg/sources/{source_id}/sd-lineups/")
+        response.raise_for_status()
+        return response.json()
+
+    async def add_sd_lineup(self, source_id: int, lineup: str) -> dict:
+        """Add an SD lineup to the account (admin on Dispatcharr)."""
+        response = await self._request(
+            "POST", f"/api/epg/sources/{source_id}/sd-lineups/", json={"lineup": lineup}
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True}
+
+    async def delete_sd_lineup(self, source_id: int, lineup: str) -> dict:
+        """Remove an SD lineup from the account (admin on Dispatcharr)."""
+        response = await self._request(
+            "DELETE", f"/api/epg/sources/{source_id}/sd-lineups/", json={"lineup": lineup}
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True}
+
+    async def search_sd_lineups(self, source_id: int, country: str, postalcode: str) -> dict:
+        """Search SD headends/lineups by country + postal code.
+
+        Returns ``{lineups:[{lineup, name, transport, location, headend}]}``.
+        """
+        response = await self._request(
+            "POST",
+            f"/api/epg/sources/{source_id}/sd-lineups/search/",
+            json={"country": country, "postalcode": postalcode},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_program_poster(self, program_id: int) -> httpx.Response:
+        """Fetch an SD program poster. Returns the raw response so the caller
+        can stream bytes + ``Content-Type`` through to the browser."""
+        response = await self._request("GET", f"/api/epg/programs/{program_id}/poster/")
+        response.raise_for_status()
+        return response
+
+    # -------------------------------------------------------------------------
     # EPG Data
     # -------------------------------------------------------------------------
 

@@ -37,6 +37,7 @@ def _mock_settings(**overrides):
         "hide_m3u_urls": True,
         "gracenote_conflict_mode": "prefer_gracenote",
         "theme": "dark",
+        "date_format": "auto",
         "default_channel_profile_ids": [],
         "linked_m3u_accounts": [],
         "epg_auto_match_threshold": 80,
@@ -84,6 +85,9 @@ def _mock_settings(**overrides):
         "auto_creation_excluded_groups": [],
         "auto_creation_exclude_auto_sync_groups": False,
         "mcp_api_key": "",
+        # Internal one-time-heal marker (GH #484); real bool so the POST handler,
+        # which preserves it into the rebuilt settings model, gets a valid value.
+        "league_delimiter_heal_applied": False,
         # Emby integration (bd-8wc6q, epic bd-2cenq). Defaults disabled so
         # existing tests can ignore the fields entirely.
         "emby_enabled": False,
@@ -133,6 +137,18 @@ class TestGetSettings:
         assert data["configured"] is True
         assert "password" not in data
 
+    @pytest.mark.asyncio
+    async def test_exposes_date_format(self, async_client):
+        """GET exposes the global date_format preference (bd-8j47e)."""
+        mock = _mock_settings(date_format="dmy")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["date_format"] == "dmy"
+
 
 class TestUpdateSettings:
     """Tests for POST /api/settings."""
@@ -156,6 +172,28 @@ class TestUpdateSettings:
 
         assert response.status_code == 200
         assert response.json()["status"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_persists_date_format(self, async_client):
+        """POST threads date_format into the saved settings (bd-8j47e)."""
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings") as mock_save, \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                "date_format": "iso",
+            })
+
+        assert response.status_code == 200
+        saved = mock_save.call_args[0][0]
+        assert saved.date_format == "iso"
 
     @pytest.mark.asyncio
     async def test_requires_password_when_changing_url(self, async_client):
@@ -258,6 +296,36 @@ class TestUpdateSettings:
         assert response.status_code == 200, response.json()
         assert captured["mcp_api_key"] == "stored-mcp-key-abc123", (
             "Partial POST cleared mcp_api_key — sensitive field not preserved"
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_preserves_league_delimiter_heal_marker(self, async_client):
+        """GH #484: the internal one-time-heal marker is never sent by the UI, so
+        a settings POST must preserve it. If it reset to False, the next boot
+        would re-run the heal and re-clobber the user's require_delimiter choice.
+        """
+        current = _mock_settings(league_delimiter_heal_applied=True)
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["marker"] = new_settings.league_delimiter_heal_applied
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "telemetry_client_errors_enabled": False,
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["marker"] is True, (
+            "Settings POST reset league_delimiter_heal_applied — heal would re-arm"
         )
 
     @pytest.mark.asyncio

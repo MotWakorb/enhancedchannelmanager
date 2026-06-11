@@ -156,6 +156,10 @@ class FailedStreamReprobeTask(TaskScheduler):
                 self._prober.probe_all_streams(
                     stream_ids_filter=failed_ids,
                     skip_m3u_refresh=True,
+                    # Info-level "probe started" alert: gate external dispatch on
+                    # this task's (send_alerts AND alert_on_info), surfaced by the
+                    # engine as self._send_alerts (GH #462).
+                    start_send_alerts=self._send_alerts,
                 )
             )
 

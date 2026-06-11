@@ -103,6 +103,7 @@ tags_metadata = [
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
     {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
+    {"name": "Emby", "description": "Emby actions — clear cached channel logos so Emby re-fetches them (GH #475)"},
 ]
 
 app = FastAPI(
@@ -129,7 +130,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.4-0006",
+    version="0.18.0-0003",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -827,22 +828,32 @@ async def startup_event():
 
     # Require a strong delimiter on the league strip rule (bd-0emgo.2) so brands
     # like "NFL RedZone" / "NFL Network" are preserved while "NFL: Buffalo Bills"
-    # still strips. Idempotent and a no-op if the rule/group is absent.
+    # still strips. This is a ONE-TIME upgrade heal, gated by a persistent settings
+    # marker so it runs at most once per install — the previous every-boot call
+    # re-flipped require_delimiter False->True on each restart and clobbered
+    # operators who deliberately disabled the option (GH #484). A marker (not an
+    # Alembic data migration) is required: ECM's smart-bootstrap stamps forward
+    # past data-only migrations when the schema already matches (bd-5w6jz).
     try:
-        from normalization_migration import set_league_strip_require_delimiter
-        session = get_session()
-        try:
-            result = set_league_strip_require_delimiter(session)
-            if result.get("updated", 0) > 0:
-                logger.info(
-                    "[MAIN] Enabled strong-delimiter requirement on %s league "
-                    "strip rule(s)",
-                    result["updated"]
-                )
-        finally:
-            session.close()
+        from normalization_migration import apply_league_strip_require_delimiter_once
+        from config import save_settings
+        settings = get_settings()
+        if not settings.league_delimiter_heal_applied:
+            session = get_session()
+            try:
+                heal = apply_league_strip_require_delimiter_once(session, settings)
+            finally:
+                session.close()
+            if heal.get("applied"):
+                save_settings(settings)
+                if heal.get("updated", 0) > 0:
+                    logger.info(
+                        "[MAIN] One-time heal: enabled strong-delimiter requirement "
+                        "on %s league strip rule(s)",
+                        heal["updated"],
+                    )
     except Exception as e:
-        logger.warning("[MAIN] Could not set league strip require_delimiter: %s", e)
+        logger.warning("[MAIN] Could not apply league strip require_delimiter heal: %s", e)
 
     # Ensure US/UK/EU are in Abbreviation Tags so Title Case preserves them
     # (otherwise US -> Us). Companion repair to the tag_group_id backfill.
