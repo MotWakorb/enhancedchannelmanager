@@ -19,6 +19,7 @@ import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
+import { setDateFormatLocale } from './utils/formatting';
 import { computeAutoRename } from './utils/channelRename';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
@@ -582,6 +583,10 @@ function App() {
           document.documentElement.setAttribute('data-theme', settings.theme);
           logger.debug(`Applied theme: ${settings.theme}`);
         }
+
+        // Apply global date-format preference (bd-8j47e) so all date
+        // displays share one locale instead of varying per browser.
+        setDateFormatLocale(settings.date_format);
 
         // Apply log levels from settings
         if (settings.frontend_log_level) {

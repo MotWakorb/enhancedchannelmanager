@@ -199,8 +199,8 @@ function PrintGuideModalInner({
   // Get channel count and range for a group within its current per-group range
   const getGroupInfo = useCallback((groupId: number) => {
     const settings = getGroupSettings(groupId);
-    const fromNum = parseInt(settings.fromRaw, 10);
-    const toNum = parseInt(settings.toRaw, 10);
+    const fromNum = parseFloat(settings.fromRaw);
+    const toNum = parseFloat(settings.toRaw);
     const rangeValid = !Number.isNaN(fromNum) && !Number.isNaN(toNum) && fromNum <= toNum;
 
     if (!rangeValid) return { count: 0, first: null, last: null, rangeError: true };
@@ -238,8 +238,8 @@ function PrintGuideModalInner({
   const buildRangeMap = useCallback((): GroupRangeMap => {
     const map: GroupRangeMap = {};
     groupSettings.forEach(s => {
-      const fromNum = parseInt(s.fromRaw, 10);
-      const toNum = parseInt(s.toRaw, 10);
+      const fromNum = parseFloat(s.fromRaw);
+      const toNum = parseFloat(s.toRaw);
       const mm = groupMinMax.get(s.groupId);
       if (!Number.isNaN(fromNum) && !Number.isNaN(toNum) && fromNum <= toNum) {
         map[s.groupId] = { from: fromNum, to: toNum };
@@ -255,8 +255,8 @@ function PrintGuideModalInner({
   const anySelectedGroupPrintable = useMemo(() => {
     return groupSettings.some(s => {
       if (!s.selected) return false;
-      const fromNum = parseInt(s.fromRaw, 10);
-      const toNum = parseInt(s.toRaw, 10);
+      const fromNum = parseFloat(s.fromRaw);
+      const toNum = parseFloat(s.toRaw);
       if (Number.isNaN(fromNum) || Number.isNaN(toNum) || fromNum > toNum) return false;
       // Check at least one channel exists for this group (even without range filter)
       return channels.some(ch => ch.channel_group_id === s.groupId && ch.channel_number !== null);
@@ -342,8 +342,8 @@ function PrintGuideModalInner({
               const settings = getGroupSettings(group.id);
               const info = getGroupInfo(group.id);
               const color = GROUP_COLORS[index % GROUP_COLORS.length];
-              const fromNum = parseInt(settings.fromRaw, 10);
-              const toNum = parseInt(settings.toRaw, 10);
+              const fromNum = parseFloat(settings.fromRaw);
+              const toNum = parseFloat(settings.toRaw);
               const rangeError =
                 !Number.isNaN(fromNum) && !Number.isNaN(toNum) && fromNum > toNum
                   ? '"From" must be ≤ "To"'
@@ -544,7 +544,19 @@ export function generatePrintHtml(
       // output.
       let channelsHtml = '';
 
-      if (showEmptySlots && groupChannels.length > 0) {
+      // A group "uses floats" if any of its channels has a non-integer number
+      // (e.g. OTA 2.1, 5.1). The empty-slot fill assumes a contiguous integer
+      // sequence, which is meaningless for float numbering — the integer gaps
+      // between 2.1 and 5.1 (3, 4, …) are not "missing channels", they are just
+      // unused major numbers. So for float groups we skip gap-fill entirely and
+      // render only the real channels (bd-szsb2, PO decision).
+      const groupUsesFloats = groupChannels.some(
+        ch => ch.channel_number !== null && !Number.isInteger(ch.channel_number),
+      );
+
+      if (showEmptySlots && !groupUsesFloats && groupChannels.length > 0) {
+        // Integer group: walk every integer slot in the range and emit a
+        // placeholder for any number with no real channel.
         const slotStart = rangeFrom;
         const slotEnd = rangeTo;
         const realByNum = new Map(
@@ -559,7 +571,7 @@ export function generatePrintHtml(
         for (let n = slotStart; n <= slotEnd; n++) {
           const ch = realByNum.get(n);
           if (ch) {
-            const num = Number.isInteger(ch.channel_number!) ? String(ch.channel_number!) : String(ch.channel_number!);
+            const num = String(ch.channel_number!);
             const displayName = cleanChannelName(ch.name, ch.channel_number);
             channelsHtml += `<div class="channel-line"><span class="ch-num">${num}</span> ${escapeHtml(displayName)}</div>\n`;
           } else {

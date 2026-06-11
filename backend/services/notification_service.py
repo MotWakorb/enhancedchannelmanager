@@ -16,6 +16,35 @@ from database import get_session
 logger = logging.getLogger(__name__)
 
 
+def task_start_alerts_enabled(task_id: str) -> bool:
+    """Whether a task's info-level "started" notification should dispatch an
+    external alert (Telegram/Discord/email).
+
+    The start/progress notification is info-level, so external dispatch is
+    opt-in via the task's ``alert_on_info`` flag on top of the master
+    ``send_alerts`` toggle — mirroring the task-engine gate (GH #462 / bd-on4sr).
+    Used by manual probe endpoints, which (unlike scheduled tasks) don't get a
+    gated ``send_alerts`` from the task engine and must look it up themselves.
+
+    Defaults to ``False`` (no external start alert) when the task has no
+    ``ScheduledTask`` row, matching the info-alerts-opt-in default.
+    """
+    try:
+        session = get_session()
+        try:
+            from models import ScheduledTask
+            scheduled_task = session.query(ScheduledTask).filter(
+                ScheduledTask.task_id == task_id
+            ).first()
+            if scheduled_task:
+                return bool(scheduled_task.send_alerts and scheduled_task.alert_on_info)
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[NOTIFY-SVC] Failed to read alert config for task %s: %s", task_id, e)
+    return False
+
+
 async def create_notification_internal(
     notification_type: str = "info",
     title: Optional[str] = None,

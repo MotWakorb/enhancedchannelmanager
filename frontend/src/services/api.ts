@@ -21,6 +21,9 @@ import type {
   StreamStats,
   StreamProfile,
   DummyEPGCustomProperties,
+  SDCustomProperties,
+  SDLineup,
+  SDLineupsResponse,
   JournalQueryParams,
   JournalResponse,
   JournalStats,
@@ -1009,6 +1012,7 @@ export interface SettingsResponse {
   hide_m3u_urls: boolean;
   gracenote_conflict_mode: GracenoteConflictMode;
   theme: Theme;
+  date_format: string;  // Global UI date format: "auto", "mdy", "dmy", or "iso" (bd-8j47e)
   default_channel_profile_ids: number[];
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
   epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
@@ -1133,6 +1137,7 @@ export async function saveSettings(settings: {
   hide_m3u_urls?: boolean;  // Optional - defaults to false
   gracenote_conflict_mode?: GracenoteConflictMode;  // Optional - defaults to 'ask'
   theme?: Theme;  // Optional - defaults to 'dark'
+  date_format?: string;  // Optional - "auto" | "mdy" | "dmy" | "iso", defaults to 'auto' (bd-8j47e)
   default_channel_profile_ids?: number[];  // Optional - empty array means no defaults
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
   epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
@@ -1236,6 +1241,48 @@ export async function testEmbyConnection(
     method: 'POST',
     body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
   });
+}
+
+// Emby Clear Logos (GH #475, bd-v9tp7). POST enqueues a background job
+// (202 + {job_id}); poll the status endpoint until terminal. Reuses the saved
+// Emby connection on the backend — no credentials cross the wire here.
+export const EMBY_LOGO_TYPES = ['Primary', 'LogoLight', 'LogoLightColor'] as const;
+export type EmbyLogoType = (typeof EMBY_LOGO_TYPES)[number];
+
+export interface ClearEmbyLogosEnqueueResult {
+  job_id: string;
+  status: string;
+  message?: string;
+}
+
+export interface ClearEmbyLogosSummary {
+  channels_processed: number;
+  images_deleted: number;
+  images_missing: number;
+  errors: number;
+  logo_types: string[];
+}
+
+export interface ClearEmbyLogosStatusResult {
+  job_id: string;
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+  result?: ClearEmbyLogosSummary;
+}
+
+export async function clearEmbyLogos(
+  logoTypes: EmbyLogoType[],
+): Promise<ClearEmbyLogosEnqueueResult> {
+  return fetchJson(`${API_BASE}/emby/clear-logos`, {
+    method: 'POST',
+    body: JSON.stringify({ logo_types: logoTypes }),
+  });
+}
+
+export async function getClearEmbyLogosStatus(
+  jobId: string,
+): Promise<ClearEmbyLogosStatusResult> {
+  return fetchJson(`${API_BASE}/emby/clear-logos/${encodeURIComponent(jobId)}`);
 }
 
 // Plex Settings UI test-connection (bd-r5f0c.5 / W5). Same shape as Emby.
@@ -1508,11 +1555,14 @@ export interface CreateEPGSourceRequest {
   name: string;
   source_type: 'xmltv' | 'schedules_direct' | 'dummy';
   url?: string | null;
-  api_key?: string | null;
+  // Schedules Direct credentials (source_type === 'schedules_direct').
+  // password is write-only: send it to create/change, never read it back.
+  username?: string | null;
+  password?: string | null;
   is_active?: boolean;
   refresh_interval?: number;
   priority?: number;
-  custom_properties?: DummyEPGCustomProperties | Record<string, unknown> | null;
+  custom_properties?: DummyEPGCustomProperties | SDCustomProperties | Record<string, unknown> | null;
 }
 
 export async function createEPGSource(data: CreateEPGSourceRequest): Promise<EPGSource> {
@@ -1522,7 +1572,11 @@ export async function createEPGSource(data: CreateEPGSourceRequest): Promise<EPG
   });
 }
 
-export async function updateEPGSource(id: number, data: Partial<EPGSource>): Promise<EPGSource> {
+// password is write-only (not on EPGSource read type) but accepted on update for SD.
+export async function updateEPGSource(
+  id: number,
+  data: Partial<EPGSource> & { password?: string | null },
+): Promise<EPGSource> {
   return fetchJson(`${API_BASE}/epg/sources/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
@@ -1542,6 +1596,39 @@ export async function refreshEPGSource(id: number): Promise<void> {
 export async function triggerEPGImport(): Promise<void> {
   return fetchJson(`${API_BASE}/epg/import`, {
     method: 'POST',
+  });
+}
+
+// --- Schedules Direct (SD) lineup management ---
+// These proxy Dispatcharr, which authenticates to SD live on each call and is
+// rate-limited by SD (lineup adds ~6/24h). Do not poll/retry these in a loop.
+
+export async function getSDLineups(sourceId: number): Promise<SDLineupsResponse> {
+  return fetchJson(`${API_BASE}/epg/sources/${sourceId}/sd-lineups`);
+}
+
+export async function searchSDLineups(
+  sourceId: number,
+  country: string,
+  postalcode: string,
+): Promise<{ lineups: SDLineup[] }> {
+  return fetchJson(`${API_BASE}/epg/sources/${sourceId}/sd-lineups/search`, {
+    method: 'POST',
+    body: JSON.stringify({ country, postalcode }),
+  });
+}
+
+export async function addSDLineup(sourceId: number, lineup: string): Promise<void> {
+  await fetchJson(`${API_BASE}/epg/sources/${sourceId}/sd-lineups`, {
+    method: 'POST',
+    body: JSON.stringify({ lineup }),
+  });
+}
+
+export async function deleteSDLineup(sourceId: number, lineup: string): Promise<void> {
+  await fetchJson(`${API_BASE}/epg/sources/${sourceId}/sd-lineups`, {
+    method: 'DELETE',
+    body: JSON.stringify({ lineup }),
   });
 }
 
