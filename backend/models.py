@@ -953,8 +953,14 @@ class M3UChangeLog(Base):
     enabled = Column(Boolean, default=False, nullable=False)  # Whether the group is enabled in the M3U
     snapshot_id = Column(Integer, ForeignKey("m3u_snapshots.id", ondelete="SET NULL"), nullable=True)
 
-    # Relationship to snapshot
-    snapshot = relationship("M3USnapshot", lazy="joined")
+    # Relationship to snapshot.
+    # lazy="select" (load-on-access), NOT "joined": M3USnapshot.groups_data is a
+    # large JSON blob (every group's full stream-name list). Every change row from
+    # a refresh shares one snapshot_id, so a joined eager load re-streams that blob
+    # once per row — an O(rows x blob) memory fanout that OOM-killed the container
+    # on the unbounded digest query (GH #473). Nothing reads .snapshot anyway
+    # (to_dict() uses the snapshot_id FK column), so on-demand loading is free here.
+    snapshot = relationship("M3USnapshot", lazy="select")
 
     __table_args__ = (
         Index("idx_m3u_change_account", m3u_account_id),
