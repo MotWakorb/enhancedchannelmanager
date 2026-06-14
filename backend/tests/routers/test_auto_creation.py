@@ -2636,3 +2636,155 @@ class TestAutoCreationAdminGating:
         assert list_resp.status_code == 200
         assert execs_resp.status_code == 200
         assert schema_resp.status_code == 200
+
+
+def _http_status_error(status: int) -> "object":
+    """Build an httpx.HTTPStatusError with the given upstream status (bd-59x51)."""
+    import httpx
+
+    request = httpx.Request("GET", "http://upstream/api/channels/channels/")
+    response = httpx.Response(status, request=request)
+    return httpx.HTTPStatusError(f"{status}", request=request, response=response)
+
+
+class TestDebugBundleFetchResilience:
+    """Debug-bundle upstream fan-out tolerates transient 504s (bd-59x51).
+
+    A debug bundle is generated precisely when Dispatcharr may be slow/overloaded,
+    so a transient upstream 504 on one page must NOT abort the whole build — it is
+    retried, and if it still fails the slice is skipped and the manifest is stamped
+    partial. ``asyncio.sleep`` is patched out so retry backoff doesn't slow tests.
+    """
+
+    @pytest.mark.asyncio
+    async def test_with_retry_retries_5xx_then_succeeds(self):
+        from routers import auto_creation as m
+
+        calls = {"n": 0}
+
+        async def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise _http_status_error(504)
+            return "ok"
+
+        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+            result = await m._with_retry(flaky, what="test")
+
+        assert result == "ok"
+        assert calls["n"] == 3  # failed twice, succeeded on the third attempt
+
+    @pytest.mark.asyncio
+    async def test_with_retry_does_not_retry_4xx(self):
+        from routers import auto_creation as m
+
+        calls = {"n": 0}
+
+        async def bad_request():
+            calls["n"] += 1
+            raise _http_status_error(400)
+
+        import httpx
+
+        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(httpx.HTTPStatusError):
+                await m._with_retry(bad_request, what="test")
+
+        assert calls["n"] == 1  # a 4xx is the caller's fault — no retry
+
+    @pytest.mark.asyncio
+    async def test_with_retry_exhausts_and_reraises(self):
+        from routers import auto_creation as m
+
+        calls = {"n": 0}
+
+        async def always_504():
+            calls["n"] += 1
+            raise _http_status_error(504)
+
+        import httpx
+
+        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(httpx.HTTPStatusError):
+                await m._with_retry(always_504, what="test")
+
+        assert calls["n"] == m._DEBUG_BUNDLE_FETCH_RETRIES
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_channels_complete(self):
+        from routers import auto_creation as m
+
+        client = MagicMock()
+
+        async def get_channels(page, page_size):
+            # 3 pages of 100, total 250.
+            results = [{"id": (page - 1) * 100 + i} for i in range(100 if page < 3 else 50)]
+            return {"count": 250, "results": results}
+
+        client.get_channels = AsyncMock(side_effect=get_channels)
+
+        channels, report = await m._fetch_all_channels(client)
+
+        assert len(channels) == 250
+        assert report["complete"] is True
+        assert report["expected_pages"] == 3
+        assert report["failed_pages"] == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_channels_tolerates_failed_page(self):
+        from routers import auto_creation as m
+
+        client = MagicMock()
+
+        async def get_channels(page, page_size):
+            if page == 2:
+                raise _http_status_error(504)  # retried, then given up on
+            results = [{"id": (page - 1) * 100 + i} for i in range(100 if page < 3 else 50)]
+            return {"count": 250, "results": results}
+
+        client.get_channels = AsyncMock(side_effect=get_channels)
+
+        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+            channels, report = await m._fetch_all_channels(client)
+
+        # Page 1 (100) + page 3 (50) survive; page 2 dropped — bundle is partial,
+        # but the build did NOT abort.
+        assert len(channels) == 150
+        assert report["complete"] is False
+        assert report["failed_pages"] == [2]
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_channels_page1_failure_propagates(self):
+        from routers import auto_creation as m
+        import httpx
+
+        client = MagicMock()
+        client.get_channels = AsyncMock(side_effect=_http_status_error(504))
+
+        # No first page => no catalog at all; this is the one case that propagates.
+        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(httpx.HTTPStatusError):
+                await m._fetch_all_channels(client)
+
+    @pytest.mark.asyncio
+    async def test_fetch_stream_details_tolerates_failed_batch(self):
+        from routers import auto_creation as m
+
+        client = MagicMock()
+
+        async def get_streams_by_ids(batch):
+            if 0 in batch:  # first batch always fails
+                raise _http_status_error(504)
+            return [{"id": sid, "name": f"s{sid}", "m3u_account": 1, "url": "u"} for sid in batch]
+
+        client.get_streams_by_ids = AsyncMock(side_effect=get_streams_by_ids)
+
+        ids = list(range(250))  # 3 batches of 100/100/50
+        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+            lookup, report = await m._fetch_stream_details(client, ids, obfuscate_url=lambda u: u)
+
+        assert report["complete"] is False
+        assert report["failed_batches"] == 1
+        assert report["expected_batches"] == 3
+        # The two surviving batches still populated the lookup.
+        assert len(lookup) == 150
