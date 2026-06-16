@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.18.0] — 2026-06-16
+## [0.17.5] — 2026-06-16
 
 ### Security
 - **Bumped dependencies to clear known CVEs flagged by the release security scans (bd-3hgrf, build 0008).** The main-targeting CI security scans (`pip-audit`, `npm audit`) — which dev-targeting PRs skip — flagged 16 backend CVEs and a frontend high that had gone latent. Backend: `aiohttp` 3.14.0→3.14.1 (8 CVEs, CVE-2026-54273..54280), `python-multipart` 0.0.27→0.0.32 (3 CVEs), `starlette` 1.0.1→1.3.1 (4 CVEs, CVE-2026-48818/48817/54283/54282 — FastAPI 0.136.1's unbounded `starlette>=0.46.0` pin already permits it, so no FastAPI bump was needed), and `cryptography` 46.0.7→49.0.0 (GHSA-537c-gmf6-5ccf). Frontend: `vite` 8.0.10→8.0.16 (GHSA-fx2h-pf6j-xcff `server.fs.deny` bypass) plus transitive patch bumps via non-`--force` `npm audit fix` (no major bumps). `pip-audit` and `npm audit --audit-level=high` now both report zero; full backend (5340 passed) and frontend (1573 passed) suites stayed green against the bumped versions. (bd-3hgrf, build 0008)
