@@ -484,39 +484,64 @@ class DispatcharrClient:
 
         Returns list of dicts: [{"name": "Group Name", "count": 42}, ...]
 
-        Optimization: Instead of fetching all streams, we get group names first,
-        then query each group with page_size=1 to get just the count from the
-        paginated response. This is much faster than loading all stream data.
+        Source (enhancedchannelmanager-05h8w): the per-group stream count
+        is read from the ``channel_groups[].stream_count`` field embedded
+        in ``GET /api/m3u/accounts/`` (the LIST view seeds a single
+        grouped COUNT per group, including disabled and zero-stream
+        groups) instead of firing one ``?channel_group_name=&page_size=1``
+        probe per group. This issues ZERO ``get_streams`` calls — just the
+        single accounts pull plus the channel-groups id→name lookup.
+
+        Semantics:
+          - ``m3u_account_id`` given → only that account's groups, and
+            groups with count == 0 are dropped.
+          - ``m3u_account_id`` None → ``stream_count`` summed per group
+            name across all accounts.
+        Sorted by name, case-insensitively.
         """
-        # First, get all group names (fast)
-        group_names = await self.get_stream_groups()
+        # id→name map for channel groups (channel_groups[] carries the
+        # numeric channel_group id, not the name).
+        channel_groups = await self.get_channel_groups()
+        name_by_id: dict = {}
+        for group in channel_groups:
+            group_id = group.get("id")
+            group_name = group.get("name")
+            if group_id is not None and group_name:
+                name_by_id[group_id] = group_name
 
-        # For each group, query with page_size=1 to get just the count
-        async def get_group_count(group_name: str) -> dict:
-            try:
-                params = {"channel_group_name": group_name, "page_size": 1}
-                if m3u_account_id is not None:
-                    params["m3u_account"] = m3u_account_id
-                response = await self._request(
-                    "GET",
-                    "/api/channels/streams/",
-                    params=params
-                )
-                response.raise_for_status()
-                data = response.json()
-                return {"name": group_name, "count": data.get("count", 0)}
-            except Exception:
-                return {"name": group_name, "count": 0}
+        accounts = await self.get_m3u_accounts()
 
-        # Fetch counts concurrently for all groups
-        results = await asyncio.gather(*[get_group_count(name) for name in group_names])
+        counts_by_name: dict = {}
+        missing_count_seen = False
+        for account in accounts:
+            if m3u_account_id is not None and account.get("id") != m3u_account_id:
+                continue
+            for acg in account.get("channel_groups", []):
+                group_id = acg.get("channel_group")
+                group_name = name_by_id.get(group_id)
+                if not group_name:
+                    continue
+                if "stream_count" not in acg:
+                    missing_count_seen = True
+                    stream_count = 0
+                else:
+                    stream_count = acg.get("stream_count") or 0
+                counts_by_name[group_name] = counts_by_name.get(group_name, 0) + stream_count
 
-        # Filter out groups with 0 streams when filtering by provider
-        results = list(results)
+        if missing_count_seen:
+            logger.warning(
+                "[DISPATCHARR] get_stream_groups_with_counts: one or more "
+                "channel_groups[] entries lacked a stream_count field; "
+                "treated as 0 (no probing fallback)"
+            )
+
+        results = [{"name": name, "count": count} for name, count in counts_by_name.items()]
+
+        # When filtering by provider, drop groups with 0 streams (matches
+        # the prior probe-based behaviour).
         if m3u_account_id is not None:
             results = [r for r in results if r["count"] > 0]
 
-        # Sort by name
         results.sort(key=lambda x: x["name"].lower())
 
         return results

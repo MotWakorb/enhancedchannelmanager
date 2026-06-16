@@ -185,7 +185,15 @@ async def _drive_two_polls(tracker, mock_client, first_payload, second_payload):
     byte delta and the ``_active_connections`` map is populated (the first
     poll opens connections, the second poll counts as ``still_active`` and
     is what the telemetry helper observes).
+
+    enhancedchannelmanager-1qmn0: the provider resolver no longer fetches
+    ``/api/m3u/accounts/`` inside ``_collect_stats``; the tracker caches
+    the accounts list and refreshes it on a 300s TTL via
+    ``_maybe_refresh_m3u_accounts`` (called from ``_poll_loop`` in
+    production). Prime that cache here so the resolver sees the configured
+    accounts, mirroring the real poll loop.
     """
+    await tracker._maybe_refresh_m3u_accounts()
     mock_client.get_channel_stats.return_value = {"channels": [first_payload]}
     await tracker._collect_stats()
     mock_client.get_channel_stats.return_value = {"channels": [second_payload]}
@@ -1484,17 +1492,21 @@ async def test_resolver_url_hostname_match_zero_per_channel_http_calls(
     mock_client,
 ):
     """bd-gy5nd contract: the URL-hostname-match fallback issues ZERO
-    per-channel HTTP calls — it consults the once-per-poll M3U
-    accounts list in memory. Replaces the bd-5g7kx per-channel-streams
-    cache test (which existed because that fallback did one HTTP call
-    per channel and needed cache layers to avoid blowing the
-    Dispatcharr budget). bd-gy5nd issues one ``get_m3u_accounts`` call
-    per poll regardless of how many channels need the hostname match.
+    per-channel HTTP calls — it consults the cached M3U accounts list in
+    memory. Replaces the bd-5g7kx per-channel-streams cache test (which
+    existed because that fallback did one HTTP call per channel and
+    needed cache layers to avoid blowing the Dispatcharr budget).
+
+    enhancedchannelmanager-1qmn0: the accounts list is now refreshed on
+    the tracker's 300s TTL (primed once here) rather than fetched inside
+    each poll, so two polls within one TTL window issue exactly ONE
+    ``get_m3u_accounts`` call regardless of how many channels need the
+    hostname match.
 
     Two channels with different uuids both fall through to the
     hostname-match path; assert ``get_channel_streams`` is never
     called (the broken endpoint) and ``get_m3u_accounts`` is called
-    exactly once per poll.
+    once for the TTL-window refresh.
     """
     channel_uuid_a = "uuid-a"
     channel_uuid_b = "uuid-b"
@@ -1539,6 +1551,10 @@ async def test_resolver_url_hostname_match_zero_per_channel_http_calls(
         url=active_url,
     )
 
+    # enhancedchannelmanager-1qmn0: prime the TTL-gated accounts cache
+    # (what _poll_loop does in production) so the resolver reads the
+    # cached snapshot instead of fetching per poll.
+    await tracker._maybe_refresh_m3u_accounts()
     mock_client.get_channel_stats.return_value = {
         "channels": [ch_a_first, ch_b_first]
     }
@@ -1553,24 +1569,29 @@ async def test_resolver_url_hostname_match_zero_per_channel_http_calls(
         "get_channel_streams must not be called with proxy-session UUIDs — "
         "the endpoint returns SPA HTML for that identifier shape"
     )
-    # One M3U accounts fetch per poll, regardless of channel count.
-    assert mock_client.get_m3u_accounts.call_count == 2, (
-        "expected one get_m3u_accounts call per poll (2 polls = 2 calls), got %d"
+    # enhancedchannelmanager-1qmn0: one M3U accounts fetch for the TTL
+    # window (the primed refresh), regardless of poll/channel count.
+    assert mock_client.get_m3u_accounts.call_count == 1, (
+        "expected one get_m3u_accounts call for the TTL window, got %d"
         % mock_client.get_m3u_accounts.call_count
     )
 
 
 @pytest.mark.asyncio
-async def test_resolver_url_hostname_match_per_poll_fetch(
+async def test_resolver_url_hostname_match_uses_ttl_cached_accounts(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
 ):
-    """bd-gy5nd: the M3U accounts list is fetched once per poll (not
-    cached cross-poll). The polling cycle is 10s so freshness is built
-    in — a freshly-added M3U account becomes visible to the resolver
-    on the next poll without bespoke invalidation logic.
+    """enhancedchannelmanager-1qmn0: the M3U accounts list is NO LONGER
+    fetched inside the resolver on every poll. It is refreshed on the
+    tracker's 300s TTL (``_maybe_refresh_m3u_accounts``, primed here once
+    via ``_drive_two_polls``) and the resolver reads the cached snapshot.
+    Two polls within one TTL window therefore issue exactly ONE
+    ``get_m3u_accounts`` call, and the provider still resolves from the
+    cache. (Was bd-gy5nd's ``per_poll_fetch``; 1qmn0 inverts the per-poll
+    contract to eliminate the ~734KB-per-poll fetch.)
     """
     channel_uuid = "stable-channel"
     active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
@@ -1598,8 +1619,9 @@ async def test_resolver_url_hostname_match_per_poll_fetch(
 
     await _drive_two_polls(tracker, mock_client, first, second)
 
-    # 2 polls = 2 get_m3u_accounts calls. No per-channel HTTP fan-out.
-    assert mock_client.get_m3u_accounts.call_count == 2
+    # 2 polls within one TTL window = ONE get_m3u_accounts call (the
+    # primed refresh). No per-channel HTTP fan-out.
+    assert mock_client.get_m3u_accounts.call_count == 1
     assert mock_client.get_channel_streams.call_count == 0
 
     session = patched_session_local()
@@ -1869,6 +1891,10 @@ async def test_resolver_three_paths_resolve_in_one_poll(
         ),
     ]
 
+    # enhancedchannelmanager-1qmn0: prime the TTL-gated accounts cache so
+    # the URL-hostname-match path (ch-fallback) reads the configured
+    # accounts from the cache instead of a per-poll fetch.
+    await tracker._maybe_refresh_m3u_accounts()
     mock_client.get_channel_stats.return_value = {"channels": poll1}
     await tracker._collect_stats()
     mock_client.get_channel_stats.return_value = {"channels": poll2}
