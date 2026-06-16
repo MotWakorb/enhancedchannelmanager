@@ -18,11 +18,96 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 5  # How often to check if refresh is complete
 MAX_WAIT_SECONDS = 300  # Maximum time to wait (5 minutes)
 
+# Page size for the bulk stream pull used to build per-group counts/names.
+# Larger pages mean fewer round-trips and a lower burst RPM against Dispatcharr's
+# uWSGI workers (each request costs a COUNT(*) + auth/middleware pass regardless
+# of size). 1000 keeps response sizes/memory modest while halving the pulls vs
+# 500; going much higher risks request timeouts on the largest accounts (bd-iwfr7).
+STREAM_PULL_PAGE_SIZE = 1000
+# Maximum number of stream names captured per group for the snapshot diff.
+MAX_STREAM_NAMES = 500
+
+
+async def get_streams_grouped(
+    api_client,
+    account_id: int,
+    group_lookup: Dict[int, str],
+    enabled_group_names: set,
+) -> tuple[Dict[str, int], Dict[str, list]]:
+    """Pull ALL streams for an M3U account in a single paginated loop and group
+    them client-side by channel group name.
+
+    This replaces both the per-group count probes (one
+    ``GET /api/channels/streams/?page_size=1`` per group) and the per-group
+    paged pulls with a SINGLE paginated ``get_streams(m3u_account=...)`` loop —
+    mirroring the proven pattern in ``auto_creation_engine._fetch_streams``.
+
+    Dispatcharr returns ``channel_group`` as a numeric ID; we resolve it to a
+    name via ``group_lookup`` (built from ``get_channel_groups()``).
+
+    Args:
+        api_client: Dispatcharr client.
+        account_id: M3U account ID to pull streams for.
+        group_lookup: {channel_group_id: group_name} for ALL channel groups.
+        enabled_group_names: Set of group names that are enabled for this
+            account. Stream NAMES are only captured for these groups (parity
+            with the prior behavior); COUNTS are captured for every group.
+
+    Returns:
+        (stream_count_lookup, stream_names_by_group)
+          - stream_count_lookup: {group_name: count} for every group with >=1
+            stream (enabled or not).
+          - stream_names_by_group: {group_name: [names]} for ENABLED groups
+            only, capped at MAX_STREAM_NAMES per group.
+    """
+    stream_count_lookup: Dict[str, int] = {}
+    stream_names_by_group: Dict[str, list] = {}
+
+    page = 1
+    fetched = 0
+    page_count = 0
+    while True:
+        response = await api_client.get_streams(
+            page=page,
+            page_size=STREAM_PULL_PAGE_SIZE,
+            m3u_account=account_id,
+        )
+        page_count += 1
+        results = response.get("results", [])
+        for stream in results:
+            group_id = stream.get("channel_group")
+            group_name = group_lookup.get(group_id)
+            if not group_name:
+                # Stream belongs to a group we don't have a name for; skip it
+                # (parity with prior code, which only counted known groups).
+                continue
+            stream_count_lookup[group_name] = stream_count_lookup.get(group_name, 0) + 1
+            # Capture names only for enabled groups, capped per group.
+            if group_name in enabled_group_names:
+                names = stream_names_by_group.setdefault(group_name, [])
+                if len(names) < MAX_STREAM_NAMES:
+                    names.append(stream.get("name", ""))
+
+        fetched += len(results)
+        total = response.get("count", 0)
+        if fetched >= total or not results:
+            break
+        page += 1
+
+    logger.debug(
+        "[M3U-CHANGE] Bulk stream pull for account %s: %s streams over %s page(s), "
+        "%s groups with streams, %s enabled groups with names",
+        account_id, fetched, page_count, len(stream_count_lookup), len(stream_names_by_group),
+    )
+    return stream_count_lookup, stream_names_by_group
+
 
 async def capture_m3u_changes(
     account_id: int,
     account_name: str,
     dispatcharr_updated_at: Optional[str] = None,
+    account_data: Optional[Dict] = None,
+    all_channel_groups: Optional[list] = None,
 ) -> Optional[Dict]:
     """
     Capture M3U state changes after a refresh.
@@ -40,6 +125,11 @@ async def capture_m3u_changes(
         account_id: The M3U account ID
         account_name: The account name (for logging)
         dispatcharr_updated_at: Dispatcharr's updated_at timestamp (for change monitoring)
+        account_data: Pre-fetched M3U account dict (from get_m3u_account). When
+            None, it is fetched here. Lets a caller that already has the account
+            (e.g. the refresh task) avoid a redundant fetch.
+        all_channel_groups: Pre-fetched list of all channel groups (from
+            get_channel_groups). When None, it is fetched here. Same rationale.
 
     Returns the change set dict if changes were detected, None otherwise.
     """
@@ -49,50 +139,38 @@ async def capture_m3u_changes(
     api_client = get_client()
 
     try:
-        # Get the M3U account - channel_groups contains ALL groups from this M3U source
-        account_data = await api_client.get_m3u_account(account_id)
+        # Get the M3U account - channel_groups contains ALL groups from this M3U source.
+        # Prefer caller-supplied data to avoid redundant fetches within a refresh run;
+        # fall back to fetching when called standalone (e.g. from the change monitor).
+        if account_data is None:
+            account_data = await api_client.get_m3u_account(account_id)
         account_channel_groups = account_data.get("channel_groups", [])
 
         # Get all channel groups to build ID -> name mapping
-        all_channel_groups = await api_client.get_channel_groups()
+        if all_channel_groups is None:
+            all_channel_groups = await api_client.get_channel_groups()
         group_lookup = {
             g["id"]: g["name"]
             for g in all_channel_groups
         }
 
-        # Get actual stream counts (only available for enabled groups with imported streams)
-        stream_counts = await api_client.get_stream_groups_with_counts(m3u_account_id=account_id)
-        stream_count_lookup = {
-            g["name"]: g["count"]
-            for g in stream_counts
-        }
-
-        # Build list of enabled group names to fetch stream names for
-        enabled_group_names = []
+        # Build set of enabled group names (stream names are only captured for these).
+        enabled_group_names = set()
         for acg in account_channel_groups:
             group_id = acg.get("channel_group")
             if group_id and group_id in group_lookup and acg.get("enabled", False):
-                enabled_group_names.append(group_lookup[group_id])
+                enabled_group_names.add(group_lookup[group_id])
 
-        # Fetch stream names for enabled groups (limit to first 50 per group)
-        stream_names_by_group = {}
-        MAX_STREAM_NAMES = 500
-        logger.info("[M3U-CHANGE] Fetching stream names for %s enabled groups: %s%s", len(enabled_group_names), enabled_group_names[:5], "..." if len(enabled_group_names) > 5 else "")
-        for group_name in enabled_group_names:
-            try:
-                streams_response = await api_client.get_streams(
-                    page=1,
-                    page_size=MAX_STREAM_NAMES,
-                    channel_group_name=group_name,
-                    m3u_account=account_id,
-                )
-                results = streams_response.get("results", [])
-                stream_names = [s.get("name", "") for s in results]
-                logger.debug("[M3U-CHANGE] Group '%s': got %s streams, %s names", group_name, len(results), len(stream_names))
-                if stream_names:
-                    stream_names_by_group[group_name] = stream_names
-            except Exception as e:
-                logger.warning("[M3U-CHANGE] Could not fetch streams for group '%s': %s", group_name, e)
+        # Single bulk paginated pull replaces BOTH the per-group count probes
+        # (get_stream_groups_with_counts) AND the per-group get_streams loop.
+        # Counts come from every group; names only for enabled groups (capped).
+        logger.info(
+            "[M3U-CHANGE] Bulk-pulling streams for account %s (%s): %s enabled groups",
+            account_id, account_name, len(enabled_group_names),
+        )
+        stream_count_lookup, stream_names_by_group = await get_streams_grouped(
+            api_client, account_id, group_lookup, enabled_group_names
+        )
 
         logger.info("[M3U-CHANGE] Captured stream names for %s groups", len(stream_names_by_group))
 
@@ -104,13 +182,21 @@ async def capture_m3u_changes(
             group_id = acg.get("channel_group")
             if group_id and group_id in group_lookup:
                 group_name = group_lookup[group_id]
-                # Get stream count if available (only for enabled groups), otherwise 0
+                # Get stream count if available (only for enabled groups), otherwise 0.
+                # NOTE (enhancedchannelmanager-05h8w): stream_count MUST stay
+                # sourced from the post-refresh bulk pull (stream_count_lookup
+                # from get_streams_grouped). The start-of-run accounts list is
+                # PRE-refresh (stale counts) and detail-endpoint count seeding
+                # is unconfirmed — only ``enabled``/``is_stale`` are taken from
+                # channel_groups[], which are authoritative.
                 stream_count = stream_count_lookup.get(group_name, 0)
                 enabled = acg.get("enabled", False)
+                is_stale = acg.get("is_stale", False)
                 current_groups.append({
                     "name": group_name,
                     "stream_count": stream_count,
                     "enabled": enabled,
+                    "is_stale": is_stale,
                 })
                 total_streams += stream_count
 
@@ -237,6 +323,20 @@ class M3URefreshTask(TaskScheduler):
                 status="refreshing",
             )
 
+            # Fetch the channel-group list ONCE for the whole run instead of
+            # re-fetching it inside capture_m3u_changes per account. Channel
+            # groups are a slow-changing read; group membership relevant to the
+            # diff comes from each account's own channel_groups (fetched fresh
+            # per account below), so a single list snapshot here is safe.
+            try:
+                all_channel_groups = await client.get_channel_groups()
+            except Exception as e:
+                logger.warning(
+                    "[%s] Could not pre-fetch channel groups, capture will fetch per-account: %s",
+                    self.task_id, e,
+                )
+                all_channel_groups = None
+
             # Refresh each account
             success_count = 0
             failed_count = 0
@@ -262,10 +362,23 @@ class M3URefreshTask(TaskScheduler):
                     logger.info("[%s] Triggering M3U refresh for: %s", self.task_id, account_name)
                     await client.refresh_m3u_account(account_id)
 
-                    # Poll until refresh completes or timeout
+                    # Poll until refresh completes or timeout.
+                    #
+                    # Track WHY we stopped polling so we can gate the expensive
+                    # capture sweep:
+                    #   - timestamp_moved=True  -> positive evidence of a content
+                    #     change; capture.
+                    #   - assumed_complete=True -> the 30s fallback fired because
+                    #     Dispatcharr exposed no usable timestamp; we have NO
+                    #     definitive "no change" signal, so we MUST still capture.
+                    #   - neither -> timestamp existed and never moved == definitive
+                    #     no-change; skip the sweep.
                     self._set_progress(current_item=f"Waiting for {account_name} to complete...")
                     refresh_complete = False
                     wait_start = datetime.utcnow()
+                    timestamp_moved = False
+                    assumed_complete = False
+                    latest_updated = initial_updated
 
                     while not refresh_complete and not self._cancel_requested:
                         elapsed = (datetime.utcnow() - wait_start).total_seconds()
@@ -278,20 +391,53 @@ class M3URefreshTask(TaskScheduler):
                         # Check if account has been updated
                         current_account = await client.get_m3u_account(account_id)
                         current_updated = current_account.get("updated_at") or current_account.get("last_refresh")
+                        latest_updated = current_updated
 
                         if current_updated and current_updated != initial_updated:
                             refresh_complete = True
+                            timestamp_moved = True
                             wait_duration = (datetime.utcnow() - wait_start).total_seconds()
                             logger.info("[%s] %s refresh complete in %.1fs", self.task_id, account_name, wait_duration)
                         elif elapsed > 30:
                             # After 30 seconds, assume refresh is complete if no timestamp field
-                            # (Dispatcharr might not have updated_at on M3U accounts)
+                            # (Dispatcharr might not have updated_at on M3U accounts).
+                            # This is the UNCERTAIN path: no usable timestamp means we
+                            # cannot prove "no change", so capture must still run.
+                            assumed_complete = True
                             logger.info("[%s] %s - assuming complete after %.0fs", self.task_id, account_name, elapsed)
                             break
 
-                    # Capture M3U changes after successful refresh
-                    self._set_progress(current_item=f"Capturing changes for {account_name}...")
-                    await capture_m3u_changes(account_id, account_name)
+                    # Gate the expensive capture sweep on POSITIVE evidence of a
+                    # change. CRITICAL: never skip when uncertain. We only skip
+                    # when the timestamp existed and definitively did NOT move
+                    # (timestamp_moved is False AND we did not fall back to the
+                    # "assume complete" path AND we saw a real timestamp). Any
+                    # other case (moved, or no usable timestamp signal) captures.
+                    have_definitive_no_change = (
+                        not timestamp_moved
+                        and not assumed_complete
+                        and latest_updated is not None
+                    )
+                    if have_definitive_no_change:
+                        logger.info(
+                            "[%s] %s: updated_at unchanged (%s) - skipping capture sweep",
+                            self.task_id, account_name, latest_updated,
+                        )
+                    else:
+                        # Capture M3U changes after refresh. Pass the freshly
+                        # fetched account + the run-level channel-group list to
+                        # avoid redundant fetches inside capture_m3u_changes.
+                        self._set_progress(current_item=f"Capturing changes for {account_name}...")
+                        capture_account_data = (
+                            current_account if timestamp_moved or assumed_complete else None
+                        )
+                        await capture_m3u_changes(
+                            account_id,
+                            account_name,
+                            dispatcharr_updated_at=latest_updated,
+                            account_data=capture_account_data,
+                            all_channel_groups=all_channel_groups,
+                        )
 
                     success_count += 1
                     refreshed.append(account_name)
