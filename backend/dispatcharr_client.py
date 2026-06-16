@@ -493,10 +493,14 @@ class DispatcharrClient:
         single accounts pull plus the channel-groups id→name lookup.
 
         Semantics:
-          - ``m3u_account_id`` given → only that account's groups, and
-            groups with count == 0 are dropped.
+          - ``m3u_account_id`` given → only that account's groups.
           - ``m3u_account_id`` None → ``stream_count`` summed per group
             name across all accounts.
+          - In BOTH cases, groups with count == 0 are dropped. This
+            faithfully restores the pre-05h8w "only groups that have
+            streams" universe (enhancedchannelmanager-rmyn7): the
+            all-accounts Streams pane must not surface empty/disabled
+            groups on first load.
         Sorted by name, case-insensitively.
         """
         # id→name map for channel groups (channel_groups[] carries the
@@ -537,10 +541,11 @@ class DispatcharrClient:
 
         results = [{"name": name, "count": count} for name, count in counts_by_name.items()]
 
-        # When filtering by provider, drop groups with 0 streams (matches
-        # the prior probe-based behaviour).
-        if m3u_account_id is not None:
-            results = [r for r in results if r["count"] > 0]
+        # Drop groups with 0 streams in all cases (matches the prior
+        # probe-based behaviour, where the group universe came from groups
+        # that actually had streams). Applies to both the provider-filtered
+        # and the all-accounts paths (enhancedchannelmanager-rmyn7).
+        results = [r for r in results if r["count"] > 0]
 
         results.sort(key=lambda x: x["name"].lower())
 
