@@ -764,8 +764,13 @@ class AutoCreationEngine:
                 page = 1
                 fetched_for_account = 0
                 while True:
+                    # page_size=1000 (was 100): auto-creation runs a full
+                    # per-account stream sweep right after every M3U refresh, so
+                    # the smaller page meant ~10x the requests against Dispatcharr
+                    # for no benefit. Matches STREAM_PULL_PAGE_SIZE in the refresh
+                    # task (bd-iwfr7).
                     result = await self.client.get_streams(
-                        page=page, page_size=100, m3u_account=account_id
+                        page=page, page_size=1000, m3u_account=account_id
                     )
                     streams = result.get("results", [])
                     for stream in streams:

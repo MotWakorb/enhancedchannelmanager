@@ -205,6 +205,57 @@ class TestM3UChangeDetector:
         assert len(stored_data["groups"]) == 2
         assert stored_data["groups"][0]["name"] == "Sports"
 
+    def test_create_snapshot_persists_is_stale(self, test_session):
+        """enhancedchannelmanager-05h8w: the authoritative ``is_stale``
+        flag from /api/m3u/accounts/ channel_groups[] survives the
+        groups_data JSON round-trip."""
+        detector = M3UChangeDetector(test_session)
+        groups_data = [
+            {"name": "Sports", "stream_count": 50, "enabled": True, "is_stale": True},
+            {"name": "Movies", "stream_count": 100, "enabled": False, "is_stale": False},
+        ]
+
+        snapshot = detector.create_snapshot(
+            m3u_account_id=1,
+            groups_data=groups_data,
+            total_streams=150,
+        )
+
+        stored = {g["name"]: g for g in snapshot.get_groups_data()["groups"]}
+        assert stored["Sports"]["is_stale"] is True
+        assert stored["Movies"]["is_stale"] is False
+
+    def test_create_snapshot_is_stale_defaults_false(self, test_session):
+        """Legacy current_groups dicts that predate the ``is_stale``
+        field serialize with is_stale defaulting to False."""
+        detector = M3UChangeDetector(test_session)
+        groups_data = [{"name": "Sports", "stream_count": 50, "enabled": True}]
+
+        snapshot = detector.create_snapshot(
+            m3u_account_id=1,
+            groups_data=groups_data,
+            total_streams=50,
+        )
+
+        stored = snapshot.get_groups_data()["groups"]
+        assert stored[0]["is_stale"] is False
+
+    def test_legacy_groups_data_without_is_stale_reads_default_false(self, test_session):
+        """An old persisted snapshot whose groups_data JSON lacks the
+        ``is_stale`` key still parses; callers default to False."""
+        from models import M3USnapshot
+
+        snapshot = M3USnapshot(m3u_account_id=1, total_streams=10)
+        # Simulate a pre-05h8w blob with no is_stale key.
+        snapshot.set_groups_data({"groups": [{"name": "Sports", "stream_count": 10, "enabled": True}]})
+        test_session.add(snapshot)
+        test_session.commit()
+        test_session.refresh(snapshot)
+
+        group = snapshot.get_groups_data()["groups"][0]
+        assert "is_stale" not in group
+        assert group.get("is_stale", False) is False
+
     def test_create_snapshot_with_dispatcharr_timestamp(self, test_session):
         """Test creating snapshot with Dispatcharr's updated_at timestamp."""
         detector = M3UChangeDetector(test_session)
