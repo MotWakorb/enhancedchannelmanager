@@ -207,3 +207,158 @@ async def test_get_streams_m3u_account_none_omits_param():
         assert "m3u_account" not in params
     finally:
         await client._client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# enhancedchannelmanager-05h8w: get_stream_groups_with_counts reads
+# channel_groups[].stream_count from /api/m3u/accounts/ — ZERO per-group
+# probes.
+# ---------------------------------------------------------------------------
+
+_MIXED_ACCOUNTS = [
+    {
+        "id": 1,
+        "name": "Provider A",
+        "channel_groups": [
+            {"channel_group": 10, "enabled": True, "stream_count": 50},
+            {"channel_group": 20, "enabled": False, "stream_count": 0},   # disabled, zero
+            {"channel_group": 30, "enabled": True, "stream_count": 7},
+        ],
+    },
+    {
+        "id": 2,
+        "name": "Provider B",
+        "channel_groups": [
+            {"channel_group": 10, "enabled": True, "stream_count": 12},   # same group, other account
+            {"channel_group": 40, "enabled": True, "stream_count": 3},
+        ],
+    },
+]
+
+_GROUP_NAMES = [
+    {"id": 10, "name": "Sports"},
+    {"id": 20, "name": "Radio"},
+    {"id": 30, "name": "Movies"},
+    {"id": 40, "name": "News"},
+]
+
+
+@pytest.mark.asyncio
+async def test_group_counts_issues_zero_stream_probes():
+    """get_stream_groups_with_counts must NEVER call get_streams — it
+    reads counts from channel_groups[].stream_count."""
+    client = _make_client()
+    try:
+        get_streams_mock = AsyncMock(
+            side_effect=AssertionError("probing path must not be used")
+        )
+        with patch.object(client, "get_channel_groups", AsyncMock(return_value=_GROUP_NAMES)), \
+             patch.object(client, "get_m3u_accounts", AsyncMock(return_value=_MIXED_ACCOUNTS)), \
+             patch.object(client, "get_streams", get_streams_mock):
+            await client.get_stream_groups_with_counts()
+        get_streams_mock.assert_not_called()
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_group_counts_none_sums_across_accounts_sorted():
+    """m3u_account_id None → sum stream_count per group name across all
+    accounts, sorted case-insensitively, zero-count groups dropped.
+
+    The count==0 drop is UNCONDITIONAL (enhancedchannelmanager-rmyn7): it
+    applies to the all-accounts case too, faithfully restoring the
+    pre-05h8w "only groups that have streams" universe. Radio sums to 0
+    across all accounts, so it must be absent."""
+    client = _make_client()
+    try:
+        with patch.object(client, "get_channel_groups", AsyncMock(return_value=_GROUP_NAMES)), \
+             patch.object(client, "get_m3u_accounts", AsyncMock(return_value=_MIXED_ACCOUNTS)):
+            result = await client.get_stream_groups_with_counts()
+
+        # Sports = 50 + 12; Movies = 7; News = 3; Radio = 0 (dropped).
+        assert result == [
+            {"name": "Movies", "count": 7},
+            {"name": "News", "count": 3},
+            {"name": "Sports", "count": 62},
+        ]
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_group_counts_none_drops_zero_count_groups():
+    """Regression (enhancedchannelmanager-rmyn7): the all-accounts
+    (m3u_account_id None) result must NOT contain a group whose summed
+    stream_count is 0.
+
+    05h8w only dropped count==0 groups in the provider-filtered branch, so
+    the unfiltered first load of the Channel Manager Streams pane began
+    showing empty/disabled groups (Radio here, disabled & zero). This test
+    fails on the 05h8w code (Radio present) and passes on the fix."""
+    client = _make_client()
+    try:
+        with patch.object(client, "get_channel_groups", AsyncMock(return_value=_GROUP_NAMES)), \
+             patch.object(client, "get_m3u_accounts", AsyncMock(return_value=_MIXED_ACCOUNTS)):
+            result = await client.get_stream_groups_with_counts()
+
+        names = [r["name"] for r in result]
+        assert "Radio" not in names
+        assert all(r["count"] > 0 for r in result)
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_group_counts_account_filter_drops_zero_count():
+    """m3u_account_id given → only that account's groups, with count==0
+    dropped (matches prior probe-based semantics)."""
+    client = _make_client()
+    try:
+        with patch.object(client, "get_channel_groups", AsyncMock(return_value=_GROUP_NAMES)), \
+             patch.object(client, "get_m3u_accounts", AsyncMock(return_value=_MIXED_ACCOUNTS)):
+            result = await client.get_stream_groups_with_counts(m3u_account_id=1)
+
+        # Account 1 only: Sports=50, Radio=0 (dropped), Movies=7.
+        assert result == [
+            {"name": "Movies", "count": 7},
+            {"name": "Sports", "count": 50},
+        ]
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_group_counts_missing_stream_count_treated_as_zero():
+    """A channel_groups[] entry lacking stream_count is treated as 0 —
+    never falls back to probing. A group that only sums to 0 (because its
+    sole entry lacked stream_count) is then dropped by the unconditional
+    count==0 filter (enhancedchannelmanager-rmyn7)."""
+    client = _make_client()
+    try:
+        accounts = [
+            {
+                "id": 1,
+                "name": "A",
+                "channel_groups": [
+                    {"channel_group": 10, "enabled": True},  # no stream_count → 0
+                    {"channel_group": 30, "enabled": True, "stream_count": 7},
+                ],
+            }
+        ]
+        get_streams_mock = AsyncMock(
+            side_effect=AssertionError("probing path must not be used")
+        )
+        with patch.object(client, "get_channel_groups", AsyncMock(return_value=_GROUP_NAMES)), \
+             patch.object(client, "get_m3u_accounts", AsyncMock(return_value=accounts)), \
+             patch.object(client, "get_streams", get_streams_mock):
+            result = await client.get_stream_groups_with_counts()
+
+        # Missing stream_count is treated as 0 (no probe), and the resulting
+        # zero-count Sports group is dropped. Movies (count=7) remains.
+        get_streams_mock.assert_not_called()
+        assert result == [
+            {"name": "Movies", "count": 7},
+        ]
+    finally:
+        await client._client.aclose()

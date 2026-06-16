@@ -33,6 +33,44 @@ _SessionLocal = None
 # informative without spamming once-per-connection lines.
 _pragma_logged = False
 
+# --- WAL-growth backstop (bd-12hxn / GH #473) ----------------------------
+# The startup ``_wal_checkpoint_truncate`` (bd-ej995 / GH #274) only bounds the
+# WAL at boot. DURING a long run the passive auto-checkpoint that SQLite would
+# normally fire every ``wal_autocheckpoint`` pages gets STARVED whenever a
+# reader (e.g. the stats poller) holds a read transaction across the checkpoint
+# window — exactly the GH #274 pinned-reader pathology — so the -wal can grow
+# without bound until the next restart truncates it. Under the GH #473 memory
+# spike that unbounded growth compounds the disk/swap pressure that corrupted
+# journal.db.
+#
+# We bound it per-connection with two cheap PRAGMA levers (no new background
+# task lifecycle to own/test):
+#
+#   * ``journal_size_limit`` caps how many bytes of WAL are RETAINED after a
+#     checkpoint reclaims it. Without a limit SQLite keeps the WAL file at its
+#     high-water mark (it only ever truncates on an explicit TRUNCATE
+#     checkpoint), so a single growth spike leaves the file large for the rest
+#     of the run. With the limit, an ordinary auto-checkpoint shrinks the file
+#     back to the cap. This does NOT fight the boot TRUNCATE checkpoint —
+#     TRUNCATE still takes the WAL to zero; the limit only governs the retained
+#     size of incremental checkpoints during the run.
+#   * ``wal_autocheckpoint`` sets the page threshold at which a committing
+#     connection attempts a PASSIVE checkpoint. SQLite's default is 1000 pages
+#     (~4 MB at the default 4 KB page size). We keep that default frequency —
+#     lowering it would checkpoint more often (more contention with readers),
+#     raising it would let the WAL run further between checkpoints. 1000 is a
+#     well-tuned default; we set it explicitly so the value is visible and
+#     can't drift if a future SQLite changes its default.
+#
+# 64 MiB cap: comfortably above normal steady-state WAL (a few MB), well below
+# the 1.4 GB GH #274 incident and the multi-GB pressure of GH #473. A reader
+# that pins the WAL can still let it grow past the cap transiently (the cap is
+# enforced at checkpoint time, and a pinned reader blocks the checkpoint) — but
+# the moment the reader releases, the next checkpoint reclaims back to the cap
+# instead of leaving the file at its spike high-water mark.
+WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024  # 64 MiB
+WAL_AUTOCHECKPOINT_PAGES = 1000  # SQLite default; set explicitly for visibility
+
 
 @event.listens_for(Engine, "connect")
 def _set_sqlite_pragmas(dbapi_connection, connection_record):
@@ -89,13 +127,29 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record):
             if row is not None:
                 resulting_mode = row[0]
 
+            # WAL-growth backstop (bd-12hxn / GH #473). Only meaningful for
+            # file-backed WAL databases — in-memory DBs have no WAL file to
+            # bound. ``journal_size_limit`` returns the previous limit; we do
+            # not act on it. Setting these per-connection (rather than once on
+            # the main connection) ensures every pooled/probe/task connection
+            # shares the same checkpoint policy.
+            cursor.execute(
+                "PRAGMA journal_size_limit=%d" % WAL_JOURNAL_SIZE_LIMIT_BYTES
+            )
+            cursor.execute(
+                "PRAGMA wal_autocheckpoint=%d" % WAL_AUTOCHECKPOINT_PAGES
+            )
+
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA foreign_keys=ON")
 
         if not _pragma_logged:
             logger.info(
-                "[DATABASE] SQLite PRAGMAs applied: journal_mode=%s synchronous=NORMAL foreign_keys=ON (memory=%s)",
+                "[DATABASE] SQLite PRAGMAs applied: journal_mode=%s synchronous=NORMAL "
+                "foreign_keys=ON journal_size_limit=%d wal_autocheckpoint=%d (memory=%s)",
                 resulting_mode or "memory",
+                WAL_JOURNAL_SIZE_LIMIT_BYTES,
+                WAL_AUTOCHECKPOINT_PAGES,
                 is_memory,
             )
             _pragma_logged = True
@@ -220,6 +274,114 @@ def _wal_checkpoint_truncate(engine) -> None:
         logger.warning(
             "[DATABASE] WAL checkpoint failed (non-fatal): %s", e
         )
+
+
+def _integrity_check(engine) -> None:
+    """Run ``PRAGMA quick_check`` against the journal DB and loud-fail on damage.
+
+    bd-12hxn / GH #473: an M3U digest OOM'd the container (~18.5 GiB) and, under
+    the memory/swap pressure, CORRUPTED the on-disk SQLite DB — the run died
+    with ``sqlite3.DatabaseError: database disk image is malformed`` raised from
+    a ``fetchall`` mid-request. That is a DATA-LOSS class outcome, not just an
+    availability one, and it surfaced at a random read instead of at boot. This
+    check moves detection to the front door: corruption is caught BEFORE
+    migrations or ``create_all`` touch a malformed file (which can deepen the
+    damage), and surfaced LOUDLY with operator guidance instead of as a cryptic
+    mid-request 500.
+
+    quick_check vs integrity_check — we use ``quick_check`` deliberately:
+
+    * A full ``PRAGMA integrity_check`` walks every index and cross-checks every
+      b-tree against its table — on a multi-GB DB that can take many seconds to
+      minutes. That is the SAME Docker health-check ``start_period`` risk the
+      WAL-truncate comment documents (GH #274): a slow boot step marks the
+      container unhealthy and blocks ecm-mcp.
+    * ``quick_check`` skips the expensive index-vs-table cross-verification but
+      STILL detects the malformed-page / corrupt-b-tree class — exactly the
+      "database disk image is malformed" failure GH #473 hit. It is dramatically
+      cheaper and bounded enough to run on every boot. The cheaper check catching
+      the actual incident's failure mode is the right trade for a boot-path guard.
+
+    Placement (init_db): after the engine is created and after
+    ``_wal_checkpoint_truncate`` (so the check sees the post-truncate main-file
+    state), but BEFORE ``_bootstrap_alembic`` / ``create_all`` /
+    ``_assert_schema_matches_models`` — corruption must be caught before
+    migrations try to write to a malformed file.
+
+    In-memory DBs (tests, ``sqlite:///:memory:``) and fresh installs (no file
+    yet) are skipped: ``quick_check`` on an empty/absent DB returns ``ok``
+    trivially, but skipping the in-memory path keeps the main test suite (which
+    runs thousands of in-memory engines) free of an unnecessary per-init scan.
+
+    On a non-'ok' result we follow the bd-zaaey loud-fail philosophy already in
+    this file (re-raise on boot problems rather than running for days on a
+    silently-broken DB): log a ``[DATABASE]`` ERROR with actionable recovery
+    guidance and raise ``RuntimeError`` so boot fails visibly.
+
+    Raises:
+        RuntimeError: when ``quick_check`` reports anything other than ``ok``.
+    """
+    # Skip in-memory engines — no on-disk file to corrupt, and the main test
+    # suite spins up thousands of them. Detect the same way the PRAGMA listener
+    # does: an in-memory DB's main entry in ``PRAGMA database_list`` has an
+    # empty ``file`` column.
+    try:
+        with engine.connect() as conn:
+            db_list = conn.execute(text("PRAGMA database_list")).fetchall()
+            # rows like (seq, name, file). Main DB is first; empty file = memory.
+            if db_list and len(db_list[0]) >= 3 and not db_list[0][2]:
+                logger.debug(
+                    "[DATABASE] Skipping integrity check for in-memory database"
+                )
+                return
+
+            # PRAGMA quick_check returns one row ``('ok',)`` on success, or one
+            # or more rows describing problems on failure. ``scalar`` reads the
+            # first row's first column, which is ``ok`` iff the DB is clean.
+            result = conn.execute(text("PRAGMA quick_check")).scalar()
+    except Exception as e:
+        # A raw "database disk image is malformed" can also surface as an
+        # exception from the PRAGMA itself rather than a non-'ok' row. Treat
+        # that identically — loud-fail with guidance.
+        logger.error(
+            "[DATABASE] SQLite integrity check could not run against %s: %s. "
+            "This often indicates a corrupted or unreadable database file. "
+            "Recovery: stop the container, back up %s (and its -wal/-shm "
+            "siblings) BEFORE any repair attempt, then restore journal.db from "
+            "a known-good backup, or attempt `sqlite3 journal.db \".recover\"` "
+            "into a fresh file. Run `PRAGMA integrity_check` for a full report.",
+            JOURNAL_DB_FILE,
+            e,
+            JOURNAL_DB_FILE,
+        )
+        raise RuntimeError(
+            "SQLite integrity check failed to run — journal.db may be corrupted "
+            f"or unreadable: {e}. Back up the DB and restore from a known-good "
+            "backup (or `.recover`) before restarting."
+        ) from e
+
+    if result != "ok":
+        logger.error(
+            "[DATABASE] SQLite integrity check FAILED for %s: quick_check "
+            "returned %r (expected 'ok'). The on-disk database is corrupted — "
+            "this is a data-integrity failure, not a transient error, and was "
+            "the GH #473 outcome of a memory/swap spike damaging the DB. "
+            "Recovery: stop the container, back up %s (and its -wal/-shm "
+            "siblings) BEFORE any repair, then restore journal.db from a "
+            "known-good backup, or attempt `sqlite3 journal.db \".recover\"` "
+            "into a fresh file. Run `PRAGMA integrity_check` (the full, slower "
+            "check) for a complete corruption report.",
+            JOURNAL_DB_FILE,
+            result,
+            JOURNAL_DB_FILE,
+        )
+        raise RuntimeError(
+            "SQLite integrity check failed — journal.db is corrupted "
+            f"(quick_check returned {result!r}). Restore from a known-good "
+            "backup or `.recover` the database before restarting."
+        )
+
+    logger.info("[DATABASE] SQLite integrity check passed (quick_check=ok)")
 
 
 def _bootstrap_alembic(engine) -> None:
@@ -548,6 +710,16 @@ def init_db() -> None:
         # before _bootstrap_alembic / _assert_schema_matches_models so the
         # migration path sees the post-truncate state.
         _wal_checkpoint_truncate(_engine)
+
+        # bd-12hxn / GH #473: verify the on-disk DB is not corrupted BEFORE any
+        # migration or create_all touches it. Runs after the WAL truncate (so it
+        # checks the post-truncate main file) but before _bootstrap_alembic so a
+        # malformed file fails the boot loudly with operator guidance instead of
+        # corrupting further or surfacing as a cryptic mid-request 500. Uses the
+        # cheap quick_check (not full integrity_check) to avoid the GH #274
+        # health-check start_period risk on large DBs. No-op for in-memory test
+        # DBs and fresh installs.
+        _integrity_check(_engine)
 
         # Import models to register them with Base
         from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable, PendingMerge, PendingMergeJournal  # noqa: F401

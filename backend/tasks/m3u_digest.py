@@ -5,9 +5,11 @@ Scheduled task to send digest emails with M3U playlist changes.
 """
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 import safe_regex
@@ -18,6 +20,43 @@ from task_registry import register_task
 from m3u_digest_template import M3UDigestTemplate
 
 logger = logging.getLogger(__name__)
+
+# Hard cap on how many change rows a single digest run will load into memory.
+# The email/Discord templates only render the 20 most-recent items per
+# account-and-type, so loading more than this never affects the rendered output —
+# it only risks OOM. An unbounded .all() over the change log (each row can carry
+# its own stream-name JSON blob) drove RSS to ~18.5 GiB and corrupted the SQLite
+# DB on a large deployment (GH #473). 5000 is far above any sane digest size.
+MAX_DIGEST_CHANGES = 5000
+
+
+@dataclass
+class _DigestPayload:
+    """Result of the synchronous (off-loop) digest build step.
+
+    ``_build_digest_payload`` runs the blocking work — DB load, exclude
+    filtering, and template rendering — in a worker thread and returns this
+    so ``execute()`` can do the async delivery (email/Discord) back on the
+    event loop. Either ``early_result`` is set (the run short-circuited:
+    disabled / no recipients / below threshold / no changes) and the caller
+    returns it verbatim, or the rendered content fields are populated.
+    """
+
+    # Short-circuit: when set, execute() returns this TaskResult directly.
+    early_result: Optional["TaskResult"] = None
+
+    # Rendered, ready-to-deliver content (None when early_result is set).
+    subject: Optional[str] = None
+    html_content: Optional[str] = None
+    plain_content: Optional[str] = None
+    discord_content: Optional[List[str]] = None
+
+    # Delivery context carried back to the event loop.
+    changes: List = field(default_factory=list)
+    recipients: List[str] = field(default_factory=list)
+    send_to_discord: bool = False
+    is_test: bool = False
+    since: Optional[datetime] = None
 
 
 class _FilteredChange:
@@ -128,38 +167,176 @@ class M3UDigestTask(TaskScheduler):
         """
         Execute the M3U digest task.
 
+        The heavy, loop-blocking work — the bounded SQLAlchemy load, the
+        exclude-pattern filtering loop, and the CPU-bound template rendering —
+        runs in a worker thread via ``run_in_threadpool`` (see
+        ``_build_digest_payload``). Async delivery (email via threaded smtplib,
+        Discord via aiohttp) then happens back on the event loop. This keeps a
+        heavy digest from freezing every other request (GH #473), where the
+        inline synchronous body blocked the loop for ~182s.
+
         Args:
             force: If True, send digest even if disabled or below threshold
             m3u_account_id: Optional filter for specific M3U account
         """
         started_at = datetime.utcnow()
-        db = get_session()
 
+        try:
+            self._set_progress(status="fetching_changes")
+
+            # Offload the blocking DB load + filter + render to a worker thread.
+            # The builder owns its own DB session (do NOT share a SQLAlchemy
+            # Session across threads) and returns rendered, ready-to-deliver
+            # content — or an early_result to short-circuit.
+            payload: _DigestPayload = await run_in_threadpool(
+                self._build_digest_payload, force, m3u_account_id, started_at
+            )
+
+            if payload.early_result is not None:
+                return payload.early_result
+
+            recipients = payload.recipients
+            send_to_discord = payload.send_to_discord
+            changes = payload.changes
+
+            # Track delivery results
+            email_success = False
+            discord_success = False
+            delivery_methods = []
+
+            # Send email if recipients configured
+            if recipients:
+                self._set_progress(status="sending_email")
+                email_success = await self._send_digest_email(
+                    recipients=recipients,
+                    subject=payload.subject,
+                    html_content=payload.html_content,
+                    plain_content=payload.plain_content,
+                )
+                if email_success:
+                    delivery_methods.append(f"email ({len(recipients)} recipients)")
+
+            # Send to Discord if enabled (aiohttp — already async, stays on loop)
+            if send_to_discord:
+                self._set_progress(status="sending_discord")
+                discord_success = await self._send_digest_discord(
+                    changes=changes,
+                    discord_content=payload.discord_content,
+                    is_test=payload.is_test,
+                )
+                if discord_success:
+                    delivery_methods.append("Discord")
+
+            # Check if at least one delivery succeeded
+            if email_success or discord_success:
+                # Update last digest time (only for real digests, not tests).
+                # Single-row UPDATE+commit — negligible vs the offloaded body,
+                # so it stays on the loop in its own short-lived session.
+                if changes:
+                    db = get_session()
+                    try:
+                        s = get_or_create_digest_settings(db)
+                        s.last_digest_at = datetime.utcnow()
+                        db.commit()
+                    finally:
+                        db.close()
+
+                # Build result message
+                if changes:
+                    message = f"Sent M3U digest with {len(changes)} changes via {', '.join(delivery_methods)}"
+                else:
+                    message = f"Test sent successfully via {', '.join(delivery_methods)}"
+
+                return TaskResult(
+                    success=True,
+                    message=message,
+                    started_at=started_at,
+                    completed_at=datetime.utcnow(),
+                    total_items=len(changes),
+                    success_count=len(changes),
+                    details={
+                        "changes_count": len(changes),
+                        "recipients": recipients,
+                        "discord_enabled": send_to_discord,
+                        "email_success": email_success,
+                        "discord_success": discord_success,
+                        "since": payload.since.isoformat() if changes else None,
+                        "is_test": payload.is_test,
+                    },
+                )
+            else:
+                failed_methods = []
+                if recipients and not email_success:
+                    failed_methods.append("email")
+                if send_to_discord and not discord_success:
+                    failed_methods.append("Discord")
+
+                return TaskResult(
+                    success=False,
+                    message=f"Failed to send M3U digest via {', '.join(failed_methods)}",
+                    error="All delivery methods failed",
+                    started_at=started_at,
+                    completed_at=datetime.utcnow(),
+                    total_items=len(changes),
+                )
+
+        except Exception as e:
+            logger.exception("[%s] M3U digest failed: %s", self.task_id, e)
+            return TaskResult(
+                success=False,
+                message=f"M3U digest failed: {str(e)}",
+                error=str(e),
+                started_at=started_at,
+                completed_at=datetime.utcnow(),
+            )
+
+    def _build_digest_payload(
+        self,
+        force: bool,
+        m3u_account_id: Optional[int],
+        started_at: datetime,
+    ) -> _DigestPayload:
+        """
+        Synchronous, loop-blocking digest build — run via ``run_in_threadpool``.
+
+        Owns its own DB session (a SQLAlchemy Session is NOT thread-safe and
+        must never be shared across the event loop and a worker thread). Loads
+        the bounded change set, applies settings/exclude filtering, evaluates
+        the threshold, and renders the email/Discord content. Returns a
+        ``_DigestPayload`` whose ``early_result`` short-circuits ``execute()``
+        when there is nothing to deliver, or whose rendered fields carry the
+        content for async delivery back on the event loop.
+
+        NOTE: this runs OFF the event loop, so it must not touch
+        ``self._progress`` notification scheduling or any other event-loop
+        state. ``self._set_progress`` calls stay in ``execute()``.
+        """
+        db = get_session()
         try:
             settings = get_or_create_digest_settings(db)
 
             # Check if enabled
             if not settings.enabled and not force:
-                return TaskResult(
+                return _DigestPayload(early_result=TaskResult(
                     success=True,
                     message="M3U digest is disabled",
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=0,
-                )
+                ))
 
             # Check for at least one delivery method
             recipients = settings.get_email_recipients()
             send_to_discord = getattr(settings, 'send_to_discord', False)
 
             if not recipients and not send_to_discord:
-                return TaskResult(
+                return _DigestPayload(early_result=TaskResult(
                     success=False,
                     message="No delivery methods configured (no email recipients and Discord disabled)",
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=0,
-                )
+                ))
 
             # Determine time range
             since = settings.last_digest_at
@@ -167,14 +344,28 @@ class M3UDigestTask(TaskScheduler):
                 # First time - use frequency to determine lookback
                 since = datetime.utcnow() - get_frequency_delta(settings.frequency)
 
-            self._set_progress(status="fetching_changes")
-
-            # Get changes since last digest
+            # Get changes since last digest.
+            # Bounded load (MAX_DIGEST_CHANGES): the templates only show the 20
+            # newest items per account-and-type, so an unbounded .all() here is
+            # pure memory risk with no effect on the rendered digest (GH #473).
             query = db.query(M3UChangeLog).filter(M3UChangeLog.change_time >= since)
             if m3u_account_id:
                 query = query.filter(M3UChangeLog.m3u_account_id == m3u_account_id)
 
-            changes = query.order_by(M3UChangeLog.change_time.desc()).all()
+            total_changes = query.count()
+            if total_changes > MAX_DIGEST_CHANGES:
+                logger.warning(
+                    "[%s] %s changes since %s exceeds cap of %s — digest will "
+                    "summarize the %s most-recent changes only",
+                    self.task_id, total_changes, since.isoformat(),
+                    MAX_DIGEST_CHANGES, MAX_DIGEST_CHANGES,
+                )
+
+            changes = (
+                query.order_by(M3UChangeLog.change_time.desc())
+                .limit(MAX_DIGEST_CHANGES)
+                .all()
+            )
 
             # Filter by settings
             if not settings.include_group_changes:
@@ -245,23 +436,23 @@ class M3UDigestTask(TaskScheduler):
                     "[%s] Only %s changes, below threshold of %s",
                     self.task_id, len(changes), settings.min_changes_threshold
                 )
-                return TaskResult(
+                return _DigestPayload(early_result=TaskResult(
                     success=True,
                     message=f"No digest sent: only {len(changes)} changes (threshold: {settings.min_changes_threshold})",
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=len(changes),
-                )
+                ))
 
             if not changes:
                 if not force:
-                    return TaskResult(
+                    return _DigestPayload(early_result=TaskResult(
                         success=True,
                         message="No changes to report since last digest",
                         started_at=started_at,
                         completed_at=datetime.utcnow(),
                         total_items=0,
-                    )
+                    ))
                 # Force mode with no changes - send a test email
                 subject = "[ECM] M3U Digest Test - Configuration Verified"
                 html_content = """
@@ -293,99 +484,29 @@ When there are actual M3U changes to report, you will receive digest emails at t
 ---
 This is a test email from Enhanced Channel Manager.
                 """.strip()
+                discord_content = None
             else:
-                self._set_progress(status="building_digest", total=len(changes))
-
-                # Build digest content
+                # Build digest content (CPU-bound string building — off-loop).
                 template = M3UDigestTemplate()
                 show_detailed = getattr(settings, 'show_detailed_list', True)
                 html_content = template.render_html(changes, since, show_detailed_list=show_detailed)
                 plain_content = template.render_plain(changes, since, show_detailed_list=show_detailed)
                 subject = template.get_subject(changes)
-
-            # Track delivery results
-            email_success = False
-            discord_success = False
-            delivery_methods = []
-
-            # Send email if recipients configured
-            if recipients:
-                self._set_progress(status="sending_email")
-                email_success = await self._send_digest_email(
-                    recipients=recipients,
-                    subject=subject,
-                    html_content=html_content,
-                    plain_content=plain_content,
-                )
-                if email_success:
-                    delivery_methods.append(f"email ({len(recipients)} recipients)")
-
-            # Send to Discord if enabled
-            if send_to_discord:
-                self._set_progress(status="sending_discord")
-                discord_content = template.render_discord(changes, since, show_detailed_list=show_detailed) if changes else None
-                discord_success = await self._send_digest_discord(
-                    changes=changes,
-                    discord_content=discord_content,
-                    is_test=not bool(changes),
-                )
-                if discord_success:
-                    delivery_methods.append("Discord")
-
-            # Check if at least one delivery succeeded
-            if email_success or discord_success:
-                # Update last digest time (only for real digests, not tests)
-                if changes:
-                    settings.last_digest_at = datetime.utcnow()
-                    db.commit()
-
-                # Build result message
-                if changes:
-                    message = f"Sent M3U digest with {len(changes)} changes via {', '.join(delivery_methods)}"
-                else:
-                    message = f"Test sent successfully via {', '.join(delivery_methods)}"
-
-                return TaskResult(
-                    success=True,
-                    message=message,
-                    started_at=started_at,
-                    completed_at=datetime.utcnow(),
-                    total_items=len(changes),
-                    success_count=len(changes),
-                    details={
-                        "changes_count": len(changes),
-                        "recipients": recipients,
-                        "discord_enabled": send_to_discord,
-                        "email_success": email_success,
-                        "discord_success": discord_success,
-                        "since": since.isoformat() if changes else None,
-                        "is_test": not bool(changes),
-                    },
-                )
-            else:
-                failed_methods = []
-                if recipients and not email_success:
-                    failed_methods.append("email")
-                if send_to_discord and not discord_success:
-                    failed_methods.append("Discord")
-
-                return TaskResult(
-                    success=False,
-                    message=f"Failed to send M3U digest via {', '.join(failed_methods)}",
-                    error="All delivery methods failed",
-                    started_at=started_at,
-                    completed_at=datetime.utcnow(),
-                    total_items=len(changes),
+                discord_content = (
+                    template.render_discord(changes, since, show_detailed_list=show_detailed)
+                    if send_to_discord else None
                 )
 
-        except Exception as e:
-            logger.exception("[%s] M3U digest failed: %s", self.task_id, e)
-            return TaskResult(
-                success=False,
-                message=f"M3U digest failed: {str(e)}",
-                error=str(e),
-                started_at=started_at,
-                completed_at=datetime.utcnow(),
+            return _DigestPayload(
+                subject=subject,
+                html_content=html_content,
+                plain_content=plain_content,
+                discord_content=discord_content,
+                changes=changes,
+                recipients=recipients,
+                send_to_discord=send_to_discord,
+                is_test=not bool(changes),
+                since=since,
             )
         finally:
             db.close()
@@ -474,7 +595,30 @@ This is a test email from Enhanced Channel Manager.
         html_content: str,
         plain_content: str,
     ) -> bool:
-        """Send a custom email with pre-built HTML content using SMTP config dict."""
+        """Send a custom email with pre-built HTML content using SMTP config dict.
+
+        The synchronous smtplib I/O (connect / STARTTLS / login / sendmail) is
+        offloaded to a worker thread so SMTP latency cannot block the asyncio
+        event loop (GH #473).
+        """
+        return await run_in_threadpool(
+            self._send_custom_email_with_config_sync,
+            config,
+            recipients,
+            subject,
+            html_content,
+            plain_content,
+        )
+
+    def _send_custom_email_with_config_sync(
+        self,
+        config: Dict,
+        recipients: List[str],
+        subject: str,
+        html_content: str,
+        plain_content: str,
+    ) -> bool:
+        """Blocking smtplib send — runs in a worker thread, never on the loop."""
         import smtplib
         import ssl
         from email.mime.text import MIMEText
