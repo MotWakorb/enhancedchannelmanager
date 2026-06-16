@@ -597,10 +597,20 @@ class StreamProber:
         self._notification_delete_by_source_callback = delete_by_source_callback
         logger.info("[STREAM-PROBE] Notification callbacks configured for stream prober")
 
-    async def _create_probe_notification(self, total_streams: int) -> Optional[int]:
+    async def _create_probe_notification(
+        self, total_streams: int, send_alerts: bool = True
+    ) -> Optional[int]:
         """Create a notification for probe progress.
 
         Deletes any existing probe notifications first to ensure only one exists.
+
+        Args:
+            total_streams: Total number of streams in this probe run.
+            send_alerts: Whether the "probe started" message should dispatch an
+                external alert (Telegram/Discord/email). This is an info-level
+                notification, so external dispatch must respect the stream-probe
+                task's ``alert_on_info`` gate — the caller passes the already-gated
+                value (GH #462). The in-app notification is created regardless.
 
         Returns:
             Notification ID or None if callbacks not configured
@@ -633,7 +643,7 @@ class StreamProber:
                 source="stream_probe",
                 source_id=str(int(time.time())),
                 metadata=metadata,
-                send_alerts=True,
+                send_alerts=send_alerts,
             )
             if result and "id" in result:
                 self._probe_notification_id = result["id"]
@@ -2203,7 +2213,7 @@ class StreamProber:
             custom_stream_ids=custom_stream_ids,
         )
 
-    async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None):
+    async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None, start_send_alerts: bool = True):
         """Probe all streams that are in channels (runs in background).
 
         Uses parallel probing - streams from different M3U accounts (or same M3U with
@@ -2216,6 +2226,10 @@ class StreamProber:
                              Use this for on-demand probes from the UI.
             stream_ids_filter: Optional list of specific stream IDs to probe.
                               If provided, only these streams will be probed (useful for re-probing failed streams).
+            start_send_alerts: Whether the info-level "probe started" notification
+                              should dispatch an external alert. Callers pass the
+                              gated ``send_alerts AND alert_on_info`` value so the
+                              start alert respects the per-task config (GH #462).
         """
         logger.info("[STREAM-PROBE] probe_all_streams called with channel_groups_override=%s, skip_m3u_refresh=%s, stream_ids_filter=%s", channel_groups_override, skip_m3u_refresh, len(stream_ids_filter) if stream_ids_filter else 0)
         logger.info("[STREAM-PROBE] Settings: parallel_probing_enabled=%s, max_concurrent_probes=%s, "
@@ -2374,7 +2388,7 @@ class StreamProber:
             self._probe_progress_status = "probing"
 
             # Create progress notification
-            await self._create_probe_notification(len(streams_to_probe))
+            await self._create_probe_notification(len(streams_to_probe), send_alerts=start_send_alerts)
 
             # Log diagnostic info if no streams to probe
             if len(streams_to_probe) == 0:
@@ -2896,7 +2910,7 @@ class StreamProber:
         finally:
             self._probing_in_progress = False
 
-    async def probe_streams_by_ids(self, stream_ids: list[int]):
+    async def probe_streams_by_ids(self, stream_ids: list[int], start_send_alerts: bool = True):
         """Probe a specific list of stream IDs in the background (on-demand bulk probe).
 
         This is the async backing for POST /api/stream-stats/probe/bulk. It reuses
@@ -2915,6 +2929,9 @@ class StreamProber:
 
         Args:
             stream_ids: Specific stream IDs to probe.
+            start_send_alerts: Whether the info-level "probe started" notification
+                should dispatch an external alert (gated value — see
+                ``probe_all_streams``; GH #462).
 
         Returns:
             Dict envelope: {status, probed, total, success, failed} or
@@ -2972,7 +2989,7 @@ class StreamProber:
             self._probe_progress_current = probed_count
             self._probe_progress_status = "probing"
 
-            await self._create_probe_notification(len(stream_ids))
+            await self._create_probe_notification(len(stream_ids), send_alerts=start_send_alerts)
 
             # Bound concurrency with the same global semaphore probe-all uses.
             semaphore = asyncio.Semaphore(self.max_concurrent_probes)

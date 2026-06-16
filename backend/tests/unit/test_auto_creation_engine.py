@@ -6,6 +6,7 @@ pipeline, coordinating rules, streams, and executions.
 """
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
+import pytest
 
 from auto_creation_engine import (
     AutoCreationEngine,
@@ -2160,7 +2161,7 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
             ("FOX", 921),
         ])
 
-        with patch("auto_creation_executor.journal.log_entry"):
+        with patch("auto_creation_executor.journal.log_entries"):
             result = self._run(rule, streams, dry_run=False)
 
         assert result["streams_merged"] == 3, (
@@ -2170,3 +2171,24 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
             f"expected 2 distinct channels touched by merges, "
             f"got {result['channels_touched']}"
         )
+
+    def test_live_merge_journal_flushes_when_later_pass_raises(self):
+        """Buffered merge journal rows flush when a later pipeline pass raises."""
+        rule = self._make_rule(if_exists="merge")
+        streams = self._make_streams([
+            ("ESPN", 901), ("ESPN", 902), ("ESPN", 903),
+            ("CNN", 911), ("CNN", 912),
+            ("FOX", 921),
+        ])
+        self.engine._reorder_channel_streams = AsyncMock(
+            side_effect=RuntimeError("reorder failed")
+        )
+
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+            with pytest.raises(RuntimeError, match="reorder failed"):
+                self._run(rule, streams, dry_run=False)
+
+        mock_log.assert_called_once()
+        entries = mock_log.call_args.kwargs["entries"]
+        assert len(entries) == 3
+        assert {entry["batch_id"] for entry in entries} == {"1"}

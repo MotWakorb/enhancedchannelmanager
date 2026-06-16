@@ -595,6 +595,7 @@ async def resolve_active_channel_streams(
     channel_streams_cache: Optional[ChannelStreamsCache] = None,
     poll_count: int = 0,
     emit_metrics: bool = True,
+    m3u_accounts: Optional[list[dict]] = None,
 ) -> dict[str, ProviderResolution]:
     """Resolve each active channel's stream identity (id + name + provider).
 
@@ -656,6 +657,13 @@ async def resolve_active_channel_streams(
     endpoint path) the SLI line is suppressed so it doesn't drown the
     cyclic poll signal.
 
+    The ``m3u_accounts`` parameter (enhancedchannelmanager-1qmn0) lets
+    the polling hot path inject a cached accounts list (refreshed on a
+    300s TTL by ``BandwidthTracker._maybe_refresh_m3u_accounts``) so the
+    resolver no longer fetches the heavy ``/api/m3u/accounts/`` payload
+    on every poll. When None (the on-demand ``/api/stats/channels``
+    path), the list is fetched here as before.
+
     The ``channel_streams_cache`` and ``poll_count`` parameters are
     retained as no-op kwargs for back-compat with existing call sites;
     bd-gy5nd no longer issues per-channel HTTP calls so neither cache
@@ -671,17 +679,30 @@ async def resolve_active_channel_streams(
     # on Dispatcharr error we degrade to an empty list — every channel
     # falls back to bare-hostname ``provider_name`` so the operator
     # still sees a meaningful string.
-    m3u_accounts: list[dict] = []
-    try:
-        raw_accounts = await client.get_m3u_accounts()
-        if isinstance(raw_accounts, list):
-            m3u_accounts = raw_accounts
-    except Exception as e:
-        logger.debug(
-            "[STATS_V2] m3u_accounts_fetch_failed error=%s — degrading to "
-            "bare-hostname provider_name (bd-gy5nd)",
-            e,
-        )
+    # enhancedchannelmanager-1qmn0: when the caller supplies a cached
+    # accounts list (the polling hot path via
+    # ``BandwidthTracker._resolve_provider_ids``, which refreshes the
+    # snapshot on a 300s TTL) use it directly and skip the per-call
+    # fetch. When ``m3u_accounts`` is None — the on-demand
+    # ``/api/stats/channels`` endpoint path, which calls this free
+    # function outside the poll loop — fall back to fetching the list
+    # here so that code path keeps working. Degrade-to-empty-list on
+    # error is preserved either way.
+    resolved_accounts: list[dict] = []
+    if m3u_accounts is not None:
+        resolved_accounts = m3u_accounts
+    else:
+        try:
+            raw_accounts = await client.get_m3u_accounts()
+            if isinstance(raw_accounts, list):
+                resolved_accounts = raw_accounts
+        except Exception as e:
+            logger.debug(
+                "[STATS_V2] m3u_accounts_fetch_failed error=%s — degrading to "
+                "bare-hostname provider_name (bd-gy5nd)",
+                e,
+            )
+    m3u_accounts = resolved_accounts
     # Build {account_id: account_name} once for ``provider_name``
     # enrichment on the direct stream-id path.
     m3u_name_by_id: dict[int, str] = {}
@@ -1432,6 +1453,18 @@ class BandwidthTracker:
         self._ecm_channel_number_map: dict[int, str] = {}  # channel_number -> name mapping from ECM
         self._channel_map_refresh_interval = 300  # Refresh channel map every 5 minutes
         self._last_channel_map_refresh = 0.0
+        # M3U accounts snapshot cache (enhancedchannelmanager-1qmn0). The
+        # provider resolver only needs each account's id/name/server_url
+        # to build the {account_id: name} table and to URL-hostname-match
+        # providers — NOT the heavy ~734KB ``channel_groups[]`` payload.
+        # Refreshing the full accounts list every 10s poll was a likely
+        # driver of Dispatcharr's uWSGI worker memory creep, so the list
+        # is cached here and refreshed on the same 300s TTL as the
+        # channel map (time-based only — account ``updated_at`` is an
+        # unreliable refresh signal pending a Dispatcharr-side fix).
+        self._m3u_accounts_cache: list[dict] = []
+        self._m3u_accounts_refresh_interval = 300  # Refresh M3U accounts every 5 minutes
+        self._last_m3u_accounts_refresh = 0.0
         # Enhanced stats tracking (v0.11.0)
         # Maps (channel_id, ip_address) -> connection_id in UniqueClientConnection table
         self._active_connections: dict[tuple[str, str], int] = {}
@@ -1654,6 +1687,11 @@ class BandwidthTracker:
             try:
                 # Refresh channel name map periodically
                 await self._maybe_refresh_channel_map()
+                # Refresh the M3U accounts snapshot periodically
+                # (enhancedchannelmanager-1qmn0) so the provider resolver
+                # reads a cached list instead of re-fetching the heavy
+                # ``/api/m3u/accounts/`` payload every poll.
+                await self._maybe_refresh_m3u_accounts()
                 await self._collect_stats()
             except asyncio.CancelledError:
                 break
@@ -1705,6 +1743,39 @@ class BandwidthTracker:
             logger.debug("[BANDWIDTH] Refreshed channel maps: %s by UUID, %s by number", len(uuid_map), len(number_map))
         except Exception as e:
             logger.debug("[BANDWIDTH] Failed to refresh channel map: %s", e)
+
+    async def _maybe_refresh_m3u_accounts(self):
+        """Refresh the cached M3U accounts snapshot on a 300s TTL.
+
+        enhancedchannelmanager-1qmn0: the provider resolver formerly
+        fetched the full ``/api/m3u/accounts/`` payload (~734KB) on every
+        10s poll, even though it only consumes each account's
+        ``id``/``name``/``server_url``. Mirroring the
+        ``_maybe_refresh_channel_map`` throttle, the list is fetched at
+        most once per ``_m3u_accounts_refresh_interval`` and threaded into
+        ``resolve_active_channel_streams`` via ``_resolve_provider_ids``.
+
+        Best-effort: on a Dispatcharr error we debug-log and keep the
+        prior cache (which may be empty on the very first poll — the
+        resolver degrades gracefully to bare-hostname provider names).
+        Time-based only; account ``updated_at`` is not used as a refresh
+        signal (unreliable; Dispatcharr-side fix pending).
+        """
+        now = time.time()
+        if now - self._last_m3u_accounts_refresh < self._m3u_accounts_refresh_interval:
+            return
+
+        try:
+            raw_accounts = await self.client.get_m3u_accounts()
+            if isinstance(raw_accounts, list):
+                self._m3u_accounts_cache = raw_accounts
+                self._last_m3u_accounts_refresh = now
+                logger.debug(
+                    "[BANDWIDTH] Refreshed M3U accounts snapshot: %s accounts",
+                    len(raw_accounts),
+                )
+        except Exception as e:
+            logger.debug("[BANDWIDTH] Failed to refresh M3U accounts snapshot: %s", e)
 
     async def _collect_stats(self):
         """Fetch stats from Dispatcharr and update daily totals."""
@@ -2438,6 +2509,7 @@ class BandwidthTracker:
             channel_streams_cache=self._provider_cache,
             poll_count=self._poll_count,
             emit_metrics=True,
+            m3u_accounts=self._m3u_accounts_cache,
         )
 
     # ------------------------------------------------------------------

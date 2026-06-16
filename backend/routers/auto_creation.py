@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
+import httpx
+
 import journal
 from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -2370,6 +2372,51 @@ _DEBUG_BUNDLE_PAGE_SIZE = 100
 _DEBUG_BUNDLE_FETCH_CONCURRENCY = 8
 _DEBUG_BUNDLE_JOB_TTL_SECONDS = 1800  # 30 minutes
 
+# Resilience for the upstream fan-out (bd-59x51). A debug bundle is generated
+# precisely when something is already wrong — often when Dispatcharr itself is
+# slow or overloaded. So the build must NEVER hard-fail on a transient upstream
+# fault: retry each page/batch a few times with exponential backoff, and if it
+# still fails, drop that slice and record it in the manifest rather than aborting
+# the whole bundle. A partial-but-stamped bundle beats no diagnostics at all.
+_DEBUG_BUNDLE_FETCH_RETRIES = 3  # total attempts per page/batch
+_DEBUG_BUNDLE_RETRY_BASE_DELAY = 0.5  # seconds; doubles each retry (0.5s, 1s, ...)
+
+
+def _is_retryable_upstream_error(exc: BaseException) -> bool:
+    """True for transient upstream faults worth retrying: a 5xx response, or a
+    transport/timeout error. A 4xx is the caller's fault and is NOT retried."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+
+
+async def _with_retry(coro_factory, *, what: str):
+    """Await ``coro_factory()`` with bounded retry + exponential backoff on
+    transient upstream faults (5xx / transport / timeout).
+
+    ``coro_factory`` is a zero-arg callable returning a fresh awaitable per
+    attempt (a coroutine can only be awaited once). Non-retryable errors raise
+    immediately; the last error is re-raised after retries are exhausted.
+    """
+    last_exc: Optional[BaseException] = None
+    for attempt in range(_DEBUG_BUNDLE_FETCH_RETRIES):
+        try:
+            return await coro_factory()
+        except Exception as e:
+            if not _is_retryable_upstream_error(e):
+                raise
+            last_exc = e
+            if attempt < _DEBUG_BUNDLE_FETCH_RETRIES - 1:
+                delay = _DEBUG_BUNDLE_RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "[AUTO-CREATE] Debug bundle: %s failed (attempt %d/%d), "
+                    "retrying in %.1fs: %s",
+                    what, attempt + 1, _DEBUG_BUNDLE_FETCH_RETRIES, delay, e,
+                )
+                await asyncio.sleep(delay)
+    assert last_exc is not None  # loop ran >=1 time, so this is set on failure
+    raise last_exc
+
 
 class _DebugBundleJob:
     """In-memory state for one debug-bundle build (bd-cns7j)."""
@@ -2407,57 +2454,123 @@ def _add_tar_entry(tf: tarfile.TarFile, name: str, data: str):
     tf.addfile(info, io.BytesIO(encoded))
 
 
-async def _fetch_all_channels(client) -> list[dict]:
-    """Fetch the full channel catalog with parallel pagination (bd-cns7j)."""
-    first = await client.get_channels(page=1, page_size=_DEBUG_BUNDLE_PAGE_SIZE)
+async def _fetch_all_channels(client) -> tuple[list[dict], dict]:
+    """Fetch the full channel catalog with parallel pagination (bd-cns7j).
+
+    Returns ``(channels, report)``. ``report`` describes fetch completeness so
+    the manifest can flag a partial bundle (bd-59x51): a transient upstream 504
+    on a single page is retried, and if it still fails that page is skipped —
+    the whole build is never aborted just because Dispatcharr was slow on one
+    page (the build runs precisely when upstream is likely struggling).
+    """
+    report: dict = {"complete": True, "expected_pages": 1, "failed_pages": []}
+    # Page 1 is load-bearing (it yields the total count); retry it but let a
+    # hard failure here propagate — with no first page there is no catalog.
+    first = await _with_retry(
+        lambda: client.get_channels(page=1, page_size=_DEBUG_BUNDLE_PAGE_SIZE),
+        what="channel page 1",
+    )
     channels: list[dict] = list(first.get("results", []))
     total_count = first.get("count")
     if total_count is not None and isinstance(total_count, int) and total_count > 0:
         total_pages = (total_count + _DEBUG_BUNDLE_PAGE_SIZE - 1) // _DEBUG_BUNDLE_PAGE_SIZE
+        report["expected_pages"] = total_pages
         if total_pages > 1:
             sem = asyncio.Semaphore(_DEBUG_BUNDLE_FETCH_CONCURRENCY)
 
             async def fetch_page(p: int) -> list[dict]:
                 async with sem:
-                    res = await client.get_channels(page=p, page_size=_DEBUG_BUNDLE_PAGE_SIZE)
+                    res = await _with_retry(
+                        lambda: client.get_channels(page=p, page_size=_DEBUG_BUNDLE_PAGE_SIZE),
+                        what=f"channel page {p}",
+                    )
                     return res.get("results", []) or []
 
+            pages = list(range(2, total_pages + 1))
             tail = await asyncio.gather(
-                *(fetch_page(p) for p in range(2, total_pages + 1))
+                *(fetch_page(p) for p in pages),
+                return_exceptions=True,
             )
-            for page_results in tail:
+            for p, page_results in zip(pages, tail):
+                if isinstance(page_results, BaseException):
+                    report["failed_pages"].append(p)
+                    logger.warning(
+                        "[AUTO-CREATE] Debug bundle: channel page %d gave up after "
+                        "%d attempts; skipping (bundle will be partial): %s",
+                        p, _DEBUG_BUNDLE_FETCH_RETRIES, page_results,
+                    )
+                    continue
                 channels.extend(page_results)
-        return channels
+        if report["failed_pages"]:
+            report["complete"] = False
+            logger.warning(
+                "[AUTO-CREATE] Debug bundle: %d/%d channel pages failed; "
+                "collected %d channels (partial)",
+                len(report["failed_pages"]), total_pages, len(channels),
+            )
+        return channels, report
     # Fallback for backends that don't return ``count`` — sequential walk.
     page = 2
     cursor = first
     while cursor.get("next"):
-        cursor = await client.get_channels(page=page, page_size=_DEBUG_BUNDLE_PAGE_SIZE)
+        try:
+            cursor = await _with_retry(
+                lambda: client.get_channels(page=page, page_size=_DEBUG_BUNDLE_PAGE_SIZE),
+                what=f"channel page {page}",
+            )
+        except Exception as e:
+            report["complete"] = False
+            report["failed_pages"].append(page)
+            logger.warning(
+                "[AUTO-CREATE] Debug bundle: sequential channel page %d gave up "
+                "after %d attempts; stopping walk (bundle will be partial): %s",
+                page, _DEBUG_BUNDLE_FETCH_RETRIES, e,
+            )
+            break
         channels.extend(cursor.get("results", []) or [])
         page += 1
-    return channels
+    report["expected_pages"] = page - 1 + len(report["failed_pages"])
+    return channels, report
 
 
-async def _fetch_stream_details(client, stream_ids: list[int], obfuscate_url) -> dict:
-    """Fetch stream metadata in parallel batches (bd-cns7j)."""
+async def _fetch_stream_details(client, stream_ids: list[int], obfuscate_url) -> tuple[dict, dict]:
+    """Fetch stream metadata in parallel batches (bd-cns7j).
+
+    Returns ``(lookup, report)``. Each batch is retried on a transient upstream
+    fault (bd-59x51); a batch that still fails is skipped (its streams simply
+    fall back to empty detail) and counted in ``report`` so the manifest can
+    flag the bundle as partial.
+    """
     lookup: dict = {}
+    report: dict = {"complete": True, "expected_batches": 0, "failed_batches": 0}
     if not stream_ids:
-        return lookup
+        return lookup, report
     batches = [
         stream_ids[i:i + _DEBUG_BUNDLE_PAGE_SIZE]
         for i in range(0, len(stream_ids), _DEBUG_BUNDLE_PAGE_SIZE)
     ]
+    report["expected_batches"] = len(batches)
     sem = asyncio.Semaphore(_DEBUG_BUNDLE_FETCH_CONCURRENCY)
 
     async def fetch_batch(batch: list[int]) -> list:
         async with sem:
             try:
-                return await client.get_streams_by_ids(batch)
+                return await _with_retry(
+                    lambda: client.get_streams_by_ids(batch),
+                    what="stream batch",
+                )
             except Exception as e:
-                logger.warning("[AUTO-CREATE] Debug bundle: failed to fetch stream batch: %s", e)
+                report["failed_batches"] += 1
+                logger.warning(
+                    "[AUTO-CREATE] Debug bundle: stream batch gave up after %d "
+                    "attempts; skipping (bundle will be partial): %s",
+                    _DEBUG_BUNDLE_FETCH_RETRIES, e,
+                )
                 return []
 
     results = await asyncio.gather(*(fetch_batch(b) for b in batches))
+    if report["failed_batches"]:
+        report["complete"] = False
     for streams in results:
         for s in streams:
             m3u_acct = s.get("m3u_account")
@@ -2470,7 +2583,7 @@ async def _fetch_stream_details(client, stream_ids: list[int], obfuscate_url) ->
                 "m3u_account_id": m3u_id,
                 "url": obfuscate_url(s.get("url", "")) if s.get("url") else "",
             }
-    return lookup
+    return lookup, report
 
 
 async def _build_debug_bundle() -> tuple[str, bytes]:
@@ -2490,7 +2603,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     from routers.backup import APP_VERSION
 
     # -- 1. Fetch channels and groups from Dispatcharr ----------------
-    all_channels = await _fetch_all_channels(client)
+    all_channels, channels_report = await _fetch_all_channels(client)
     groups = await client.get_channel_groups() or []
     group_lookup = {g.get("id"): g.get("name", "") for g in groups}
 
@@ -2500,7 +2613,9 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         all_stream_ids.update(ch.get("streams", []))
 
     stream_ids_list = list(all_stream_ids)
-    stream_detail_lookup = await _fetch_stream_details(client, stream_ids_list, obfuscate_url)
+    stream_detail_lookup, streams_report = await _fetch_stream_details(
+        client, stream_ids_list, obfuscate_url
+    )
 
     # Load stream stats from DB
     from models import StreamStats
@@ -2766,6 +2881,13 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     black_screen_count = sum(1 for s in stream_stats_lookup.values() if s.is_black_screen)
     low_fps_count = sum(1 for s in stream_stats_lookup.values() if s.is_low_fps)
 
+    # data_completeness (bd-59x51): whether every upstream page/batch came back.
+    # When False, the channel/stream data above is PARTIAL — a reader must not
+    # treat counts as authoritative. This is surfaced so a slow Dispatcharr that
+    # timed out some pages yields a usable, honestly-labelled bundle instead of
+    # a hard failure right when diagnostics are most needed.
+    data_complete = bool(channels_report.get("complete")) and bool(streams_report.get("complete"))
+
     manifest = {
         "ecm_version": APP_VERSION,
         "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -2775,6 +2897,11 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         "stream_count": total_streams,
         "normalization_group_count": norm_group_count,
         "normalization_rule_count": norm_rule_count,
+        "data_completeness": {
+            "complete": data_complete,
+            "channels": channels_report,
+            "streams": streams_report,
+        },
         "stream_stats": {
             "probed_success": probed_success,
             "probed_failed": probed_failed,
@@ -2784,6 +2911,11 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         },
     }
     manifest_str = json.dumps(manifest, indent=2)
+    if not data_complete:
+        logger.warning(
+            "[AUTO-CREATE] Debug bundle is PARTIAL — channels: %s, streams: %s",
+            channels_report, streams_report,
+        )
 
     # -- 10. Pack into tar.gz ----------------------------------------
     buf = io.BytesIO()

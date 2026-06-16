@@ -390,14 +390,45 @@ ENDPOINTS: dict[str, Endpoint] = {
         # Backend body is ``request: Request`` (raw) — forwarded to Dispatcharr.
         # These are the keys the tool sends; the call-time guard validates them.
         # source_type is required by Dispatcharr (bd-1wq7z.9: omitting it → 400).
-        request_fields=frozenset({"name", "url", "source_type"}),
+        # Schedules Direct sources send username/password instead of url.
+        request_fields=frozenset({
+            "name", "url", "source_type", "username", "password",
+            "is_active", "refresh_interval", "priority", "custom_properties",
+        }),
     ),
     "epg_update_source": Endpoint(
         name="epg_update_source",
         method="PATCH",
         path="/api/epg/sources/{source_id}",
         # Backend body is ``request: Request`` (raw) — see epg_create_source.
-        request_fields=frozenset({"name", "url"}),
+        request_fields=frozenset({
+            "name", "url", "username", "password",
+            "is_active", "refresh_interval", "priority", "custom_properties",
+        }),
+    ),
+    # -- Schedules Direct (SD) account lineup management -------------------
+    "epg_sd_lineups_list": Endpoint(
+        name="epg_sd_lineups_list",
+        method="GET",
+        path="/api/epg/sources/{source_id}/sd-lineups",
+    ),
+    "epg_sd_lineup_add": Endpoint(
+        name="epg_sd_lineup_add",
+        method="POST",
+        path="/api/epg/sources/{source_id}/sd-lineups",
+        request_fields=frozenset({"lineup"}),  # SDLineupRequest
+    ),
+    "epg_sd_lineup_remove": Endpoint(
+        name="epg_sd_lineup_remove",
+        method="DELETE",
+        path="/api/epg/sources/{source_id}/sd-lineups",
+        request_fields=frozenset({"lineup"}),  # SDLineupRequest
+    ),
+    "epg_sd_lineups_search": Endpoint(
+        name="epg_sd_lineups_search",
+        method="POST",
+        path="/api/epg/sources/{source_id}/sd-lineups/search",
+        request_fields=frozenset({"country", "postalcode"}),  # SDLineupSearchRequest
     ),
     "epg_delete_source": Endpoint(
         name="epg_delete_source",

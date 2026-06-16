@@ -310,12 +310,35 @@ class ActionExecutor:
 
         self._logo_cache = {}  # logo_url -> logo_id
 
+        # Buffer per-merge journal entries so long runs do not commit one row
+        # at a time. This keeps the audit trail but reduces WAL churn.
+        self._journal_buffer: list[dict] = []
+        self._journal_flush_threshold = 100
+
         # Channel number tracking
         self._used_channel_numbers = set()
         for c in self.existing_channels:
             if c.get("channel_number"):
                 self._used_channel_numbers.add(c["channel_number"])
         self._channel_assigned_numbers = {}  # channel_id -> number (set_channel_number dedup)
+
+    def _flush_journal_buffer(self) -> None:
+        """Flush buffered journal entries in one transaction."""
+        if not self._journal_buffer:
+            return
+
+        pending = list(self._journal_buffer)
+        if journal.log_entries(entries=pending):
+            logger.debug(
+                "[AUTO-CREATE-EXEC] Flushed %s buffered journal entries",
+                len(pending),
+            )
+            self._journal_buffer.clear()
+        else:
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Failed to flush %s buffered journal entries",
+                len(pending),
+            )
 
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
@@ -1060,10 +1083,10 @@ class ActionExecutor:
         Tags the entry with ``batch_id=str(execution_id)`` so an operator can
         list every ``(channel_id, stream_id)`` pair a run touched and recover
         from a bad merge. ``before_value``/``after_value`` carry STREAM IDs
-        ONLY — never URLs/objects, which embed provider credentials. A failed
-        journal write must never break the merge, so failures are logged and
-        swallowed (``journal.log_entry`` already does this internally; this is
-        defense-in-depth).
+        ONLY — never URLs/objects, which embed provider credentials. Entries are
+        buffered and flushed via ``journal.log_entries`` to reduce commit churn
+        during large auto-creation runs; ``JournalEntry.timestamp`` is stamped
+        when the buffer flushes, not when each merge is queued.
 
         enhancedchannelmanager-jnzst: when a scored-fuzzy ``provenance`` dict is
         supplied, it is folded into ``after_value`` alongside the stream IDs
@@ -1080,23 +1103,19 @@ class ActionExecutor:
             # Fold provenance into the after_value JSON. Keep stream_ids the
             # leading key so existing batch-recovery readers are unaffected.
             after_value["match"] = provenance
-        try:
-            journal.log_entry(
-                category="auto_creation",
-                action_type="merge_stream",
-                entity_id=channel_id,
-                entity_name=channel_name,
-                description="Merged stream %s into channel '%s'" % (stream_id, channel_name),
-                before_value={"stream_ids": list(before_ids)},
-                after_value=after_value,
-                user_initiated=False,
-                batch_id=str(self._execution_id),
-            )
-        except Exception as e:
-            logger.warning(
-                "[AUTO-CREATE-EXEC] Failed to journal merge of stream %s into channel '%s': %s",
-                stream_id, channel_name, e,
-            )
+        self._journal_buffer.append({
+            "category": "auto_creation",
+            "action_type": "merge_stream",
+            "entity_id": channel_id,
+            "entity_name": channel_name,
+            "description": "Merged stream %s into channel '%s'" % (stream_id, channel_name),
+            "before_value": {"stream_ids": list(before_ids)},
+            "after_value": after_value,
+            "user_initiated": False,
+            "batch_id": str(self._execution_id),
+        })
+        if len(self._journal_buffer) >= self._journal_flush_threshold:
+            self._flush_journal_buffer()
 
     async def _update_channel(self, channel: dict, stream_ctx: StreamContext,
                                exec_ctx: ExecutionContext, params: dict) -> ActionResult:
@@ -1132,6 +1151,8 @@ class ActionExecutor:
 
             if updates:
                 await self.client.update_channel(channel_id, updates)
+                # Update simulated state so subsequent actions see the changes
+                channel.update(updates)
 
             return ActionResult(
                 success=True,
@@ -1636,6 +1657,7 @@ class ActionExecutor:
                 )
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"logo_id": logo_id})
+            channel["logo_id"] = logo_id
 
             return ActionResult(
                 success=True,
@@ -1699,6 +1721,7 @@ class ActionExecutor:
             previous_state = {"tvg_id": channel.get("tvg_id")}
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"tvg_id": tvg_id})
+            channel["tvg_id"] = tvg_id
 
             return ActionResult(
                 success=True,
@@ -1816,6 +1839,7 @@ class ActionExecutor:
                 payload["tvg_id"] = epg_tvg_id
 
             await self.client.update_channel(exec_ctx.current_channel_id, payload)
+            channel.update(payload)
 
             # Track for post-execution verification if channel was just created
             newly_created_ids = {c["id"] for c in self._created_channels.values()}
@@ -2090,6 +2114,11 @@ class ActionExecutor:
             )
 
         if exec_ctx.dry_run:
+            # Update simulated state so subsequent actions in this dry run
+            # preview against the new profile (mirrors the real-run path).
+            simulated = self._channel_by_id.get(exec_ctx.current_channel_id)
+            if simulated is not None:
+                simulated["stream_profile_id"] = profile_id
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -2104,6 +2133,7 @@ class ActionExecutor:
             previous_state = {"stream_profile_id": channel.get("stream_profile_id")}
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"stream_profile_id": profile_id})
+            channel["stream_profile_id"] = profile_id
 
             return ActionResult(
                 success=True,
@@ -2204,6 +2234,11 @@ class ActionExecutor:
 
         if exec_ctx.dry_run:
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
+            # Update simulated state so subsequent actions in this dry run
+            # preview against the new number (mirrors the real-run path).
+            simulated = self._channel_by_id.get(exec_ctx.current_channel_id)
+            if simulated is not None:
+                simulated["channel_number"] = channel_number
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -2218,6 +2253,7 @@ class ActionExecutor:
             previous_state = {"channel_number": channel.get("channel_number")}
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"channel_number": channel_number})
+            channel["channel_number"] = channel_number
             self._used_channel_numbers.add(channel_number)
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
 
@@ -2612,6 +2648,7 @@ class ActionExecutor:
             channel_name = channel.get("name", f"ID:{channel_id}")
 
             await self.client.update_channel(channel_id, {"channel_group_id": None})
+            channel["channel_group_id"] = None
             logger.info("[AUTO-CREATE-EXEC] Moved orphaned channel %s (%s) to Uncategorized", channel_id, channel_name)
 
             return ActionResult(

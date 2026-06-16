@@ -356,6 +356,11 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 | `PATCH /api/epg/sources/{id}` | Update EPG source |
 | `DELETE /api/epg/sources/{id}` | Delete EPG source |
 | `POST /api/epg/sources/{id}/refresh` | Refresh EPG source |
+| `GET /api/epg/sources/{id}/sd-lineups` | List a Schedules Direct source's active lineups |
+| `POST /api/epg/sources/{id}/sd-lineups` | Add a Schedules Direct lineup (`{"lineup": "..."}`) |
+| `DELETE /api/epg/sources/{id}/sd-lineups` | Remove a Schedules Direct lineup (`{"lineup": "..."}`) |
+| `POST /api/epg/sources/{id}/sd-lineups/search` | Search SD lineups by location (`{"country", "postalcode"}`) |
+| `GET /api/epg/programs/{id}/poster` | Proxy a Schedules Direct program poster image |
 | `POST /api/epg/import` | Trigger EPG import |
 | `GET /api/epg/data` | Search EPG data (paginated) |
 | `GET /api/epg/data/{id}` | Get individual EPG data entry |

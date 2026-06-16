@@ -21,6 +21,9 @@ import type {
   StreamStats,
   StreamProfile,
   DummyEPGCustomProperties,
+  SDCustomProperties,
+  SDLineup,
+  SDLineupsResponse,
   JournalQueryParams,
   JournalResponse,
   JournalStats,
@@ -1552,11 +1555,14 @@ export interface CreateEPGSourceRequest {
   name: string;
   source_type: 'xmltv' | 'schedules_direct' | 'dummy';
   url?: string | null;
-  api_key?: string | null;
+  // Schedules Direct credentials (source_type === 'schedules_direct').
+  // password is write-only: send it to create/change, never read it back.
+  username?: string | null;
+  password?: string | null;
   is_active?: boolean;
   refresh_interval?: number;
   priority?: number;
-  custom_properties?: DummyEPGCustomProperties | Record<string, unknown> | null;
+  custom_properties?: DummyEPGCustomProperties | SDCustomProperties | Record<string, unknown> | null;
 }
 
 export async function createEPGSource(data: CreateEPGSourceRequest): Promise<EPGSource> {
@@ -1566,7 +1572,11 @@ export async function createEPGSource(data: CreateEPGSourceRequest): Promise<EPG
   });
 }
 
-export async function updateEPGSource(id: number, data: Partial<EPGSource>): Promise<EPGSource> {
+// password is write-only (not on EPGSource read type) but accepted on update for SD.
+export async function updateEPGSource(
+  id: number,
+  data: Partial<EPGSource> & { password?: string | null },
+): Promise<EPGSource> {
   return fetchJson(`${API_BASE}/epg/sources/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
@@ -1586,6 +1596,39 @@ export async function refreshEPGSource(id: number): Promise<void> {
 export async function triggerEPGImport(): Promise<void> {
   return fetchJson(`${API_BASE}/epg/import`, {
     method: 'POST',
+  });
+}
+
+// --- Schedules Direct (SD) lineup management ---
+// These proxy Dispatcharr, which authenticates to SD live on each call and is
+// rate-limited by SD (lineup adds ~6/24h). Do not poll/retry these in a loop.
+
+export async function getSDLineups(sourceId: number): Promise<SDLineupsResponse> {
+  return fetchJson(`${API_BASE}/epg/sources/${sourceId}/sd-lineups`);
+}
+
+export async function searchSDLineups(
+  sourceId: number,
+  country: string,
+  postalcode: string,
+): Promise<{ lineups: SDLineup[] }> {
+  return fetchJson(`${API_BASE}/epg/sources/${sourceId}/sd-lineups/search`, {
+    method: 'POST',
+    body: JSON.stringify({ country, postalcode }),
+  });
+}
+
+export async function addSDLineup(sourceId: number, lineup: string): Promise<void> {
+  await fetchJson(`${API_BASE}/epg/sources/${sourceId}/sd-lineups`, {
+    method: 'POST',
+    body: JSON.stringify({ lineup }),
+  });
+}
+
+export async function deleteSDLineup(sourceId: number, lineup: string): Promise<void> {
+  await fetchJson(`${API_BASE}/epg/sources/${sourceId}/sd-lineups`, {
+    method: 'DELETE',
+    body: JSON.stringify({ lineup }),
   });
 }
 

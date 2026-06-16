@@ -700,8 +700,16 @@ def set_league_strip_require_delimiter(db: Session) -> dict:
     while "NFL RedZone" is preserved.
 
     Fresh installs get this via create_demo_rules (the league DEMO_RULE_CONFIGS
-    entry carries ``require_delimiter: True``). This boot migration flips it on
-    for EXISTING operators upgrading to the fixed release.
+    entry carries ``require_delimiter: True``). EXISTING operators upgrading get
+    the flip via ``apply_league_strip_require_delimiter_once`` at startup.
+
+    NOTE (GH #484): this raw flip used to run on EVERY boot, which re-flipped
+    False->True on each restart and clobbered operators who deliberately disabled
+    the option. It is now invoked only through
+    ``apply_league_strip_require_delimiter_once``, which gates it behind a
+    persistent settings marker so it runs at most once per install. This function
+    is retained as the unit-tested core of the heal logic and as a manual-repair
+    helper.
 
     Robust identification (do NOT rely on rule-group name alone — operators may
     have renamed it): a rule qualifies iff it is a ``strip_prefix`` tag_group
@@ -764,6 +772,33 @@ def set_league_strip_require_delimiter(db: Session) -> dict:
         )
 
     return {"updated": updated}
+
+
+def apply_league_strip_require_delimiter_once(db: Session, settings) -> dict:
+    """Run the league-strip delimiter heal at most ONCE per install (GH #484).
+
+    Gated by the persistent ``settings.league_delimiter_heal_applied`` marker so
+    the heal applies once for operators upgrading past bd-0emgo.2 but never
+    re-flips a value the operator later changed. The previous every-boot
+    invocation re-enabled the option on every restart (GH #484).
+
+    Mutates ``settings.league_delimiter_heal_applied`` to True on first run; the
+    caller is responsible for persisting it via ``save_settings``. A persistent
+    marker (rather than an Alembic data migration) is required because ECM's
+    smart-bootstrap stamps forward past data-only migrations when the live schema
+    already matches the model (bd-5w6jz), so a data migration would be skipped.
+
+    Returns:
+        ``{"updated": n, "applied": bool}`` — ``applied`` is False when the
+        marker was already set (heal skipped), True when the heal ran this call
+        (``updated`` counts rows flipped, which may be 0 if already correct).
+    """
+    if getattr(settings, "league_delimiter_heal_applied", False):
+        return {"updated": 0, "applied": False}
+
+    result = set_league_strip_require_delimiter(db)
+    settings.league_delimiter_heal_applied = True
+    return {"updated": result.get("updated", 0), "applied": True}
 
 
 # Acronyms that title-casing must preserve. "US" and "EU" contain a vowel and
