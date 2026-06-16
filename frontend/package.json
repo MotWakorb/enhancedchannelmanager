@@ -2,7 +2,7 @@
   "name": "enhanced-channel-manager",
   "private": true,
 
-  "version": "0.18.0-0007",
+  "version": "0.18.0-0008",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -43,7 +43,7 @@
     "msw": "2.13.4",
     "typescript": "6.0.3",
     "typescript-eslint": "8.59.0",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "vitest": "4.1.4"
   },
   "overrides": {
