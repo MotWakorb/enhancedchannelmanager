@@ -136,6 +136,13 @@ class M3UChangeDetector:
         for group in groups_data:
             group_copy = dict(group)
             group_name = group.get("name")
+            # enhancedchannelmanager-05h8w: persist the authoritative
+            # ``is_stale`` flag (from /api/m3u/accounts/ channel_groups[])
+            # into the snapshot's groups_data JSON blob. Defaulted to
+            # False so legacy current_groups dicts that predate the field
+            # still serialize cleanly. Old persisted snapshots that lack
+            # the key are handled at read time (callers default to False).
+            group_copy["is_stale"] = group.get("is_stale", False)
             if stream_names_by_group and group_name in stream_names_by_group:
                 group_copy["stream_names"] = stream_names_by_group[group_name]
                 groups_with_names += 1
