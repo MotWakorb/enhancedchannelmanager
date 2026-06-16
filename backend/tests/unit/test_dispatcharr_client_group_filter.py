@@ -264,20 +264,47 @@ async def test_group_counts_issues_zero_stream_probes():
 @pytest.mark.asyncio
 async def test_group_counts_none_sums_across_accounts_sorted():
     """m3u_account_id None → sum stream_count per group name across all
-    accounts, sorted case-insensitively, zero-count groups retained."""
+    accounts, sorted case-insensitively, zero-count groups dropped.
+
+    The count==0 drop is UNCONDITIONAL (enhancedchannelmanager-rmyn7): it
+    applies to the all-accounts case too, faithfully restoring the
+    pre-05h8w "only groups that have streams" universe. Radio sums to 0
+    across all accounts, so it must be absent."""
     client = _make_client()
     try:
         with patch.object(client, "get_channel_groups", AsyncMock(return_value=_GROUP_NAMES)), \
              patch.object(client, "get_m3u_accounts", AsyncMock(return_value=_MIXED_ACCOUNTS)):
             result = await client.get_stream_groups_with_counts()
 
-        # Sports = 50 + 12; Movies = 7; News = 3; Radio = 0 (retained, no filter).
+        # Sports = 50 + 12; Movies = 7; News = 3; Radio = 0 (dropped).
         assert result == [
             {"name": "Movies", "count": 7},
             {"name": "News", "count": 3},
-            {"name": "Radio", "count": 0},
             {"name": "Sports", "count": 62},
         ]
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_group_counts_none_drops_zero_count_groups():
+    """Regression (enhancedchannelmanager-rmyn7): the all-accounts
+    (m3u_account_id None) result must NOT contain a group whose summed
+    stream_count is 0.
+
+    05h8w only dropped count==0 groups in the provider-filtered branch, so
+    the unfiltered first load of the Channel Manager Streams pane began
+    showing empty/disabled groups (Radio here, disabled & zero). This test
+    fails on the 05h8w code (Radio present) and passes on the fix."""
+    client = _make_client()
+    try:
+        with patch.object(client, "get_channel_groups", AsyncMock(return_value=_GROUP_NAMES)), \
+             patch.object(client, "get_m3u_accounts", AsyncMock(return_value=_MIXED_ACCOUNTS)):
+            result = await client.get_stream_groups_with_counts()
+
+        names = [r["name"] for r in result]
+        assert "Radio" not in names
+        assert all(r["count"] > 0 for r in result)
     finally:
         await client._client.aclose()
 
@@ -304,7 +331,9 @@ async def test_group_counts_account_filter_drops_zero_count():
 @pytest.mark.asyncio
 async def test_group_counts_missing_stream_count_treated_as_zero():
     """A channel_groups[] entry lacking stream_count is treated as 0 —
-    never falls back to probing."""
+    never falls back to probing. A group that only sums to 0 (because its
+    sole entry lacked stream_count) is then dropped by the unconditional
+    count==0 filter (enhancedchannelmanager-rmyn7)."""
     client = _make_client()
     try:
         accounts = [
@@ -312,7 +341,7 @@ async def test_group_counts_missing_stream_count_treated_as_zero():
                 "id": 1,
                 "name": "A",
                 "channel_groups": [
-                    {"channel_group": 10, "enabled": True},  # no stream_count
+                    {"channel_group": 10, "enabled": True},  # no stream_count → 0
                     {"channel_group": 30, "enabled": True, "stream_count": 7},
                 ],
             }
@@ -325,10 +354,11 @@ async def test_group_counts_missing_stream_count_treated_as_zero():
              patch.object(client, "get_streams", get_streams_mock):
             result = await client.get_stream_groups_with_counts()
 
+        # Missing stream_count is treated as 0 (no probe), and the resulting
+        # zero-count Sports group is dropped. Movies (count=7) remains.
         get_streams_mock.assert_not_called()
         assert result == [
             {"name": "Movies", "count": 7},
-            {"name": "Sports", "count": 0},
         ]
     finally:
         await client._client.aclose()
