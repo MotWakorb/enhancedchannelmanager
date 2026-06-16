@@ -194,7 +194,7 @@ class TestChannelsTouchedInvariant:
             ("FOX", 921),
         ])
 
-        with patch("auto_creation_executor.journal.log_entry"):
+        with patch("auto_creation_executor.journal.log_entries"):
             result = self._run(rule, streams, dry_run=False)
 
         merged = result["streams_merged"]
@@ -261,7 +261,7 @@ class TestExecutionIdPresentBothModes:
         self.engine._update_rule_stats = AsyncMock()
 
         with patch("auto_creation_engine.get_session") as mock_get_session, \
-                patch("auto_creation_executor.journal.log_entry"):
+                patch("auto_creation_executor.journal.log_entries"):
             mock_get_session.return_value = MagicMock()
             return asyncio.get_event_loop().run_until_complete(
                 self.engine.run_pipeline(dry_run=dry_run)

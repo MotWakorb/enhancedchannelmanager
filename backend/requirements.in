@@ -1,20 +1,23 @@
-# ASGI triplet — backend request path (bead enhancedchannelmanager-j9xrz + -6rrl5.1 + -6rrl5.2).
-# Bundled because starlette 1.0 is the stable 1.x line and fastapi 0.136.1 already permits it
-# (`starlette>=0.46.0`, no upper bound). Keep this pin set aligned; a fastapi/starlette break
-# must bump both at once per ADR-001 pin-chain guidance.
+# ASGI triplet — backend request path (bead enhancedchannelmanager-j9xrz + -6rrl5.1 + -6rrl5.2
+# + enhancedchannelmanager-3hgrf).
+# starlette floored at 1.3.1 to clear CVE-2026-48818/48817/54283/54282 (4 CVEs, v0.18.0
+# release-scan blocker). fastapi 0.136.1 declares `starlette>=0.46.0` with no upper bound, so it
+# permits the 1.x line; the compiled lock + full backend suite confirm compatibility. Keep this
+# pin set aligned; a fastapi/starlette break must bump both at once per ADR-001 pin-chain guidance.
 fastapi==0.136.1
-starlette==1.0.0
+starlette>=1.3.1
 uvicorn[standard]==0.46.0
 httpx>=0.28.0
 pydantic>=2.10.0
 email-validator>=2.1.0
-python-multipart>=0.0.18
+python-multipart>=0.0.31
 
 # Authentication
 bcrypt>=4.0.0
 slowapi>=0.1.9
 python-jose[cryptography]>=3.3.0
-cryptography>=42.0.0
+# Floored at 48.0.1 to clear GHSA-537c-gmf6-5ccf (v0.18.0 release-scan blocker).
+cryptography>=48.0.1
 
 # TLS/ACME (Let's Encrypt)
 josepy>=1.14.0
@@ -26,8 +29,9 @@ alembic>=1.13.0
 aiofiles>=23.0.0
 croniter>=2.0.0
 # 3.14.0 fixes CVE-2026-34993 + CVE-2026-47265 (flagged by pip-audit at the
-# v0.17.4 release cut). Floor raised so the lock can't regress below the fix.
-aiohttp>=3.14.0
+# v0.17.4 release cut). 3.14.1 clears a further 8 CVEs (CVE-2026-54273..54280,
+# v0.18.0 release-scan blocker). Floor raised so the lock can't regress below the fix.
+aiohttp>=3.14.1
 
 # ReDoS-guarded regex wrapper (backend/safe_regex.py, bd-eio04.5)
 regex>=2024.5.15

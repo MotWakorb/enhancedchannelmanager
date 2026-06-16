@@ -14,6 +14,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from alert_methods import send_alert
@@ -196,6 +197,129 @@ async def delete_epg_source(source_id: int):
             logger.warning("[EPG] Delete EPG source %s rejected by Dispatcharr: %s", source_id, e)
             raise mapped
         logger.exception("[EPG] Failed to delete EPG source %s: %s", source_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ---------------------------------------------------------------------------
+# Schedules Direct (SD) — account lineup management + program posters
+# ---------------------------------------------------------------------------
+# These proxy Dispatcharr's SD endpoints. Dispatcharr authenticates to SD live
+# on each call and is rate-limited by SD (lineup adds 6/24h). ECM is a thin
+# proxy and must NOT add its own retry/polling — that would amplify SD calls.
+
+
+class SDLineupRequest(BaseModel):
+    """Body for adding/removing an SD lineup."""
+    lineup: str
+
+
+class SDLineupSearchRequest(BaseModel):
+    """Body for searching SD headends/lineups by location."""
+    country: str
+    postalcode: str
+
+
+@router.get("/sources/{source_id}/sd-lineups")
+async def get_sd_lineups(source_id: int):
+    """List the SD account's active lineups for a Schedules Direct source."""
+    logger.debug("[EPG] GET /api/epg/sources/%s/sd-lineups", source_id)
+    client = get_client()
+    try:
+        return await client.get_sd_lineups(source_id)
+    except Exception as e:
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG] SD lineups list for %s rejected by Dispatcharr: %s", source_id, e)
+            raise mapped
+        logger.exception("[EPG] Failed to list SD lineups for %s: %s", source_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/sources/{source_id}/sd-lineups")
+async def add_sd_lineup(source_id: int, request: SDLineupRequest):
+    """Add an SD lineup to the account."""
+    logger.debug("[EPG] POST /api/epg/sources/%s/sd-lineups lineup=%s", source_id, request.lineup)
+    client = get_client()
+    try:
+        result = await client.add_sd_lineup(source_id, request.lineup)
+        journal.log_entry(
+            category="epg",
+            action_type="update",
+            entity_id=source_id,
+            entity_name=request.lineup,
+            description=f"Added Schedules Direct lineup '{request.lineup}'",
+            after_value={"lineup": request.lineup},
+        )
+        logger.info("[EPG] Added SD lineup '%s' to source %s", request.lineup, source_id)
+        return result
+    except Exception as e:
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG] SD lineup add for %s rejected by Dispatcharr: %s", source_id, e)
+            raise mapped
+        logger.exception("[EPG] Failed to add SD lineup for %s: %s", source_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.delete("/sources/{source_id}/sd-lineups")
+async def delete_sd_lineup(source_id: int, request: SDLineupRequest):
+    """Remove an SD lineup from the account."""
+    logger.debug("[EPG] DELETE /api/epg/sources/%s/sd-lineups lineup=%s", source_id, request.lineup)
+    client = get_client()
+    try:
+        result = await client.delete_sd_lineup(source_id, request.lineup)
+        journal.log_entry(
+            category="epg",
+            action_type="update",
+            entity_id=source_id,
+            entity_name=request.lineup,
+            description=f"Removed Schedules Direct lineup '{request.lineup}'",
+            before_value={"lineup": request.lineup},
+        )
+        logger.info("[EPG] Removed SD lineup '%s' from source %s", request.lineup, source_id)
+        return result
+    except Exception as e:
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG] SD lineup remove for %s rejected by Dispatcharr: %s", source_id, e)
+            raise mapped
+        logger.exception("[EPG] Failed to remove SD lineup for %s: %s", source_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/sources/{source_id}/sd-lineups/search")
+async def search_sd_lineups(source_id: int, request: SDLineupSearchRequest):
+    """Search SD headends/lineups by country + postal code."""
+    logger.debug(
+        "[EPG] POST /api/epg/sources/%s/sd-lineups/search country=%s", source_id, request.country
+    )
+    client = get_client()
+    try:
+        return await client.search_sd_lineups(source_id, request.country, request.postalcode)
+    except Exception as e:
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG] SD lineup search for %s rejected by Dispatcharr: %s", source_id, e)
+            raise mapped
+        logger.exception("[EPG] Failed to search SD lineups for %s: %s", source_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/programs/{program_id}/poster")
+async def get_program_poster(program_id: int):
+    """Proxy an SD program poster image (bytes + Content-Type) from Dispatcharr."""
+    logger.debug("[EPG] GET /api/epg/programs/%s/poster", program_id)
+    client = get_client()
+    try:
+        resp = await client.get_program_poster(program_id)
+        media_type = resp.headers.get("content-type", "image/jpeg")
+        return Response(content=resp.content, media_type=media_type)
+    except Exception as e:
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG] Program poster %s rejected by Dispatcharr: %s", program_id, e)
+            raise mapped
+        logger.exception("[EPG] Failed to fetch program poster %s: %s", program_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

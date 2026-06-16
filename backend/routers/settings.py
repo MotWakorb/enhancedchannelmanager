@@ -709,6 +709,11 @@ async def update_settings(request: SettingsRequest):
         jellyfin_api_key=jellyfin_api_key,
         # bd-mlcla: trusted media/proxy networks (preserve-on-omit above).
         trusted_media_networks=trusted_media_networks,
+        # Internal bookkeeping marker (GH #484): never sent by the UI, so it MUST
+        # be preserved from current settings — rebuilding the model here would
+        # otherwise reset it to False and re-arm the one-time league-strip heal,
+        # re-clobbering the user's require_delimiter choice on the next boot.
+        league_delimiter_heal_applied=current_settings.league_delimiter_heal_applied,
     )
     save_settings(new_settings)
     clear_settings_cache()

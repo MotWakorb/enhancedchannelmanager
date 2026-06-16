@@ -1329,6 +1329,169 @@ class TestActionExecutorPropertyActions:
         self.client.update_channel.assert_called_with(1, {"channel_number": 999})
 
 
+class TestSimulatedChannelStateAfterActions:
+    """Regression tests for PR #483 — action handlers must update the in-memory
+    simulated channel (``_channel_by_id``) after a successful API update, so a
+    later action in the same rule operates on fresh state instead of stale
+    values. The headline bug: assign_tvg_id wrote the API but not the simulated
+    channel, so a following assign_epg matched on the old (None) tvg_id and fell
+    back to incorrect fuzzy matching.
+    """
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        self.client.create_logo = AsyncMock(return_value={"id": 42})
+        self.client.find_logo_by_url = AsyncMock(return_value=None)
+
+        self.channels = [
+            {
+                "id": 1,
+                "name": "ESPN",
+                "logo_url": None,
+                "tvg_id": None,
+                "stream_profile_id": None,
+                "channel_number": None,
+                "channel_group_id": 7,
+            },
+        ]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+        )
+
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="ESPN HD",
+            m3u_account_id=1,
+            logo_url="http://example.com/espn.png",
+            tvg_id="ESPN.US",
+        )
+
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def test_assign_logo_updates_simulated_state(self):
+        action = {"type": "assign_logo", "value": "from_stream"}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["logo_id"] == 42
+
+    def test_assign_tvg_id_updates_simulated_state(self):
+        action = {"type": "assign_tvg_id", "value": "from_stream"}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["tvg_id"] == "ESPN.US"
+
+    def test_assign_epg_updates_simulated_state(self):
+        epg_data = [{"id": 42, "tvg_id": "ESPN.US", "epg_source": 5}]
+        executor = ActionExecutor(
+            self.client, existing_channels=self.channels, epg_data=epg_data
+        )
+        action = {"type": "assign_epg", "epg_id": 5, "set_tvg_id": True}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert executor._channel_by_id[1]["epg_data_id"] == 42
+        assert executor._channel_by_id[1]["tvg_id"] == "ESPN.US"
+
+    def test_assign_profile_updates_simulated_state(self):
+        action = {"type": "assign_profile", "profile_id": 3}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["stream_profile_id"] == 3
+
+    def test_set_channel_number_updates_simulated_state(self):
+        action = {"type": "set_channel_number", "value": 999}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["channel_number"] == 999
+
+    def test_move_channel_to_uncategorized_updates_simulated_state(self):
+        assert self.executor._channel_by_id[1]["channel_group_id"] == 7
+
+        result = self._run(self.executor.move_channel_to_uncategorized(1))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["channel_group_id"] is None
+
+    def test_assign_tvg_id_then_assign_epg_uses_fresh_tvg_id(self):
+        """End-to-end of the PR #483 bug: assign_tvg_id then assign_epg.
+
+        Entry A is reachable ONLY via exact tvg_id match; entry B is a fuzzy
+        name-match trap. Without the simulated-state update, assign_epg would
+        read the stale tvg_id (None), skip the exact-match path, and wrongly
+        pick entry B. With the fix it exact-matches entry A.
+        """
+        epg_data = [
+            {"id": 100, "tvg_id": "ESPN.US", "epg_source": 5, "name": "Sports Channel A"},
+            {"id": 200, "tvg_id": "WRONG.US", "epg_source": 5, "name": "ESPN"},
+        ]
+        executor = ActionExecutor(
+            self.client, existing_channels=self.channels, epg_data=epg_data
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        # Step 1: stamp the tvg_id from the stream onto the channel.
+        r1 = self._run(executor.execute(
+            {"type": "assign_tvg_id", "value": "from_stream"}, self.stream_ctx, exec_ctx
+        ))
+        assert r1.success is True
+        assert executor._channel_by_id[1]["tvg_id"] == "ESPN.US"
+
+        # Step 2: assign EPG — must exact-match entry A via the fresh tvg_id.
+        r2 = self._run(executor.execute(
+            {"type": "assign_epg", "epg_id": 5}, self.stream_ctx, exec_ctx
+        ))
+        assert r2.success is True
+        self.client.update_channel.assert_called_with(1, {"epg_data_id": 100})
+
+    def test_assign_profile_dry_run_updates_simulated_state(self):
+        """Dry-run consistency follow-up: profile preview reflects in sim state."""
+        action = {"type": "assign_profile", "profile_id": 3}
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["stream_profile_id"] == 3
+        self.client.update_channel.assert_not_called()
+
+    def test_set_channel_number_dry_run_updates_simulated_state(self):
+        """Dry-run consistency follow-up: number preview reflects in sim state."""
+        action = {"type": "set_channel_number", "value": 999}
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 1
+
+        result = self._run(self.executor.execute(action, self.stream_ctx, exec_ctx))
+
+        assert result.success is True
+        assert self.executor._channel_by_id[1]["channel_number"] == 999
+        self.client.update_channel.assert_not_called()
+
+
 class TestActionExecutorDryRun:
     """Tests for dry run mode across all actions."""
 
@@ -2665,9 +2828,9 @@ class TestCreateChannelSuperscriptStripping:
 
 
 class TestMergeJournalEntry:
-    """bd-0emgo.5: per-merge journal entry for lightweight recoverability.
+    """bd-0emgo.5: per-merge journal entries for lightweight recoverability.
 
-    Each LIVE merge in ``_add_stream_to_channel`` must write one
+    Each LIVE merge in ``_add_stream_to_channel`` must queue one
     ``auto_creation``/``merge_stream`` journal entry tagged with
     ``batch_id=str(execution_id)`` so an operator can later list every
     ``(channel_id, stream_id)`` pair a run touched via
@@ -2705,57 +2868,59 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext()  # dry_run defaults to False (live)
-        return asyncio.get_event_loop().run_until_complete(
+        result = asyncio.get_event_loop().run_until_complete(
             executor.execute(action, self.stream_ctx, exec_ctx)
         )
+        executor._flush_journal_buffer()
+        return result
 
-    def test_live_merge_writes_one_journal_entry(self):
-        """A live merge writes exactly one auto_creation/merge_stream entry."""
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+    def test_live_merge_flushes_one_journal_entry(self):
+        """A live merge flushes exactly one auto_creation/merge_stream entry."""
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             result = self._run_live_merge(execution_id=42)
 
         assert result.success is True
         assert result.modified is True
         mock_log.assert_called_once()
-        kwargs = mock_log.call_args.kwargs
-        assert kwargs["category"] == "auto_creation"
-        assert kwargs["action_type"] == "merge_stream"
-        assert kwargs["entity_id"] == 1  # channel_id
-        assert kwargs["entity_name"] == "ESPN"
-        assert kwargs["user_initiated"] is False
+        entry = mock_log.call_args.kwargs["entries"][0]
+        assert entry["category"] == "auto_creation"
+        assert entry["action_type"] == "merge_stream"
+        assert entry["entity_id"] == 1  # channel_id
+        assert entry["entity_name"] == "ESPN"
+        assert entry["user_initiated"] is False
 
     def test_journal_batch_id_is_execution_id(self):
         """batch_id carries the run's execution_id (as a string)."""
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
-        kwargs = mock_log.call_args.kwargs
-        assert kwargs["batch_id"] == "42"
+        entry = mock_log.call_args.kwargs["entries"][0]
+        assert entry["batch_id"] == "42"
 
     def test_journal_before_after_carry_stream_ids_only(self):
         """before/after hold stream IDs only — never URLs/objects (creds)."""
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
-        kwargs = mock_log.call_args.kwargs
-        before = kwargs["before_value"]
-        after = kwargs["after_value"]
+        entry = mock_log.call_args.kwargs["entries"][0]
+        before = entry["before_value"]
+        after = entry["after_value"]
         assert before == {"stream_ids": [101]}
         assert after == {"stream_ids": [101, 201]}
         # Credential safety: the provider token must not leak anywhere.
-        serialized = repr(kwargs)
+        serialized = repr(entry)
         assert "secret-token" not in serialized
         assert "http" not in serialized
 
     def test_journal_round_trip_recovers_channel_stream_pair(self):
         """The (channel_id, stream_id) pair is recoverable from the entry."""
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
-        kwargs = mock_log.call_args.kwargs
-        channel_id = kwargs["entity_id"]
-        before_ids = set(kwargs["before_value"]["stream_ids"])
-        after_ids = set(kwargs["after_value"]["stream_ids"])
+        entry = mock_log.call_args.kwargs["entries"][0]
+        channel_id = entry["entity_id"]
+        before_ids = set(entry["before_value"]["stream_ids"])
+        after_ids = set(entry["after_value"]["stream_ids"])
         merged_stream_ids = after_ids - before_ids
         assert channel_id == 1
         assert merged_stream_ids == {201}
@@ -2774,18 +2939,19 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext(dry_run=True)
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, self.stream_ctx, exec_ctx)
             )
+            executor._flush_journal_buffer()
 
         assert result.success is True
         assert "Would add" in result.description
         self.client.update_channel.assert_not_called()
         mock_log.assert_not_called()
 
-    def test_multi_merge_run_writes_one_entry_per_merge(self):
-        """A run merging N streams writes N entries, all sharing batch_id."""
+    def test_multi_merge_run_flushes_one_entry_per_merge(self):
+        """A run merging N streams flushes N entries, all sharing batch_id."""
         executor = ActionExecutor(
             self.client,
             existing_channels=self.channels,
@@ -2803,15 +2969,51 @@ class TestMergeJournalEntry:
                           m3u_account_id=1, tvg_id="ESPN.US")
             for sid in (301, 302, 303)
         ]
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             for sc in stream_ctxs:
                 asyncio.get_event_loop().run_until_complete(
                     executor.execute(action, sc, exec_ctx)
                 )
+            executor._flush_journal_buffer()
 
-        assert mock_log.call_count == 3
-        batch_ids = {c.kwargs["batch_id"] for c in mock_log.call_args_list}
+        mock_log.assert_called_once()
+        entries = mock_log.call_args.kwargs["entries"]
+        assert len(entries) == 3
+        batch_ids = {entry["batch_id"] for entry in entries}
         assert batch_ids == {"7"}
+
+    def test_merge_journal_flushes_at_threshold(self):
+        """The default 100-entry buffer threshold flushes and clears itself."""
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            execution_id=99,
+        )
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        exec_ctx = ExecutionContext()
+        stream_ctxs = [
+            StreamContext(stream_id=sid, stream_name=f"S{sid}",
+                          m3u_account_id=1, tvg_id="ESPN.US")
+            for sid in range(300, 400)
+        ]
+
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+            for sc in stream_ctxs:
+                result = asyncio.get_event_loop().run_until_complete(
+                    executor.execute(action, sc, exec_ctx)
+                )
+                assert result.success is True
+
+        mock_log.assert_called_once()
+        entries = mock_log.call_args.kwargs["entries"]
+        assert len(entries) == executor._journal_flush_threshold == 100
+        assert {entry["batch_id"] for entry in entries} == {"99"}
+        assert executor._journal_buffer == []
 
     def test_no_execution_id_skips_journal(self):
         """Without an execution_id (direct-construct callers) no entry is written.
@@ -2831,10 +3033,11 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, self.stream_ctx, exec_ctx)
             )
+            executor._flush_journal_buffer()
 
         assert result.success is True
         mock_log.assert_not_called()
@@ -2859,10 +3062,11 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entry") as mock_log:
+        with patch("auto_creation_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
+            executor._flush_journal_buffer()
 
         assert result.success is True
         assert result.skipped is True
@@ -2903,7 +3107,7 @@ class TestMergeCountLabels:
             m3u_account_id=1,
         )
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entry"):
+        with patch("auto_creation_executor.journal.log_entries"):
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
@@ -3068,7 +3272,7 @@ class TestChannelsTouchedDryRun:
             m3u_account_id=1,
         )
         exec_ctx = ExecutionContext(dry_run=False)
-        with patch("auto_creation_executor.journal.log_entry"):
+        with patch("auto_creation_executor.journal.log_entries"):
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
