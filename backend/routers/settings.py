@@ -714,6 +714,13 @@ async def update_settings(request: SettingsRequest):
         # otherwise reset it to False and re-arm the one-time league-strip heal,
         # re-clobbering the user's require_delimiter choice on the next boot.
         league_delimiter_heal_applied=current_settings.league_delimiter_heal_applied,
+        # ADR-013 (bead 312nk.2): WS channel_stats subscriber flags. Not yet
+        # surfaced in the UI (operator-driven soak via settings.json), so they
+        # MUST be preserved from current settings — rebuilding the model here
+        # would otherwise reset an operator's opt-in back to the default OFF on
+        # the next UI settings-save.
+        use_ws_channel_stats=current_settings.use_ws_channel_stats,
+        ws_suppress_poll_when_healthy=current_settings.ws_suppress_poll_when_healthy,
     )
     save_settings(new_settings)
     clear_settings_cache()
