@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- **Auto-creation OOM-killed the container and then crash-looped on every restart (GH #473, bd-sjdsq + bd-exo4j, build 0001).** Two coupled fixes for a persistent outage. **(1) Memory (bd-sjdsq):** the engine accumulated an `execution_log` plus per-stream verbose rule/condition traces in memory for the entire run — O(streams×rules×conditions) — so RSS grew steadily until the kernel OOM-killed the process (reporter recurred even at 32 GiB). `results["execution_log"]` is now a `BoundedExecutionLog` (a `list` subclass, so every append site is governed by construction): non-dry-run runs strip the verbose per-stream trace incrementally and retain at most `MAX_AUTO_CREATION_LOG_ENTRIES` (default 500, settings-overridable) with an aggregate "…N more" summary + a `log_truncated` marker; dry-run keeps the full trace. The run now logs peak RSS and a run-size summary. **(2) Crash loop (bd-exo4j):** a kernel OOM-kill leaves the `AutoCreationExecution` row stuck `status="running"`, and scheduled M3U refresh re-fired `run_on_refresh` auto-creation unconditionally → re-OOM on every restart (doubling RAM didn't help). A startup crash-sentinel now marks orphaned `running` executions `abandoned` (before the scheduler arms) and trips a persisted circuit-breaker that **skips `run_on_refresh` auto-creation until an operator explicitly re-enables it** (`POST /api/auto-creation/reset-circuit-breaker`); a `ECM_DISABLE_RUN_ON_REFRESH=1` env var is a break-glass. Manual "Run Now" is never gated. (GH #473, bd-sjdsq, bd-exo4j, build 0001)
+
+### Added
+- **Per-run created-channel cap for auto-creation — a safety valve against runaway rules (GH #473, bd-h2xnl, build 0001).** An over-broad rule (e.g. one matching per-event PPV/event streams) could expand a lineup from ~186 to 2400+ channels in a single run, the upstream amplifier of the OOM. Auto-creation now soft-aborts a run once it would create more than `MAX_AUTO_CREATED_CHANNELS_PER_RUN` channels (default 500, settings-overridable): it stops creating further channels (already-created channels are left consistent), marks the execution `status="capped"`, and surfaces a non-silent "capped at N of M — review the rule or raise the cap" alert. (GH #473, bd-h2xnl, build 0001)
+
 ## [0.17.5] — 2026-06-16
 
 ### Security

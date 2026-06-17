@@ -23,6 +23,27 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 ALLOWED_URL_SCHEMES = {"http", "https"}
 
+# GH #473 OOM cluster — named, settings-overridable safety-valve defaults.
+#
+# MAX_AUTO_CREATION_LOG_ENTRIES (bd-sjdsq): hard cap on the number of
+# per-stream execution_log entries RETAINED in memory (and therefore
+# serialized to the auto_creation_executions.execution_log TEXT column) for a
+# single non-dry-run pipeline run. The dominant accumulator on a runaway run is
+# this log — it holds the full per-stream rule/condition trace — so bounding it
+# incrementally during the run is what keeps peak RSS flat regardless of how
+# many streams match. Dry-run is exempt (it mutates nothing and the operator
+# wants the full trace for debugging). Default 500.
+#
+# MAX_AUTO_CREATED_CHANNELS_PER_RUN (bd-h2xnl, shared with bd-exo4j as the
+# run-size lever): hard cap on the number of channels a single run will
+# CREATE. When a run reaches it the engine soft-aborts — it stops creating
+# further channels, leaves the already-created channels consistent, marks the
+# execution status='capped', and alerts. This is the systemic safety valve for
+# the PPV/event expansion blast radius (186 -> 2400+); it is NOT the root-cause
+# fix. Default 500.
+DEFAULT_MAX_AUTO_CREATION_LOG_ENTRIES = 500
+DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN = 500
+
 
 def validate_url_scheme(url: str, field_name: str = "URL") -> None:
     """Validate that a URL uses an allowed scheme (http/https only).
@@ -218,6 +239,22 @@ class DispatcharrSettings(BaseModel):
     # M3USnapshot newest-N precedent (ADR-010 §D7).
     auto_creation_snapshot_days: int = 30  # Age window — prune snapshots older than this many days (by snapshot_time).
     auto_creation_snapshot_max: int = 50  # Count cap — keep at most this many newest snapshots; older ones pruned regardless of age.
+    # GH #473 OOM cluster safety valves (settings-overridable; module defaults
+    # in DEFAULT_MAX_* above). See those constants for the full rationale.
+    # bd-sjdsq: max per-stream execution_log entries retained in memory per
+    # non-dry-run run. Dry-run keeps the full trace. <= 0 disables the cap.
+    max_auto_creation_log_entries: int = DEFAULT_MAX_AUTO_CREATION_LOG_ENTRIES
+    # bd-h2xnl / bd-exo4j: max channels a single run will create before
+    # soft-aborting (status='capped'). <= 0 disables the cap.
+    max_auto_created_channels_per_run: int = DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN
+    # bd-exo4j circuit breaker (THE breaker, persisted across restarts): when
+    # the startup crash-sentinel abandons a run left 'running' by an OOM
+    # SIGKILL, it sets this flag True. While True, run_auto_creation_after_refresh
+    # SKIPS the auto-fire chain (manual "Run Now" is NOT gated). NEVER
+    # auto-reset — the operator must deliberately clear it via
+    # POST /api/auto-creation/reset-circuit-breaker. Internal bookkeeping, not a
+    # user-facing preference.
+    auto_creation_run_on_refresh_disabled: bool = False
     # M3U change-tracking retention (bd-wehek / bd-f9gd8 DBA spike). Both tables
     # grow with every Dispatcharr upstream change (every 5-min poll if upstream
     # churns): m3u_snapshots stores ~1-10 kB groups_data JSON per row;
