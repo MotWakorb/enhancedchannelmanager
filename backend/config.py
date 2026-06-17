@@ -255,6 +255,18 @@ class DispatcharrSettings(BaseModel):
     # POST /api/auto-creation/reset-circuit-breaker. Internal bookkeeping, not a
     # user-facing preference.
     auto_creation_run_on_refresh_disabled: bool = False
+    # ADR-011 (bd-ka7j9): refresh watermark decoupling M3U refresh from
+    # auto-creation. M3U refresh no longer hard-chains auto-creation as a
+    # side-effect; instead it advances ``last_m3u_refresh_completed_at`` on
+    # EVERY successful refresh (Q1: NOT change-gated — preserves today's
+    # "runs after every refresh" behavior). The interval-scheduled
+    # AutoCreationTask auto-fires only when the refresh watermark is newer than
+    # ``last_auto_creation_consumed_refresh_at`` (which it advances to the
+    # consumed value when it runs). Both are ISO-8601 UTC strings (matching the
+    # other timestamp fields); empty string == "never" (sorts before any real
+    # timestamp, so a fresh install with at least one refresh fires once).
+    last_m3u_refresh_completed_at: str = ""
+    last_auto_creation_consumed_refresh_at: str = ""
     # M3U change-tracking retention (bd-wehek / bd-f9gd8 DBA spike). Both tables
     # grow with every Dispatcharr upstream change (every 5-min poll if upstream
     # churns): m3u_snapshots stores ~1-10 kB groups_data JSON per row;

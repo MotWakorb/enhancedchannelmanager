@@ -939,6 +939,9 @@ def _run_migrations(engine) -> None:
             # Flip cleanup task MANUAL -> CRON Sunday 02:00 UTC for existing operators (v0.17.0 - bd-ifmr5)
             _migrate_cleanup_task_manual_to_cron(conn)
 
+            # Flip auto_creation task MANUAL -> INTERVAL 60s for existing operators (ADR-011 - bd-ka7j9)
+            _migrate_auto_creation_task_manual_to_interval(conn)
+
             # Heal task_schedules rows with NULL next_run_at (v0.17.0 - bd-1weac / bd-p5b8i)
             _heal_task_schedules_null_next_run_at(conn)
 
@@ -2645,6 +2648,62 @@ def _migrate_cleanup_task_manual_to_cron(conn) -> None:
         logger.info(
             "[DATABASE] Flipped cleanup task schedule MANUAL -> CRON Sunday 02:00 UTC "
             "for %d existing operator(s) (bd-ifmr5)",
+            update.rowcount,
+        )
+        conn.commit()
+
+
+def _migrate_auto_creation_task_manual_to_interval(conn) -> None:
+    """Flip the auto_creation task MANUAL -> INTERVAL 60s for existing operators
+    (ADR-011, bd-ka7j9).
+
+    ADR-011 decoupled M3U refresh from auto-creation: auto-creation is no longer
+    hard-chained as a side-effect of the refresh task. Instead the
+    ``AutoCreationTask`` self-fires on an INTERVAL schedule (~60s) and a top-of-run
+    guard runs the post-refresh pipeline only when a new refresh watermark is
+    available. The constructor default flipped MANUAL -> INTERVAL (60s), but
+    existing installs already have a persisted ``scheduled_tasks`` row with
+    ``schedule_type='manual'`` that ``TaskRegistry.sync_from_database`` faithfully
+    rehydrates — so the new behavior would never reach upgraders without this
+    one-time migration. Mirrors ``_migrate_cleanup_task_manual_to_cron`` (bd-ifmr5),
+    including the "why not Alembic" reasoning (the bd-5w6jz fast-path would
+    silently skip a data-only Alembic migration).
+
+    We set ``interval_seconds=60`` alongside the type so ``sync_from_database`` /
+    ``_create_default_task_schedule`` materialize a ``task_schedules`` row with a
+    non-NULL ``next_run_at`` (``calculate_next_run`` returns None for
+    interval_seconds <= 0 — the bd-1weac silent-skip trap). ``next_run_at`` is
+    reset to NULL on the ``scheduled_tasks`` row so the registry recomputes it.
+
+    Idempotency: the ``schedule_type='manual'`` predicate is the gate — an
+    operator already on INTERVAL, a fresh install (no row yet), and a
+    previously-migrated install all match zero rows. Operator caveat (CHANGELOG):
+    an operator who deliberately set MANUAL via the UI will be flipped to
+    INTERVAL once; auto-creation only actually runs when a run_on_refresh rule
+    exists and a refresh has occurred, so the practical effect for an operator
+    with no run_on_refresh rules is nil.
+    """
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+    ))
+    if not result.fetchone():
+        logger.debug(
+            "[DATABASE] scheduled_tasks table doesn't exist yet, skipping "
+            "auto_creation MANUAL->INTERVAL migration"
+        )
+        return
+
+    update = conn.execute(text(
+        "UPDATE scheduled_tasks "
+        "SET schedule_type='interval', interval_seconds=60, next_run_at=NULL "
+        "WHERE task_id='auto_creation' AND schedule_type='manual'"
+    ))
+    if update.rowcount > 0:
+        logger.info(
+            "[DATABASE] Flipped auto_creation task schedule MANUAL -> INTERVAL 60s "
+            "for %d existing operator(s) (ADR-011, bd-ka7j9)",
             update.rowcount,
         )
         conn.commit()
