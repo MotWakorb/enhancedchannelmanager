@@ -714,6 +714,26 @@ async def update_settings(request: SettingsRequest):
         # otherwise reset it to False and re-arm the one-time league-strip heal,
         # re-clobbering the user's require_delimiter choice on the next boot.
         league_delimiter_heal_applied=current_settings.league_delimiter_heal_applied,
+        # ADR-013 (bead 312nk.2): WS channel_stats subscriber flags. Not yet
+        # surfaced in the UI (operator-driven soak via settings.json), so they
+        # MUST be preserved from current settings — rebuilding the model here
+        # would otherwise reset an operator's opt-in back to the default OFF on
+        # the next UI settings-save.
+        use_ws_channel_stats=current_settings.use_ws_channel_stats,
+        ws_suppress_poll_when_healthy=current_settings.ws_suppress_poll_when_healthy,
+        # ADR-013 §D2 (bead 312nk.3): steady-state session_telemetry write
+        # cadence. Like the WS flags above it is operator-driven via
+        # settings.json (not surfaced in the UI), so it MUST be preserved from
+        # current settings — rebuilding the model here would otherwise reset an
+        # operator's tuned value back to the default on the next UI settings-save.
+        telemetry_write_interval=current_settings.telemetry_write_interval,
+        # ADR-013 §D3/§D4 (bead 312nk.4): stream->provider and user->username
+        # cache TTLs. Operator-driven via settings.json (not surfaced in the
+        # UI), so they MUST be preserved from current settings — rebuilding the
+        # model here would otherwise reset a tuned value back to the default on
+        # the next UI settings-save.
+        stream_provider_cache_ttl=current_settings.stream_provider_cache_ttl,
+        user_username_cache_ttl=current_settings.user_username_cache_ttl,
     )
     save_settings(new_settings)
     clear_settings_cache()
