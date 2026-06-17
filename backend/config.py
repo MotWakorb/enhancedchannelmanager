@@ -150,6 +150,21 @@ class DispatcharrSettings(BaseModel):
     # against the last WS snapshot instead of double-processing telemetry. Flip
     # to True once the feature defaults ON.
     ws_suppress_poll_when_healthy: bool = False
+    # ADR-013 §D3 (bead 312nk.4): coarse safety TTL (seconds) for the
+    # process-lived stream_id -> (m3u_account_id, provider_name) cache. The
+    # cache is event-invalidated by the WS stream_rehash / channels_created
+    # broadcasts while the WS is healthy; this TTL bounds staleness if an
+    # invalidation event is missed during a WS gap, and is the ONLY invalidation
+    # on the poll-fallback path (degraded mode). Default 300s matches the
+    # bd-1qmn0 M3U-accounts snapshot cache. Operator-driven via settings.json
+    # (not surfaced in the UI). No migration.
+    stream_provider_cache_ttl: int = 300
+    # ADR-013 §D4 (bead 312nk.4): TTL (seconds) for the user_id -> username
+    # cache that replaces the per-write get_users() fetch. Dispatcharr usernames
+    # change rarely, so minutes of staleness on a display name is harmless.
+    # Default 300s. Operator-driven via settings.json (not surfaced in the UI).
+    # No migration.
+    user_username_cache_ttl: int = 300
     # User timezone for stats display (IANA timezone name, e.g. "America/Los_Angeles")
     # Empty string means use UTC
     user_timezone: str = ""
