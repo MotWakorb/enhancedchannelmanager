@@ -156,6 +156,28 @@ async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str)
         logger.exception("[M3U-CHANGE] Failed to capture changes for %s: %s", account_name, e)
 
 
+def _advance_refresh_watermark() -> None:
+    """ADR-011 (bd-ka7j9): mark that an M3U refresh just completed successfully.
+
+    Replaces the old per-account hard chain to ``run_auto_creation_after_refresh``.
+    The interval-scheduled ``AutoCreationTask`` reads this watermark FRESH on each
+    tick and auto-fires when it is newer than the consumed watermark, so a single
+    failed account never suppresses auto-creation for the batch. Per Q1 it
+    advances on EVERY successful refresh (NOT change-gated). Best-effort.
+    """
+    from datetime import datetime as _dt
+    try:
+        settings = get_settings()
+        settings.last_m3u_refresh_completed_at = _dt.utcnow().isoformat()
+        save_settings(settings)
+        logger.info(
+            "[M3U-REFRESH] Advanced refresh watermark to %s (auto-creation picks it up on its next tick)",
+            settings.last_m3u_refresh_completed_at,
+        )
+    except Exception as e:  # pragma: no cover — watermark write is best-effort
+        logger.warning("[M3U-REFRESH] Failed to advance refresh watermark: %s", e)
+
+
 async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
     """
     Background task to poll Dispatcharr until M3U refresh completes.
@@ -230,15 +252,9 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                     entity_id=account_id,
                 )
 
-                # Run auto-creation rules if any have run_on_refresh=True
-                try:
-                    from tasks.auto_creation import run_auto_creation_after_refresh
-                    await run_auto_creation_after_refresh(
-                        m3u_account_ids=[account_id],
-                        triggered_by="m3u_refresh",
-                    )
-                except Exception as e:
-                    logger.warning("[M3U-REFRESH] Auto-creation after refresh failed: %s", e)
+                # ADR-011 (bd-ka7j9): no more hard chain. Advance the refresh
+                # watermark; the interval-scheduled AutoCreationTask self-fires.
+                _advance_refresh_watermark()
 
                 return
             elif elapsed > 30 and not initial_updated:
@@ -277,15 +293,9 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                     entity_id=account_id,
                 )
 
-                # Run auto-creation rules if any have run_on_refresh=True
-                try:
-                    from tasks.auto_creation import run_auto_creation_after_refresh
-                    await run_auto_creation_after_refresh(
-                        m3u_account_ids=[account_id],
-                        triggered_by="m3u_refresh",
-                    )
-                except Exception as e:
-                    logger.warning("[M3U-REFRESH] Auto-creation after refresh failed: %s", e)
+                # ADR-011 (bd-ka7j9): no more hard chain. Advance the refresh
+                # watermark; the interval-scheduled AutoCreationTask self-fires.
+                _advance_refresh_watermark()
 
                 return
 
