@@ -21,7 +21,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta, timezone
-from typing import Any, ClassVar, NamedTuple, Optional
+from typing import Any, Callable, ClassVar, NamedTuple, Optional
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -1434,16 +1434,32 @@ class BandwidthTracker:
     Polls Dispatcharr's stats endpoint and stores daily aggregates.
     """
 
-    def __init__(self, client, poll_interval: int = DEFAULT_POLL_INTERVAL):
+    def __init__(
+        self,
+        client,
+        poll_interval: int = DEFAULT_POLL_INTERVAL,
+        *,
+        now_fn: Optional[Callable[[], float]] = None,
+    ):
         """
         Initialize the tracker.
 
         Args:
             client: DispatcharrClient instance for API calls
             poll_interval: Seconds between polls (default 10)
+            now_fn: Monotonic clock source for the telemetry-write throttle and
+                the watch-time accrual (ADR-013 §D2 / bead 312nk.3). Defaults to
+                ``time.monotonic``. Injectable so tests can drive the throttle
+                with a controllable clock instead of sleeping — both the throttle
+                gate and the per-observation watch-time elapsed are read through
+                this single source so they stay consistent.
         """
         self.client = client
         self.poll_interval = poll_interval
+        # ADR-013 §D2 (bead 312nk.3): monotonic clock for the telemetry-write
+        # throttle and watch-time accrual. Monotonic (not wall-clock) so a
+        # system clock step cannot inflate or stall either.
+        self._now: Callable[[], float] = now_fn or time.monotonic
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._last_bytes: dict[str, int] = {}  # Track per-channel bytes to compute deltas
@@ -1535,6 +1551,35 @@ class BandwidthTracker:
         # of ``_process_channel_snapshot``.
         self._snapshot_lock = asyncio.Lock()
 
+        # ADR-013 §D2 (bead 312nk.3): decouple observation freshness from the
+        # session_telemetry write cadence. ``_process_channel_snapshot`` runs
+        # PHASE A (byte-delta, ChannelBandwidth/BandwidthDaily, in-memory
+        # active-channel/client tracking) on EVERY observation, but PHASE B (the
+        # heavy write path: provider resolution + system-events ingest +
+        # attribution + session_telemetry insert) only when due.
+        #
+        # ``_last_telemetry_write_at`` is the monotonic timestamp of the last
+        # phase-B run; phase B runs when ``now - last >= telemetry_write_interval``
+        # OR an active-connection-set edge (channel newly active / client
+        # appears/leaves) forces an immediate flush. ``None`` until the first
+        # write, so the first observation always flushes.
+        self._last_telemetry_write_at: Optional[float] = None
+        # The session_telemetry ``poll_interval_ms`` column is stamped with the
+        # elapsed time (from ``self._now``) SINCE the previous phase-B write so
+        # ``SUM(poll_interval_ms)`` watch-time telescopes to true wall-clock
+        # regardless of how throttling/edge flushes space the writes (the
+        # downstream watch-time analytic sums distinct (channel, observed_at)
+        # buckets — see popularity_calculator and routers/stats.py).
+        # Monotonic timestamp of the last phase-A observation. Watch-time
+        # accrual (UniqueClientConnection.watch_seconds, ChannelBandwidth.
+        # total_watch_seconds) is per-OBSERVATION but its INCREMENT must be the
+        # real elapsed wall-clock since the previous observation — NOT the fixed
+        # poll_interval — or it would inflate ~5x when observing at 2s under WS.
+        # ``None`` until the first observation (the first tick accrues nothing
+        # for continuing clients, matching today's behavior where a connection
+        # opened this poll accrues 0 until the next poll).
+        self._last_observation_at: Optional[float] = None
+
         # ADR-013 §D1 (bead 312nk.2): the WebSocket channel_stats subscriber is
         # OWNED by the tracker. It is constructed lazily in ``start()`` (only
         # when ``use_ws_channel_stats`` is true) and its task cancelled in
@@ -1597,6 +1642,22 @@ class BandwidthTracker:
         (ADR-013 §D5 / PO decision #3)."""
         settings = getattr(self.client, "settings", None)
         return bool(getattr(settings, "ws_suppress_poll_when_healthy", False))
+
+    def _telemetry_write_interval(self) -> float:
+        """Steady-state session_telemetry write cadence in seconds (ADR-013
+        §D2 / bead 312nk.3). Read live off the client settings so a settings
+        change takes effect on the tracker the restart reconstructs. Falls back
+        to ``self.poll_interval`` (today's effective cadence) when the setting
+        is absent or non-positive, preserving default-OFF parity."""
+        settings = getattr(self.client, "settings", None)
+        raw = getattr(settings, "telemetry_write_interval", None)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value <= 0:
+            return float(self.poll_interval)
+        return value
 
     async def stop(self):
         """Stop the background polling task."""
@@ -1917,9 +1978,39 @@ class BandwidthTracker:
         a second caller. Serialized by ``self._snapshot_lock`` so the two
         drivers can never interleave and corrupt ``_last_bytes`` (ADR-013 §D5
         / Consequences).
+
+        ADR-013 §D2 (bead 312nk.3) splits the body into two phases:
+
+        * **Phase A — every observation (~2s under WS).** Byte-delta math,
+          ChannelBandwidth/BandwidthDaily, and the in-memory active-channel /
+          per-client tracking. ``total_bytes`` is cumulative so deltas sum
+          identically at any cadence. Watch-time accrual increments by the REAL
+          elapsed wall-clock since the previous observation (``self._now``), not
+          the fixed poll_interval, so observing at 2s vs 10s yields the same
+          total. This phase is NEVER throttled.
+        * **Phase B — throttled write path.** Provider resolution, system-events
+          ingest, media-server attribution, and the ``session_telemetry`` write.
+          Runs only when ``now - last_write >= telemetry_write_interval`` OR the
+          active-connection set changed this observation (edge-triggered flush —
+          captures session start/stop at WS latency). The snapshot is coalesced,
+          not queued: between writes phase A keeps refreshing in-memory state so
+          the next write reflects the latest observation. When
+          ``ECM_STATS_TELEMETRY_OPT_OUT`` is set, phase B is skipped entirely.
         """
         async with self._snapshot_lock:
             logger.debug("[BANDWIDTH] Collected stats for %s active channels", len(channels))
+
+            # Phase-A watch-time accrual increment (ADR-013 §D2). Real elapsed
+            # wall-clock since the previous observation. ``None`` on the first
+            # observation -> 0 elapsed (a connection opened this observation
+            # accrues nothing until the next one, matching the legacy behavior
+            # where a brand-new connection's watch_seconds starts at 0).
+            now_mono = self._now()
+            if self._last_observation_at is None:
+                observation_elapsed = 0.0
+            else:
+                observation_elapsed = max(0.0, now_mono - self._last_observation_at)
+            self._last_observation_at = now_mono
 
             # Calculate totals from all active channels
             total_bytes_delta = 0
@@ -2093,6 +2184,21 @@ class BandwidthTracker:
                 self._log_watch_stop_events(stopped_channels)
                 self._close_client_connections(stopped_channels)
 
+            # ADR-013 §D2 edge-triggered flush: the active-connection SET
+            # changed this observation if a channel became newly active, a
+            # channel stopped, or the per-channel client-IP set changed on any
+            # still-active channel. Compared against the PRE-commit ``_last_*``
+            # state below, so it must be captured before the commit overwrites
+            # them. A session start/stop edge forces a phase-B telemetry write
+            # immediately (even mid-interval) so session boundaries are captured
+            # at WS latency instead of up to telemetry_write_interval late.
+            connection_set_changed = bool(newly_active_channels) or bool(stopped_channels)
+            if not connection_set_changed:
+                for channel_id, client_ips in current_channel_clients.items():
+                    if client_ips != self._last_channel_clients.get(channel_id, set()):
+                        connection_set_changed = True
+                        break
+
             # Update last bytes tracking
             self._last_bytes = current_bytes
             self._last_active_channels = current_active_channels
@@ -2113,11 +2219,40 @@ class BandwidthTracker:
                     bytes_mb = total_bytes_delta / (1024 * 1024)
                     logger.debug("[BANDWIDTH] Bandwidth delta: %.2f MB (in: %.2f, out: %.2f), active channels: %s, clients: %s", bytes_mb, total_bytes_in_delta / (1024*1024), total_bytes_out_delta / (1024*1024), active_channels, total_clients)
 
-            # Update per-channel bandwidth (v0.11.0)
+            # Update per-channel bandwidth (v0.11.0). Phase A — runs every
+            # observation. ``observation_elapsed`` (real wall-clock since the
+            # last observation) replaces the fixed poll_interval increment so
+            # total_watch_seconds is cadence-independent (ADR-013 §D2).
             if channel_bandwidth_updates:
-                self._update_channel_bandwidth(channel_bandwidth_updates)
+                self._update_channel_bandwidth(
+                    channel_bandwidth_updates, observation_elapsed
+                )
 
-            # Resolve user_id → username for any channels with user IDs
+            # ADR-013 §D2 (bead 312nk.3): decide whether the heavy PHASE-B write
+            # path runs this observation. Everything ABOVE this point is phase A
+            # and has already run (byte-delta, daily record, ChannelBandwidth,
+            # in-memory connection-set tracking). Phase B runs when:
+            #   * the active-connection set changed (edge-triggered flush —
+            #     session start/stop captured at WS latency), OR
+            #   * the steady-state interval has elapsed since the last write.
+            # The opt-out kill-switch short-circuits phase B entirely below
+            # (it is NOT a cadence knob — when set, no write happens regardless
+            # of throttle or edge).
+            write_interval = self._telemetry_write_interval()
+            interval_due = (
+                self._last_telemetry_write_at is None
+                or (now_mono - self._last_telemetry_write_at) >= write_interval
+            )
+            should_write_telemetry = connection_set_changed or interval_due
+
+            # Resolve user_id → username for any channels with user IDs. This is
+            # a phase-B Dispatcharr round-trip (get_users), so it only runs on a
+            # write observation — but its result feeds the phase-A
+            # _update_watch_counts / _update_watch_time username stamping below.
+            # That stays correct because a NEW connection (which needs a fresh
+            # username) is always an active-connection-set EDGE, which forces
+            # should_write_telemetry True — so usernames are resolved on exactly
+            # the observations that create connection rows.
             all_channel_data = newly_active_channels + still_active_channels
             has_user_ids = any(
                 ch.get("client_user_map") for ch in all_channel_data
@@ -2144,9 +2279,12 @@ class BandwidthTracker:
             # the watch-history path already paid in the common case.
             exclude_user_tokens = _parse_telemetry_exclude_users()
             need_user_resolution = (
-                has_user_ids
-                or snapshot_has_user_ids
-                or bool(exclude_user_tokens)
+                should_write_telemetry
+                and (
+                    has_user_ids
+                    or snapshot_has_user_ids
+                    or bool(exclude_user_tokens)
+                )
             )
             if need_user_resolution:
                 try:
@@ -2168,9 +2306,12 @@ class BandwidthTracker:
                 logger.info("[BANDWIDTH] %s channel(s) started streaming", len(newly_active_channels))
                 self._update_watch_counts(newly_active_channels)
 
-            # Accumulate watch time for still-active channels
+            # Accumulate watch time for still-active channels. Phase A — runs
+            # every observation. ``observation_elapsed`` (real wall-clock since
+            # the last observation) replaces the fixed poll_interval increment
+            # so per-connection watch_seconds is cadence-independent (§D2).
             if still_active_channels:
-                self._update_watch_time(still_active_channels)
+                self._update_watch_time(still_active_channels, observation_elapsed)
 
             # Log stopped channels
             if stopped_channels:
@@ -2193,6 +2334,33 @@ class BandwidthTracker:
             # network round-trips this flag elides, not the parse itself.
             if _telemetry_opt_out_enabled():
                 return
+
+            # ADR-013 §D2 throttle gate. When phase B is not due this
+            # observation (steady-state, no connection-set edge, interval not
+            # elapsed), skip the heavy write path entirely. Phase A above has
+            # already refreshed all in-memory + bandwidth state, so the NEXT
+            # phase-B write reflects the latest observation — the snapshot is
+            # coalesced, not queued.
+            if not should_write_telemetry:
+                return
+
+            # The session_telemetry ``poll_interval_ms`` column carries the
+            # duration THIS write represents — the elapsed time since the
+            # previous write (NOT the fixed poll_interval). The downstream
+            # watch-time analytic sums distinct (channel, observed_at) buckets'
+            # poll_interval_ms; stamping the real inter-write gap makes that sum
+            # telescope to true wall-clock regardless of how the throttle / edge
+            # flushes space the writes. Derived from the SAME monotonic clock as
+            # the throttle (``self._now``) so the cadence source is consistent.
+            # On the FIRST write there is no prior, so fall back to the
+            # configured cadence (the nominal first bucket).
+            if self._last_telemetry_write_at is None:
+                telemetry_interval_ms = int(write_interval * 1000)
+            else:
+                telemetry_interval_ms = max(
+                    0, int(round((now_mono - self._last_telemetry_write_at) * 1000))
+                )
+            self._last_telemetry_write_at = now_mono
 
             # Stats v2 write (bd-skqln.3 step (d)). Runs LAST and is wrapped in
             # a defensive try/except inside the helper so a failure in this
@@ -2255,6 +2423,9 @@ class BandwidthTracker:
                 # map — empty when all sources are disabled or no pair
                 # resolved on any source.
                 attributions=attributions,
+                # ADR-013 §D2: the inter-write elapsed (ms) this row represents,
+                # so SUM(poll_interval_ms) watch-time telescopes to wall-clock.
+                poll_interval_ms_override=telemetry_interval_ms,
             )
 
     def _update_daily_record(
@@ -2307,8 +2478,21 @@ class BandwidthTracker:
         finally:
             session.close()
 
-    def _update_channel_bandwidth(self, updates: list[dict]):
-        """Update per-channel bandwidth records (v0.11.0)."""
+    def _update_channel_bandwidth(
+        self, updates: list[dict], elapsed_seconds: Optional[float] = None
+    ):
+        """Update per-channel bandwidth records (v0.11.0).
+
+        ``elapsed_seconds`` (ADR-013 §D2 / bead 312nk.3) is the REAL wall-clock
+        elapsed since the previous observation, used as the per-client
+        ``total_watch_seconds`` increment. It replaces the fixed
+        ``self.poll_interval`` so the accrual is cadence-independent: observing
+        at 2s under the WS driver yields the same total as the 10s poll. When
+        omitted (legacy / direct test calls) it defaults to ``self.poll_interval``
+        — identical to today's behavior.
+        """
+        if elapsed_seconds is None:
+            elapsed_seconds = float(self.poll_interval)
         today = get_current_date()
         session = get_session()
         try:
@@ -2339,7 +2523,7 @@ class BandwidthTracker:
                 # Update record
                 record.bytes_transferred += bytes_delta
                 record.peak_clients = max(record.peak_clients, client_count)
-                record.total_watch_seconds += self.poll_interval * client_count  # Each client adds poll_interval seconds
+                record.total_watch_seconds += int(round(elapsed_seconds)) * client_count  # Each client adds the elapsed observation interval (ADR-013 §D2)
                 record.channel_name = channel_name  # Update name in case it changed
 
             session.commit()
@@ -2422,7 +2606,9 @@ class BandwidthTracker:
         finally:
             session.close()
 
-    def _update_watch_time(self, channels: list[dict]):
+    def _update_watch_time(
+        self, channels: list[dict], elapsed_seconds: Optional[float] = None
+    ):
         """Accumulate watch time for channels that are still active.
 
         bd-skqln.3 step (d): the legacy ``ChannelWatchStats`` write that
@@ -2431,7 +2617,17 @@ class BandwidthTracker:
         The per-client ``UniqueClientConnection.watch_seconds`` write
         below stays — it's a per-connection accumulator, not the
         per-channel aggregate that was retired.
+
+        ``elapsed_seconds`` (ADR-013 §D2 / bead 312nk.3) is the REAL wall-clock
+        elapsed since the previous observation, used as the per-connection
+        ``watch_seconds`` increment. It replaces the fixed ``self.poll_interval``
+        so the accrual is cadence-independent (observing at 2s vs 10s yields the
+        same total). When omitted (direct test calls) it defaults to
+        ``self.poll_interval`` — identical to today's behavior.
         """
+        if elapsed_seconds is None:
+            elapsed_seconds = float(self.poll_interval)
+        watch_increment = int(round(elapsed_seconds))
         session = get_session()
         today = get_current_date()
         try:
@@ -2477,7 +2673,7 @@ class BandwidthTracker:
                             UniqueClientConnection.id == conn_id
                         ).first()
                         if connection:
-                            connection.watch_seconds += self.poll_interval
+                            connection.watch_seconds += watch_increment
 
                 # Handle clients that disconnected from this still-active channel
                 last_clients = self._last_channel_clients.get(channel_id, set())
@@ -3608,6 +3804,7 @@ class BandwidthTracker:
         exclude_user_tokens: Optional[frozenset[str]] = None,
         emby_attributions: Optional[dict[tuple[str, str], EmbyAttribution]] = None,
         attributions: Optional[dict[tuple[str, str], AttributionResult]] = None,
+        poll_interval_ms_override: Optional[int] = None,
     ) -> None:
         """Write one row per active viewing connection into ``session_telemetry``.
 
@@ -3666,7 +3863,12 @@ class BandwidthTracker:
           fires on ffmpeg-speed threshold trips) so this column
           typically reads zero — the other three carry the
           operationally-meaningful signal.
-        * ``poll_interval_ms`` — ``self.poll_interval`` (seconds) × 1000.
+        * ``poll_interval_ms`` — the duration this write represents. ADR-013
+          §D2 (bead 312nk.3): the throttle/edge caller passes
+          ``poll_interval_ms_override`` = elapsed wall-clock since the previous
+          write, so ``SUM(poll_interval_ms)`` watch-time stays correct even when
+          throttling/edge flushes space writes unevenly. Without an override it
+          falls back to ``self.poll_interval`` × 1000 (today's behavior).
 
         The write is wrapped in a defensive try/except so any failure here
         cannot disturb the legacy writes that already committed. This is
@@ -3737,7 +3939,16 @@ class BandwidthTracker:
         rows_excluded = 0
         write_result = "failure"
         try:
-            poll_interval_ms = max(int(self.poll_interval * 1000), 0)
+            # ADR-013 §D2 (bead 312nk.3): the duration THIS write represents.
+            # When the throttle/edge caller supplies an override (the elapsed
+            # wall-clock since the previous write), use it so SUM(poll_interval_ms)
+            # watch-time telescopes to true wall-clock regardless of write
+            # spacing. Absent an override (legacy / test direct calls), fall back
+            # to the configured poll_interval — identical to today.
+            if poll_interval_ms_override is not None:
+                poll_interval_ms = max(int(poll_interval_ms_override), 0)
+            else:
+                poll_interval_ms = max(int(self.poll_interval * 1000), 0)
             session = get_session()
             try:
                 # Track which channels have already received their per-type

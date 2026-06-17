@@ -104,12 +104,16 @@ def mock_client():
             "limit": 1000,
         }
     )
+    # ADR-013 §D2: real settings so telemetry_write_interval resolves to its
+    # default (10s) rather than a Mock attribute (bead 312nk.3).
+    from config import DispatcharrSettings
+    client.settings = DispatcharrSettings()
     return client
 
 
 @pytest.fixture
-def tracker(mock_client):
-    return BandwidthTracker(client=mock_client, poll_interval=10)
+def tracker(mock_client, telemetry_clock):
+    return BandwidthTracker(client=mock_client, poll_interval=10, now_fn=telemetry_clock)
 
 
 @pytest.fixture

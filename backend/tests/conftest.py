@@ -69,6 +69,45 @@ def closing_create_task_mock() -> MagicMock:
     return mock
 
 
+def auto_advancing_clock(step: float):
+    """Return a monotonic clock that advances ``step`` seconds per call.
+
+    ADR-013 §D2 / bead 312nk.3 wired a ``telemetry_write_interval`` throttle and
+    a wall-clock-based watch-time accrual into ``BandwidthTracker``, both read
+    through the injectable ``now_fn`` clock. The tracker reads the clock exactly
+    once per observation (``_process_channel_snapshot``). BandwidthTracker unit
+    tests drive that method back-to-back without sleeping, so a real monotonic
+    clock would report ~0s between observations — throttling every poll after
+    the first and zeroing watch-time accrual.
+
+    This factory makes each successive observation land exactly ``step`` seconds
+    (the poll interval) after the previous one, so the throttle is always due
+    (matching today's per-poll write cadence) and watch-time accrues exactly the
+    poll interval per continuing poll — i.e. the pre-throttle behavior the
+    existing assertions encode, with no test-by-test clock bookkeeping.
+    """
+    state = {"t": 0.0}
+
+    def _clock() -> float:
+        state["t"] += step
+        return state["t"]
+
+    return _clock
+
+
+@pytest.fixture
+def telemetry_clock():
+    """An auto-advancing 10s monotonic clock for BandwidthTracker unit tests.
+
+    Inject as ``BandwidthTracker(..., now_fn=telemetry_clock)`` so back-to-back
+    ``_collect_stats`` / ``_process_channel_snapshot`` calls each land one poll
+    interval apart — keeping the ADR-013 §D2 throttle due every poll and the
+    watch-time accrual at one poll interval per poll, matching the pre-throttle
+    behavior the existing assertions encode. See ``auto_advancing_clock``.
+    """
+    return auto_advancing_clock(10.0)
+
+
 @pytest.fixture(scope="function")
 def test_engine():
     """Create an in-memory SQLite engine for testing."""

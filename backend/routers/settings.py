@@ -721,6 +721,12 @@ async def update_settings(request: SettingsRequest):
         # the next UI settings-save.
         use_ws_channel_stats=current_settings.use_ws_channel_stats,
         ws_suppress_poll_when_healthy=current_settings.ws_suppress_poll_when_healthy,
+        # ADR-013 §D2 (bead 312nk.3): steady-state session_telemetry write
+        # cadence. Like the WS flags above it is operator-driven via
+        # settings.json (not surfaced in the UI), so it MUST be preserved from
+        # current settings — rebuilding the model here would otherwise reset an
+        # operator's tuned value back to the default on the next UI settings-save.
+        telemetry_write_interval=current_settings.telemetry_write_interval,
     )
     save_settings(new_settings)
     clear_settings_cache()
