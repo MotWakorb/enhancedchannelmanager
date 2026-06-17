@@ -125,6 +125,46 @@ class DispatcharrSettings(BaseModel):
     custom_network_suffixes: list[str] = []
     # Stats polling interval in seconds (how often to check Dispatcharr for channel stats)
     stats_poll_interval: int = 10
+    # ADR-013 §D2 (bead 312nk.3): steady-state ``session_telemetry`` write
+    # cadence in seconds. Observation freshness (byte-delta bandwidth,
+    # ChannelBandwidth/BandwidthDaily, in-memory active-channel/client tracking)
+    # is decoupled from this — it updates on EVERY observation (~2s under the WS
+    # driver). The heavy write path (provider resolution, system-events ingest,
+    # media-server attribution, session_telemetry insert) only runs once per
+    # this interval. Edge-triggered writes on session start/stop (a channel
+    # becomes newly active, or a client appears/leaves) still fire IMMEDIATELY
+    # even mid-interval, so session boundaries are captured at WS latency.
+    # PO-LOCKED DEFAULT 10s — preserves today's session_telemetry row cadence
+    # (matches the default stats_poll_interval). No migration (settings.json).
+    telemetry_write_interval: int = 10
+    # ADR-013: WebSocket channel_stats subscriber (bead 312nk.2). Master enable
+    # for the WS driver that feeds Dispatcharr's channel_stats broadcast into
+    # the bandwidth tracker as a drop-in for the /proxy/ts/status poll. Default
+    # OFF — the poll remains the permanent fallback. The settings-restart path
+    # (_restart_background_services) reconstructs the tracker, so toggling this
+    # re-reads it on the next start.
+    use_ws_channel_stats: bool = False
+    # ADR-013 §D5 / PO decision #3. When the WS is healthy: if True, the poll
+    # skips its get_channel_stats() fetch entirely (WS is the sole driver); if
+    # False (the soak default), the poll STILL fetches but cross-validates
+    # against the last WS snapshot instead of double-processing telemetry. Flip
+    # to True once the feature defaults ON.
+    ws_suppress_poll_when_healthy: bool = False
+    # ADR-013 §D3 (bead 312nk.4): coarse safety TTL (seconds) for the
+    # process-lived stream_id -> (m3u_account_id, provider_name) cache. The
+    # cache is event-invalidated by the WS stream_rehash / channels_created
+    # broadcasts while the WS is healthy; this TTL bounds staleness if an
+    # invalidation event is missed during a WS gap, and is the ONLY invalidation
+    # on the poll-fallback path (degraded mode). Default 300s matches the
+    # bd-1qmn0 M3U-accounts snapshot cache. Operator-driven via settings.json
+    # (not surfaced in the UI). No migration.
+    stream_provider_cache_ttl: int = 300
+    # ADR-013 §D4 (bead 312nk.4): TTL (seconds) for the user_id -> username
+    # cache that replaces the per-write get_users() fetch. Dispatcharr usernames
+    # change rarely, so minutes of staleness on a display name is harmless.
+    # Default 300s. Operator-driven via settings.json (not surfaced in the UI).
+    # No migration.
+    user_username_cache_ttl: int = 300
     # User timezone for stats display (IANA timezone name, e.g. "America/Los_Angeles")
     # Empty string means use UTC
     user_timezone: str = ""
