@@ -588,6 +588,149 @@ class ChannelStreamsCache:
         return len(self._entries)
 
 
+# ADR-013 §D3/§D4 (bead 312nk.4): coarse safety TTL for both the
+# stream->provider cache and the user->username cache. 300s matches the
+# bd-1qmn0 M3U-accounts snapshot cache so the three caches age on the same
+# clock. The TTL is the ONLY invalidation on the poll-fallback path (WS down);
+# while the WS is up the stream->provider cache is event-invalidated
+# (stream_rehash / channels_created) and the TTL is just a backstop for a
+# missed event during a WS gap.
+DEFAULT_STREAM_PROVIDER_CACHE_TTL = 300
+DEFAULT_USER_USERNAME_CACHE_TTL = 300
+
+
+class StreamProviderCache:
+    """Process-lived ``stream_id -> (m3u_account_id, stream_name)`` cache
+    (ADR-013 §D3).
+
+    Collapses ``get_streams_by_ids`` from per-write to RARE: a resolve serves
+    cache HITS for free and batches ONLY the cache-MISS stream ids into one
+    ``get_streams_by_ids`` call (``resolve_active_channel_streams`` does the
+    batching — this class just classifies hits vs. misses and stores the
+    response).
+
+    Value shape ``(provider_id, stream_name)`` is exactly the two fields the
+    resolver reads from each by-ids stream record (``m3u_account_id`` and
+    ``name``). The downstream ``provider_name`` enrichment and the bd-gy5nd
+    URL-hostname fallback both still run on top of these — the cache sits in
+    FRONT of the stream-id lookup only and changes nothing about how a resolved
+    (or unresolved) stream id is turned into a ``ProviderResolution``.
+
+    Invalidation:
+    * whole-map ``clear()`` — wired from the WS ``stream_rehash`` /
+      ``channels_created`` events (these are infrequent, so a targeted
+      per-stream invalidation is not worth the bookkeeping).
+    * a coarse wall-clock TTL (``ttl_seconds``, default 300s) bounds staleness
+      if an invalidation event is missed during a WS gap. On the poll-fallback
+      path this TTL is the only invalidation (acceptable — degraded mode).
+
+    The clock is injectable (``now_fn``, defaults to ``time.monotonic``) so
+    tests drive TTL deterministically without sleeping.
+    """
+
+    def __init__(
+        self,
+        ttl_seconds: float = DEFAULT_STREAM_PROVIDER_CACHE_TTL,
+        *,
+        now_fn: Optional[Callable[[], float]] = None,
+    ) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._now: Callable[[], float] = now_fn or time.monotonic
+        # stream_id -> (cached_at, provider_id, stream_name)
+        self._entries: dict[int, tuple[float, Optional[int], Optional[str]]] = {}
+
+    def get_batch(
+        self, stream_ids: list[int]
+    ) -> tuple[dict[int, tuple[Optional[int], Optional[str]]], list[int]]:
+        """Classify ``stream_ids`` into fresh hits and misses.
+
+        Returns ``(hits, misses)`` where ``hits`` maps each cached, unexpired
+        stream id to ``(provider_id, stream_name)`` and ``misses`` is the
+        de-duplicated list of ids the caller must fetch. Expired entries are
+        pruned in-place and reported as misses. Duplicate input ids collapse
+        (each id appears at most once in hits/misses)."""
+        now = self._now()
+        hits: dict[int, tuple[Optional[int], Optional[str]]] = {}
+        misses: list[int] = []
+        seen_miss: set[int] = set()
+        for sid in stream_ids:
+            entry = self._entries.get(sid)
+            if entry is not None:
+                cached_at, provider_id, stream_name = entry
+                if now - cached_at <= self.ttl_seconds:
+                    hits[sid] = (provider_id, stream_name)
+                    continue
+                # Expired — prune and treat as a miss.
+                del self._entries[sid]
+            if sid not in seen_miss:
+                seen_miss.add(sid)
+                misses.append(sid)
+        return hits, misses
+
+    def put(
+        self, stream_id: int, *, provider_id: Optional[int], stream_name: Optional[str]
+    ) -> None:
+        """Store a resolved stream's ``(provider_id, stream_name)`` stamped
+        with the current time."""
+        self._entries[stream_id] = (self._now(), provider_id, stream_name)
+
+    def clear(self) -> None:
+        """Drop the whole map (event invalidation, §D3)."""
+        self._entries.clear()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+class UserUsernameCache:
+    """``user_id -> username`` TTL cache (ADR-013 §D4).
+
+    Replaces the inline per-write ``get_users()`` fetch. The write path reads
+    the cached ``{str(user_id) -> username}`` map and refreshes it only when
+    the TTL has expired OR a requested user_id is not in the map (one refresh,
+    then served from cache for the rest of the TTL). Usernames change rarely on
+    Dispatcharr; minutes of staleness on a display name is harmless.
+
+    User ids are keyed as ``str`` to match the watch-history /
+    ``session_telemetry`` convention (``str(disp_user_id)``).
+
+    The clock is injectable (``now_fn``, defaults to ``time.monotonic``) for
+    deterministic TTL tests.
+    """
+
+    def __init__(
+        self,
+        ttl_seconds: float = DEFAULT_USER_USERNAME_CACHE_TTL,
+        *,
+        now_fn: Optional[Callable[[], float]] = None,
+    ) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._now: Callable[[], float] = now_fn or time.monotonic
+        self._map: dict[str, str] = {}
+        # ``None`` until the first refresh, so an unpopulated cache always
+        # reports expired (forces the first fetch).
+        self._refreshed_at: Optional[float] = None
+
+    def is_expired(self) -> bool:
+        if self._refreshed_at is None:
+            return True
+        return self._now() - self._refreshed_at > self.ttl_seconds
+
+    def contains(self, user_id: str) -> bool:
+        return user_id in self._map
+
+    def get(self, user_id: str) -> Optional[str]:
+        return self._map.get(user_id)
+
+    def replace(self, user_map: dict[str, str]) -> None:
+        """Swap in a freshly-fetched map and reset the TTL anchor."""
+        self._map = dict(user_map)
+        self._refreshed_at = self._now()
+
+    def snapshot(self) -> dict[str, str]:
+        return dict(self._map)
+
+
 async def resolve_active_channel_streams(
     client,
     channel_snapshot: list[dict],
@@ -596,6 +739,7 @@ async def resolve_active_channel_streams(
     poll_count: int = 0,
     emit_metrics: bool = True,
     m3u_accounts: Optional[list[dict]] = None,
+    stream_provider_cache: Optional["StreamProviderCache"] = None,
 ) -> dict[str, ProviderResolution]:
     """Resolve each active channel's stream identity (id + name + provider).
 
@@ -769,55 +913,95 @@ async def resolve_active_channel_streams(
         return provider_by_channel
 
     unique_stream_ids = sorted(set(stream_id_by_channel.values()))
-    try:
-        streams = await client.get_streams_by_ids(unique_stream_ids)
-    except Exception as e:
-        logger.warning(
-            "[STATS_V2] provider_resolution_failed reason=lookup_raised error=%s",
-            e,
-        )
-        # Stream-id lookup failed — try URL-hostname match for every
-        # affected channel so the operator still sees a provider name
-        # when possible.
-        unresolved_after_url = 0
-        url_resolved = 0
-        for channel_uuid in stream_id_by_channel:
-            hostname_resolution = _resolution_from_url_hostname(
-                url_by_channel.get(channel_uuid), m3u_accounts
-            )
-            if hostname_resolution is not None:
-                provider_by_channel[channel_uuid] = hostname_resolution
-                url_resolved += 1
-                continue
-            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-            unresolved_after_url += 1
-        if emit_metrics:
-            already_resolved_via_hostname = sum(
-                1
-                for ch, resolution in provider_by_channel.items()
-                if ch not in stream_id_by_channel
-                and resolution is not EMPTY_RESOLUTION
-            )
-            _log_provider_resolution_sli(
-                url_resolved + already_resolved_via_hostname,
-                len(unresolvable_channels) + unresolved_after_url,
-            )
-        return provider_by_channel
 
+    # ADR-013 §D3 (bead 312nk.4): the stream->provider cache sits in FRONT of
+    # the stream-id lookup. Serve cache HITS for free; batch ONLY the
+    # cache-MISS ids into the one ``get_streams_by_ids`` call. Hits seed the
+    # by-stream maps directly so the downstream resolution / bd-gy5nd
+    # fall-through logic is identical whether a stream came from the cache or
+    # from a fresh fetch. When no cache is supplied (the on-demand
+    # ``/api/stats/channels`` path), behavior is exactly as before — every id
+    # is a miss.
     provider_by_stream: dict[int, Optional[int]] = {}
     name_by_stream: dict[int, Optional[str]] = {}
+    if stream_provider_cache is not None:
+        cached_hits, miss_ids = stream_provider_cache.get_batch(unique_stream_ids)
+        for sid_int, (cached_provider_id, cached_name) in cached_hits.items():
+            provider_by_stream[sid_int] = cached_provider_id
+            name_by_stream[sid_int] = cached_name
+        fetch_ids = miss_ids
+    else:
+        fetch_ids = unique_stream_ids
+
+    streams: list[dict] = []
+    if fetch_ids:
+        try:
+            streams = await client.get_streams_by_ids(fetch_ids)
+        except Exception as e:
+            logger.warning(
+                "[STATS_V2] provider_resolution_failed reason=lookup_raised error=%s",
+                e,
+            )
+            # Stream-id lookup failed — try URL-hostname match for every
+            # affected channel that the cache did NOT already resolve so the
+            # operator still sees a provider name when possible. Channels whose
+            # stream id was a cache HIT continue through the normal path below
+            # against the partially-populated by-stream maps.
+            unresolved_after_url = 0
+            url_resolved = 0
+            uncached_channels = [
+                channel_uuid
+                for channel_uuid, sid in stream_id_by_channel.items()
+                if sid not in provider_by_stream
+            ]
+            for channel_uuid in uncached_channels:
+                hostname_resolution = _resolution_from_url_hostname(
+                    url_by_channel.get(channel_uuid), m3u_accounts
+                )
+                if hostname_resolution is not None:
+                    provider_by_channel[channel_uuid] = hostname_resolution
+                    url_resolved += 1
+                    continue
+                provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+                unresolved_after_url += 1
+            # Drop the channels we just resolved via the failure path so the
+            # normal per-channel loop below only handles the cache-hit
+            # remainder.
+            for channel_uuid in uncached_channels:
+                stream_id_by_channel.pop(channel_uuid, None)
+            if not stream_id_by_channel:
+                if emit_metrics:
+                    already_resolved_via_hostname = sum(
+                        1
+                        for resolution in provider_by_channel.values()
+                        if resolution is not EMPTY_RESOLUTION
+                    ) - url_resolved
+                    _log_provider_resolution_sli(
+                        url_resolved + already_resolved_via_hostname,
+                        len(unresolvable_channels) + unresolved_after_url,
+                    )
+                return provider_by_channel
+
     for stream in streams:
         sid = stream.get("id", stream.get("stream_id"))
         if sid is None:
             continue
         sid_int = int(sid)
-        provider_by_stream[sid_int] = extract_m3u_account_id(
-            stream.get("m3u_account")
-        )
+        resolved_provider_id = extract_m3u_account_id(stream.get("m3u_account"))
         raw_name = stream.get("name")
-        name_by_stream[sid_int] = (
+        resolved_name = (
             str(raw_name) if isinstance(raw_name, str) and raw_name else None
         )
+        provider_by_stream[sid_int] = resolved_provider_id
+        name_by_stream[sid_int] = resolved_name
+        # Populate the cache with streams that were actually FOUND in the
+        # response. Streams missing from the response (``stream_not_found``)
+        # are NOT cached — a negative result must keep being re-fetched so the
+        # stream is picked up when it later appears.
+        if stream_provider_cache is not None:
+            stream_provider_cache.put(
+                sid_int, provider_id=resolved_provider_id, stream_name=resolved_name
+            )
 
     resolved_count = sum(
         1
@@ -1440,6 +1624,7 @@ class BandwidthTracker:
         poll_interval: int = DEFAULT_POLL_INTERVAL,
         *,
         now_fn: Optional[Callable[[], float]] = None,
+        cache_now_fn: Optional[Callable[[], float]] = None,
     ):
         """
         Initialize the tracker.
@@ -1453,6 +1638,13 @@ class BandwidthTracker:
                 with a controllable clock instead of sleeping — both the throttle
                 gate and the per-observation watch-time elapsed are read through
                 this single source so they stay consistent.
+            cache_now_fn: Monotonic clock source for the §D3/§D4 cache TTLs
+                (ADR-013 / bead 312nk.4). Deliberately SEPARATE from ``now_fn``:
+                the telemetry-throttle test clock auto-advances on every read,
+                which would make the coarse 300s cache TTLs age unpredictably.
+                The cache clock is read only on cache operations, so a plain
+                ``time.monotonic`` is correct in production. Injectable so the
+                cache-TTL tests drive expiry deterministically.
         """
         self.client = client
         self.poll_interval = poll_interval
@@ -1460,6 +1652,9 @@ class BandwidthTracker:
         # throttle and watch-time accrual. Monotonic (not wall-clock) so a
         # system clock step cannot inflate or stall either.
         self._now: Callable[[], float] = now_fn or time.monotonic
+        # ADR-013 §D3/§D4 (bead 312nk.4): independent clock for the cache TTLs
+        # (see the ``cache_now_fn`` arg note). Defaults to ``time.monotonic``.
+        self._cache_now: Callable[[], float] = cache_now_fn or time.monotonic
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._last_bytes: dict[str, int] = {}  # Track per-channel bytes to compute deltas
@@ -1517,6 +1712,27 @@ class BandwidthTracker:
         # same change.
         self._channel_streams_cache_cap = self._provider_cache.cap
         self._channel_streams_cache_ttl_polls = self._provider_cache.ttl_polls
+
+        # ADR-013 §D3 (bead 312nk.4): process-lived stream->provider cache. Sits
+        # in FRONT of the ``get_streams_by_ids`` lookup in
+        # ``resolve_active_channel_streams`` — hits cost nothing, only misses
+        # are batched. Whole-map-cleared by the WS ``stream_rehash`` /
+        # ``channels_created`` events (via ``invalidate_stream_provider_cache``)
+        # and bounded by a coarse safety TTL. The TTL is read live off the
+        # client settings; we seed the instance with the current value and the
+        # tracker's monotonic clock so it ages on the same source as the
+        # telemetry throttle and tests can drive it deterministically.
+        self._stream_provider_cache = StreamProviderCache(
+            ttl_seconds=self._stream_provider_cache_ttl(),
+            now_fn=self._cache_now,
+        )
+        # ADR-013 §D4 (bead 312nk.4): user_id->username TTL cache. Replaces the
+        # per-write ``get_users()`` fetch — refreshed only on TTL expiry or a
+        # miss for an unknown user_id.
+        self._user_username_cache = UserUsernameCache(
+            ttl_seconds=self._user_username_cache_ttl(),
+            now_fn=self._cache_now,
+        )
         # Monotonically increasing poll counter, used as the TTL anchor
         # for ``_provider_cache``. Incremented on every
         # ``_collect_stats`` entry so the counter advances even when the
@@ -1658,6 +1874,75 @@ class BandwidthTracker:
         if value <= 0:
             return float(self.poll_interval)
         return value
+
+    def _stream_provider_cache_ttl(self) -> float:
+        """Safety TTL (seconds) for the stream->provider cache (ADR-013 §D3).
+        Read live off the client settings; falls back to the 300s default when
+        absent or non-positive."""
+        settings = getattr(self.client, "settings", None)
+        raw = getattr(settings, "stream_provider_cache_ttl", None)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value <= 0:
+            return float(DEFAULT_STREAM_PROVIDER_CACHE_TTL)
+        return value
+
+    def _user_username_cache_ttl(self) -> float:
+        """TTL (seconds) for the user->username cache (ADR-013 §D4). Read live
+        off the client settings; falls back to the 300s default when absent or
+        non-positive."""
+        settings = getattr(self.client, "settings", None)
+        raw = getattr(settings, "user_username_cache_ttl", None)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value <= 0:
+            return float(DEFAULT_USER_USERNAME_CACHE_TTL)
+        return value
+
+    def invalidate_stream_provider_cache(self, reason: str = "") -> None:
+        """Whole-map clear of the stream->provider cache (ADR-013 §D3).
+
+        Wired from the WS ``stream_rehash`` / ``channels_created`` events via
+        ``ChannelStatsSubscriber``. These events are infrequent, so a whole-map
+        clear is the correct (and simplest) invalidation — the next resolve
+        lazily re-fills only the active streams' ids. No-op-safe to call from
+        the WS read loop."""
+        self._stream_provider_cache.clear()
+        logger.info(
+            "[WS] stream->provider cache invalidated (reason=%s)", reason or "event"
+        )
+
+    async def _resolve_usernames(self, user_ids: set[str]) -> dict[str, str]:
+        """Resolve ``{str(user_id) -> username}`` for the requested ids using
+        the §D4 TTL cache, fetching ``get_users()`` only when REQUIRED.
+
+        Refreshes (one ``get_users()`` round-trip) when the cache TTL has
+        expired OR any requested id is not in the cached map; otherwise serves
+        entirely from cache. Returns the full cached map (the caller indexes it
+        by ``str(user_id)``). An empty request fetches nothing and returns ``{}``
+        — preserving the ``need_user_resolution`` gating (no user ids → no
+        fetch). A fetch failure logs and returns the (possibly stale) cached map
+        so a transient Dispatcharr error never blanks usernames mid-stream."""
+        if not user_ids:
+            return {}
+        needs_refresh = self._user_username_cache.is_expired() or any(
+            not self._user_username_cache.contains(uid) for uid in user_ids
+        )
+        if needs_refresh:
+            try:
+                users = await self.client.get_users()
+                self._user_username_cache.replace(
+                    {str(u["id"]): u.get("username", "") for u in users}
+                )
+            except Exception as e:
+                logger.warning(
+                    "[BANDWIDTH] Failed to refresh username cache: %s", e
+                )
+        return self._user_username_cache.snapshot()
 
     async def stop(self):
         """Stop the background polling task."""
@@ -2287,11 +2572,28 @@ class BandwidthTracker:
                 )
             )
             if need_user_resolution:
+                # ADR-013 §D4 (bead 312nk.4): resolve usernames through the TTL
+                # cache instead of an unconditional per-write ``get_users()``.
+                # ``_resolve_usernames`` fetches only on TTL expiry or a miss
+                # for an unknown user_id, then serves the cached map for the
+                # rest of the TTL — dropping the steady-state ``get_users()``
+                # round-trip to rare. The set of ids drawn from BOTH the
+                # watch-history channels and the broader telemetry snapshot so
+                # a new viewer (which is always a connection-set edge → a write)
+                # forces the one refresh that warms the cache.
+                requested_user_ids: set[str] = set()
+                for ch in all_channel_data:
+                    for uid in ch.get("client_user_map", {}).values():
+                        if uid is not None:
+                            requested_user_ids.add(str(uid))
+                for entry in telemetry_channel_snapshot:
+                    for uid in entry.get("client_user_map", {}).values():
+                        if uid is not None:
+                            requested_user_ids.add(str(uid))
                 try:
-                    users = await self.client.get_users()
-                    dispatcharr_user_map = {
-                        str(u["id"]): u.get("username", "") for u in users
-                    }
+                    dispatcharr_user_map = await self._resolve_usernames(
+                        requested_user_ids
+                    )
                     for ch in all_channel_data:
                         client_user_map = ch.get("client_user_map", {})
                         ch["client_username_map"] = {
@@ -2825,6 +3127,7 @@ class BandwidthTracker:
             poll_count=self._poll_count,
             emit_metrics=True,
             m3u_accounts=self._m3u_accounts_cache,
+            stream_provider_cache=self._stream_provider_cache,
         )
 
     # ------------------------------------------------------------------

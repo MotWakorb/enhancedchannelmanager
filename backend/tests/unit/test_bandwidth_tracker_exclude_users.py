@@ -601,13 +601,19 @@ async def test_exclude_does_not_skip_get_users_when_configured(
     monkeypatch,
 ):
     """When the exclude list is configured AND the snapshot carries user
-    ids, the helper MUST call ``get_users`` to resolve the username axis
-    — even when the watch-history flow would otherwise skip it.
+    ids, the helper MUST resolve the username axis (call ``get_users`` at
+    least once to warm the cache) — even when the watch-history flow would
+    otherwise skip it.
 
     Failure mode this guards against: a future refactor of the
     watch-history username resolution that skips the round-trip when
     only the exclude filter needs it. The filter would silently
     degrade to user_id-only matching.
+
+    ADR-013 §D4 (bead 312nk.4): the username resolution now goes through a
+    TTL cache, so the round-trip fires ONCE (cold cache, poll 1) and poll 2
+    serves the same user id from cache. The guard still holds — the username
+    map IS populated for the filter; it is just no longer re-fetched every poll.
     """
     monkeypatch.setenv("ECM_TELEMETRY_EXCLUDE_USERS", "claude")
     included_uid, excluded_uid = seed_synthetic_users
@@ -625,6 +631,6 @@ async def test_exclude_does_not_skip_get_users_when_configured(
 
     await _drive_two_polls(tracker, mock_client, first, second)
 
-    # ``get_users`` was invoked on each poll so the username axis is
-    # populated for the filter.
-    assert mock_client.get_users.await_count == 2
+    # ``get_users`` was invoked to warm the username cache (once, cold cache);
+    # poll 2 served the same user id from cache. The username axis is populated.
+    assert mock_client.get_users.await_count == 1

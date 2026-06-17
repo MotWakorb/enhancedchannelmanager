@@ -727,6 +727,13 @@ async def update_settings(request: SettingsRequest):
         # current settings — rebuilding the model here would otherwise reset an
         # operator's tuned value back to the default on the next UI settings-save.
         telemetry_write_interval=current_settings.telemetry_write_interval,
+        # ADR-013 §D3/§D4 (bead 312nk.4): stream->provider and user->username
+        # cache TTLs. Operator-driven via settings.json (not surfaced in the
+        # UI), so they MUST be preserved from current settings — rebuilding the
+        # model here would otherwise reset a tuned value back to the default on
+        # the next UI settings-save.
+        stream_provider_cache_ttl=current_settings.stream_provider_cache_ttl,
+        user_username_cache_ttl=current_settings.user_username_cache_ttl,
     )
     save_settings(new_settings)
     clear_settings_cache()

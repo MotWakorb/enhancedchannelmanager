@@ -17,13 +17,13 @@ Scope of THIS bead:
 * watchdog/staleness -> flip ``ws_healthy`` False so the poll re-engages
 * exponential backoff + jitter (cap 30s), reset on a successful event
 * ``channel_stats`` -> ``_process_channel_snapshot``; ignore all other types
+* ``stream_rehash`` / ``channels_created`` -> invalidate the tracker's
+  stream->provider cache (ADR-013 §D3, bead 312nk.4); these are NOT snapshot
+  drivers, they only dirty the cache.
 
-OUT OF SCOPE (later beads): ``stream_rehash``/``channels_created`` cache
-invalidation (.4), telemetry write-cadence throttle (.3). NOTE: while WS is
-enabled+healthy, ``_process_channel_snapshot`` is driven on EVERY event (~2s),
-which is ~5x today's telemetry write volume. This amplification is KNOWN and
-fixed by bead 312nk.3 (the ``telemetry_write_interval`` throttle); do not add it
-here.
+The telemetry write-cadence throttle (bead 312nk.3) and the stream->provider /
+user->username caches (bead 312nk.4) live in ``bandwidth_tracker``; this module
+only routes the WS events to them.
 """
 from __future__ import annotations
 
@@ -210,9 +210,16 @@ class ChannelStatsSubscriber:
             return
 
         etype = event.get("type")
+        if etype in ("stream_rehash", "channels_created"):
+            # ADR-013 §D3 (bead 312nk.4): these infrequent events dirty the
+            # stream->provider mapping. Whole-map clear of the tracker's
+            # stream->provider cache so the next resolve lazily re-fills. These
+            # are NOT snapshot drivers — they do not feed
+            # ``_process_channel_snapshot``.
+            self.tracker.invalidate_stream_provider_cache(reason=etype)
+            return
         if etype != "channel_stats":
-            # stream_rehash / channels_created / anything else — ignored for
-            # this bead (no crash on unknown types). Cache invalidation is .4.
+            # Anything else — ignored gracefully (no crash on unknown types).
             logger.debug("[WS] ignoring event type=%s", etype)
             return
 
