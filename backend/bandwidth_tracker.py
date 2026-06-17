@@ -1535,6 +1535,17 @@ class BandwidthTracker:
         # of ``_process_channel_snapshot``.
         self._snapshot_lock = asyncio.Lock()
 
+        # ADR-013 §D1 (bead 312nk.2): the WebSocket channel_stats subscriber is
+        # OWNED by the tracker. It is constructed lazily in ``start()`` (only
+        # when ``use_ws_channel_stats`` is true) and its task cancelled in
+        # ``stop()`` so it shares the tracker's lifecycle — the settings-driven
+        # restart and the HTTPS-subprocess guard govern it for free. While
+        # healthy it drives ``_process_channel_snapshot`` directly; the poll
+        # loop reads ``_ws_subscriber.ws_healthy`` each tick to decide whether
+        # to suppress / cross-validate (§D5).
+        self._ws_subscriber = None
+        self._ws_task: Optional[asyncio.Task] = None
+
     async def start(self):
         """Start the background polling task."""
         if self._running:
@@ -1564,6 +1575,29 @@ class BandwidthTracker:
         self._task = asyncio.create_task(self._poll_loop())
         logger.info("[BANDWIDTH] BandwidthTracker started (polling every %ss)", self.poll_interval)
 
+        # ADR-013 §D7: start the WebSocket channel_stats subscriber only when
+        # ``use_ws_channel_stats`` is enabled. Default OFF — pure-poll behavior,
+        # zero new connection. The flag is read off the live client settings so
+        # the settings-restart path (which reconstructs the tracker with a fresh
+        # client) re-reads the toggle on the next start.
+        if self._use_ws_channel_stats():
+            from channel_stats_subscriber import ChannelStatsSubscriber
+
+            self._ws_subscriber = ChannelStatsSubscriber(self.client, self)
+            self._ws_task = asyncio.create_task(self._ws_subscriber.run())
+            logger.info("[WS] channel_stats subscriber enabled (use_ws_channel_stats=True)")
+
+    def _use_ws_channel_stats(self) -> bool:
+        """Read the WS master enable off the live client settings (ADR-013)."""
+        settings = getattr(self.client, "settings", None)
+        return bool(getattr(settings, "use_ws_channel_stats", False))
+
+    def _ws_suppress_poll_when_healthy(self) -> bool:
+        """Read the poll-suppression toggle off the live client settings
+        (ADR-013 §D5 / PO decision #3)."""
+        settings = getattr(self.client, "settings", None)
+        return bool(getattr(settings, "ws_suppress_poll_when_healthy", False))
+
     async def stop(self):
         """Stop the background polling task."""
         self._running = False
@@ -1574,6 +1608,17 @@ class BandwidthTracker:
             except asyncio.CancelledError:
                 logger.debug("[BANDWIDTH] Polling task cancelled during shutdown")
             self._task = None
+        # Cancel the WS subscriber task (if running) so it shares the tracker's
+        # shutdown — the settings-restart path stops the old tracker before
+        # building a new one (ADR-013 §D1).
+        if self._ws_task:
+            self._ws_task.cancel()
+            try:
+                await self._ws_task
+            except asyncio.CancelledError:
+                logger.debug("[WS] subscriber task cancelled during shutdown")
+            self._ws_task = None
+        self._ws_subscriber = None
         logger.info("[BANDWIDTH] BandwidthTracker stopped")
 
     async def _initialize_channel_maps(self):
@@ -1797,6 +1842,25 @@ class BandwidthTracker:
         # realistic operator timeline (>68 years at 10s polls on 32-bit
         # int, far longer on 64-bit Python ints).
         self._poll_count += 1
+
+        # ADR-013 §D5 / PO decision #3 — poll behavior when the WS driver is
+        # enabled and healthy. When the WS is NOT healthy (or the feature is
+        # OFF), the poll behaves EXACTLY as it did before this bead: fetch +
+        # process. ``_ws_healthy`` short-circuits both branches below to that
+        # legacy path so the default-OFF behavior is byte-for-byte unchanged.
+        ws_healthy = (
+            self._use_ws_channel_stats()
+            and self._ws_subscriber is not None
+            and self._ws_subscriber.ws_healthy
+        )
+
+        if ws_healthy and self._ws_suppress_poll_when_healthy():
+            # Suppress mode: the WS is the sole driver. Skip the fetch entirely
+            # (avoids a redundant /proxy/ts/status round-trip). Flipped ON once
+            # the feature defaults ON.
+            logger.debug("[WS] poll suppressed — WS healthy and suppress_poll_when_healthy=True")
+            return
+
         try:
             stats = await self.client.get_channel_stats()
         except Exception as e:
@@ -1811,6 +1875,33 @@ class BandwidthTracker:
         observed_at_ms = int(time.time() * 1000)
 
         channels = stats.get("channels", [])
+
+        if ws_healthy:
+            # Soak mode (suppress_poll_when_healthy=False): the WS is driving
+            # ``_process_channel_snapshot``, so the poll must NOT also process —
+            # that would double-write telemetry and double-advance byte-delta
+            # baselines. Instead, log a lightweight cross-validation line
+            # comparing this poll snapshot to the last WS snapshot (channel
+            # count + total-bytes drift) so a soak operator can confirm the WS
+            # path matches the poll path before flipping the feature default ON.
+            poll_count = len(channels)
+            poll_total_bytes = sum(
+                (c.get("total_bytes", 0) or 0) for c in channels if isinstance(c, dict)
+            )
+            ws_count = self._ws_subscriber.last_snapshot_channel_count
+            ws_total_bytes = self._ws_subscriber.last_snapshot_total_bytes
+            logger.info(
+                "[WS] cross-validate: poll(channels=%s, total_bytes=%s) "
+                "vs ws(channels=%s, total_bytes=%s) drift(channels=%s, total_bytes=%s)",
+                poll_count,
+                poll_total_bytes,
+                ws_count,
+                ws_total_bytes,
+                poll_count - ws_count,
+                poll_total_bytes - ws_total_bytes,
+            )
+            return
+
         await self._process_channel_snapshot(channels, observed_at_ms)
 
     async def _process_channel_snapshot(self, channels, observed_at_ms):
