@@ -137,52 +137,71 @@ class TestCrashSentinel:
 
 
 class TestRunOnRefreshBreaker:
+    """exo4j breaker/break-glass still trips/skips end-to-end through the new
+    SINGLE auto-creation path (ADR-011 collapsed AutoCreationTask.execute())."""
+
+    def _settings(self, **kw):
+        base = dict(
+            auto_creation_run_on_refresh_disabled=False,
+            last_m3u_refresh_completed_at="2026-01-02T00:00:00+00:00",
+            last_auto_creation_consumed_refresh_at="2026-01-01T00:00:00+00:00",
+        )
+        base.update(kw)
+        return MagicMock(**base)
+
     @pytest.mark.asyncio
     async def test_skipped_when_flag_set(self):
-        from tasks import auto_creation as ac
+        from tasks.auto_creation import AutoCreationTask
 
         with patch.dict(os.environ, {}, clear=False), \
-             patch.object(ac, "get_settings", return_value=MagicMock(auto_creation_run_on_refresh_disabled=True)), \
+             patch("tasks.auto_creation.get_settings",
+                   return_value=self._settings(auto_creation_run_on_refresh_disabled=True)), \
              patch("services.notification_service.create_notification_internal", new=AsyncMock()) as mock_notif, \
              patch("journal.log_entry") as mock_journal:
             os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
-            result = await ac.run_auto_creation_after_refresh(m3u_account_ids=[1])
+            result = await AutoCreationTask().execute()
 
-        assert result["success"] is True
-        assert result.get("skipped") is True
+        assert result.success is True
+        assert result.details.get("skipped") is True
         mock_notif.assert_awaited()  # operator is told
         mock_journal.assert_called()
 
     @pytest.mark.asyncio
     async def test_break_glass_env_skips_regardless(self):
-        from tasks import auto_creation as ac
+        from tasks.auto_creation import AutoCreationTask
 
         with patch.dict(os.environ, {"ECM_DISABLE_RUN_ON_REFRESH": "1"}, clear=False), \
-             patch.object(ac, "get_settings", return_value=MagicMock(auto_creation_run_on_refresh_disabled=False)):
-            result = await ac.run_auto_creation_after_refresh(m3u_account_ids=[1])
+             patch("tasks.auto_creation.get_settings", return_value=self._settings()), \
+             patch("services.notification_service.create_notification_internal", new=AsyncMock()), \
+             patch("journal.log_entry"):
+            result = await AutoCreationTask().execute()
 
-        assert result.get("skipped") is True
+        assert result.details.get("skipped") is True
 
     @pytest.mark.asyncio
     async def test_fires_when_flag_clear(self):
-        from tasks import auto_creation as ac
+        from tasks.auto_creation import AutoCreationTask
 
         fake_engine = MagicMock()
-        fake_engine.run_pipeline = AsyncMock(return_value={"channels_created": 2, "streams_matched": 2, "streams_evaluated": 5})
+        fake_engine.run_pipeline = AsyncMock(return_value={
+            "channels_created": 2, "streams_matched": 2, "streams_evaluated": 5,
+        })
+        session = MagicMock()
+        rule = MagicMock(id=1)
+        rule.name = "R1"
+        session.query.return_value.filter.return_value.all.return_value = [rule]
 
         with patch.dict(os.environ, {}, clear=False), \
-             patch.object(ac, "get_settings", return_value=MagicMock(auto_creation_run_on_refresh_disabled=False)), \
+             patch("tasks.auto_creation.get_settings", return_value=self._settings()), \
+             patch("tasks.auto_creation.save_settings"), \
              patch("services.notification_service.create_notification_internal", new=AsyncMock()), \
              patch("auto_creation_engine.get_auto_creation_engine", return_value=fake_engine), \
-             patch("dispatcharr_client.get_client", return_value=MagicMock()), \
-             patch("database.get_session") as mock_sess:
+             patch("tasks.auto_creation.get_client", return_value=MagicMock()), \
+             patch("database.get_session", return_value=session):
             os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
-            rule = MagicMock(id=1)
-            rule.name = "R1"
-            mock_sess.return_value.query.return_value.filter.return_value.all.return_value = [rule]
-            result = await ac.run_auto_creation_after_refresh(m3u_account_ids=[1])
+            result = await AutoCreationTask().execute()
 
-        assert result.get("channels_created") == 2
+        assert result.details.get("channels_created") == 2
         fake_engine.run_pipeline.assert_awaited_once()
 
 

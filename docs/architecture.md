@@ -217,6 +217,32 @@ Startup → TaskEngine (checks every 60s, max 3 concurrent)
 
 `AutoCreationEngine` orchestrates a per-stream pipeline. For each stream in scope it builds a `StreamContext`, evaluates it against a rule via `ConditionEvaluator`, and on match hands the matched actions to `ActionExecutor`.
 
+### Trigger model — event-driven, decoupled from M3U refresh (ADR-011)
+
+Auto-creation has **two** entry points, with distinct gating:
+
+- **Manual "Run Now"** — `POST /api/auto-creation/run` (and `/rules/{id}/run`)
+  go straight to `engine.run_pipeline`. **Never gated** by the run-on-refresh
+  circuit breaker or the refresh watermark.
+- **Unattended auto-fire** — `AutoCreationTask` (`tasks/auto_creation.py`) runs
+  on an **INTERVAL schedule (~60s)** and decides for itself whether to run. It
+  is the single auto-fire path (one breaker gate, one created-channel cap path,
+  one notification style).
+
+M3U refresh **no longer hard-chains** auto-creation. Instead, on every
+successful refresh (scheduled `M3URefreshTask` or the manual single-account
+poll in `routers/m3u.py`), the refresh advances a watermark
+`last_m3u_refresh_completed_at` in settings.json (Q1: not change-gated). The
+`AutoCreationTask` AUTO-FIRE GUARD then runs the post-refresh pipeline on its
+next tick only when ALL hold: (a) task enabled; (b) `_run_on_refresh_suppressed()`
+is False (exo4j breaker clear AND `ECM_DISABLE_RUN_ON_REFRESH` unset, read
+fresh); (c) ≥1 `enabled AND run_on_refresh=True` rule exists (only that set
+runs); (d) `last_m3u_refresh_completed_at > last_auto_creation_consumed_refresh_at`.
+On run it consumes the watermark (advances `last_auto_creation_consumed_refresh_at`)
+**before** running, so a crash or overlapping tick cannot re-fire against the
+same refresh. Trade-off: ~60s latency after a refresh (Q3); a single failed M3U
+account no longer suppresses auto-creation for the batch. See ADR-011.
+
 ```
 AutoCreationEngine.run_pipeline() / run_rule()
   ├─ _load_existing_data · _load_rules · _fetch_streams · _load_stream_stats

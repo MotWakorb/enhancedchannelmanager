@@ -314,12 +314,15 @@ async def _run_execute_with_timestamps(initial_ts, polled_ts):
 
     # Patch sleep so the poll loop runs instantly. Drive "elapsed" so the 30s
     # fallback only triggers when we want it to (after the timestamp check).
+    # ADR-011 (bd-ka7j9): the hard chain to auto-creation is gone; refresh now
+    # only advances the watermark via save_settings. Patch settings so the test
+    # never touches the real config file.
     with patch("tasks.m3u_refresh.get_client", return_value=client), \
          patch("tasks.m3u_refresh.capture_m3u_changes", capture), \
          patch("tasks.m3u_refresh.POLL_INTERVAL_SECONDS", 0), \
          patch("tasks.m3u_refresh.asyncio.sleep", new=AsyncMock(return_value=None)), \
-         patch("tasks.auto_creation.run_auto_creation_after_refresh",
-               new=AsyncMock(return_value={})):
+         patch("tasks.m3u_refresh.get_settings", return_value=MagicMock()), \
+         patch("tasks.m3u_refresh.save_settings"):
         task = _make_task()
         await task.execute()
 
@@ -365,8 +368,8 @@ async def test_execute_skips_when_timestamp_definitively_unchanged():
          patch("tasks.m3u_refresh.POLL_INTERVAL_SECONDS", 0), \
          patch("tasks.m3u_refresh.MAX_WAIT_SECONDS", 0), \
          patch("tasks.m3u_refresh.asyncio.sleep", new=AsyncMock(return_value=None)), \
-         patch("tasks.auto_creation.run_auto_creation_after_refresh",
-               new=AsyncMock(return_value={})):
+         patch("tasks.m3u_refresh.get_settings", return_value=MagicMock()), \
+         patch("tasks.m3u_refresh.save_settings"):
         task = _make_task()
         await task.execute()
 
@@ -401,8 +404,8 @@ async def test_execute_captures_when_no_usable_timestamp_uncertain():
          patch("tasks.m3u_refresh.POLL_INTERVAL_SECONDS", 0), \
          patch("tasks.m3u_refresh.MAX_WAIT_SECONDS", 0), \
          patch("tasks.m3u_refresh.asyncio.sleep", new=AsyncMock(return_value=None)), \
-         patch("tasks.auto_creation.run_auto_creation_after_refresh",
-               new=AsyncMock(return_value={})):
+         patch("tasks.m3u_refresh.get_settings", return_value=MagicMock()), \
+         patch("tasks.m3u_refresh.save_settings"):
         task = _make_task()
         await task.execute()
 
