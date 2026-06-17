@@ -1524,6 +1524,17 @@ class BandwidthTracker:
         # repaired environments re-arm the alarm if drift recurs.
         self._schema_drift_alarm_armed = True
 
+        # Snapshot-processing serialization (ADR-013 §D5 / Consequences).
+        # ``_process_channel_snapshot`` mutates per-tracker observation state
+        # (``_last_bytes``, ``_last_active_channels``, ``_last_channel_clients``)
+        # that the byte-delta math depends on. Today only the poll loop drives
+        # it, so the lock is effectively uncontended. ADR-013 adds a second
+        # driver (the WebSocket subscriber, bead 312nk.2); this lock is in
+        # place now so a fallback poll and a late WS event can never interleave
+        # and corrupt ``_last_bytes``. Created here, acquired around the body
+        # of ``_process_channel_snapshot``.
+        self._snapshot_lock = asyncio.Lock()
+
     async def start(self):
         """Start the background polling task."""
         if self._running:
@@ -1800,343 +1811,360 @@ class BandwidthTracker:
         observed_at_ms = int(time.time() * 1000)
 
         channels = stats.get("channels", [])
-        logger.debug("[BANDWIDTH] Collected stats for %s active channels", len(channels))
+        await self._process_channel_snapshot(channels, observed_at_ms)
 
-        # Calculate totals from all active channels
-        total_bytes_delta = 0
-        total_bytes_in_delta = 0  # Inbound from providers
-        total_bytes_out_delta = 0  # Outbound to clients
-        current_bitrate_in = 0  # Current inbound bitrate (bps)
-        current_bitrate_out = 0  # Current outbound bitrate (bps)
-        active_channels = len(channels)
-        total_clients = 0
+    async def _process_channel_snapshot(self, channels, observed_at_ms):
+        """Process an already-fetched channel-stats snapshot.
 
-        current_bytes: dict[str, int] = {}
-        current_active_channels: set[str] = set()
-        current_channel_clients: dict[str, set[str]] = {}  # channel_id -> set of IPs
-        newly_active_channels: list[dict] = []
-        still_active_channels: list[dict] = []
-        # Per-channel bandwidth tracking (v0.11.0)
-        channel_bandwidth_updates: list[dict] = []
-        # Per-channel snapshot for the Stats v2 session_telemetry helper
-        # (skqln.3 step (a)). One entry per active channel this poll.
-        telemetry_channel_snapshot: list[dict] = []
+        Behavior-preserving extraction of the parse / byte-delta /
+        attribution / telemetry body of ``_collect_stats`` (ADR-013 §D1,
+        bead 312nk.1). Takes the ``channels`` list already extracted from a
+        ``/proxy/ts/status`` response (``stats.get("channels", [])``) and the
+        observation timestamp ``observed_at_ms`` so the value is identical
+        whichever driver produced the snapshot. The poll loop is the only
+        caller today; ADR-013 adds the WebSocket subscriber (bead 312nk.2) as
+        a second caller. Serialized by ``self._snapshot_lock`` so the two
+        drivers can never interleave and corrupt ``_last_bytes`` (ADR-013 §D5
+        / Consequences).
+        """
+        async with self._snapshot_lock:
+            logger.debug("[BANDWIDTH] Collected stats for %s active channels", len(channels))
 
-        for channel in channels:
-            channel_id = str(channel.get("channel_id", ""))
-            channel_number = channel.get("channel_number")
-            # Get channel name - prefer ECM lookup by channel_number or UUID, fall back to Dispatcharr's response
-            channel_name = None
-            # Try channel_number lookup first (most reliable)
-            if channel_number is not None:
-                channel_name = self._ecm_channel_number_map.get(int(channel_number))
-            # Fall back to UUID lookup
-            if not channel_name:
-                channel_name = self._ecm_channel_map.get(channel_id)
-            # Fall back to Dispatcharr's response
-            if not channel_name:
-                channel_name = channel.get("channel_name") or channel.get("name")
-            # Last resort: use partial UUID
-            if not channel_name:
-                channel_name = f"Channel {channel_id[:8]}..."
+            # Calculate totals from all active channels
+            total_bytes_delta = 0
+            total_bytes_in_delta = 0  # Inbound from providers
+            total_bytes_out_delta = 0  # Outbound to clients
+            current_bitrate_in = 0  # Current inbound bitrate (bps)
+            current_bitrate_out = 0  # Current outbound bitrate (bps)
+            active_channels = len(channels)
+            total_clients = 0
 
-            bytes_now = channel.get("total_bytes", 0) or 0
-            client_count = channel.get("client_count", 0) or 0
-            avg_bitrate_kbps = channel.get("avg_bitrate_kbps", 0) or 0
+            current_bytes: dict[str, int] = {}
+            current_active_channels: set[str] = set()
+            current_channel_clients: dict[str, set[str]] = {}  # channel_id -> set of IPs
+            newly_active_channels: list[dict] = []
+            still_active_channels: list[dict] = []
+            # Per-channel bandwidth tracking (v0.11.0)
+            channel_bandwidth_updates: list[dict] = []
+            # Per-channel snapshot for the Stats v2 session_telemetry helper
+            # (skqln.3 step (a)). One entry per active channel this poll.
+            telemetry_channel_snapshot: list[dict] = []
 
-            # Extract client IP addresses and user_id mappings
-            clients = channel.get("clients", [])
-            client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
-            client_user_map = {}
-            for c in clients:
-                ip = c.get("ip_address")
-                uid = c.get("user_id")
-                if ip and uid:
-                    client_user_map[ip] = uid
-            current_channel_clients[channel_id] = set(client_ips)
+            for channel in channels:
+                channel_id = str(channel.get("channel_id", ""))
+                channel_number = channel.get("channel_number")
+                # Get channel name - prefer ECM lookup by channel_number or UUID, fall back to Dispatcharr's response
+                channel_name = None
+                # Try channel_number lookup first (most reliable)
+                if channel_number is not None:
+                    channel_name = self._ecm_channel_number_map.get(int(channel_number))
+                # Fall back to UUID lookup
+                if not channel_name:
+                    channel_name = self._ecm_channel_map.get(channel_id)
+                # Fall back to Dispatcharr's response
+                if not channel_name:
+                    channel_name = channel.get("channel_name") or channel.get("name")
+                # Last resort: use partial UUID
+                if not channel_name:
+                    channel_name = f"Channel {channel_id[:8]}..."
 
-            current_bytes[channel_id] = bytes_now
-            total_clients += client_count
+                bytes_now = channel.get("total_bytes", 0) or 0
+                client_count = channel.get("client_count", 0) or 0
+                avg_bitrate_kbps = channel.get("avg_bitrate_kbps", 0) or 0
 
-            # Track current bitrate (for peak calculation)
-            # Inbound: one stream per channel from provider
-            # Outbound: stream × number of clients
-            channel_bitrate_bps = int(avg_bitrate_kbps * 1000)  # Convert kbps to bps
-            current_bitrate_in += channel_bitrate_bps  # One stream per channel
-            current_bitrate_out += channel_bitrate_bps * max(client_count, 1)  # Stream × clients
+                # Extract client IP addresses and user_id mappings
+                clients = channel.get("clients", [])
+                client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
+                client_user_map = {}
+                for c in clients:
+                    ip = c.get("ip_address")
+                    uid = c.get("user_id")
+                    if ip and uid:
+                        client_user_map[ip] = uid
+                current_channel_clients[channel_id] = set(client_ips)
 
-            # Calculate per-channel byte delta
-            channel_bytes_delta = 0
-            if channel_id in self._last_bytes:
-                prev_bytes = self._last_bytes[channel_id]
-                if bytes_now > prev_bytes:
-                    channel_bytes_delta = bytes_now - prev_bytes
-                    total_bytes_delta += channel_bytes_delta
-                    # Calculate in/out bytes
-                    # Inbound = bytes from provider (one stream per channel)
-                    total_bytes_in_delta += channel_bytes_delta
-                    # Outbound = bytes fanned out to all clients (stream × clients)
-                    total_bytes_out_delta += channel_bytes_delta * max(client_count, 1)
+                current_bytes[channel_id] = bytes_now
+                total_clients += client_count
 
-            # Track active channels for watch counting (use string ID for UUID support)
-            if channel_id:
-                current_active_channels.add(channel_id)
-                self._channel_names[channel_id] = channel_name  # Cache name for stop events
+                # Track current bitrate (for peak calculation)
+                # Inbound: one stream per channel from provider
+                # Outbound: stream × number of clients
+                channel_bitrate_bps = int(avg_bitrate_kbps * 1000)  # Convert kbps to bps
+                current_bitrate_in += channel_bitrate_bps  # One stream per channel
+                current_bitrate_out += channel_bitrate_bps * max(client_count, 1)  # Stream × clients
 
-                # Detect new and continuing client connections
-                last_clients = self._last_channel_clients.get(channel_id, set())
-                new_clients = set(client_ips) - last_clients
-                continuing_clients = set(client_ips) & last_clients
+                # Calculate per-channel byte delta
+                channel_bytes_delta = 0
+                if channel_id in self._last_bytes:
+                    prev_bytes = self._last_bytes[channel_id]
+                    if bytes_now > prev_bytes:
+                        channel_bytes_delta = bytes_now - prev_bytes
+                        total_bytes_delta += channel_bytes_delta
+                        # Calculate in/out bytes
+                        # Inbound = bytes from provider (one stream per channel)
+                        total_bytes_in_delta += channel_bytes_delta
+                        # Outbound = bytes fanned out to all clients (stream × clients)
+                        total_bytes_out_delta += channel_bytes_delta * max(client_count, 1)
 
-                # Check if this channel just became active (wasn't in last poll)
-                if channel_id not in self._last_active_channels:
-                    newly_active_channels.append({
-                        "channel_id": channel_id,
+                # Track active channels for watch counting (use string ID for UUID support)
+                if channel_id:
+                    current_active_channels.add(channel_id)
+                    self._channel_names[channel_id] = channel_name  # Cache name for stop events
+
+                    # Detect new and continuing client connections
+                    last_clients = self._last_channel_clients.get(channel_id, set())
+                    new_clients = set(client_ips) - last_clients
+                    continuing_clients = set(client_ips) & last_clients
+
+                    # Check if this channel just became active (wasn't in last poll)
+                    if channel_id not in self._last_active_channels:
+                        newly_active_channels.append({
+                            "channel_id": channel_id,
+                            "channel_name": channel_name,
+                            "client_ips": client_ips,
+                            "client_user_map": client_user_map,
+                            "client_count": client_count,
+                        })
+                    else:
+                        # Channel was active last poll and still is - accumulate watch time
+                        still_active_channels.append({
+                            "channel_id": channel_id,
+                            "channel_name": channel_name,
+                            "client_ips": client_ips,
+                            "client_user_map": client_user_map,
+                            "new_clients": list(new_clients),
+                            "continuing_clients": list(continuing_clients),
+                            "client_count": client_count,
+                        })
+
+                    # Track per-channel bandwidth data
+                    if channel_bytes_delta > 0 or client_count > 0:
+                        channel_bandwidth_updates.append({
+                            "channel_id": channel_id,
+                            "channel_name": channel_name,
+                            "bytes_delta": channel_bytes_delta,
+                            "client_count": client_count,
+                        })
+
+                    # Capture the snapshot the Stats v2 session_telemetry helper
+                    # needs (skqln.3 step (a)). Built unconditionally so the data
+                    # shape is stable; the helper is a no-op when the feature
+                    # flag is OFF. ``stream_id`` is the Dispatcharr integer ID
+                    # of the stream currently being served — surfaced by
+                    # ``/proxy/ts/status``, consumed by the provider resolver
+                    # in ``_resolve_provider_ids`` (bd-skqln.14). May be missing
+                    # if Dispatcharr serves a degraded stats payload; the
+                    # resolver tolerates that and falls back to URL parsing
+                    # (bd-kbgey) when ``url`` carries the same id as the trailing
+                    # ``.../<stream_id>.ts`` path segment, then NULL.
+                    telemetry_channel_snapshot.append({
+                        "channel_uuid": channel_id,
+                        "channel_number": channel_number,
+                        # bd-zldrq (fix-forward for v0.17.1-0033): pass the
+                        # ECM-resolved channel name into _resolve_emby_attributions
+                        # so the tiered resolver can match Emby's live-TV
+                        # item.Name "<number> | <name>" against the channel
+                        # name (the Dispatcharr stream name does not fuzzy
+                        # match it above 0.85 for provider-prefixed verbose
+                        # names like "US: ESPN FHD").
                         "channel_name": channel_name,
-                        "client_ips": client_ips,
-                        "client_user_map": client_user_map,
-                        "client_count": client_count,
+                        "client_ips": list(client_ips),
+                        "client_user_map": dict(client_user_map),
+                        "channel_bytes_delta": channel_bytes_delta,
+                        "stream_id": channel.get("stream_id"),
+                        "url": channel.get("url"),
+                        # bd-mlcla: per-connection metadata for the reconciler.
+                        # ``connected_at`` is the IP-bucket tie-break. (The channel
+                        # ``url`` above feeds the bd-gy5nd provider/hostname path;
+                        # bd-4w9w6 removed its use as a reconciliation discriminator
+                        # — see _reconcile_persisted_attributions.)
+                        # bd-rools: carry the Dispatcharr account ``user_id`` so the
+                        # persisted reconciler can apply the SAME per-connection
+                        # account-identity discriminator as the live stats path — a
+                        # genuine direct subscriber (positive user_id) is excluded
+                        # from media-server reconciliation, anonymous pulls
+                        # (user_id "0"/None) stay eligible.
+                        "client_meta": [
+                            {
+                                "ip_address": c.get("ip_address"),
+                                "client_id": c.get("client_id"),
+                                "connected_at": c.get("connected_at"),
+                                "user_id": c.get("user_id"),
+                            }
+                            for c in clients
+                            if c.get("ip_address")
+                        ],
                     })
-                else:
-                    # Channel was active last poll and still is - accumulate watch time
-                    still_active_channels.append({
-                        "channel_id": channel_id,
-                        "channel_name": channel_name,
-                        "client_ips": client_ips,
-                        "client_user_map": client_user_map,
-                        "new_clients": list(new_clients),
-                        "continuing_clients": list(continuing_clients),
-                        "client_count": client_count,
-                    })
 
-                # Track per-channel bandwidth data
-                if channel_bytes_delta > 0 or client_count > 0:
-                    channel_bandwidth_updates.append({
-                        "channel_id": channel_id,
-                        "channel_name": channel_name,
-                        "bytes_delta": channel_bytes_delta,
-                        "client_count": client_count,
-                    })
+            # Check for channels that stopped being watched
+            stopped_channels = self._last_active_channels - current_active_channels
+            if stopped_channels:
+                self._log_watch_stop_events(stopped_channels)
+                self._close_client_connections(stopped_channels)
 
-                # Capture the snapshot the Stats v2 session_telemetry helper
-                # needs (skqln.3 step (a)). Built unconditionally so the data
-                # shape is stable; the helper is a no-op when the feature
-                # flag is OFF. ``stream_id`` is the Dispatcharr integer ID
-                # of the stream currently being served — surfaced by
-                # ``/proxy/ts/status``, consumed by the provider resolver
-                # in ``_resolve_provider_ids`` (bd-skqln.14). May be missing
-                # if Dispatcharr serves a degraded stats payload; the
-                # resolver tolerates that and falls back to URL parsing
-                # (bd-kbgey) when ``url`` carries the same id as the trailing
-                # ``.../<stream_id>.ts`` path segment, then NULL.
-                telemetry_channel_snapshot.append({
-                    "channel_uuid": channel_id,
-                    "channel_number": channel_number,
-                    # bd-zldrq (fix-forward for v0.17.1-0033): pass the
-                    # ECM-resolved channel name into _resolve_emby_attributions
-                    # so the tiered resolver can match Emby's live-TV
-                    # item.Name "<number> | <name>" against the channel
-                    # name (the Dispatcharr stream name does not fuzzy
-                    # match it above 0.85 for provider-prefixed verbose
-                    # names like "US: ESPN FHD").
-                    "channel_name": channel_name,
-                    "client_ips": list(client_ips),
-                    "client_user_map": dict(client_user_map),
-                    "channel_bytes_delta": channel_bytes_delta,
-                    "stream_id": channel.get("stream_id"),
-                    "url": channel.get("url"),
-                    # bd-mlcla: per-connection metadata for the reconciler.
-                    # ``connected_at`` is the IP-bucket tie-break. (The channel
-                    # ``url`` above feeds the bd-gy5nd provider/hostname path;
-                    # bd-4w9w6 removed its use as a reconciliation discriminator
-                    # — see _reconcile_persisted_attributions.)
-                    # bd-rools: carry the Dispatcharr account ``user_id`` so the
-                    # persisted reconciler can apply the SAME per-connection
-                    # account-identity discriminator as the live stats path — a
-                    # genuine direct subscriber (positive user_id) is excluded
-                    # from media-server reconciliation, anonymous pulls
-                    # (user_id "0"/None) stay eligible.
-                    "client_meta": [
-                        {
-                            "ip_address": c.get("ip_address"),
-                            "client_id": c.get("client_id"),
-                            "connected_at": c.get("connected_at"),
-                            "user_id": c.get("user_id"),
-                        }
-                        for c in clients
-                        if c.get("ip_address")
-                    ],
-                })
+            # Update last bytes tracking
+            self._last_bytes = current_bytes
+            self._last_active_channels = current_active_channels
+            self._last_channel_clients = current_channel_clients
 
-        # Check for channels that stopped being watched
-        stopped_channels = self._last_active_channels - current_active_channels
-        if stopped_channels:
-            self._log_watch_stop_events(stopped_channels)
-            self._close_client_connections(stopped_channels)
+            # Only record if there's actual data transfer
+            if total_bytes_delta > 0 or active_channels > 0:
+                self._update_daily_record(
+                    total_bytes_delta,
+                    active_channels,
+                    total_clients,
+                    bytes_in_delta=total_bytes_in_delta,
+                    bytes_out_delta=total_bytes_out_delta,
+                    current_bitrate_in=current_bitrate_in,
+                    current_bitrate_out=current_bitrate_out,
+                )
+                if total_bytes_delta > 0:
+                    bytes_mb = total_bytes_delta / (1024 * 1024)
+                    logger.debug("[BANDWIDTH] Bandwidth delta: %.2f MB (in: %.2f, out: %.2f), active channels: %s, clients: %s", bytes_mb, total_bytes_in_delta / (1024*1024), total_bytes_out_delta / (1024*1024), active_channels, total_clients)
 
-        # Update last bytes tracking
-        self._last_bytes = current_bytes
-        self._last_active_channels = current_active_channels
-        self._last_channel_clients = current_channel_clients
+            # Update per-channel bandwidth (v0.11.0)
+            if channel_bandwidth_updates:
+                self._update_channel_bandwidth(channel_bandwidth_updates)
 
-        # Only record if there's actual data transfer
-        if total_bytes_delta > 0 or active_channels > 0:
-            self._update_daily_record(
-                total_bytes_delta,
-                active_channels,
-                total_clients,
-                bytes_in_delta=total_bytes_in_delta,
-                bytes_out_delta=total_bytes_out_delta,
-                current_bitrate_in=current_bitrate_in,
-                current_bitrate_out=current_bitrate_out,
+            # Resolve user_id → username for any channels with user IDs
+            all_channel_data = newly_active_channels + still_active_channels
+            has_user_ids = any(
+                ch.get("client_user_map") for ch in all_channel_data
             )
-            if total_bytes_delta > 0:
-                bytes_mb = total_bytes_delta / (1024 * 1024)
-                logger.debug("[BANDWIDTH] Bandwidth delta: %.2f MB (in: %.2f, out: %.2f), active channels: %s, clients: %s", bytes_mb, total_bytes_in_delta / (1024*1024), total_bytes_out_delta / (1024*1024), active_channels, total_clients)
-
-        # Update per-channel bandwidth (v0.11.0)
-        if channel_bandwidth_updates:
-            self._update_channel_bandwidth(channel_bandwidth_updates)
-
-        # Resolve user_id → username for any channels with user IDs
-        all_channel_data = newly_active_channels + still_active_channels
-        has_user_ids = any(
-            ch.get("client_user_map") for ch in all_channel_data
-        )
-        # The Dispatcharr-side user_id → username map. Populated below
-        # when (a) watch-history flow needs usernames, OR (b) the
-        # bd-uqbob exclude filter is configured and the snapshot carries
-        # user ids that need matching. Keyed by ``str(disp_user_id)`` to
-        # match the watch-history convention.
-        dispatcharr_user_map: dict[str, str] = {}
-        snapshot_has_user_ids = any(
-            entry.get("client_user_map") for entry in telemetry_channel_snapshot
-        )
-        # bd-uqbob: the exclude set means we may need usernames for the
-        # filter even when the watch-history path doesn't need them.
-        # bd-gsn3r: the writer ALSO needs the username unconditionally
-        # to populate ``session_telemetry.dispatcharr_username`` (the
-        # denormalized read-side replacement for the dropped ECM
-        # ``users`` FK join). When the snapshot carries any user IDs,
-        # pay the single get_users() round-trip per poll so the writer
-        # can stamp the username — otherwise pre-migration-style NULL
-        # rows leak through and the panel falls back to "Unknown
-        # viewer". The cost is one Dispatcharr API call per poll which
-        # the watch-history path already paid in the common case.
-        exclude_user_tokens = _parse_telemetry_exclude_users()
-        need_user_resolution = (
-            has_user_ids
-            or snapshot_has_user_ids
-            or bool(exclude_user_tokens)
-        )
-        if need_user_resolution:
-            try:
-                users = await self.client.get_users()
-                dispatcharr_user_map = {
-                    str(u["id"]): u.get("username", "") for u in users
-                }
-                for ch in all_channel_data:
-                    client_user_map = ch.get("client_user_map", {})
-                    ch["client_username_map"] = {
-                        ip: dispatcharr_user_map.get(str(uid), "")
-                        for ip, uid in client_user_map.items()
+            # The Dispatcharr-side user_id → username map. Populated below
+            # when (a) watch-history flow needs usernames, OR (b) the
+            # bd-uqbob exclude filter is configured and the snapshot carries
+            # user ids that need matching. Keyed by ``str(disp_user_id)`` to
+            # match the watch-history convention.
+            dispatcharr_user_map: dict[str, str] = {}
+            snapshot_has_user_ids = any(
+                entry.get("client_user_map") for entry in telemetry_channel_snapshot
+            )
+            # bd-uqbob: the exclude set means we may need usernames for the
+            # filter even when the watch-history path doesn't need them.
+            # bd-gsn3r: the writer ALSO needs the username unconditionally
+            # to populate ``session_telemetry.dispatcharr_username`` (the
+            # denormalized read-side replacement for the dropped ECM
+            # ``users`` FK join). When the snapshot carries any user IDs,
+            # pay the single get_users() round-trip per poll so the writer
+            # can stamp the username — otherwise pre-migration-style NULL
+            # rows leak through and the panel falls back to "Unknown
+            # viewer". The cost is one Dispatcharr API call per poll which
+            # the watch-history path already paid in the common case.
+            exclude_user_tokens = _parse_telemetry_exclude_users()
+            need_user_resolution = (
+                has_user_ids
+                or snapshot_has_user_ids
+                or bool(exclude_user_tokens)
+            )
+            if need_user_resolution:
+                try:
+                    users = await self.client.get_users()
+                    dispatcharr_user_map = {
+                        str(u["id"]): u.get("username", "") for u in users
                     }
-            except Exception as e:
-                logger.warning("[BANDWIDTH] Failed to resolve usernames for watch history: %s", e)
+                    for ch in all_channel_data:
+                        client_user_map = ch.get("client_user_map", {})
+                        ch["client_username_map"] = {
+                            ip: dispatcharr_user_map.get(str(uid), "")
+                            for ip, uid in client_user_map.items()
+                        }
+                except Exception as e:
+                    logger.warning("[BANDWIDTH] Failed to resolve usernames for watch history: %s", e)
 
-        # Update watch counts for newly active channels (and log start events)
-        if newly_active_channels:
-            logger.info("[BANDWIDTH] %s channel(s) started streaming", len(newly_active_channels))
-            self._update_watch_counts(newly_active_channels)
+            # Update watch counts for newly active channels (and log start events)
+            if newly_active_channels:
+                logger.info("[BANDWIDTH] %s channel(s) started streaming", len(newly_active_channels))
+                self._update_watch_counts(newly_active_channels)
 
-        # Accumulate watch time for still-active channels
-        if still_active_channels:
-            self._update_watch_time(still_active_channels)
+            # Accumulate watch time for still-active channels
+            if still_active_channels:
+                self._update_watch_time(still_active_channels)
 
-        # Log stopped channels
-        if stopped_channels:
-            logger.info("[BANDWIDTH] %s channel(s) stopped streaming", len(stopped_channels))
+            # Log stopped channels
+            if stopped_channels:
+                logger.info("[BANDWIDTH] %s channel(s) stopped streaming", len(stopped_channels))
 
-        # Operator-facing Stats v2 telemetry opt-out (bd-tp1pd). When the
-        # ``ECM_STATS_TELEMETRY_OPT_OUT`` env var is truthy, the entire
-        # Stats v2 path is short-circuited: the provider resolver is not
-        # called (skips the Dispatcharr ``get_streams_by_ids`` round-trip),
-        # the buffer-event ingest is not called (skips the
-        # ``get_system_events`` round-trip), and no ``session_telemetry``
-        # rows are written. The legacy sibling writes above
-        # (``ChannelBandwidth``, ``BandwidthDaily``,
-        # ``UniqueClientConnection``) are NOT affected — they pre-date
-        # Stats v2 and are not part of the opt-out surface.
-        #
-        # The env var is read per-poll so a runtime flip takes effect on
-        # the next cycle. Cost: one os.environ lookup + string compare
-        # per poll (microseconds). The latency-sensitive surface is the
-        # network round-trips this flag elides, not the parse itself.
-        if _telemetry_opt_out_enabled():
-            return
+            # Operator-facing Stats v2 telemetry opt-out (bd-tp1pd). When the
+            # ``ECM_STATS_TELEMETRY_OPT_OUT`` env var is truthy, the entire
+            # Stats v2 path is short-circuited: the provider resolver is not
+            # called (skips the Dispatcharr ``get_streams_by_ids`` round-trip),
+            # the buffer-event ingest is not called (skips the
+            # ``get_system_events`` round-trip), and no ``session_telemetry``
+            # rows are written. The legacy sibling writes above
+            # (``ChannelBandwidth``, ``BandwidthDaily``,
+            # ``UniqueClientConnection``) are NOT affected — they pre-date
+            # Stats v2 and are not part of the opt-out surface.
+            #
+            # The env var is read per-poll so a runtime flip takes effect on
+            # the next cycle. Cost: one os.environ lookup + string compare
+            # per poll (microseconds). The latency-sensitive surface is the
+            # network round-trips this flag elides, not the parse itself.
+            if _telemetry_opt_out_enabled():
+                return
 
-        # Stats v2 write (bd-skqln.3 step (d)). Runs LAST and is wrapped in
-        # a defensive try/except inside the helper so a failure in this
-        # path cannot disturb the legacy sibling writes above. Step (d)
-        # made this unconditional — the ECM_SESSION_TELEMETRY_WRITE_ENABLED
-        # kill-switch was retired along with the legacy
-        # ``ChannelWatchStats`` writes that the gate used to protect.
-        # (bd-tp1pd re-introduces an env var, but as an operator-facing
-        # opt-out, not a transition gate — see the short-circuit above.)
-        #
-        # Provider resolution (bd-skqln.14): the snapshot already carries
-        # the ``stream_id`` Dispatcharr surfaced per-channel. The resolver
-        # batches those stream IDs into ONE ``get_streams_by_ids`` call
-        # per poll and returns a ``{channel_uuid: provider_id}`` map. The
-        # cache lives only for the duration of this invocation — next
-        # poll re-resolves so a stream's failover hop is picked up
-        # immediately. NULL on failure (network, missing stream, deleted
-        # provider); the row still gets written.
-        provider_by_channel = await self._resolve_provider_ids(
-            telemetry_channel_snapshot
-        )
-        # Channel-event ingest (bd-ov5vb, broadens bd-skqln.15). Fetches
-        # the channel-health subset of Dispatcharr's
-        # ``/api/core/system-events/`` feed (no event_type filter —
-        # buckets client-side into channel_buffering / channel_reconnect
-        # / channel_error / stream_switch), de-duplicates against the
-        # cross-poll LRU, and produces a
-        # ``{channel_uuid: {event_type: deduped_count}}`` map. Failure is
-        # non-fatal — the helper returns ``{}`` and the session_telemetry
-        # rows still write with every per-type counter at 0.
-        channel_events_by_channel = await self._collect_channel_events(
-            telemetry_channel_snapshot
-        )
-        # bd-r5f0c.4 (extends bd-gih6d): cross-reference each active
-        # (channel, ip) pair against ALL THREE media-source session
-        # lists (Emby + Plex + Jellyfin) so the writer can stamp the
-        # corresponding ``session_telemetry.*_user_id`` /
-        # ``*_user_name`` columns. The helper fans out via
-        # ``asyncio.gather`` with per-source timeout — one source's
-        # outage CANNOT block the telemetry write or the other
-        # sources' attributions. Returns a sparse
-        # ``{(channel, ip): AttributionResult}`` map; pairs not in the
-        # map land NULL across every source's column pair.
-        attributions = await self._resolve_attributions(
-            telemetry_channel_snapshot, provider_by_channel,
-        )
-        self._write_session_telemetry(
-            telemetry_channel_snapshot,
-            observed_at_ms,
-            provider_by_channel,
-            channel_events_by_channel,
-            # bd-uqbob: pre-resolved Dispatcharr user_id → username map and
-            # already-parsed exclude token set. Both default to empty on
-            # the call-site signature so older test seams keep working;
-            # an empty exclude set short-circuits the filter inside the
-            # helper before any per-row work runs.
-            dispatcharr_user_map=dispatcharr_user_map,
-            exclude_user_tokens=exclude_user_tokens,
-            # bd-r5f0c.4: sparse {(channel_uuid, ip): AttributionResult}
-            # map — empty when all sources are disabled or no pair
-            # resolved on any source.
-            attributions=attributions,
-        )
+            # Stats v2 write (bd-skqln.3 step (d)). Runs LAST and is wrapped in
+            # a defensive try/except inside the helper so a failure in this
+            # path cannot disturb the legacy sibling writes above. Step (d)
+            # made this unconditional — the ECM_SESSION_TELEMETRY_WRITE_ENABLED
+            # kill-switch was retired along with the legacy
+            # ``ChannelWatchStats`` writes that the gate used to protect.
+            # (bd-tp1pd re-introduces an env var, but as an operator-facing
+            # opt-out, not a transition gate — see the short-circuit above.)
+            #
+            # Provider resolution (bd-skqln.14): the snapshot already carries
+            # the ``stream_id`` Dispatcharr surfaced per-channel. The resolver
+            # batches those stream IDs into ONE ``get_streams_by_ids`` call
+            # per poll and returns a ``{channel_uuid: provider_id}`` map. The
+            # cache lives only for the duration of this invocation — next
+            # poll re-resolves so a stream's failover hop is picked up
+            # immediately. NULL on failure (network, missing stream, deleted
+            # provider); the row still gets written.
+            provider_by_channel = await self._resolve_provider_ids(
+                telemetry_channel_snapshot
+            )
+            # Channel-event ingest (bd-ov5vb, broadens bd-skqln.15). Fetches
+            # the channel-health subset of Dispatcharr's
+            # ``/api/core/system-events/`` feed (no event_type filter —
+            # buckets client-side into channel_buffering / channel_reconnect
+            # / channel_error / stream_switch), de-duplicates against the
+            # cross-poll LRU, and produces a
+            # ``{channel_uuid: {event_type: deduped_count}}`` map. Failure is
+            # non-fatal — the helper returns ``{}`` and the session_telemetry
+            # rows still write with every per-type counter at 0.
+            channel_events_by_channel = await self._collect_channel_events(
+                telemetry_channel_snapshot
+            )
+            # bd-r5f0c.4 (extends bd-gih6d): cross-reference each active
+            # (channel, ip) pair against ALL THREE media-source session
+            # lists (Emby + Plex + Jellyfin) so the writer can stamp the
+            # corresponding ``session_telemetry.*_user_id`` /
+            # ``*_user_name`` columns. The helper fans out via
+            # ``asyncio.gather`` with per-source timeout — one source's
+            # outage CANNOT block the telemetry write or the other
+            # sources' attributions. Returns a sparse
+            # ``{(channel, ip): AttributionResult}`` map; pairs not in the
+            # map land NULL across every source's column pair.
+            attributions = await self._resolve_attributions(
+                telemetry_channel_snapshot, provider_by_channel,
+            )
+            self._write_session_telemetry(
+                telemetry_channel_snapshot,
+                observed_at_ms,
+                provider_by_channel,
+                channel_events_by_channel,
+                # bd-uqbob: pre-resolved Dispatcharr user_id → username map and
+                # already-parsed exclude token set. Both default to empty on
+                # the call-site signature so older test seams keep working;
+                # an empty exclude set short-circuits the filter inside the
+                # helper before any per-row work runs.
+                dispatcharr_user_map=dispatcharr_user_map,
+                exclude_user_tokens=exclude_user_tokens,
+                # bd-r5f0c.4: sparse {(channel_uuid, ip): AttributionResult}
+                # map — empty when all sources are disabled or no pair
+                # resolved on any source.
+                attributions=attributions,
+            )
 
     def _update_daily_record(
         self,
