@@ -125,6 +125,18 @@ class DispatcharrSettings(BaseModel):
     custom_network_suffixes: list[str] = []
     # Stats polling interval in seconds (how often to check Dispatcharr for channel stats)
     stats_poll_interval: int = 10
+    # ADR-013 §D2 (bead 312nk.3): steady-state ``session_telemetry`` write
+    # cadence in seconds. Observation freshness (byte-delta bandwidth,
+    # ChannelBandwidth/BandwidthDaily, in-memory active-channel/client tracking)
+    # is decoupled from this — it updates on EVERY observation (~2s under the WS
+    # driver). The heavy write path (provider resolution, system-events ingest,
+    # media-server attribution, session_telemetry insert) only runs once per
+    # this interval. Edge-triggered writes on session start/stop (a channel
+    # becomes newly active, or a client appears/leaves) still fire IMMEDIATELY
+    # even mid-interval, so session boundaries are captured at WS latency.
+    # PO-LOCKED DEFAULT 10s — preserves today's session_telemetry row cadence
+    # (matches the default stats_poll_interval). No migration (settings.json).
+    telemetry_write_interval: int = 10
     # ADR-013: WebSocket channel_stats subscriber (bead 312nk.2). Master enable
     # for the WS driver that feeds Dispatcharr's channel_stats broadcast into
     # the bandwidth tracker as a drop-in for the /proxy/ts/status poll. Default
