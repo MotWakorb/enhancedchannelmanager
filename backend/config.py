@@ -125,6 +125,19 @@ class DispatcharrSettings(BaseModel):
     custom_network_suffixes: list[str] = []
     # Stats polling interval in seconds (how often to check Dispatcharr for channel stats)
     stats_poll_interval: int = 10
+    # ADR-013: WebSocket channel_stats subscriber (bead 312nk.2). Master enable
+    # for the WS driver that feeds Dispatcharr's channel_stats broadcast into
+    # the bandwidth tracker as a drop-in for the /proxy/ts/status poll. Default
+    # OFF — the poll remains the permanent fallback. The settings-restart path
+    # (_restart_background_services) reconstructs the tracker, so toggling this
+    # re-reads it on the next start.
+    use_ws_channel_stats: bool = False
+    # ADR-013 §D5 / PO decision #3. When the WS is healthy: if True, the poll
+    # skips its get_channel_stats() fetch entirely (WS is the sole driver); if
+    # False (the soak default), the poll STILL fetches but cross-validates
+    # against the last WS snapshot instead of double-processing telemetry. Flip
+    # to True once the feature defaults ON.
+    ws_suppress_poll_when_healthy: bool = False
     # User timezone for stats display (IANA timezone name, e.g. "America/Los_Angeles")
     # Empty string means use UTC
     user_timezone: str = ""
