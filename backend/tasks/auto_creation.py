@@ -5,14 +5,45 @@ Scheduled task to run the auto-creation pipeline, creating channels
 from streams based on configured rules.
 """
 import logging
+import os
 from datetime import datetime
 from typing import Optional
 
+import journal
+from config import get_settings
 from dispatcharr_client import get_client
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType
 from task_registry import register_task
 
 logger = logging.getLogger(__name__)
+
+
+def _run_on_refresh_suppressed() -> tuple[bool, str]:
+    """bd-exo4j: decide whether the post-refresh auto-fire chain is suppressed.
+
+    Two independent suppressors, checked at run time (the breaker scenario is a
+    container restart, so the state must be read fresh, never cached):
+
+    - ``ECM_DISABLE_RUN_ON_REFRESH`` env var (break-glass): honored regardless
+      of the persisted flag so an operator can stop the chain before the app
+      even reads settings.
+    - ``auto_creation_run_on_refresh_disabled`` persisted setting (THE
+      breaker): set True by the startup crash-sentinel when it abandons a run
+      left 'running' by an OOM SIGKILL. NEVER auto-reset — cleared only by the
+      operator via POST /api/auto-creation/reset-circuit-breaker.
+
+    Returns ``(suppressed, reason)``. ``reason`` is a short machine-stable tag
+    used in the notification/journal text.
+    """
+    env_val = (os.environ.get("ECM_DISABLE_RUN_ON_REFRESH") or "").strip().lower()
+    if env_val in ("1", "true", "yes", "on"):
+        return True, "break_glass_env"
+    try:
+        if get_settings().auto_creation_run_on_refresh_disabled:
+            return True, "circuit_breaker"
+    except Exception as e:  # pragma: no cover — settings must never block the gate
+        logger.warning("[AUTO-CREATION] Failed to read circuit-breaker flag: %s", e)
+    return False, ""
 
 
 @register_task
@@ -224,6 +255,58 @@ async def run_auto_creation_after_refresh(
     from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
     from dispatcharr_client import get_client
 
+    # bd-exo4j THE BREAKER: a doomed run (OOM-killed, abandoned by the startup
+    # sentinel) must NOT auto-re-fire on the next scheduled refresh. Gate the
+    # auto-fire chain on the persisted breaker flag and the break-glass env var
+    # BEFORE doing any work. Manual "Run Now" goes through the router's /run
+    # endpoint, NOT this function, so it is deliberately NOT gated here.
+    suppressed, reason = _run_on_refresh_suppressed()
+    if suppressed:
+        logger.warning(
+            "[AUTO-CREATION] run_on_refresh SUPPRESSED (%s) — skipping auto-fire. "
+            "Operator must clear the circuit breaker to re-enable.",
+            reason,
+        )
+        from services.notification_service import create_notification_internal
+        if reason == "circuit_breaker":
+            msg = (
+                "Auto-creation after M3U refresh is DISABLED because a previous run "
+                "was abandoned (likely an out-of-memory crash). Review your rules, "
+                "then re-enable via POST /api/auto-creation/reset-circuit-breaker."
+            )
+        else:
+            msg = (
+                "Auto-creation after M3U refresh is suppressed by the "
+                "ECM_DISABLE_RUN_ON_REFRESH environment break-glass switch."
+            )
+        try:
+            await create_notification_internal(
+                notification_type="warning",
+                title="Auto-Creation: Skipped (run-on-refresh disabled)",
+                message=msg,
+                source="auto_creation",
+                source_id="circuit_breaker",
+                send_alerts=True,
+            )
+        except Exception as e:  # pragma: no cover — notification best-effort
+            logger.warning("[AUTO-CREATION] Failed to emit suppression notification: %s", e)
+        try:
+            journal.log_entry(
+                category="auto_creation",
+                action_type="run_on_refresh_skipped",
+                entity_name="Auto-Creation",
+                description=msg,
+                user_initiated=False,
+            )
+        except Exception as e:  # pragma: no cover — journal best-effort
+            logger.warning("[AUTO-CREATION] Failed to journal suppression: %s", e)
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": reason,
+            "message": "Auto-creation run-on-refresh suppressed",
+        }
+
     # Check if any rules have run_on_refresh enabled
     session = get_session()
     try:
@@ -313,6 +396,23 @@ async def run_auto_creation_after_refresh(
             source_id="m3u_refresh",
             send_alerts=False,
         )
+
+        # bd-h2xnl: a capped run must NOT be silent. Emit a warning alert with
+        # the N-of-M so the operator knows to review the rule or raise the cap.
+        if result.get("capped"):
+            would = created + result.get("cap_would_create", 0)
+            await create_notification_internal(
+                notification_type="warning",
+                title="Auto-Creation: Capped",
+                message=(
+                    f"Auto-creation capped at {created} of ~{would} would-create "
+                    f"channels — review the rule or raise the cap "
+                    f"(max_auto_created_channels_per_run)."
+                ),
+                source="auto_creation",
+                source_id="capped",
+                send_alerts=True,
+            )
 
         return result
 
