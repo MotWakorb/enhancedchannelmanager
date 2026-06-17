@@ -26,6 +26,98 @@ DEFAULT_CHECK_INTERVAL = 60  # Check for due tasks every 60 seconds
 MAX_CONCURRENT_TASKS = 3  # Maximum tasks running simultaneously
 
 
+def _abandon_orphaned_auto_creation_executions(session=None) -> int:
+    """bd-exo4j crash-sentinel: reconcile AutoCreationExecution rows orphaned
+    by a hard restart, and trip the circuit breaker if any were found.
+
+    A kernel OOM-kill is a SIGKILL — no Python ``finally`` runs — so an
+    in-flight auto-creation run leaves its ``AutoCreationExecution`` row at
+    ``status='running'`` forever. ``task_engine`` already reconciles stale
+    ``TaskExecution`` rows (``_cleanup_stale_executions``) but NOT
+    ``AutoCreationExecution``; this closes that gap.
+
+    Idempotent: only ``status='running'`` rows are touched (``WHERE`` filter),
+    so ``completed`` / ``failed`` / ``capped`` rows are left alone and a second
+    boot finds nothing to do. The abandoned status is the DISTINCT value
+    ``'abandoned'`` (NOT ``'failed'`` — an OOM crash is operationally different
+    from a rule that errored and we want the UI/alerts to say so).
+
+    When at least one row is abandoned we set the PERSISTED circuit-breaker
+    flag (``auto_creation_run_on_refresh_disabled=True``) so the post-refresh
+    auto-fire chain stays disabled across the restart until the operator
+    deliberately clears it. NEVER auto-resets.
+
+    MUST run before the task scheduler arms — it is called from
+    ``TaskEngine.start()`` ahead of the scheduler loop creation.
+
+    Args:
+        session: optional SQLAlchemy session (tests inject the in-memory one).
+            When None, a fresh session is opened and closed here.
+
+    Returns:
+        Count of rows transitioned 'running' -> 'abandoned'.
+    """
+    from models import AutoCreationExecution
+
+    owns_session = session is None
+    if owns_session:
+        session = get_session()
+    try:
+        abandoned_count = session.query(AutoCreationExecution).filter(
+            AutoCreationExecution.status == "running"
+        ).update({
+            "status": "abandoned",
+            "completed_at": datetime.utcnow(),
+            "error_message": (
+                "Abandoned: run was interrupted by a system restart "
+                "(likely an out-of-memory kill). See GH #473."
+            ),
+        }, synchronize_session=False)
+        session.commit()
+
+        if abandoned_count > 0:
+            logger.warning(
+                "[TASK-ENGINE] Abandoned %s orphaned auto-creation execution(s) "
+                "left 'running' by a hard restart — tripping the run-on-refresh "
+                "circuit breaker (bd-exo4j / GH #473)",
+                abandoned_count,
+            )
+            _trip_run_on_refresh_circuit_breaker()
+
+        return abandoned_count
+    except Exception as e:
+        logger.exception(
+            "[TASK-ENGINE] Failed to reconcile orphaned auto-creation executions: %s", e
+        )
+        return 0
+    finally:
+        if owns_session:
+            session.close()
+
+
+def _trip_run_on_refresh_circuit_breaker() -> None:
+    """Persist the run-on-refresh breaker flag (bd-exo4j).
+
+    Persisted in settings.json so it survives the restart that motivated the
+    breaker. Idempotent — re-tripping an already-tripped breaker is a no-op
+    write. Best-effort: a settings failure is logged but never aborts startup.
+    """
+    try:
+        from config import get_settings, save_settings
+        settings = get_settings()
+        if getattr(settings, "auto_creation_run_on_refresh_disabled", False):
+            return
+        settings.auto_creation_run_on_refresh_disabled = True
+        save_settings(settings)
+        logger.warning(
+            "[TASK-ENGINE] Run-on-refresh circuit breaker TRIPPED — auto-creation "
+            "will NOT auto-fire after M3U refresh until an operator clears it via "
+            "POST /api/auto-creation/reset-circuit-breaker."
+        )
+    except Exception as e:  # pragma: no cover — best-effort, must not block boot
+        logger.warning("[TASK-ENGINE] Failed to trip run-on-refresh circuit breaker: %s", e)
+
+
 def _task_execution_metadata_extra(task_id: str, result: TaskResult) -> dict:
     """Counter-style fields for task alerts (email/Discord), aligned with each task's UI semantics."""
     extra: dict = {}
@@ -146,8 +238,14 @@ class TaskEngine:
         logger.info("[TASK-ENGINE] Starting task execution engine")
         self._running = True
 
-        # Cleanup any stale "running" executions from previous runs
+        # Cleanup any stale "running" executions from previous runs. Runs
+        # BEFORE the scheduler loop arms (below) so a doomed auto-creation run
+        # cannot be re-fired before reconciliation.
         self._cleanup_stale_executions()
+        # bd-exo4j (GH #473): reconcile orphaned AutoCreationExecution rows the
+        # OOM SIGKILL left 'running', and trip the run-on-refresh breaker if
+        # any were found. MUST be before the scheduler loop starts.
+        _abandon_orphaned_auto_creation_executions()
 
         # Initialize registry from database
         registry = get_registry()
