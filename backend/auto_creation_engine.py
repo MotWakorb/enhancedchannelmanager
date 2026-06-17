@@ -13,13 +13,18 @@ import asyncio
 import json
 import logging
 import re
+import resource
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
 import safe_regex
 import journal
-from config import get_settings
+from config import (
+    DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN,
+    DEFAULT_MAX_AUTO_CREATION_LOG_ENTRIES,
+    get_settings,
+)
 from database import get_session
 from models import (
     AutoCreationRule,
@@ -43,6 +48,104 @@ from auto_creation_executor import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# Keys carrying the verbose per-stream evaluation trace. Dropped from each
+# retained entry on non-dry-run so peak RSS does not scale with
+# streams×rules×conditions (bd-sjdsq). The Rule Analyzer re-evaluates rules
+# itself and does NOT read the persisted execution_log; rollback uses
+# AutoCreationSnapshot/created_entities, not the log — so dropping these is
+# safe. The retained entry still carries stream_id / stream_name and the
+# actions_executed list (which holds created channel entity_ids), so rollback
+# and the per-channel audit trail are intact.
+_VERBOSE_LOG_KEYS = ("rules_evaluated",)
+
+
+class BoundedExecutionLog(list):
+    """A list that bounds the auto-creation execution_log in memory (bd-sjdsq).
+
+    THE SINGLE CHOKEPOINT for execution_log growth. Every
+    ``results["execution_log"].append(...)`` site in the engine and the
+    executor funnels through this ``append`` — a list subclass rather than a
+    helper function so a missed call site is impossible by construction (any
+    append on the object is governed, no matter who holds the reference).
+
+    Two bounds, applied incrementally as entries arrive (NOT a final trim — the
+    reporter's docker-stats showed steady growth, so a final trim is too late):
+
+    1. Verbose-trace stripping (non-dry-run only): the per-stream
+       ``rules_evaluated`` trace — the dominant memory term — is replaced with
+       ``[]`` before the entry is retained. Dry-run keeps the full trace
+       (operator wants it for debugging and a dry-run mutates nothing).
+    2. Entry cap: at most ``cap`` entries are retained. Once the cap is hit,
+       further entries are counted but NOT stored. ``finalize()`` appends a
+       single aggregate summary entry ("…and N more") and sets a
+       ``log_truncated`` marker so the truncation is never silent.
+
+    ``cap <= 0`` disables the cap (entries still get verbose-stripped on
+    non-dry-run). Pass ``verbose=True`` for dry-run.
+    """
+
+    def __init__(self, cap: int = 0, verbose: bool = False):
+        super().__init__()
+        self._cap = cap if cap and cap > 0 else 0
+        self._verbose = verbose
+        self.retained_count = 0
+        self.truncated_count = 0
+        self.truncated = False
+        self._finalized = False
+
+    def append(self, entry):  # noqa: D102 — see class docstring
+        # Strip the verbose per-stream trace on non-dry-run runs. Mutating the
+        # dict in place is fine: it is freshly built at each call site and not
+        # referenced elsewhere after the append.
+        if not self._verbose and isinstance(entry, dict):
+            for key in _VERBOSE_LOG_KEYS:
+                if entry.get(key):
+                    entry[key] = []
+
+        if self._cap and self.retained_count >= self._cap:
+            # At cap — count it, drop it. The summary entry is emitted by
+            # finalize() so we keep peak memory flat regardless of overflow.
+            self.truncated_count += 1
+            if not self.truncated:
+                self.truncated = True
+                logger.warning(
+                    "[AUTO-CREATE] execution_log reached the retention cap (%s "
+                    "entries); further entries are summarized, not stored "
+                    "(bd-sjdsq / GH #473)",
+                    self._cap,
+                )
+            return
+
+        super().append(entry)
+        self.retained_count += 1
+
+    def finalize(self):
+        """Append the aggregate truncation summary once, if truncated."""
+        if self._finalized:
+            return
+        self._finalized = True
+        if self.truncated and self.truncated_count > 0:
+            super().append({
+                "stream_id": None,
+                "stream_name": "[AUTO-CREATE] execution log truncated",
+                "m3u_account_id": None,
+                "log_truncated": True,
+                "rules_evaluated": [],
+                "actions_executed": [{
+                    "type": "log_truncated",
+                    "description": (
+                        f"Execution log capped at {self._cap} entries; "
+                        f"{self.truncated_count} more matched-stream entries were "
+                        f"omitted to bound memory. Raise "
+                        f"max_auto_creation_log_entries in Settings to retain more."
+                    ),
+                    "success": True,
+                    "entity_id": None,
+                    "error": None,
+                }],
+            })
 
 
 class AutoCreationEngine:
@@ -198,7 +301,21 @@ class AutoCreationEngine:
         completed_at = datetime.utcnow()
         execution.completed_at = completed_at
         execution.duration_seconds = (completed_at - started_at).total_seconds()
-        execution.status = "completed"
+        # bd-h2xnl: a capped run is a distinct terminal status so the execution
+        # record (and the UI/alerts that read it) surface "capped at N of M"
+        # rather than masquerading as a clean completion. error_message carries
+        # the would-have-been M so the operator sees the full picture.
+        if results.get("capped"):
+            execution.status = "capped"
+            would = results.get("channels_created", 0) + results.get("cap_would_create", 0)
+            execution.error_message = (
+                f"Created-channel cap reached: created "
+                f"{results.get('channels_created', 0)} of ~{would} matched; "
+                f"{results.get('cap_would_create', 0)} stream(s) not processed. "
+                f"Review the rule or raise max_auto_created_channels_per_run."
+            )
+        else:
+            execution.status = "completed"
         execution.streams_evaluated = results["streams_evaluated"]
         execution.streams_matched = results["streams_matched"]
         execution.channels_created = results["channels_created"]
@@ -1384,10 +1501,29 @@ class AutoCreationEngine:
             "modified_entities": [],
             "dry_run_results": [],
             "conflicts": [],
-            "execution_log": [],
+            # bd-sjdsq: bounded in-memory execution_log. Verbose per-stream
+            # trace is stripped on non-dry-run; dry-run keeps the full trace.
+            # cap <= 0 (operator override) disables the entry cap. Every
+            # append site in the engine + executor funnels through this
+            # object's overridden .append — the single chokepoint.
+            "execution_log": BoundedExecutionLog(
+                cap=(0 if dry_run else max(0, getattr(
+                    settings, "max_auto_creation_log_entries",
+                    DEFAULT_MAX_AUTO_CREATION_LOG_ENTRIES,
+                ))),
+                verbose=dry_run,
+            ),
             "rule_match_counts": {},
             "probe_stream_ids": set(),
-            "streams_probed": 0
+            "streams_probed": 0,
+            # bd-h2xnl / bd-exo4j created-channel cap state. Resolved here so
+            # the Pass 2 soft-abort and the run summary share one value.
+            "channel_cap": max(0, getattr(
+                settings, "max_auto_created_channels_per_run",
+                DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN,
+            )),
+            "capped": False,
+            "cap_would_create": 0,
         }
 
         # Track which streams have been processed by which rules
@@ -1598,7 +1734,49 @@ class AutoCreationEngine:
         # chokepoint), so it stays consistent with streams_merged no matter which
         # path produced the merge (bd-0emgo.4).
         channels_touched_ids: set = set()
-        for stream, winning_rule, losing_rules, stream_rules_log in sorted_entries:
+        # bd-h2xnl / bd-exo4j created-channel cap (shared safety valve). Checked
+        # at the TOP of each iteration — i.e. between streams, after the prior
+        # stream's actions fully completed and aggregated — so a cap trip can
+        # never leave a half-applied batch. The cap counts channels CREATED this
+        # run (results["channels_created"]); merges/updates do not count toward
+        # it (they don't drive the PPV/event blast radius). Disabled when
+        # channel_cap <= 0 or in dry-run (a dry run mutates nothing).
+        _channel_cap = results.get("channel_cap", 0)
+        _cap_active = bool(_channel_cap) and not dry_run
+        for _idx, (stream, winning_rule, losing_rules, stream_rules_log) in enumerate(sorted_entries):
+            if _cap_active and results["channels_created"] >= _channel_cap:
+                # Soft-abort: stop creating further channels, leave what we have
+                # consistent, record N-of-M for a non-silent surface.
+                remaining = len(sorted_entries) - _idx
+                results["capped"] = True
+                results["cap_would_create"] = remaining
+                logger.warning(
+                    "[AUTO-CREATE] Created-channel cap reached: %s created, "
+                    "stopping with %s matched stream(s) unprocessed (cap=%s). "
+                    "Review the rule or raise max_auto_created_channels_per_run "
+                    "(bd-h2xnl / GH #473).",
+                    results["channels_created"], remaining, _channel_cap,
+                )
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": "[AUTO-CREATE] created-channel cap reached",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "capped",
+                        "description": (
+                            f"Auto-creation capped at {results['channels_created']} "
+                            f"channel(s); {remaining} more matched stream(s) were not "
+                            f"processed. Review the rule or raise the cap "
+                            f"(max_auto_created_channels_per_run={_channel_cap})."
+                        ),
+                        "success": True,
+                        "entity_id": None,
+                        "error": None,
+                    }],
+                })
+                break
+
             # Skip struck-out streams if the winning rule has skip_struck_streams enabled
             if getattr(winning_rule, 'skip_struck_streams', False) and stream.stream_id in self._struck_stream_ids:
                 logger.info("[AUTO-CREATE-ENGINE] Skipping struck stream %r (id=%s) for rule '%s'",
@@ -1925,6 +2103,45 @@ class AutoCreationEngine:
 
             # Clean up non-serializable set before returning
             del results["probe_stream_ids"]
+
+            # bd-sjdsq: finalize the bounded execution_log — appends the single
+            # aggregate "…and N more" summary entry if it truncated.
+            exec_log = results.get("execution_log")
+            if isinstance(exec_log, BoundedExecutionLog):
+                exec_log.finalize()
+                log_retained = exec_log.retained_count
+                log_truncated = exec_log.truncated_count
+                results["execution_log_truncated"] = exec_log.truncated
+            else:  # pragma: no cover — defensive; pipeline always sets the bounded list
+                log_retained = len(exec_log or [])
+                log_truncated = 0
+
+            # bd-sjdsq OBSERVABILITY (SRE hard requirement): a peak-RSS line and
+            # a run-size summary at completion so operators can see whether a run
+            # blew up before it OOM-kills again. INFO level, [AUTO-CREATE] prefix.
+            try:
+                # ru_maxrss is in KiB on Linux.
+                peak_rss_mib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+                logger.info(
+                    "[AUTO-CREATE] Run peak RSS: %.1f MiB", peak_rss_mib
+                )
+            except Exception as e:  # pragma: no cover — getrusage is best-effort
+                logger.debug("[AUTO-CREATE] Could not read peak RSS: %s", e)
+            logger.info(
+                "[AUTO-CREATE] Run size summary: streams_evaluated=%s "
+                "streams_matched=%s channels_created=%s "
+                "execution_log_retained=%s execution_log_truncated=%s "
+                "capped=%s cap_would_create=%s",
+                results.get("streams_evaluated", 0),
+                results.get("streams_matched", 0),
+                results.get("channels_created", 0),
+                log_retained, log_truncated,
+                results.get("capped", False),
+                results.get("cap_would_create", 0),
+            )
+
+            # Drop the transient cap budget (not part of the API surface).
+            results.pop("channel_cap", None)
 
             return results
         finally:

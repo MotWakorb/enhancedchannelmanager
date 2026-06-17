@@ -1226,6 +1226,57 @@ async def run_auto_creation_rule(rule_id: int, dry_run: bool = False, _admin=Req
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/circuit-breaker")
+async def get_run_on_refresh_circuit_breaker():
+    """Return the run-on-refresh circuit-breaker state (bd-exo4j / GH #473).
+
+    ``disabled`` True means a previous auto-creation run was abandoned (likely
+    an OOM crash) and the startup crash-sentinel tripped the breaker, so
+    auto-creation will NOT auto-fire after M3U refresh until an operator clears
+    it via ``POST /reset-circuit-breaker``. Manual "Run Now" is never gated.
+    Lets the frontend distinguish auto-disabled from user-disabled.
+    """
+    from config import get_settings
+    settings = get_settings()
+    return {
+        "disabled": bool(getattr(settings, "auto_creation_run_on_refresh_disabled", False)),
+        "reason": "abandoned_run" if getattr(settings, "auto_creation_run_on_refresh_disabled", False) else None,
+    }
+
+
+@router.post("/reset-circuit-breaker")
+async def reset_run_on_refresh_circuit_breaker(_admin=RequireAdminIfEnabled):
+    """Clear the run-on-refresh circuit breaker (bd-exo4j / GH #473).
+
+    A DELIBERATE operator act — re-enables the post-refresh auto-fire chain
+    that the startup crash-sentinel disabled after an abandoned (OOM-killed)
+    run. The breaker NEVER auto-resets on its own, so this endpoint is the only
+    in-band recovery path. Idempotent: clearing an already-clear breaker is a
+    no-op success.
+    """
+    from config import get_settings, save_settings
+    settings = get_settings()
+    was_disabled = bool(getattr(settings, "auto_creation_run_on_refresh_disabled", False))
+    if was_disabled:
+        settings.auto_creation_run_on_refresh_disabled = False
+        save_settings(settings)
+        logger.warning(
+            "[AUTO-CREATE] Run-on-refresh circuit breaker CLEARED by operator — "
+            "auto-creation will auto-fire after M3U refresh again."
+        )
+        try:
+            journal.log_entry(
+                category="auto_creation",
+                action_type="circuit_breaker_reset",
+                entity_name="Auto-Creation",
+                description="Operator cleared the run-on-refresh circuit breaker.",
+                user_initiated=True,
+            )
+        except Exception as e:  # pragma: no cover — journal best-effort
+            logger.warning("[AUTO-CREATE] Failed to journal breaker reset: %s", e)
+    return {"success": True, "was_disabled": was_disabled, "disabled": False}
+
+
 @router.get("/executions")
 async def get_auto_creation_executions(
     limit: int = 50,
