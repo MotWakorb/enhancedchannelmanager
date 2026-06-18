@@ -1,0 +1,170 @@
+# =============================================================================
+# DBAS round-trip test stack — a pinned, throwaway Dispatcharr instance
+# =============================================================================
+#
+# Purpose
+# -------
+# Stands up a real Dispatcharr (modular topology: web + celery + postgres +
+# redis) so the ECM <-> Dispatcharr DBAS round-trip success signal
+# (enhancedchannelmanager-0i2vt epic) can be tested against a LIVE instance
+# instead of mocks. The existing mocks (backend/tests/fixtures/mock_dispatcharr.py)
+# encode OUR ASSUMPTIONS of Dispatcharr async behavior (M3U 2-stage refresh
+# polling, EPG download wait, is_active quirk, /api/accounts/users/me/) —
+# exactly the behaviors Phase 2 must validate. This stack lets us validate them
+# for real.
+#
+# This is SEPARATE from the production docker-compose.yml and
+# docker-compose.mcp.yml. It does NOT define the `ecm` service and shares NO
+# resources (no networks, no volumes, no ports, no project name) with the
+# production stack or the live ecm-ecm-1 container.
+#
+# Version pin
+# -----------
+# Pinned to Dispatcharr 0.26.0 — the operator's live instance version
+# (GET /api/core/version/ -> 0.26.0; spike enhancedchannelmanager-tsfv0).
+# The ECM code encodes a 0.23.0+ behavioral FLOOR (config.py login throttle;
+# auth/providers/dispatcharr.py /api/accounts/users/me/ with /api/accounts/me/
+# fallback); 0.26.0 is the validation TARGET. Re-validate the 0.23.0-era
+# behaviors against 0.26.0 — they may have changed across 0.24–0.26.
+#
+# Bump procedure: when the operator upgrades, change DISPATCHARR_VERSION in
+# .env (or override at the command line) and re-run the validation suite. The
+# digest pin in the comment below should be refreshed at the same time for an
+# immutable-tag guarantee.
+#
+# Image: dispatcharr/dispatcharr (Docker Hub) — mirror of
+#        ghcr.io/dispatcharr/dispatcharr.
+#   0.26.0 digest (2026-06-07):
+#   sha256:9275b0c1f5319a84b412af6839a1364ef25b61d8d6ff0d2130a6c2b2504a8b07
+#   For an immutable pin in CI, replace the tag with @<digest>.
+#
+# Isolation contract (NON-NEGOTIABLE — must never touch ecm-ecm-1)
+# ----------------------------------------------------------------
+#   * ALWAYS run with a distinct project name:  -p dbas-testenv
+#   * All host ports are in the 95xx/54xx range, deliberately away from ECM's
+#     6100/6143/6101 and the operator's live Dispatcharr 9191.
+#   * Dedicated named volumes and a dedicated network, all project-scoped.
+#   * Tear DOWN when done:  docker compose -p dbas-testenv -f <this file> down -v
+#
+# Bring-up / validation: see tests/dbas-test-env/README.md and
+# docs/testing/dbas-test-env.md.
+# =============================================================================
+
+name: dbas-testenv
+
+services:
+  # ---------------------------------------------------------------------------
+  # Dispatcharr web (API + UI). This is the surface ECM's DispatcharrClient
+  # talks to. Exposed on host 9591 (NOT the operator's 9191).
+  # ---------------------------------------------------------------------------
+  dispatcharr-web:
+    image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.26.0}
+    restart: "no"
+    ports:
+      - "${DBAS_TEST_HTTP_PORT:-9591}:9191"
+    depends_on:
+      dispatcharr-db:
+        condition: service_healthy
+      dispatcharr-redis:
+        condition: service_healthy
+    volumes:
+      - dbas-test-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - DISPATCHARR_ENV=modular
+      - POSTGRES_HOST=dispatcharr-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+      - REDIS_HOST=dispatcharr-redis
+      - REDIS_PORT=6379
+      - DISPATCHARR_LOG_LEVEL=info
+      # Seed an initial superuser so the round-trip test has credentials without
+      # a manual first-run wizard. (Verify these env names against the pinned
+      # image on first bring-up — see README "Validate the seed-admin env".)
+      - DISPATCHARR_SUPERUSER_USERNAME=${DBAS_TEST_ADMIN_USER:-ecmtest}
+      - DISPATCHARR_SUPERUSER_PASSWORD=${DBAS_TEST_ADMIN_PASS:-ecmtestpass}
+    healthcheck:
+      # /api/core/version/ is the version-detect endpoint ECM uses; if it
+      # answers, the API is up. Falls back to the root if curl is unavailable.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9191/api/core/version/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Celery worker — runs Dispatcharr's BACKGROUND jobs. This is what makes the
+  # 2-stage M3U refresh and EPG download-wait behaviors REAL: the API returns
+  # "refresh initiated" immediately, celery does the work asynchronously, and
+  # ECM polls for completion. Without celery the async behaviors can't be
+  # validated — the whole point of this stack.
+  # ---------------------------------------------------------------------------
+  dispatcharr-celery:
+    image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.26.0}
+    restart: "no"
+    depends_on:
+      dispatcharr-db:
+        condition: service_healthy
+      dispatcharr-redis:
+        condition: service_healthy
+      dispatcharr-web:
+        condition: service_started
+    volumes:
+      - dbas-test-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    entrypoint: ["/app/docker/entrypoint.celery.sh"]
+    environment:
+      - DISPATCHARR_ENV=modular
+      - DISPATCHARR_PORT=9191
+      - POSTGRES_HOST=dispatcharr-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+      - REDIS_HOST=dispatcharr-redis
+      - REDIS_PORT=6379
+      - DISPATCHARR_LOG_LEVEL=info
+      - DJANGO_SETTINGS_MODULE=dispatcharr.settings
+      - PYTHONUNBUFFERED=1
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Dispatcharr's datastore. postgres:17 matches upstream.
+  # Host port 5436 -> 5432 only for snapshot capture/load via pg_dump/psql;
+  # the app talks to it over the internal network.
+  # ---------------------------------------------------------------------------
+  dispatcharr-db:
+    image: postgres:17
+    restart: "no"
+    ports:
+      - "${DBAS_TEST_PG_PORT:-5436}:5432"
+    environment:
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+    volumes:
+      - dbas-test-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatcharr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Redis — celery broker + result backend.
+  # ---------------------------------------------------------------------------
+  dispatcharr-redis:
+    image: redis:7
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dbas-test-data:
+  dbas-test-pg:
