@@ -323,6 +323,17 @@ class DispatcharrSettings(BaseModel):
     # Prune by age, BEFORE the VACUUM step, mirroring the established
     # age-window pattern.  90-day default mirrors the M3U retention window above.
     unique_client_connection_days: int = 90  # Delete unique_client_connections rows older than this many days (by connected_at).
+    # DBAS outbound SSRF mode (bead 0i2vt.5, threat model §9.4 item 7 / ADR-012
+    # D4). The SINGLE wizard knob governing the outbound-destination policy for
+    # cloud upload (S3/WebDAV/OneDrive/Dropbox/GDrive). "lan_friendly" (DEFAULT)
+    # allows RFC1918 private + 127/8 loopback destinations (operators backing up
+    # to a LAN NAS); "public_only" blocks those. The ALWAYS-ON denylist
+    # (metadata/link-local/CGNAT/IPv6-special/non-http(s)) is enforced
+    # unconditionally in code (security/ssrf.py) regardless of this value — this
+    # key can ONLY move the RFC1918/loopback band, never the always-on denylist
+    # (threat model B6). The first-run wizard that records this choice is a
+    # separate frontend bead; this field is the persistence seam.
+    ssrf_outbound_mode: str = "lan_friendly"
     # MCP server API key for Claude integration (empty = not configured)
     mcp_api_key: str = ""
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
