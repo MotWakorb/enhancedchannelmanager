@@ -1714,6 +1714,21 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_executions "
                     "ADD COLUMN channels_touched INTEGER NOT NULL DEFAULT 0"
                 ))
+                # 0023 (bd-0i2vt.4): credential-freshness + insecure flag on the
+                # pre-0005 cloud_storage_targets table — create_all() can't add
+                # columns to an existing table, so add them by hand here too.
+                conn.execute(text(
+                    "ALTER TABLE cloud_storage_targets "
+                    "ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 1"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE cloud_storage_targets "
+                    "ADD COLUMN token_revoked_at DATETIME"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE cloud_storage_targets "
+                    "ADD COLUMN insecure BOOLEAN NOT NULL DEFAULT 0"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.
