@@ -4,6 +4,13 @@
 
 This project has comprehensive test coverage at three levels.
 
+> **DBAS round-trip test environment** (ECM ↔ live Dispatcharr): a pinned,
+> throwaway Dispatcharr stack + production-shaped seed tooling lives in
+> [`tests/dbas-test-env/`](../tests/dbas-test-env/). Strategy and rationale:
+> [`docs/testing/dbas-test-env.md`](testing/dbas-test-env.md). Use it to validate
+> the round-trip success signal against a real Dispatcharr instead of the
+> assumption-encoding mocks in `backend/tests/fixtures/mock_dispatcharr.py`.
+
 ## 1. Backend Tests (Python/pytest)
 
 Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
