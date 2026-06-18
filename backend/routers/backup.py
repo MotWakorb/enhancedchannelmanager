@@ -4,6 +4,7 @@ Backup & Restore router — create and restore ECM configuration backups.
 Backs up: settings.json, journal.db, uploads/logos/, tls/, m3u_uploads/
 YAML export: settings + DB tables + Dispatcharr state in a single file.
 """
+import hashlib
 import io
 import json
 import logging
@@ -61,9 +62,24 @@ def _resolve_backup_normalization_group_ids(item: dict, session) -> str | None:
 # Directories to include in backup (relative to CONFIG_DIR)
 BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
-# App version for manifest (imported at call time to avoid circular imports)
+# App version for manifest (imported at call time to avoid circular imports).
+#
+# IMPORTANT (versioning.md touchpoint): APP_VERSION is a CI-enforced version
+# literal. scripts/check_version_consistency.py greps for the exact
+# ``APP_VERSION = "..."`` shape and fails the PR if it diverges from
+# frontend/package.json and backend/main.py. Do NOT rename it, change its
+# shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
+# ECM build produced this artifact") — it is NOT a compatibility gate.
+APP_VERSION = "0.17.6-0004"
 
-APP_VERSION = "0.17.6-0003"
+# DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
+# DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
+# APP_VERSION string above. Restore gates on THIS value (manifest_version <=
+# BACKUP_SCHEMA_VERSION accepted; a newer artifact is refused with the
+# user-facing "Unsupported backup version"). Bump by +1 only on a
+# backward-incompatible artifact-format change; never tie it to APP_VERSION.
+# Starts at 1 for the first v0.18.0 DBAS artifact (0i2vt.7).
+BACKUP_SCHEMA_VERSION = 1
 
 REDACTED = "***REDACTED***"
 
@@ -90,6 +106,61 @@ _SETTINGS_CREDENTIAL_FIELDS = (
 # the masking set in AlertMethod.to_dict (models.py) so backup redaction stays
 # in lock-step with the API-response masking already shipped to clients.
 _ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_key")
+
+# SINGLE shared credential-key denylist for the DBAS artifact (0i2vt.7, ADR-012
+# D1 redact-by-default). Used by the NON-BYPASSABLE deep redactor
+# (_redact_credentials_deep) that runs over EVERY category — including
+# Dispatcharr-sourced sections (M3U / EPG accounts), which the shipped YAML
+# export does NOT scrub on its own. Production Dispatcharr happens to never
+# return the M3U password (write-only, SHA1-hashed at fetch — see
+# docs/dispatcharr_api.md), but the artifact MUST NOT depend on that: redaction
+# is defense-in-depth and runs before any byte enters the archive. This union
+# folds in the settings + alert-method denylists so there is exactly one list
+# to maintain. Matched case-insensitively against dict keys.
+_REDACT_KEYS = frozenset(
+    {k.lower() for k in _SETTINGS_CREDENTIAL_FIELDS}
+    | {k.lower() for k in _ALERT_METHOD_CREDENTIAL_KEYS}
+    | {
+        # Dispatcharr / cloud-target credential-class keys that can ride along
+        # in gathered sections. Keep additive — never remove without confirming
+        # the field is not credential-bearing.
+        "password",
+        "passwd",
+        "secret",
+        "secret_key",
+        "access_key",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "private_key",
+        "auth_token",
+        "bearer_token",
+    }
+)
+
+
+def _redact_credentials_deep(obj):
+    """Recursively replace any value whose key (case-insensitive) is in the
+    shared :data:`_REDACT_KEYS` denylist with the REDACTED sentinel.
+
+    NON-BYPASSABLE artifact-pipeline stage (0i2vt.7): there is no plaintext
+    switch. Walks dicts and lists in place-safe fashion (returns a new
+    structure) so credential-class values never enter the archive regardless of
+    which category/source produced them. Non-credential values are untouched.
+    """
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            if isinstance(key, str) and key.lower() in _REDACT_KEYS:
+                # Only redact truthy values — preserve None/"" so restore-side
+                # preserve-on-omit semantics still distinguish "unset".
+                out[key] = REDACTED if value not in (None, "") else value
+            else:
+                out[key] = _redact_credentials_deep(value)
+        return out
+    if isinstance(obj, list):
+        return [_redact_credentials_deep(item) for item in obj]
+    return obj
 
 
 def _get_backup_filename() -> str:
@@ -249,6 +320,388 @@ def _create_backup_zip() -> io.BytesIO:
     buf.seek(0)
     logger.info("[BACKUP] Backup created with %d files", len(files_added))
     return buf
+
+
+# ---------------------------------------------------------------------------
+# DBAS backup artifact builder (0i2vt.7)
+#
+# The NEW v0.18.0 DBAS artifact format. Distinct from the legacy
+# ``_create_backup_zip`` above (which the shipped GET /create + POST /save +
+# restore paths still use). The new artifact is a ZIP containing:
+#
+#   manifest.json                 — schema_version (int) + app_version (str) +
+#                                   created_at + per-file SHA-256 + redacted flag.
+#                                   This is the CLEARTEXT HEADER: schema_version
+#                                   is readable WITHOUT decrypting (encryption seam
+#                                   for u81kh — a future wrapper encrypts the whole
+#                                   ZIP file, but the schema_version must remain
+#                                   discoverable from the manifest before decrypt).
+#   categories/<name>.yaml        — per-category redacted config (reuses
+#                                   build_yaml_export / _gather_* — single source).
+#   journal.db                    — scrubbed via _scrub_journal_db_to_temp.
+#   binary/metadata.json          — logo inventory.
+#   binary/url-mappings.json      — logo-file -> source-URL map.
+#   binary/logos/<file>           — per-image logo files (streamed, not buffered).
+#
+# A SHA-256 checksum SIDECAR file is written ALONGSIDE the ZIP (ADR-012 D1):
+# ``<artifact>.sha256``, computed by STREAMING the finished ZIP file (never by
+# hashing an in-RAM blob). Redaction is a NON-BYPASSABLE pipeline stage that
+# runs BEFORE any bytes enter the archive: there is no "ship plaintext" switch.
+# ---------------------------------------------------------------------------
+
+# Path layout inside the new artifact ZIP.
+ARTIFACT_MANIFEST_NAME = "manifest.json"
+ARTIFACT_CATEGORY_DIR = "categories"
+ARTIFACT_BINARY_DIR = "binary"
+ARTIFACT_LOGO_DIR = "binary/logos"
+ARTIFACT_BINARY_METADATA = "binary/metadata.json"
+ARTIFACT_BINARY_URL_MAPPINGS = "binary/url-mappings.json"
+
+# Streaming chunk size for SHA-256 computation over the finished artifact.
+_SHA256_CHUNK = 1024 * 1024  # 1 MiB
+
+# Headroom multiplier for the pre-build free-disk check. The redacted source
+# (logos + journal.db) is read once into a compressed ZIP; we conservatively
+# require free space >= estimated_source_bytes (the ZIP is typically smaller,
+# but DEFLATE on already-compressed PNG/JPG logos barely shrinks them, so we do
+# not discount). A clear failure here beats filling /config and corrupting
+# journal.db mid-write (D8 / grooming note).
+_DISK_HEADROOM_BYTES = 64 * 1024 * 1024  # 64 MiB absolute floor on top of estimate
+
+
+class BackupArtifact:
+    """Result of :func:`build_backup_artifact`.
+
+    Attributes:
+        zip_path: Path to the sealed (redacted) ZIP artifact on disk.
+        sidecar_path: Path to the ``<zip>.sha256`` checksum sidecar.
+        schema_version: The integer schema version stamped in the manifest.
+        sha256: Hex SHA-256 of the final artifact bytes (== sidecar contents).
+        file_count: Number of member files written into the ZIP.
+    """
+
+    __slots__ = ("zip_path", "sidecar_path", "schema_version", "sha256", "file_count")
+
+    def __init__(self, zip_path, sidecar_path, schema_version, sha256, file_count):
+        self.zip_path = zip_path
+        self.sidecar_path = sidecar_path
+        self.schema_version = schema_version
+        self.sha256 = sha256
+        self.file_count = file_count
+
+
+def _compute_sha256_streaming(path: Path) -> str:
+    """Compute the SHA-256 of a file by streaming it in chunks.
+
+    Never reads the whole file into RAM — the artifact can be multi-GB (D8).
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(_SHA256_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _estimate_artifact_source_bytes() -> int:
+    """Estimate the on-disk byte cost of the artifact before building.
+
+    Sums journal.db plus every file under the backup directories (logos, tls,
+    m3u_uploads). DEFLATE rarely shrinks already-compressed logo images, so we
+    treat the raw source size as the floor for the free-disk pre-check.
+    """
+    total = 0
+    if JOURNAL_DB_FILE.exists():
+        try:
+            total += JOURNAL_DB_FILE.stat().st_size
+        except OSError:
+            pass
+    for dir_rel in BACKUP_DIRS:
+        dir_path = CONFIG_DIR / dir_rel
+        if not (dir_path.exists() and dir_path.is_dir()):
+            continue
+        for file_path in dir_path.rglob("*"):
+            try:
+                if file_path.is_file():
+                    total += file_path.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _check_free_disk(target_dir: Path, required_bytes: int) -> None:
+    """Raise RuntimeError if ``target_dir``'s partition lacks ``required_bytes``
+    of free space (plus a fixed headroom floor).
+
+    A giant artifact can fill the /config partition and break the live
+    journal.db; failing loudly BEFORE we start writing is the safe behavior
+    (grooming note / D8).
+    """
+    needed = required_bytes + _DISK_HEADROOM_BYTES
+    try:
+        usage = shutil.disk_usage(str(target_dir))
+    except OSError as e:
+        # If we cannot stat the partition, do not block the backup outright —
+        # log and proceed; the write itself will fail loudly if truly full.
+        logger.warning("[BACKUP] Could not check free disk on %s: %s", target_dir, e)
+        return
+    if usage.free < needed:
+        raise RuntimeError(
+            "Insufficient free disk to build backup artifact: need ~%d bytes "
+            "(estimate %d + headroom %d), have %d free on %s"
+            % (needed, required_bytes, _DISK_HEADROOM_BYTES, usage.free, target_dir)
+        )
+
+
+def _build_artifact_manifest(
+    schema_version: int,
+    file_hashes: dict[str, str],
+) -> dict:
+    """Build the new-format artifact manifest (cleartext header).
+
+    ``schema_version`` is a dedicated integer, DISTINCT from ``app_version``
+    (the human-readable APP_VERSION string). Both are kept: ``app_version`` for
+    operator info, ``schema_version`` for the restore compatibility gate.
+    ``files`` carries a per-member SHA-256 so an unpacked member can be
+    integrity-checked independently of the whole-artifact sidecar.
+    """
+    return {
+        "schema_version": schema_version,
+        "app_version": APP_VERSION,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "redacted": True,
+        "files": [
+            {"path": path, "sha256": sha}
+            for path, sha in sorted(file_hashes.items())
+        ],
+    }
+
+
+async def _gather_redacted_categories() -> dict[str, str]:
+    """Produce the per-category redacted YAML payloads for the artifact.
+
+    REUSES build_yaml_export / _gather_settings / _gather_db_tables /
+    _gather_dispatcharr_sections — the SAME gather + redaction pipeline the
+    shipped YAML export uses. There is no second gather and no divergent
+    redaction list: settings credentials are masked by _gather_settings via the
+    shared _SETTINGS_CREDENTIAL_FIELDS denylist before any byte is emitted.
+
+    Returns a mapping of ``<category-name>.yaml`` -> YAML text. Each restorable
+    section is emitted as its own file so a future selective restore (Phase 2)
+    can read one category without parsing the whole archive.
+    """
+    out: dict[str, str] = {}
+    for key in RESTORABLE_SECTIONS:
+        # build_yaml_export routes settings/db/dispatcharr correctly and applies
+        # the settings-field redaction. That is NOT sufficient on its own:
+        # Dispatcharr-sourced sections (M3U / EPG accounts) can carry
+        # credential-class fields the settings redactor never touches. So every
+        # category's gathered payload passes through the shared NON-BYPASSABLE
+        # deep redactor before it is serialized into the archive — one denylist,
+        # every category, no plaintext path.
+        yaml_text = await build_yaml_export({key})
+        parsed = yaml.safe_load(yaml_text)
+        redacted = _redact_credentials_deep(parsed)
+        out["%s.yaml" % key] = yaml.dump(
+            redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
+        )
+    return out
+
+
+def _gather_logo_binary_subtree() -> tuple[list[tuple[Path, str]], dict, dict]:
+    """Enumerate logo files for the binary subtree without reading them.
+
+    Returns ``(entries, metadata, url_mappings)`` where:
+      - ``entries`` is a list of ``(source_path, arcname)`` to stream into the
+        ZIP one file at a time (D8 streaming-upload model — the builder writes
+        each via zf.write(), which streams from disk, never buffering all logos
+        in RAM).
+      - ``metadata`` is the inventory written to binary/metadata.json.
+      - ``url_mappings`` maps each archived logo filename to its (best-effort)
+        source reference for restore-side re-hosting.
+    """
+    entries: list[tuple[Path, str]] = []
+    files_meta: list[dict] = []
+    url_mappings: dict[str, str] = {}
+
+    logos_dir = CONFIG_DIR / "uploads" / "logos"
+    if logos_dir.exists() and logos_dir.is_dir():
+        for file_path in sorted(logos_dir.rglob("*")):
+            if not file_path.is_file():
+                continue
+            rel = file_path.relative_to(logos_dir).as_posix()
+            arcname = "%s/%s" % (ARTIFACT_LOGO_DIR, rel)
+            entries.append((file_path, arcname))
+            try:
+                size = file_path.stat().st_size
+            except OSError:
+                size = None
+            files_meta.append({"filename": rel, "size_bytes": size})
+            # Local logos are referenced by their on-disk relative path; the
+            # restore importer (Phase 2, 0i2vt.15) re-hosts them. Remote logo
+            # URL reconstruction is a restore-side concern and out of scope for
+            # the builder — record the local path so the mapping is complete.
+            url_mappings[rel] = "uploads/logos/%s" % rel
+
+    metadata = {
+        "logo_count": len(files_meta),
+        "logos": files_meta,
+    }
+    return entries, metadata, url_mappings
+
+
+async def build_backup_artifact(dest_dir: Optional[Path] = None) -> BackupArtifact:
+    """Build the new-format DBAS backup artifact (0i2vt.7).
+
+    Streams a redacted, sealed ZIP to a temp file under ``dest_dir`` (defaults
+    to a temp dir on the CONFIG partition), then writes a SHA-256 sidecar
+    computed by streaming the finished file. Returns a :class:`BackupArtifact`.
+
+    Redaction is non-bypassable: there is no plaintext switch. The redacted
+    bytes are produced as a clean stream so a future wrapper (u81kh) can encrypt
+    the whole file without re-cutting the format; ``manifest.json`` remains the
+    cleartext header carrying ``schema_version``.
+
+    On ANY failure, partial temp artifacts are cleaned up.
+    """
+    # Flush WAL so journal.db is self-contained (same rationale as the legacy
+    # builder — see _create_backup_zip).
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+            conn.commit()
+        if row and row[0]:
+            logger.warning("[BACKUP] WAL checkpoint completed (incomplete -- WAL busy)")
+        else:
+            logger.info("[BACKUP] WAL checkpoint completed")
+    except Exception as e:
+        logger.warning("[BACKUP] WAL checkpoint failed (non-fatal): %s", e)
+
+    # Pre-build free-disk check on the partition we will write to.
+    if dest_dir is None:
+        dest_dir = CONFIG_DIR
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    _check_free_disk(dest_dir, _estimate_artifact_source_bytes())
+
+    # Gather redacted payloads BEFORE opening the archive so a gather failure
+    # never leaves a half-written ZIP on disk.
+    categories = await _gather_redacted_categories()
+    logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree()
+
+    fd, tmp_zip_name = tempfile.mkstemp(prefix="ecm-artifact-", suffix=".zip", dir=str(dest_dir))
+    os.close(fd)
+    zip_path = Path(tmp_zip_name)
+    sidecar_path = Path(str(zip_path) + ".sha256")
+    scrubbed_db_path: Optional[Path] = None
+    file_hashes: dict[str, str] = {}
+
+    def _writestr_hashed(zf: zipfile.ZipFile, arcname: str, data: bytes) -> None:
+        zf.writestr(arcname, data)
+        file_hashes[arcname] = hashlib.sha256(data).hexdigest()
+
+    def _write_hashed(zf: zipfile.ZipFile, src: Path, arcname: str) -> None:
+        # Stream the file into the ZIP AND hash it in the same single pass over
+        # the bytes (no second read, no whole-file buffer).
+        zinfo = zipfile.ZipInfo(arcname)
+        zinfo.compress_type = zipfile.ZIP_DEFLATED
+        h = hashlib.sha256()
+        with open(src, "rb") as fsrc, zf.open(zinfo, "w") as fdst:
+            for chunk in iter(lambda: fsrc.read(_SHA256_CHUNK), b""):
+                fdst.write(chunk)
+                h.update(chunk)
+        file_hashes[arcname] = h.hexdigest()
+
+    try:
+        # Open the ZIP on a writable FILE HANDLE (NamedTemporaryFile-class temp
+        # path), NOT io.BytesIO — the artifact is streamed to disk (D8).
+        with open(zip_path, "wb") as zfh:
+            with zipfile.ZipFile(zfh, "w", zipfile.ZIP_DEFLATED) as zf:
+                # Per-category redacted YAML.
+                for name, yaml_text in categories.items():
+                    _writestr_hashed(
+                        zf,
+                        "%s/%s" % (ARTIFACT_CATEGORY_DIR, name),
+                        yaml_text.encode("utf-8"),
+                    )
+
+                # journal.db — scrubbed copy (alert_methods.config creds redacted).
+                if JOURNAL_DB_FILE.exists():
+                    scrubbed_db_path = _scrub_journal_db_to_temp(JOURNAL_DB_FILE)
+                    _write_hashed(zf, scrubbed_db_path, "journal.db")
+
+                # Binary subtree: metadata + url-mappings + per-image logo files.
+                _writestr_hashed(
+                    zf,
+                    ARTIFACT_BINARY_METADATA,
+                    json.dumps(logo_metadata, indent=2).encode("utf-8"),
+                )
+                _writestr_hashed(
+                    zf,
+                    ARTIFACT_BINARY_URL_MAPPINGS,
+                    json.dumps(url_mappings, indent=2).encode("utf-8"),
+                )
+                for src_path, arcname in logo_entries:
+                    _write_hashed(zf, src_path, arcname)
+
+                # Manifest LAST so it can carry every member's hash. This is the
+                # cleartext header (schema_version readable pre-decrypt).
+                manifest = _build_artifact_manifest(BACKUP_SCHEMA_VERSION, file_hashes)
+                # The manifest itself is not in file_hashes (it hashes the others).
+                zf.writestr(ARTIFACT_MANIFEST_NAME, json.dumps(manifest, indent=2))
+
+        # SHA-256 of the FINISHED artifact, computed by streaming the file.
+        artifact_sha = _compute_sha256_streaming(zip_path)
+        sidecar_path.write_text(
+            "%s  %s\n" % (artifact_sha, zip_path.name), encoding="utf-8"
+        )
+
+        logger.info(
+            "[BACKUP] Built artifact %s (schema_version=%d, %d members, sha256=%s)",
+            zip_path.name, BACKUP_SCHEMA_VERSION, len(file_hashes), artifact_sha,
+        )
+        return BackupArtifact(
+            zip_path=zip_path,
+            sidecar_path=sidecar_path,
+            schema_version=BACKUP_SCHEMA_VERSION,
+            sha256=artifact_sha,
+            file_count=len(file_hashes),
+        )
+    except Exception:
+        # Clean up partial temp artifacts on ANY failure.
+        for p in (zip_path, sidecar_path):
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError as e:
+                logger.warning("[BACKUP] Failed to clean up partial artifact %s: %s", p, e)
+        raise
+    finally:
+        if scrubbed_db_path is not None:
+            try:
+                scrubbed_db_path.unlink()
+            except OSError as e:
+                logger.warning(
+                    "[BACKUP] Failed to unlink scrubbed journal temp %s: %s",
+                    scrubbed_db_path, e,
+                )
+
+
+def verify_artifact_sha256(zip_path: Path, sidecar_path: Path) -> bool:
+    """Verify a built artifact against its SHA-256 sidecar.
+
+    Streams the artifact (no whole-file buffer) and compares against the hash in
+    the sidecar. Returns True on match, False on mismatch or unreadable sidecar.
+    """
+    try:
+        sidecar_text = Path(sidecar_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    expected = sidecar_text.split()[0] if sidecar_text else ""
+    if not expected:
+        return False
+    actual = _compute_sha256_streaming(Path(zip_path))
+    return actual == expected
 
 
 def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:

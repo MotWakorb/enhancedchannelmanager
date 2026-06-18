@@ -62,20 +62,23 @@ security prerequisites → Phase 1 backup + cloud upload → Phase 2 full restor
 |---|----------|------------------|
 | **D1** | Artifact format | ZIP-wrapping per-category YAML + a binary subtree (per-image logo files + `metadata.json` + `url-mappings.json`) + a SHA-256 checksum file alongside the ZIP + a manifest carrying `schema_version`. **`schema_version` is mandatory from the first release.** Restore on an unknown version refuses with a user-facing `"Unsupported backup version"` (full detail server-side only). |
 | **D2** | Phase-1 scope | v0.18.0 **MUST ship backup AND restore.** Backup without restore is pointless (you cannot recover from a backup you cannot apply). The two are one user-facing capability, not two releases. |
-| **D3** | Credential storage | Fernet symmetric encryption via the **existing** `backend/cloud_storage/crypto.py` primitive. **No KMS for the MVP.** No new crypto surface is introduced. |
+| **D3** | Credential storage | Fernet symmetric encryption via the **existing** `backend/cloud_storage/crypto.py` primitive. **No KMS for the MVP.** No new crypto surface is introduced. *(Note 2026-06-16: **D12 partially supersedes this** — optional whole-artifact passphrase encryption introduces a new KDF+AEAD surface for the opt-in cred-carrying path. D3 still governs at-rest credential storage.)* |
 | **D4** | Outbound URL policy | A **first-run SSRF wizard** (LAN-friendly default: RFC1918 + loopback allowed; public-only mode blocks them) + an **always-on denylist** (metadata/link-local/CGNAT/IPv6-special/non-`http(s)` schemes, rejected in *both* modes, no opt-out) + **DNS-rebinding mitigations** (resolve-then-connect-by-IP, redirect re-validation). |
 | **D5** | Progress transport | **HTTP polling**, reusing `task_scheduler` + the NotificationCenter. **WebSocket is NOT ported** from DBAS. |
 | **D6** | Release sequencing | **v0.18.0 (DBAS) then v0.18.1 (Sync), sequential**, per the ADR-004 "one major thing per cut" discipline. DBAS is the sole major item of v0.18.0; Sync is the sole major item of v0.18.1. |
 | **D7** | Dry-run engine | **Counts-only** (would-create / would-update / would-skip per entity per action). The full entity-level diff tree is **deferred to v0.19.x.** Dry-run is **default-ON** for Dispatcharr restores (opt in to apply; cannot opt out of the dry-run guardrail). |
 | **D8** | Logo memory model | **Streaming upload** pattern (read one logo → decode → upload → release before the next), **not** a port of DBAS's `CumulativeMemoryTracker`. Re-evaluable at implementation kickoff. |
 | **D9** | Logo-miss severity | A logo that cannot be matched on restore produces a **WARN log + an aggregate count + a prominent red banner on the restore-complete screen** — not a silent DEBUG line. |
+| **D10** | Plugins scope | **Plugins are EXCLUDED from v0.18.0** backup/restore (RCE-surface unknown; sidesteps the question and unblocks the rest of `0i2vt.13`). Revisit once plugin semantics are understood. *(Added 2026-06-16; full rationale in the Amendment below.)* |
+| **D11** | Cross-instance restore | **IN SCOPE for v0.18.0.** The archive is **trusted operator input**, but always-on safety validations apply regardless of source (SSRF denylist on every URL, schema validation, never restore a foreign admin that locks out the current operator). No archive signing/provenance for a self-hosted LAN tool. *(Added 2026-06-16; rationale in the Amendment.)* |
+| **D12** | Passphrase encryption | **Optional whole-artifact passphrase encryption SHIPS in v0.18.0** (overrides the architect's defer recommendation) so credentials travel with a cross-instance migration (pairs with D11). Opt-in; redact-by-default (D1) stays the default. Introduces a new KDF+AEAD surface (**partially supersedes D3**) and a decrypt path across all Phase-2 restore beads. *(Added 2026-06-16. Grooming 2026-06-17: design-gated — crypto spike `0zrse` precedes build; v0.18.0-vs-v0.18.1 placement decided on spike output. Rationale in the Amendment.)* |
 
 ### Five open questions — all resolved inline at decision time (2026-04-21)
 
 | Q | Question | Resolution |
 |---|----------|------------|
 | Q1 | Scope of the v0.18.0 deliverable | **Full round-trip** (backup + restore, all 13 categories). |
-| Q2 | Engineer-day estimate | **27–46 engineer-days accepted** by the PO. |
+| Q2 | Engineer-day estimate | **27–46 engineer-days accepted** by the PO (2026-04-21). *(Stale as of 2026-06-17: this predates D10/D11/D12. Grooming put the D12-in range at ~37–60 days. UNDER REVISION — re-estimate pending the `0zrse` crypto-spike outcome, since D12's v0.18.0-vs-.1 placement is the largest swing. v0.18.0 scope also narrowed: Dropbox/OneDrive cloud targets deferred, leaving S3/WebDAV/GDrive.)* |
 | Q3 | SSRF wizard default | **LAN-friendly** (many operators back up to a NAS on `192.168.x.x`). |
 | Q4 | Dry-run depth | **Counts-only** for v0.18.0; full diff tree deferred to v0.19.x (= D7). |
 | Q5 | Logo-miss visibility | **Prominent red banner** on restore-complete (= D9). |
