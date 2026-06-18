@@ -5,6 +5,8 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from cryptography.fernet import Fernet
+
 from cloud_storage import get_adapter, ConnectionTestResult
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials, reset_key_cache
 
@@ -186,6 +188,225 @@ class TestCrypto:
                 decrypted = decrypt_credentials(encrypted)
                 assert decrypted == data
                 reset_key_cache()
+
+
+# =============================================================================
+# Key bootstrap integrity (mode 0600 + ownership) — bead 0i2vt.2
+# =============================================================================
+
+
+def _fake_owner_stat(target_path, fake_uid):
+    """Patch Path.stat so `target_path` reports a foreign owner uid.
+
+    Returns a patch context manager. The real mode bits are preserved (so the
+    mode-repair branch behaves normally); only st_uid is overridden, and only
+    for the target path — every other Path.stat() call delegates to the real
+    implementation so chmod/replace/tempfile internals are unaffected.
+    """
+    import os
+    import pathlib
+
+    real_stat = pathlib.Path.stat
+    target_str = str(target_path)
+
+    class _FakeStatResult:
+        def __init__(self, src):
+            self._src = src
+
+        def __getattr__(self, name):
+            if name == "st_uid":
+                return fake_uid
+            return getattr(self._src, name)
+
+    def _stat_side_effect(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        if str(self) == target_str:
+            return _FakeStatResult(result)
+        return result
+
+    return patch.object(pathlib.Path, "stat", _stat_side_effect)
+
+
+class TestKeyIntegrity:
+    """Verify the Fernet key bootstrap integrity check.
+
+    Decisions under test (PO-resolved, bead 0i2vt.2):
+      - Wrong MODE -> repair to 0600 on load.
+      - Existing key with live ciphertext + drifted mode -> repaired, NOT
+        regenerated, ciphertext still decrypts.
+      - Wrong OWNER + unfixable (non-root) -> fail-closed, no regenerate/thrash.
+      - No key (first boot) -> generate 0600 atomically (no world-readable window).
+      - Decrypt with broken key -> fail-soft (returns None, never raises).
+    """
+
+    def _patched(self, tmp_path):
+        """Context managers patching KEY_FILE + CONFIG_DIR to a tmp location."""
+        key_file = tmp_path / ".export_key"
+        return key_file
+
+    def test_existing_key_mode_repaired_to_0600(self, tmp_path):
+        import os
+        import stat as stat_mod
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+        # Pre-create a valid key with a drifted (world/group-readable) mode.
+        key_file.write_bytes(Fernet.generate_key())
+        key_file.chmod(0o644)
+        assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o644
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                crypto._load_or_generate_key()
+
+        assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
+        reset_key_cache()
+
+    def test_drifted_mode_with_live_ciphertext_repairs_not_regenerates(self, tmp_path):
+        """The key MUST NOT be regenerated — existing ciphertext must still decrypt."""
+        import os
+        import stat as stat_mod
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                # First boot: generate a key and encrypt live credentials.
+                original = {"access_key": "AKID123", "secret": "supersecret"}
+                encrypted = encrypt_credentials(original)
+                key_bytes_before = key_file.read_bytes()
+
+                # Simulate a filesystem permission regression.
+                key_file.chmod(0o644)
+                reset_key_cache()
+
+                # Reload: mode must be repaired, key must NOT change.
+                decrypted = decrypt_credentials(encrypted)
+
+        assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
+        assert key_file.read_bytes() == key_bytes_before, "key was regenerated — data loss!"
+        assert decrypted == original, "live ciphertext no longer decrypts after repair"
+        reset_key_cache()
+
+    def test_wrong_owner_unfixable_non_root_fails_closed(self, tmp_path):
+        """Non-root process + key owned by another uid -> fail-closed, no regen."""
+        import os
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+        key_file.write_bytes(Fernet.generate_key())
+        key_file.chmod(0o600)
+        key_bytes_before = key_file.read_bytes()
+
+        fake_uid = os.stat(key_file).st_uid + 4242  # an owner that is not us
+        fake_stat = _fake_owner_stat(key_file, fake_uid)
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                # Force a non-root process context and a foreign owner.
+                with patch("cloud_storage.crypto.os.getuid", return_value=1000):
+                    with fake_stat:
+                        with pytest.raises(RuntimeError, match="ownership"):
+                            crypto._load_or_generate_key()
+
+        # Must NOT have regenerated / thrashed the key.
+        assert key_file.read_bytes() == key_bytes_before
+        reset_key_cache()
+
+    def test_wrong_owner_root_context_does_not_thrash(self, tmp_path):
+        """Root process + key owned by another uid -> proceed (ownership advisory)."""
+        import os
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+        key_file.write_bytes(Fernet.generate_key())
+        key_file.chmod(0o600)
+        key_bytes_before = key_file.read_bytes()
+
+        fake_uid = os.stat(key_file).st_uid + 4242
+        fake_stat = _fake_owner_stat(key_file, fake_uid)
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                with patch("cloud_storage.crypto.os.getuid", return_value=0):
+                    with fake_stat:
+                        # Should NOT raise and should NOT regenerate.
+                        key = crypto._load_or_generate_key()
+
+        assert key == key_bytes_before.strip()
+        assert key_file.read_bytes() == key_bytes_before
+        reset_key_cache()
+
+    def test_first_boot_generates_0600_atomically(self, tmp_path):
+        """No key present -> generate with 0600 and never a world-readable window."""
+        import os
+        import stat as stat_mod
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+        assert not key_file.exists()
+
+        observed_modes = []
+        real_replace = os.replace
+
+        def _spy_replace(src, dst):
+            # At the instant the key becomes visible under its real path, capture
+            # the mode of the source temp file — it must already be 0600.
+            observed_modes.append(stat_mod.S_IMODE(os.stat(src).st_mode))
+            return real_replace(src, dst)
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                with patch("cloud_storage.crypto.os.replace", side_effect=_spy_replace):
+                    crypto._load_or_generate_key()
+
+        assert key_file.exists()
+        assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
+        # The file was 0600 *before* it became visible under the real path.
+        assert observed_modes == [0o600], (
+            f"key was exposed with non-0600 mode during create: {observed_modes}"
+        )
+        reset_key_cache()
+
+    def test_decrypt_broken_key_fails_soft(self, tmp_path):
+        """A garbled key / undecryptable blob returns None, never raises."""
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                # Encrypt with a real key first.
+                encrypted = encrypt_credentials({"a": "b"})
+                reset_key_cache()
+
+                # Corrupt the key file in place (garbled key).
+                key_file.write_bytes(b"not-a-valid-fernet-key")
+                key_file.chmod(0o600)
+
+                # Decrypt must fail-soft -> None, not raise.
+                result = decrypt_credentials(encrypted)
+
+        assert result is None
+        reset_key_cache()
+
+    def test_decrypt_garbled_ciphertext_fails_soft(self, tmp_path):
+        """A corrupted ciphertext blob with a valid key returns None, never raises."""
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                # Valid key, but feed garbage ciphertext.
+                result = decrypt_credentials("this-is-not-a-valid-token")
+
+        assert result is None
+        reset_key_cache()
 
 
 # =============================================================================

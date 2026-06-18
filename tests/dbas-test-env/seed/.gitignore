@@ -1,0 +1,5 @@
+# The captured snapshot is large and machine-local — regenerate on demand via
+# ../capture-snapshot.sh. Commit the MANIFEST and the tooling, NOT the dump.
+dispatcharr-seed.sql.gz
+*.sql
+*.sql.gz
