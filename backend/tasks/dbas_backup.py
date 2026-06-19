@@ -155,7 +155,21 @@ class DbasBackupTask(TaskScheduler):
         self.retention_last_n: int = retention.DEFAULT_LAST_N
         self.retention_max_age_days: int = retention.DEFAULT_MAX_AGE_DAYS
 
+        # Whole-artifact passphrase encryption (ADR-012 D12 / u81kh) — MANUAL-RUN
+        # ONLY transients, passed as ad-hoc run parameters and DELIBERATELY
+        # excluded from get_config so a passphrase is never persisted to the
+        # schedule store (journal.db). A SCHEDULED run therefore always produces
+        # the default redact-by-default backup: there is nowhere safe to keep a
+        # passphrase at rest for an unattended run, so encrypted backups are
+        # opt-in + interactive only.
+        self.passphrase: Optional[str] = None
+        self.include_credentials: bool = False
+        self.acknowledge_unrecoverable: bool = False
+
     def get_config(self) -> dict:
+        # Encryption transients (passphrase/include_credentials/
+        # acknowledge_unrecoverable) are intentionally absent — they must never
+        # be persisted; they apply to a single manual run only.
         return {
             "cloud_target_id": self.cloud_target_id,
             "cloud_credential_version": self.cloud_credential_version,
@@ -198,6 +212,14 @@ class DbasBackupTask(TaskScheduler):
         if "retention_max_age_days" in config:
             val = config["retention_max_age_days"]
             self.retention_max_age_days = int(val) if val is not None else retention.DEFAULT_MAX_AGE_DAYS
+        # Encryption transients (manual run only — never persisted, see get_config).
+        if "passphrase" in config:
+            val = config["passphrase"]
+            self.passphrase = str(val) if val else None
+        if "include_credentials" in config:
+            self.include_credentials = bool(config["include_credentials"])
+        if "acknowledge_unrecoverable" in config:
+            self.acknowledge_unrecoverable = bool(config["acknowledge_unrecoverable"])
 
     async def execute(self) -> TaskResult:
         started_at = datetime.now(timezone.utc)
@@ -217,7 +239,12 @@ class DbasBackupTask(TaskScheduler):
             self._set_progress(
                 current_item="Building backup artifact...", status="running",
             )
-            artifact = await build_backup_artifact(dest_dir=BACKUPS_DIR)
+            artifact = await build_backup_artifact(
+                dest_dir=BACKUPS_DIR,
+                passphrase=self.passphrase,
+                include_credentials=self.include_credentials,
+                acknowledge_unrecoverable=self.acknowledge_unrecoverable,
+            )
 
             # Give the artifact its CANONICAL, timestamped, allowlist-matching
             # name (ecm-backup-<ts>.zip) so it is discoverable, sortable by the

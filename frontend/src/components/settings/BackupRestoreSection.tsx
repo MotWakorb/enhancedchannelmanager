@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { BackupRestoreModal } from '../BackupRestoreModal';
+import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { getDateLocale } from '../../utils/formatting';
 import './BackupRestoreSection.css';
 
@@ -343,6 +344,9 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           </button>
         )}
       </div>
+
+      {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
+      <EncryptedBackupCard />
 
       {/* Full ZIP Restore */}
       <div className="backup-card">

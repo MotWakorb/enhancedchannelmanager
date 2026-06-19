@@ -22,13 +22,14 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
 from auth import RequireAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
+from dbas import artifact_crypto
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
 from models import (
@@ -73,7 +74,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.17.6-0004"
+APP_VERSION = "0.17.6-0005"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -142,7 +143,7 @@ _REDACT_KEYS = frozenset(
 )
 
 
-def _redact_credentials_deep(obj):
+def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
     """Recursively replace any value whose key (case-insensitive) is in the
     shared :data:`_REDACT_KEYS` denylist with the REDACTED sentinel.
 
@@ -150,19 +151,34 @@ def _redact_credentials_deep(obj):
     switch. Walks dicts and lists in place-safe fashion (returns a new
     structure) so credential-class values never enter the archive regardless of
     which category/source produced them. Non-credential values are untouched.
+
+    ``preserve_keys`` is the opt-in ``include_credentials`` re-injection
+    allowlist (ADR-012 D12 / u81kh): a key in this set is NOT redacted — its real
+    value is carried so a cross-instance migration does not have to re-enter it.
+    This does NOT bypass redaction: redaction still runs over every key; only the
+    explicitly-approved migration creds are preserved, and the artifact is then
+    whole-passphrase-encrypted (the only context in which ``preserve_keys`` is
+    ever non-empty — see :func:`build_backup_artifact`). Keys NOT in this set
+    (and never approved — e.g. ``password_hash``, never in :data:`_REDACT_KEYS`)
+    stay redacted regardless.
     """
     if isinstance(obj, dict):
         out = {}
         for key, value in obj.items():
-            if isinstance(key, str) and key.lower() in _REDACT_KEYS:
+            klower = key.lower() if isinstance(key, str) else key
+            if isinstance(key, str) and klower in _REDACT_KEYS and klower not in preserve_keys:
                 # Only redact truthy values — preserve None/"" so restore-side
                 # preserve-on-omit semantics still distinguish "unset".
                 out[key] = REDACTED if value not in (None, "") else value
+            elif isinstance(key, str) and klower in preserve_keys:
+                # Approved migration cred — carried as-is (no recursion needed;
+                # a credential value is a scalar, not a nested structure).
+                out[key] = value
             else:
-                out[key] = _redact_credentials_deep(value)
+                out[key] = _redact_credentials_deep(value, preserve_keys)
         return out
     if isinstance(obj, list):
-        return [_redact_credentials_deep(item) for item in obj]
+        return [_redact_credentials_deep(item, preserve_keys) for item in obj]
     return obj
 
 
@@ -181,18 +197,30 @@ def _build_manifest(files: list[str]) -> dict:
     }
 
 
-def _scrub_journal_db_to_temp(src: Path) -> Path:
+def _scrub_journal_db_to_temp(src: Path, include_credentials: bool = False) -> Path:
     """Copy journal.db to a temp file and redact credential-class keys in
     alert_methods.config rows. Returns the temp file path; caller must unlink.
 
     Per bd-l0nhi: PR #163 began storing SMTP password (and other creds) inside
     alert_methods.config JSON, so the live DB cannot be zipped raw without
     leaking credentials.
+
+    ``include_credentials`` (ADR-012 D12 / u81kh) preserves those
+    alert_methods.config creds (the SMTP password an operator would otherwise
+    re-enter on migration) instead of redacting them. It is only ever True from
+    :func:`build_backup_artifact` when a passphrase is set, so the cleartext-on-
+    disk default copy is always scrubbed. NOTE: any CloudStorageTarget /
+    SyncTarget credential columns in journal.db remain Fernet-ciphertext at rest
+    (ADR-012 D3) regardless of this flag; they are usable on the target only with
+    the same export key, else treated as absent on restore (checklist 19).
     """
     fd, tmp_name = tempfile.mkstemp(prefix="ecm-backup-journal-", suffix=".db")
     os.close(fd)
     tmp_path = Path(tmp_name)
     shutil.copyfile(src, tmp_path)
+    if include_credentials:
+        # Approved cred-carrying migration path: do NOT scrub alert_methods creds.
+        return tmp_path
 
     try:
         conn = sqlite3.connect(str(tmp_path))
@@ -410,17 +438,28 @@ class BackupArtifact:
         sidecar_path: Path to the ``<zip>.sha256`` checksum sidecar.
         schema_version: The integer schema version stamped in the manifest.
         sha256: Hex SHA-256 of the final artifact bytes (== sidecar contents).
+            For an encrypted artifact this is over the ENCRYPTED envelope bytes
+            (the bytes actually on disk).
         file_count: Number of member files written into the ZIP.
+        encrypted: True when the artifact is whole-passphrase-encrypted
+            (ADR-012 D12 / u81kh); the manifest/schema_version then live INSIDE
+            the ciphertext and only the envelope ``format_version`` is readable
+            pre-decrypt.
     """
 
-    __slots__ = ("zip_path", "sidecar_path", "schema_version", "sha256", "file_count")
+    __slots__ = (
+        "zip_path", "sidecar_path", "schema_version", "sha256", "file_count",
+        "encrypted",
+    )
 
-    def __init__(self, zip_path, sidecar_path, schema_version, sha256, file_count):
+    def __init__(self, zip_path, sidecar_path, schema_version, sha256, file_count,
+                 encrypted=False):
         self.zip_path = zip_path
         self.sidecar_path = sidecar_path
         self.schema_version = schema_version
         self.sha256 = sha256
         self.file_count = file_count
+        self.encrypted = encrypted
 
 
 def _compute_sha256_streaming(path: Path) -> str:
@@ -488,6 +527,7 @@ def _check_free_disk(target_dir: Path, required_bytes: int) -> None:
 def _build_artifact_manifest(
     schema_version: int,
     file_hashes: dict[str, str],
+    redacted: bool = True,
 ) -> dict:
     """Build the new-format artifact manifest (cleartext header).
 
@@ -501,7 +541,7 @@ def _build_artifact_manifest(
         "schema_version": schema_version,
         "app_version": APP_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "redacted": True,
+        "redacted": redacted,
         "files": [
             {"path": path, "sha256": sha}
             for path, sha in sorted(file_hashes.items())
@@ -509,7 +549,7 @@ def _build_artifact_manifest(
     }
 
 
-async def _gather_redacted_categories() -> dict[str, str]:
+async def _gather_redacted_categories(include_credentials: bool = False) -> dict[str, str]:
     """Produce the per-category redacted YAML payloads for the artifact.
 
     REUSES build_yaml_export / _gather_settings / _gather_db_tables /
@@ -522,6 +562,13 @@ async def _gather_redacted_categories() -> dict[str, str]:
     section is emitted as its own file so a future selective restore (Phase 2)
     can read one category without parsing the whole archive.
     """
+    # include_credentials (D12) preserves the approved migration-cred allowlist
+    # (== _REDACT_KEYS; password_hash is never in that set and so is never
+    # carried). Redaction STILL runs over every key — only the explicitly
+    # approved creds are preserved — so this is re-injection, not a redaction
+    # bypass (checklist 28). preserve_keys is empty unless the caller opted in
+    # AND set a passphrase (enforced in build_backup_artifact).
+    preserve_keys = _REDACT_KEYS if include_credentials else frozenset()
     out: dict[str, str] = {}
     for key in RESTORABLE_SECTIONS:
         # build_yaml_export routes settings/db/dispatcharr correctly and applies
@@ -531,9 +578,9 @@ async def _gather_redacted_categories() -> dict[str, str]:
         # category's gathered payload passes through the shared NON-BYPASSABLE
         # deep redactor before it is serialized into the archive — one denylist,
         # every category, no plaintext path.
-        yaml_text = await build_yaml_export({key})
+        yaml_text = await build_yaml_export({key}, include_credentials=include_credentials)
         parsed = yaml.safe_load(yaml_text)
-        redacted = _redact_credentials_deep(parsed)
+        redacted = _redact_credentials_deep(parsed, preserve_keys)
         out["%s.yaml" % key] = yaml.dump(
             redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
         )
@@ -582,20 +629,54 @@ def _gather_logo_binary_subtree() -> tuple[list[tuple[Path, str]], dict, dict]:
     return entries, metadata, url_mappings
 
 
-async def build_backup_artifact(dest_dir: Optional[Path] = None) -> BackupArtifact:
-    """Build the new-format DBAS backup artifact (0i2vt.7).
+async def build_backup_artifact(
+    dest_dir: Optional[Path] = None,
+    *,
+    passphrase: Optional[str] = None,
+    include_credentials: bool = False,
+    acknowledge_unrecoverable: bool = False,
+) -> BackupArtifact:
+    """Build the new-format DBAS backup artifact (0i2vt.7 + u81kh).
 
     Streams a redacted, sealed ZIP to a temp file under ``dest_dir`` (defaults
     to a temp dir on the CONFIG partition), then writes a SHA-256 sidecar
     computed by streaming the finished file. Returns a :class:`BackupArtifact`.
 
     Redaction is non-bypassable: there is no plaintext switch. The redacted
-    bytes are produced as a clean stream so a future wrapper (u81kh) can encrypt
-    the whole file without re-cutting the format; ``manifest.json`` remains the
-    cleartext header carrying ``schema_version``.
+    bytes are produced as a clean stream.
+
+    Optional whole-artifact passphrase encryption (ADR-012 D12 / u81kh):
+
+    * ``passphrase`` — when set, the sealed ZIP is encrypted off the event loop
+      via :mod:`dbas.artifact_crypto` (scrypt + chunked AEAD) and the artifact
+      on disk is the encrypted envelope (its ``format_version`` is readable
+      pre-decrypt; the backup ``schema_version`` then lives inside the
+      ciphertext). Requires ``acknowledge_unrecoverable=True`` (lost passphrase
+      = permanently unrecoverable, checklist 34) and a passphrase of at least
+      :data:`dbas.artifact_crypto.MIN_PASSPHRASE_LENGTH` chars (checklist 29).
+    * ``include_credentials`` — the explicit "include credentials for migration"
+      opt-in (checklist 27). It re-injects the approved migration-cred allowlist
+      before encryption; redaction still runs (structural redact-then-encrypt,
+      checklist 28). It REQUIRES ``passphrase`` — there is no switch that ships
+      unredacted creds without one.
 
     On ANY failure, partial temp artifacts are cleaned up.
     """
+    encrypt = passphrase is not None
+    if include_credentials and not encrypt:
+        # No unredacted-creds-without-a-passphrase path (checklist 27/28).
+        raise ValueError("include_credentials requires a passphrase")
+    if encrypt:
+        if not acknowledge_unrecoverable:
+            raise ValueError(
+                "Encrypted backup requires acknowledge_unrecoverable: a lost "
+                "passphrase makes the artifact permanently unrecoverable"
+            )
+        if len(passphrase) < artifact_crypto.MIN_PASSPHRASE_LENGTH:
+            raise ValueError(
+                "Passphrase must be at least %d characters"
+                % artifact_crypto.MIN_PASSPHRASE_LENGTH
+            )
     # Flush WAL so journal.db is self-contained (same rationale as the legacy
     # builder — see _create_backup_zip).
     try:
@@ -618,8 +699,10 @@ async def build_backup_artifact(dest_dir: Optional[Path] = None) -> BackupArtifa
     _check_free_disk(dest_dir, _estimate_artifact_source_bytes())
 
     # Gather redacted payloads BEFORE opening the archive so a gather failure
-    # never leaves a half-written ZIP on disk.
-    categories = await _gather_redacted_categories()
+    # never leaves a half-written ZIP on disk. include_credentials only ever
+    # re-injects the approved migration creds (and only with a passphrase set,
+    # validated above); redaction still runs over everything else.
+    categories = await _gather_redacted_categories(include_credentials=include_credentials)
     logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree()
 
     fd, tmp_zip_name = tempfile.mkstemp(prefix="ecm-artifact-", suffix=".zip", dir=str(dest_dir))
@@ -658,9 +741,12 @@ async def build_backup_artifact(dest_dir: Optional[Path] = None) -> BackupArtifa
                         yaml_text.encode("utf-8"),
                     )
 
-                # journal.db — scrubbed copy (alert_methods.config creds redacted).
+                # journal.db — scrubbed copy (alert_methods.config creds redacted,
+                # unless the cred-carrying migration opt-in preserves them).
                 if JOURNAL_DB_FILE.exists():
-                    scrubbed_db_path = _scrub_journal_db_to_temp(JOURNAL_DB_FILE)
+                    scrubbed_db_path = _scrub_journal_db_to_temp(
+                        JOURNAL_DB_FILE, include_credentials=include_credentials
+                    )
                     _write_hashed(zf, scrubbed_db_path, "journal.db")
 
                 # Binary subtree: metadata + url-mappings + per-image logo files.
@@ -677,21 +763,53 @@ async def build_backup_artifact(dest_dir: Optional[Path] = None) -> BackupArtifa
                 for src_path, arcname in logo_entries:
                     _write_hashed(zf, src_path, arcname)
 
-                # Manifest LAST so it can carry every member's hash. This is the
-                # cleartext header (schema_version readable pre-decrypt).
-                manifest = _build_artifact_manifest(BACKUP_SCHEMA_VERSION, file_hashes)
+                # Manifest LAST so it can carry every member's hash. For a
+                # PLAINTEXT artifact this is the cleartext header (schema_version
+                # readable pre-decrypt); for an ENCRYPTED artifact it is sealed
+                # inside the ciphertext, and the envelope's format_version is the
+                # pre-decrypt version gate instead (checklist 30).
+                manifest = _build_artifact_manifest(
+                    BACKUP_SCHEMA_VERSION, file_hashes, redacted=not include_credentials
+                )
                 # The manifest itself is not in file_hashes (it hashes the others).
                 zf.writestr(ARTIFACT_MANIFEST_NAME, json.dumps(manifest, indent=2))
 
-        # SHA-256 of the FINISHED artifact, computed by streaming the file.
+        # Optional whole-artifact passphrase encryption (ADR-012 D12 / u81kh).
+        # The sealed plaintext ZIP is encrypted OFF the event loop to a sibling
+        # temp, then atomically swapped into zip_path so the artifact on disk is
+        # the encrypted envelope. The plaintext is destroyed by the replace.
+        if encrypt:
+            enc_path = Path(str(zip_path) + ".enc")
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(
+                    None,
+                    artifact_crypto.encrypt_file,
+                    zip_path, passphrase, enc_path,
+                )
+                os.replace(enc_path, zip_path)  # plaintext ZIP -> encrypted bytes
+            except Exception:
+                # encrypt_file already unlinks its own partial output; clear any
+                # straggler so the outer cleanup sees a consistent state.
+                try:
+                    if enc_path.exists():
+                        enc_path.unlink()
+                except OSError:
+                    pass
+                raise
+
+        # SHA-256 of the FINISHED artifact (encrypted bytes if encrypted),
+        # computed by streaming the file.
         artifact_sha = _compute_sha256_streaming(zip_path)
         sidecar_path.write_text(
             "%s  %s\n" % (artifact_sha, zip_path.name), encoding="utf-8"
         )
 
         logger.info(
-            "[BACKUP] Built artifact %s (schema_version=%d, %d members, sha256=%s)",
-            zip_path.name, BACKUP_SCHEMA_VERSION, len(file_hashes), artifact_sha,
+            "[BACKUP] Built artifact %s (schema_version=%d, %d members, "
+            "encrypted=%s, include_credentials=%s, sha256=%s)",
+            zip_path.name, BACKUP_SCHEMA_VERSION, len(file_hashes),
+            encrypt, include_credentials, artifact_sha,
         )
         return BackupArtifact(
             zip_path=zip_path,
@@ -699,6 +817,7 @@ async def build_backup_artifact(dest_dir: Optional[Path] = None) -> BackupArtifa
             schema_version=BACKUP_SCHEMA_VERSION,
             sha256=artifact_sha,
             file_count=len(file_hashes),
+            encrypted=encrypt,
         )
     except Exception:
         # Clean up partial temp artifacts on ANY failure.
@@ -1451,6 +1570,14 @@ async def restore_dbas_artifact(
         default=False,
         description="False (default) runs a counts-only dry-run; True runs the apply.",
     ),
+    passphrase: Optional[str] = Form(
+        default=None,
+        description=(
+            "Operator passphrase for an encrypted artifact (ADR-012 D12). Omit "
+            "for a plain artifact. Sent as a form field, never a query string, "
+            "so it does not land in access logs."
+        ),
+    ),
     _admin=RequireAdminIfEnabled,
 ):
     """Trigger an async DBAS artifact restore. Admin only.
@@ -1483,6 +1610,10 @@ async def restore_dbas_artifact(
         "confirm_apply": bool(confirm_apply),
         "cleanup_artifact": True,
     }
+    # Forward the passphrase only when present (encrypted artifact). The task
+    # excludes it from get_config so it is never persisted or logged.
+    if passphrase:
+        parameters["passphrase"] = passphrase
 
     try:
         from task_engine import get_engine
@@ -1512,14 +1643,22 @@ async def restore_dbas_artifact(
     }
 
 
-def _gather_settings() -> dict:
-    """Read settings.json and return as dict (excluding sensitive fields)."""
+def _gather_settings(include_credentials: bool = False) -> dict:
+    """Read settings.json and return as dict (excluding sensitive fields).
+
+    ``include_credentials`` (ADR-012 D12 / u81kh) preserves the settings-class
+    credentials (SMTP password, API keys, bot tokens) instead of redacting them,
+    for the opt-in passphrase-encrypted cred-carrying migration path. It is only
+    ever True inside :func:`build_backup_artifact` when a passphrase is set; the
+    review/portability YAML export path always redacts.
+    """
     settings = get_settings()
     data = settings.model_dump()
-    # Redact credentials — the export is for review/portability, not secret storage
-    for key in _SETTINGS_CREDENTIAL_FIELDS:
-        if key in data:
-            data[key] = REDACTED
+    if not include_credentials:
+        # Redact credentials — the export is for review/portability, not secret storage
+        for key in _SETTINGS_CREDENTIAL_FIELDS:
+            if key in data:
+                data[key] = REDACTED
     return data
 
 
@@ -1654,11 +1793,19 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
         return {"_warning": "Dispatcharr not connected — %s" % str(e)}
 
 
-async def build_yaml_export(sections: Optional[set[str]] = None) -> str:
+async def build_yaml_export(
+    sections: Optional[set[str]] = None, include_credentials: bool = False
+) -> str:
     """Build a YAML export string, optionally limited to specific sections.
 
     If sections is None, all sections are included. Otherwise only the
     specified section keys (from RESTORABLE_SECTIONS) are included.
+
+    ``include_credentials`` (ADR-012 D12 / u81kh) flows down to
+    :func:`_gather_settings` to preserve settings-class creds for the opt-in
+    passphrase-encrypted migration path; it is only ever True from
+    :func:`build_backup_artifact`. The user-facing ``/export`` endpoint never
+    sets it (always redacts).
     """
     all_keys = set(RESTORABLE_SECTIONS.keys())
     selected = sections if sections else all_keys
@@ -1672,7 +1819,7 @@ async def build_yaml_export(sections: Optional[set[str]] = None) -> str:
     }
 
     if "settings" in selected:
-        export_data["settings"] = _gather_settings()
+        export_data["settings"] = _gather_settings(include_credentials=include_credentials)
 
     # ECM database sections
     db_sections = _gather_db_tables()
