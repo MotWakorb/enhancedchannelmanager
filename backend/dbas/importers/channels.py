@@ -1,17 +1,41 @@
-"""The channels restore importer — channel-row create + profile reattach.
+"""The channels restore importer — channel-row create + profile reattach + streams.
 
-Bead ``enhancedchannelmanager-4vouz`` (split 2/4 of the ``0i2vt.14`` channels
-importer epic). This module restores the CHANNEL entity category from a
-Dispatcharr export archive: it creates each archived channel row and reattaches
-each channel to its archived channel-profile memberships.
+Bead ``enhancedchannelmanager-4vouz`` (split 2/4) created the channel-row +
+profile-reattach layer; bead ``enhancedchannelmanager-0i2vt.14`` (the INTEGRATION
+umbrella) extends it with the stream layer. This module restores the CHANNEL
+entity category from a Dispatcharr export archive: it creates each archived
+channel row, reattaches each channel to its archived channel-profile memberships,
+AND re-attaches each channel's archived embedded streams to the destination.
 
-SCOPE — TIGHT. This importer does channel-row create + profile membership
-reattach ONLY. It deliberately leaves a clean SEAM where bead ``0i2vt.14``
-integrates the stream matcher (``al6e3``) + ``create_stream`` (``nav0c``) +
-custom-stream fallback (``ahygg``) to match and attach an archived channel's
-streams. This importer NEVER matches a stream, NEVER attaches a stream, and
-strips any embedded ``streams`` payload from the create. Stream attachment is
-explicitly out of scope.
+THE STREAM LAYER (``0i2vt.14`` integration — wires the three sibling splits).
+For each restored channel, the archived embedded ``streams`` are matched against
+the destination instance's existing streams using the pure 4-tier matcher
+(:func:`dbas.stream_matcher.match_stream`, bead ``al6e3``):
+
+* Tier 1-4 HIT  -> the matched DESTINATION stream id is attached to the channel.
+  The existing stream is NOT created and NOT ledgered (it already exists; only
+  the attachment is new).
+* MISS (tier 0) -> the archived stream is an ORPHAN. Orphans are collected across
+  the WHOLE import and handed, ONCE, to
+  :func:`dbas.custom_stream_fallback.synthesize_custom_streams` (bead ``ahygg``),
+  threading one :class:`~dbas.custom_stream_fallback._FallbackState` so the
+  synthesized custom-stream M3U account is found-or-created at most once. The
+  synthesizer creates each orphan, ledgers it (``EntityType.STREAM``), records it
+  in the remap, and WARNs. The synthesized destination ids are then attached back
+  to the channels they came from.
+
+ATTACH MECHANISM. A Dispatcharr channel's stream set IS an ordered list of stream
+ids on the channel: ``client.update_channel(channel_id, {"streams": [ids…]})``
+replaces the channel's stream list (verified against ``routers/channels.py`` —
+reorder/merge use this same call). ORDERING is preserved by emitting the
+destination ids in the archived stream order: each archived stream owns one slot,
+filled with its matched id (immediately) or its synthesized id (after the batched
+fallback resolves), then the whole ordered list is sent in one ``update_channel``.
+
+create_stream (``nav0c``) is used ONLY inside the fallback synthesizer for
+orphans; a matched stream is never created. The STREAM-category counts in the
+report distinguish them: synthesized orphans land in ``created`` (ahygg), matched
+existing streams in ``updated`` (attached-not-created).
 
 FK remapping (the load-bearing correctness control). A Dispatcharr export records
 each entity's id *as it was on the source instance*; on restore the destination
@@ -65,7 +89,9 @@ READ-ONLY.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 
+from dbas.custom_stream_fallback import _FallbackState, synthesize_custom_streams
 from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
@@ -76,6 +102,7 @@ from dbas.restore_contracts import (
     SkipDetail,
     SkipReason,
 )
+from dbas.stream_matcher import MatchTier, match_stream
 from dispatcharr_client import DispatcharrClient
 
 logger = logging.getLogger(__name__)
@@ -248,6 +275,19 @@ async def import_channels(
     # Each tuple: (archive_channel, destination_channel_id).
     reattach_queue: list[tuple[dict, int]] = []
 
+    # Per-channel stream-attach plans, built during the create loop and resolved
+    # after the batched custom-stream fallback runs. Each is a _ChannelStreamPlan
+    # carrying the channel's dest id + one ordered slot per archived stream.
+    stream_plans: list[_ChannelStreamPlan] = []
+
+    # Destination candidate streams for the matcher — fetched ONCE for the whole
+    # import (the matcher is pure; the candidate set is the destination's existing
+    # streams). Empty/failed fetch => every archived stream MISSes and routes to
+    # the custom-stream fallback (never a wrong attach).
+    candidate_streams = (
+        await _fetch_candidate_streams(client) if not is_dry_run else []
+    )
+
     for archive_channel in archive_channels:
         label = _channel_label(archive_channel)
         source_id = archive_channel.get("id")
@@ -263,6 +303,13 @@ async def import_channels(
                 remap.add(EntityType.CHANNEL, int(source_id), int(existing_id))
                 if not is_dry_run:
                     reattach_queue.append((archive_channel, int(existing_id)))
+                    _plan_streams(
+                        stream_plans,
+                        archive_channel,
+                        int(existing_id),
+                        candidate_streams,
+                        report,
+                    )
             continue
 
         # FK remap: rewrite remappable FK ids; unresolved => DEPENDENCY_UNRESOLVED.
@@ -306,12 +353,236 @@ async def import_channels(
                 remap.add(EntityType.CHANNEL, int(source_id), dest_id)
             ledger.record_created(EntityType.CHANNEL, dest_id, label)
             reattach_queue.append((archive_channel, dest_id))
+            _plan_streams(
+                stream_plans, archive_channel, dest_id, candidate_streams, report
+            )
         logger.info("[DBAS-CHANNELS] Restored channel '%s' (id=%s).", label, dest_id)
 
     # Profile reattach pass — runs AFTER all channels are created so every channel
     # has a destination id. Dry-run reattaches nothing.
     if not is_dry_run:
         await _reattach_profiles(reattach_queue, client=client, report=report, remap=remap)
+        # Stream layer: synthesize orphans (batched, one fallback state) + attach
+        # the matched + synthesized stream ids to each channel in archived order.
+        await _attach_streams(
+            stream_plans,
+            client=client,
+            report=report,
+            ledger=ledger,
+            remap=remap,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Stream layer (0i2vt.14 integration: matcher al6e3 + fallback ahygg + attach)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _StreamSlot:
+    """One archived stream's attach slot, preserving archived order.
+
+    Exactly one slot per archived embedded stream, in archived order, so the
+    final channel stream list mirrors the archive. A slot resolves to ONE
+    destination stream id:
+
+    * a tier 1-4 MATCH fills :attr:`dest_id` immediately (the existing
+      destination stream the matcher resolved — never created, never ledgered);
+    * a MISS leaves :attr:`dest_id` ``None`` and records the archived stream as
+      ``orphan`` so the batched fallback can synthesize it, after which its
+      synthesized id is resolved back into the slot via the shared remap.
+    """
+
+    dest_id: int | None = None
+    orphan: dict | None = None
+
+
+@dataclass
+class _ChannelStreamPlan:
+    """A channel's ordered stream-attach plan.
+
+    Built during the create loop (one per channel that has archived streams),
+    resolved after the batched custom-stream fallback runs: each slot's final
+    destination id is collected in order and sent in one ``update_channel``.
+    """
+
+    dest_channel_id: int
+    label: str
+    slots: list[_StreamSlot] = field(default_factory=list)
+
+
+async def _fetch_candidate_streams(client: DispatcharrClient) -> list[dict]:
+    """Fetch the destination instance's existing streams (matcher candidates).
+
+    Paginates ``get_streams`` so the matcher sees the full candidate universe.
+    A failed/garbled fetch yields an empty candidate list — every archived
+    stream then MISSes and routes to the custom-stream fallback (a safe outcome:
+    orphans are synthesized, never mis-attached). Never raises.
+    """
+    candidates: list[dict] = []
+    page = 1
+    try:
+        while True:
+            resp = await client.get_streams(page=page, page_size=1000)
+            if isinstance(resp, dict):
+                results = resp.get("results", [])
+            else:
+                results = resp
+            page_items = [s for s in (results or []) if isinstance(s, dict)]
+            candidates.extend(page_items)
+            # Stop when a page returns fewer than requested (last page) or the
+            # response is not the paginated dict shape (single-shot list).
+            if not isinstance(resp, dict) or len(page_items) < 1000:
+                break
+            page += 1
+    except Exception as exc:
+        logger.warning(
+            "[DBAS-CHANNELS] Could not list destination streams for matching; "
+            "every archived stream will route to the custom-stream fallback: %s",
+            exc,
+        )
+        return []
+    logger.info(
+        "[DBAS-CHANNELS] Fetched %d destination stream candidate(s) for matching.",
+        len(candidates),
+    )
+    return candidates
+
+
+def _archived_streams(archive_channel: dict) -> list[dict]:
+    """The channel's archived embedded stream records, in archived order.
+
+    Returns an empty list when the archive carries no ``streams`` (or a
+    non-list) — such a channel attaches nothing and fires no fallback.
+    """
+    streams = archive_channel.get("streams")
+    if not isinstance(streams, list):
+        return []
+    return [s for s in streams if isinstance(s, dict)]
+
+
+def _plan_streams(
+    plans: list[_ChannelStreamPlan],
+    archive_channel: dict,
+    dest_channel_id: int,
+    candidates: list[dict],
+    report: RestoreReport,
+) -> None:
+    """Build a channel's ordered stream-attach plan via the 4-tier matcher.
+
+    For each archived stream (in order) run :func:`match_stream`:
+
+    * a HIT records the matched destination id in the slot and counts the attach
+      as an ``updated`` STREAM in the report (attached, NOT created/ledgered);
+    * a MISS records the archived stream as an orphan slot for the batched
+      fallback to synthesize.
+
+    A channel with no archived streams produces no plan (nothing to attach).
+    """
+    archived = _archived_streams(archive_channel)
+    if not archived:
+        return
+
+    stream_cat = report.category(EntityType.STREAM)
+    plan = _ChannelStreamPlan(dest_channel_id=dest_channel_id, label=_channel_label(archive_channel))
+    for archived_stream in archived:
+        tier, match_id = match_stream(archived_stream, candidates)
+        if tier != MatchTier.MISS and match_id is not None:
+            plan.slots.append(_StreamSlot(dest_id=match_id))
+            # Matched an EXISTING destination stream: attached, not created — so
+            # it is an ``updated`` STREAM, never ledgered (nothing to roll back).
+            stream_cat.updated += 1
+        else:
+            plan.slots.append(_StreamSlot(orphan=archived_stream))
+    plans.append(plan)
+
+
+async def _attach_streams(
+    plans: list[_ChannelStreamPlan],
+    *,
+    client: DispatcharrClient,
+    report: RestoreReport,
+    ledger: RollbackLedger,
+    remap: IdRemapTable,
+) -> None:
+    """Synthesize MISS orphans (batched, once) then attach streams per channel.
+
+    Two passes:
+
+    1. Collect every orphan across ALL channels and hand them to
+       :func:`synthesize_custom_streams` in ONE call, threading a single
+       :class:`_FallbackState` so the custom-stream account is found-or-created
+       at most once. The synthesizer creates/ledgers each orphan and records its
+       ``source_export_id -> dest_id`` in the shared remap.
+    2. Resolve each slot's destination id (the matched id, or — for a MISS slot —
+       the synthesized id looked up from the remap) in archived order, and send
+       the channel's full ordered stream list in one ``update_channel`` call.
+
+    A plan list with no orphans skips the fallback entirely (no synthesized
+    account, no WARN) — the common happy case where every stream matched.
+    """
+    if not plans:
+        return
+
+    # Pass 1 — batched fallback over EVERY orphan, one threaded state.
+    orphans = [
+        slot.orphan
+        for plan in plans
+        for slot in plan.slots
+        if slot.orphan is not None
+    ]
+    if orphans:
+        state = _FallbackState()
+        await synthesize_custom_streams(
+            orphans=orphans,
+            client=client,
+            remap=remap,
+            ledger=ledger,
+            report=report,
+            state=state,
+        )
+
+    # Pass 2 — resolve each slot to a dest id (matched or synthesized) and attach.
+    for plan in plans:
+        ordered_ids: list[int] = []
+        for slot in plan.slots:
+            if slot.dest_id is not None:
+                ordered_ids.append(slot.dest_id)
+                continue
+            # MISS slot: resolve the synthesized id the fallback recorded under
+            # EntityType.STREAM. A synthesize failure (no id recorded) drops the
+            # orphan from the attach list rather than attaching a wrong/None id.
+            source_id = slot.orphan.get("id") if slot.orphan else None
+            if source_id is None:
+                continue
+            synthesized = remap.resolve(EntityType.STREAM, int(source_id))
+            if synthesized is not None:
+                ordered_ids.append(synthesized)
+
+        if not ordered_ids:
+            continue
+        try:
+            await client.update_channel(
+                plan.dest_channel_id, {"streams": ordered_ids}
+            )
+        except Exception as exc:
+            stream_cat = report.category(EntityType.STREAM)
+            stream_cat.failed += 1
+            stream_cat.failure_details.append(
+                FailureDetail(
+                    reason=FailureReason.UPSTREAM_API_ERROR,
+                    label=plan.label,
+                    message=_sanitize_failure(exc),
+                    source_export_id=None,
+                )
+            )
+            logger.warning(
+                "[DBAS-CHANNELS] Failed to attach streams to channel '%s' "
+                "(dest id %s): %s",
+                plan.label,
+                plan.dest_channel_id,
+                FailureReason.UPSTREAM_API_ERROR.value,
+            )
 
 
 async def _reattach_profiles(
