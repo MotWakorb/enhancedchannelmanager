@@ -219,7 +219,17 @@ class DispatcharrClient:
         **kwargs,
     ) -> httpx.Response:
         """Make an authenticated request with automatic token refresh."""
-        logger.debug("[DISPATCHARR] API request: %s %s", method, path)
+        # Clear-text-logging hygiene (bead 0i2vt.13): NEVER log ``path`` at any
+        # sink in this method. ``path`` is attacker-influenced/credential-tainted
+        # in practice -- callers such as ``update_core_setting`` build it from a
+        # settings key (``f"{_CORE_SETTINGS_PATH}{setting_name}/"``), and a path
+        # *could* in principle carry a query string with a token. CodeQL's
+        # py/clear-text-logging-sensitive-data correctly traces that credential
+        # source into ``path`` and flags every ``logger.*(..., path)`` sink here.
+        # These logs use only NON-sensitive fields -- HTTP method, status code,
+        # and (on error) the exception TYPE name -- which is plenty to triage an
+        # upstream failure without ever emitting a URL, token, or response body.
+        logger.debug("[DISPATCHARR] API request: %s", method)
         await self._ensure_authenticated()
 
         headers = kwargs.pop("headers", {})
@@ -255,7 +265,7 @@ class DispatcharrClient:
             # If unauthorized in JWT mode, try refreshing token and retry.
             # In api-key mode a 401 is terminal (the key is invalid or revoked).
             if response.status_code == 401 and not self._uses_api_key:
-                logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s %s", method, path)
+                logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
                 await self._refresh_access_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
                 response = await self._client.request(
@@ -267,13 +277,18 @@ class DispatcharrClient:
                 )
 
             if response.status_code >= 400:
-                logger.warning("[DISPATCHARR] API request failed: %s %s - status: %s", method, path, response.status_code)
+                logger.warning("[DISPATCHARR] API request failed: %s - status: %s", method, response.status_code)
             else:
-                logger.debug("[DISPATCHARR] API request successful: %s %s - status: %s", method, path, response.status_code)
+                logger.debug("[DISPATCHARR] API request successful: %s - status: %s", method, response.status_code)
 
             return response
         except Exception as e:
-            logger.exception("[DISPATCHARR] API request error: %s %s - %s", method, path, e)
+            # Log only the exception TYPE name -- never the exception object or
+            # ``str(e)``. An httpx error's text can embed the full request URL
+            # (with query params/credentials), so logging ``e`` here would leak
+            # exactly what CodeQL flags. Method + exception type is enough to
+            # triage; ``logger.exception`` still attaches the traceback.
+            logger.exception("[DISPATCHARR] API request error: %s - %s", method, type(e).__name__)
             raise
 
     # -------------------------------------------------------------------------

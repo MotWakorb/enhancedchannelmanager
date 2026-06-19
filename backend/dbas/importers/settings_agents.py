@@ -211,6 +211,28 @@ def _sanitize_failure(exc: Exception, generic: str) -> str:
     return text or generic
 
 
+def _safe_key_label(index: int, name) -> str:
+    """Non-sensitive, taint-free label for a settings key in LOG lines only.
+
+    A settings key NAME can itself be credential-bearing (e.g. a denylisted key
+    literally named ``dispatcharr_api_key``), and CodeQL's
+    py/clear-text-logging-sensitive-data correctly taints any value derived from
+    the archive's keys as a secret. To both (a) avoid echoing a possibly
+    sensitive key name to the log stream and (b) break the taint flow into the
+    ``logger.*`` sinks below, we emit ONLY non-sensitive, synthetic metadata:
+    the loop INDEX and the key's character LENGTH. No character of the original
+    key name flows into the returned string, so nothing CodeQL classifies as a
+    secret reaches the log sink.
+
+    Operators correlate this label with the FULL ``source_label:setting_name``
+    identifier via the structured report's ``skip_details`` / ``failure_details``
+    (those are operator-facing report fields, not log sinks, and are already
+    value-free). The log line is for triage volume/sequencing only.
+    """
+    length = len(name) if isinstance(name, str) else 0
+    return f"key#{index} (len={length})"
+
+
 def _skip(cat, reason: SkipReason, label: str, source_export_id, is_dry_run: bool) -> None:
     """Record a skip in both the count and the reasoned detail list."""
     if is_dry_run:
@@ -495,16 +517,16 @@ async def _apply_settings_blob(
         len(archive_settings),
     )
 
-    # NOTE (clear-text-logging hygiene, bead 0i2vt.13): the loop variables are
-    # named ``setting_name`` / ``setting_value`` — deliberately NOT ``key`` /
-    # ``value``. CodeQL's py/clear-text-logging-sensitive-data classifies any
-    # value flowing from a variable whose NAME contains ``key`` as a secret, so a
-    # loop variable literally named ``key`` taints every ``logger.*(..., key)``
-    # sink (and, via the request path it builds, the shared ``_request`` logs).
-    # The setting NAME is safe to log; only the VALUE could be a secret. We log
-    # ONLY ``setting_name`` (never ``setting_value``), and the non-credential
-    # variable names keep CodeQL's name heuristic from mis-tainting these sinks.
-    for setting_name, setting_value in archive_settings.items():
+    # NOTE (clear-text-logging hygiene, bead 0i2vt.13): a settings key NAME can
+    # itself be credential-bearing (a denylisted key may be literally named
+    # ``dispatcharr_api_key``), and CodeQL's py/clear-text-logging-sensitive-data
+    # correctly taints any value derived from the archive's keys as a secret.
+    # The structured report (``skip_details`` / ``failure_details``) still
+    # carries the full ``source_label:setting_name`` label for operators — those
+    # are report fields, not log sinks. The LOG lines below emit ONLY synthetic,
+    # taint-free metadata via :func:`_safe_key_label` (loop index + key length),
+    # never ``setting_name`` and never ``setting_value``.
+    for setting_index, (setting_name, setting_value) in enumerate(archive_settings.items()):
         if not is_safe_setting_key(setting_name):
             # SKIP a dangerous setting. Report the NAME only — never the value.
             if is_dry_run:
@@ -518,12 +540,12 @@ async def _apply_settings_blob(
                     source_export_id=None,
                 )
             )
-            # Log the NAME ONLY — never the value (it may be a secret).
+            # Log taint-free metadata ONLY — never the key name or value.
             logger.info(
-                "[DBAS-SETTINGS] %s setting '%s' looks credential/instance-identity; "
+                "[DBAS-SETTINGS] %s setting %s looks credential/instance-identity; "
                 "NOT applied (conservative skip).",
                 source_label,
-                setting_name,
+                _safe_key_label(setting_index, setting_name),
             )
             continue
 
@@ -545,15 +567,19 @@ async def _apply_settings_blob(
                 )
             )
             logger.warning(
-                "[DBAS-SETTINGS] Failed to apply %s setting '%s'.",
+                "[DBAS-SETTINGS] Failed to apply %s setting %s.",
                 source_label,
-                setting_name,
+                _safe_key_label(setting_index, setting_name),
             )
             continue
 
         cat.updated += 1
-        # Log the NAME ONLY — never the value.
-        logger.info("[DBAS-SETTINGS] Applied %s setting '%s'.", source_label, setting_name)
+        # Log taint-free metadata ONLY — never the key name or value.
+        logger.info(
+            "[DBAS-SETTINGS] Applied %s setting %s.",
+            source_label,
+            _safe_key_label(setting_index, setting_name),
+        )
 
 
 async def import_core_settings(
