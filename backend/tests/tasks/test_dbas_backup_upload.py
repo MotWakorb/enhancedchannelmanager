@@ -174,6 +174,55 @@ async def test_some_targets_succeed_is_partial(_wire_db, _reset_metrics, test_se
 
 
 @pytest.mark.asyncio
+async def test_run_outcome_notification_carries_only_counts_and_status(
+    _wire_db, _reset_metrics, test_session, tmp_path
+):
+    """The run-level outcome notification (clear-text-logging cleanup, 0i2vt.8)
+    must carry ONLY the status word + the two integer counts — never any
+    per-target reason/error detail that could contain masked credential
+    material. This guards the source-level taint cut for the 4
+    py/clear-text-logging-sensitive-data alerts."""
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    t1 = _make_target(test_session, name="a")
+    t2 = _make_target(test_session, name="b")
+    # t1 ok, t2 fails — the failing adapter's error must NOT leak into the
+    # run-outcome notification message/title.
+    adapters = [_adapter(_ok_upload), _adapter(_fail_upload)]
+    result, notify = await _run(
+        dbas_backup, DbasBackupTask, tmp_path / "backups",
+        {"cloud_targets": [
+            {"cloud_target_id": t1.id, "cloud_credential_version": 1},
+            {"cloud_target_id": t2.id, "cloud_credential_version": 1},
+        ]},
+        adapters,
+    )
+
+    assert result.details["upload"]["run_result"] == "partial"
+
+    # Isolate the run-level outcome notification (source_id="cloud_upload_run").
+    run_calls = [
+        c for c in notify.await_args_list
+        if c.kwargs.get("source_id") == "cloud_upload_run"
+    ]
+    assert len(run_calls) == 1, "exactly one run-level outcome notification expected"
+    call = run_calls[0]
+    title = call.kwargs["title"]
+    message = call.kwargs["message"]
+
+    # Right counts/status: 1 of 2 succeeded, partial.
+    assert title == "DBAS Backup: Upload Partial"
+    assert "1 of 2 configured targets succeeded" in message
+
+    # No per-target detail: the failing adapter's error word ("boom"), the
+    # target names, and the per-target reason vocabulary must be absent.
+    for leak in ("boom", "'a'", "'b'", "raised:", "failed:", "id="):
+        assert leak not in title, "title leaked per-target detail: %r" % leak
+        assert leak not in message, "message leaked per-target detail: %r" % leak
+
+
+@pytest.mark.asyncio
 async def test_no_targets_succeed_is_failed(_wire_db, _reset_metrics, test_session, tmp_path):
     from tasks import dbas_backup
     from tasks.dbas_backup import DbasBackupTask

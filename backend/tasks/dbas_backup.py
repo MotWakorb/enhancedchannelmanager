@@ -390,6 +390,16 @@ class DbasBackupTask(TaskScheduler):
 
         summary["attempted"] = True
         total = len(self.cloud_targets)
+        # Track counts in plain int locals — NOT by reading them back out of the
+        # `summary` dict. `summary["results"]` holds per-target `reason` strings
+        # that can carry masked credential-derived detail, so CodeQL treats the
+        # whole dict (and every subscript of it) as tainted. Keeping the counts
+        # and the derived status word as standalone locals means the values that
+        # reach the notification emitter never share a taint lineage with the
+        # per-target reason strings — the emitted data is provably just a status
+        # word and two integers.
+        succeeded = 0
+        failed = 0
         for idx, entry in enumerate(self.cloud_targets, start=1):
             self._set_progress(
                 current_item="Uploading to cloud target %d/%d..." % (idx, total),
@@ -400,19 +410,23 @@ class DbasBackupTask(TaskScheduler):
             outcome = await self._upload_one_target(artifact, tid, cfg_version)
             summary["results"].append(outcome)
             if outcome["success"]:
-                summary["succeeded"] += 1
+                succeeded += 1
             else:
-                summary["failed"] += 1
+                failed += 1
 
-        if summary["succeeded"] == total:
-            summary["run_result"] = "success"
-        elif summary["succeeded"] == 0:
-            summary["run_result"] = "failed"
+        if succeeded == total:
+            run_result = "success"
+        elif succeeded == 0:
+            run_result = "failed"
         else:
-            summary["run_result"] = "partial"
+            run_result = "partial"
 
-        if summary["run_result"] != "success":
-            await self._notify_upload_outcome(summary, total)
+        summary["succeeded"] = succeeded
+        summary["failed"] = failed
+        summary["run_result"] = run_result
+
+        if run_result != "success":
+            await self._notify_upload_outcome(run_result, succeeded, total)
 
         return summary
 
@@ -622,18 +636,27 @@ class DbasBackupTask(TaskScheduler):
         except Exception as e:  # pragma: no cover
             logger.warning("[DBAS_BACKUP] Failed to emit target-failure notification: %s", e)
 
-    async def _notify_upload_outcome(self, summary: dict, total: int) -> None:
-        """Fire the run-level partial/failed notification (PO decision)."""
-        run_result = summary["run_result"]
-        succeeded = summary["succeeded"]
+    async def _notify_upload_outcome(
+        self, run_result: str, succeeded: int, total: int
+    ) -> None:
+        """Fire the run-level partial/failed notification (PO decision).
+
+        Accepts ONLY clean scalars — the run-result status word (``success`` /
+        ``partial`` / ``failed``) and two integer counts. It deliberately does
+        NOT take the ``summary`` dict: ``summary["results"]`` holds per-target
+        ``reason`` strings that can carry masked credential-derived detail, and
+        CodeQL treats the whole dict (and every subscript of it) as tainted.
+        Receiving the status word + counts as plain typed arguments cuts that
+        taint lineage at the source, so nothing sensitive can flow into the
+        notification message/title or the downstream alert logging sinks.
+        """
         msg = (
             "DBAS backup cloud upload %s: %d of %d configured targets succeeded. "
             "The local artifact was written; review the cloud target "
             "configuration." % (run_result, succeeded, total)
         )
         # Log only the safe run-level counts (no per-target reason strings flow
-        # here); the full message goes to the notification sink below. This keeps
-        # the source-tainted `summary` out of any logging sink.
+        # here); the full message goes to the notification sink below.
         logger.warning(
             "[DBAS_BACKUP] Cloud upload %s: %d of %d targets succeeded",
             run_result, succeeded, total,
