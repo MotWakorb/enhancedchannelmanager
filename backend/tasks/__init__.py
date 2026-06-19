@@ -19,6 +19,7 @@ from tasks.black_screen_scan import BlackScreenScanTask
 from tasks.export_publish import ExportPublishTask
 from tasks.yaml_backup import YamlBackupTask
 from tasks.dbas_backup import DbasBackupTask
+from tasks.dbas_restore import DbasRestoreTask
 from tasks.stats_v2_rollup import StatsV2RollupTask
 
 __all__ = [
@@ -36,5 +37,6 @@ __all__ = [
     "ExportPublishTask",
     "YamlBackupTask",
     "DbasBackupTask",
+    "DbasRestoreTask",
     "StatsV2RollupTask",
 ]

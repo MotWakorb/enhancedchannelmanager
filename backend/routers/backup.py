@@ -4,6 +4,7 @@ Backup & Restore router — create and restore ECM configuration backups.
 Backs up: settings.json, journal.db, uploads/logos/, tls/, m3u_uploads/
 YAML export: settings + DB tables + Dispatcharr state in a single file.
 """
+import asyncio
 import hashlib
 import io
 import json
@@ -12,6 +13,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -359,6 +361,18 @@ ARTIFACT_BINARY_URL_MAPPINGS = "binary/url-mappings.json"
 
 # Streaming chunk size for SHA-256 computation over the finished artifact.
 _SHA256_CHUNK = 1024 * 1024  # 1 MiB
+
+# Restore-upload streaming chunk size — the uploaded artifact is streamed to a
+# temp file ONE chunk at a time (never read whole-in-RAM, mirrors the .7/.15
+# streaming discipline; ADR-008 D8). 1 MiB chunks keep the per-read buffer small.
+_RESTORE_UPLOAD_CHUNK = 1024 * 1024  # 1 MiB
+
+# Hard cap on an uploaded restore artifact (the binary logo subtree can be large,
+# but a multi-GB upload is an abuse signal / DoS surface). The stream loop aborts
+# and cleans up the moment cumulative bytes exceed this — it never buffers the
+# whole upload to discover the size. 2 GiB is generous headroom over a realistic
+# redacted artifact while still bounding the temp-file write.
+_RESTORE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 
 # Headroom multiplier for the pre-build free-disk check. The redacted source
 # (logos + journal.db) is read once into a compressed ZIP; we conservatively
@@ -1209,6 +1223,153 @@ async def restore_backup_initial(file: UploadFile = File(...)):
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+    }
+
+
+# ---------------------------------------------------------------------------
+# DBAS async restore-trigger endpoint (bead enhancedchannelmanager-o8tbv)
+#
+# The new-format DBAS artifact restore — the async, progress-emitting path that
+# makes restore user-triggerable. UNTRUSTED-ARTIFACT-UPLOAD surface:
+#   * admin-auth only (RequireAdminIfEnabled, like every restore endpoint here),
+#   * the upload is STREAMED to a temp file on the CONFIG partition one chunk at
+#     a time (never read whole-in-RAM — ADR-008 D8), mode 0600,
+#   * a hard size cap aborts + cleans up an oversize upload mid-stream,
+#   * validation (.17 version + integrity) runs INSIDE the task BEFORE any
+#     mutation, and the orchestrator's default-ON dry-run guardrail means APPLY
+#     requires an explicit confirm flag.
+# The endpoint kicks the DbasRestoreTask in the background and returns its
+# task id immediately; the frontend polls /api/tasks/{id} for per-stage progress.
+# ---------------------------------------------------------------------------
+
+DBAS_RESTORE_TASK_ID = "dbas_restore"
+_DBAS_RESTORE_TMP_DIR = CONFIG_DIR / "dbas" / "restore_uploads"
+
+
+async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
+    """Stream an uploaded artifact to a 0600 temp file, chunk by chunk.
+
+    NEVER reads the whole upload into RAM (ADR-008 D8) — it copies
+    ``_RESTORE_UPLOAD_CHUNK`` bytes at a time and enforces
+    :data:`_RESTORE_MAX_UPLOAD_BYTES`, aborting + unlinking the partial temp the
+    moment the cumulative size exceeds the cap (so an oversize upload can never
+    fill the partition). The temp file is created mode 0600 (owner-only) because
+    the artifact may carry credential-bearing material (journal.db) even though
+    it is redacted-by-default.
+
+    Returns the temp file path on success. Raises ``HTTPException(413)`` on
+    oversize and ``HTTPException(400)`` on a read error — the partial temp is
+    cleaned up in both cases.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix="ecm-restore-", suffix=".zip", dir=str(dest_dir))
+    tmp_path = Path(tmp_name)
+    # Owner read/write only — the artifact may carry sensitive (if redacted) data.
+    try:
+        os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:  # pragma: no cover — platform without fchmod
+        pass
+
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                try:
+                    chunk = await file.read(_RESTORE_UPLOAD_CHUNK)
+                except Exception as exc:  # noqa: BLE001 - any read error is a 400
+                    raise HTTPException(status_code=400, detail="Failed to read uploaded artifact") from exc
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _RESTORE_MAX_UPLOAD_BYTES:
+                    logger.warning(
+                        "[BACKUP] Refusing restore: upload exceeded size cap (%d bytes max)",
+                        _RESTORE_MAX_UPLOAD_BYTES,
+                    )
+                    raise HTTPException(
+                        status_code=413, detail="Uploaded artifact is too large"
+                    )
+                out.write(chunk)
+    except Exception:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to clean up partial restore upload: %s", exc)
+        raise
+
+    if total == 0:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="Uploaded artifact is empty")
+
+    logger.info("[BACKUP] Streamed restore artifact to temp (%d bytes)", total)
+    return tmp_path
+
+
+@router.post("/restore-dbas")
+async def restore_dbas_artifact(
+    file: UploadFile = File(...),
+    confirm_apply: bool = Query(
+        default=False,
+        description="False (default) runs a counts-only dry-run; True runs the apply.",
+    ),
+    _admin=RequireAdminIfEnabled,
+):
+    """Trigger an async DBAS artifact restore. Admin only.
+
+    Streams the uploaded artifact to a temp file on the CONFIG partition, then
+    kicks the :class:`tasks.dbas_restore.DbasRestoreTask` in the background and
+    returns its ``task_id`` so the frontend can poll ``/api/tasks/{task_id}`` for
+    per-stage progress and the terminal ``RestoreReport``.
+
+    DRY-RUN is default-ON: without ``confirm_apply=True`` the run is a counts-only
+    plan that makes ZERO mutation (the orchestrator's .16 guardrail enforces this
+    even if this flag were bypassed). Validation (.17 version + integrity) runs
+    inside the task BEFORE any decode or importer.
+    """
+    logger.info(
+        "[BACKUP] DBAS restore requested (filename=%s, confirm_apply=%s)",
+        file.filename, confirm_apply,
+    )
+
+    tmp_path = await _stream_upload_to_temp(file, _DBAS_RESTORE_TMP_DIR)
+
+    # Configure + kick the restore task. The task owns temp-artifact teardown
+    # (cleanup_artifact=True) so the file never outlives the run.
+    parameters = {
+        "artifact_path": str(tmp_path),
+        "confirm_apply": bool(confirm_apply),
+        "cleanup_artifact": True,
+    }
+
+    try:
+        from task_engine import get_engine
+
+        engine = get_engine()
+        # Fire-and-forget: run_task awaits to completion, so schedule it as a
+        # background asyncio task and return the task id immediately. The
+        # frontend polls /api/tasks/{id} for live progress. The task's own
+        # finally-block cleans up the temp artifact on success AND failure.
+        asyncio.create_task(
+            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters)
+        )
+    except Exception as exc:
+        logger.exception("[BACKUP] Failed to schedule DBAS restore task: %s", exc)
+        # Scheduling failed before the task could own cleanup — remove the temp.
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail="Failed to start restore")
+
+    return {
+        "status": "started",
+        "task_id": DBAS_RESTORE_TASK_ID,
+        "is_dry_run": not confirm_apply,
     }
 
 
