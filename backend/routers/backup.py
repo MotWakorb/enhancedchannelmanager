@@ -704,6 +704,178 @@ def verify_artifact_sha256(zip_path: Path, sidecar_path: Path) -> bool:
     return actual == expected
 
 
+# ---------------------------------------------------------------------------
+# Restore-ingest schema_version gate (0i2vt.17, ADR-008 D1 + S4)
+#
+# The new-format DBAS artifact (build_backup_artifact) carries a CLEARTEXT
+# manifest.json whose dedicated integer ``schema_version`` is the restore
+# compatibility gate. On restore we MUST refuse an artifact built by a NEWER
+# ECM (schema_version > BACKUP_SCHEMA_VERSION) BEFORE any mutation — a v0.19
+# archive restored on a v0.18 build would otherwise silently partial-restore
+# and corrupt state. The rule (mirrors build_backup_artifact's contract):
+# manifest schema_version <= BACKUP_SCHEMA_VERSION is accepted; anything newer
+# (or missing/malformed) is refused.
+#
+# SECURITY (D1 + S4 — no schema-internals leakage): the user-facing message is
+# EXACTLY "Unsupported backup version" with NO version numbers and NO schema
+# internals. The actual detail (got X, support up to Y) is logged SERVER-SIDE
+# only for operator troubleshooting.
+#
+# NOTE: the manifest ``schema_version`` and the embedded journal.db
+# alembic_version are TWO DISTINCT axes. This gate is ONLY the manifest
+# schema_version.
+# ---------------------------------------------------------------------------
+
+# The ONLY user-facing string for a version refusal. No interpolation: it must
+# never carry a version number or any schema internal.
+UNSUPPORTED_BACKUP_VERSION_MESSAGE = "Unsupported backup version"
+
+
+class UnsupportedBackupVersionError(Exception):
+    """Raised when a restore artifact's manifest schema_version is unsupported.
+
+    ``str(err)`` is EXACTLY :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE` — the
+    user-facing message — and carries NO version numbers or schema internals
+    (ADR-008 D1 + S4). The actual version detail is logged server-side by the
+    raiser before this is raised.
+    """
+
+    def __init__(self, message: str = UNSUPPORTED_BACKUP_VERSION_MESSAGE):
+        super().__init__(message)
+
+
+def validate_restore_schema_version(manifest) -> None:
+    """Refuse a restore artifact whose manifest schema_version is unsupported.
+
+    Reusable version comparator for the restore-ingest chokepoint. Applies the
+    same rule build_backup_artifact stamps: ``schema_version <=
+    BACKUP_SCHEMA_VERSION`` is accepted; a NEWER artifact (or one with a
+    missing/malformed schema_version) is REFUSED.
+
+    Raises :class:`UnsupportedBackupVersionError` whose message is EXACTLY
+    :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE` (no version leak). The actual
+    detail is logged server-side (lazy %%-formatting) BEFORE raising.
+
+    Args:
+        manifest: The parsed manifest dict. A non-dict, a missing
+            ``schema_version``, or a non-int (bool excluded) value is treated as
+            unknown/invalid and refused — never accepted by default.
+
+    Returns:
+        None on an accepted (supported) version.
+    """
+    version = manifest.get("schema_version") if isinstance(manifest, dict) else None
+
+    # bool is an int subclass; reject it explicitly so True/False can't pass.
+    if not isinstance(version, int) or isinstance(version, bool):
+        logger.warning(
+            "[BACKUP] Refusing restore: manifest schema_version missing or "
+            "malformed (got %r); this build supports up to %d",
+            version, BACKUP_SCHEMA_VERSION,
+        )
+        raise UnsupportedBackupVersionError()
+
+    if version > BACKUP_SCHEMA_VERSION:
+        logger.warning(
+            "[BACKUP] Refusing restore: artifact schema_version=%d is newer "
+            "than supported (this build supports up to %d). Refuse before any "
+            "mutation to avoid a silent partial restore.",
+            version, BACKUP_SCHEMA_VERSION,
+        )
+        raise UnsupportedBackupVersionError()
+
+    logger.debug(
+        "[BACKUP] Restore artifact schema_version=%d accepted (supported up to %d)",
+        version, BACKUP_SCHEMA_VERSION,
+    )
+
+
+def _verify_artifact_member_integrity(zf: zipfile.ZipFile, manifest: dict) -> None:
+    """Verify each manifest-listed member's SHA-256 against the ZIP bytes.
+
+    Pairs with the version gate at the same chokepoint (grooming: validate
+    version + integrity together BEFORE mutation). A member whose bytes do not
+    match the manifest hash, or a manifest member absent from the ZIP, refuses
+    the restore with a generic integrity message that leaks NO schema internals
+    (no schema_version numbers). The detail (which member, hash mismatch) is
+    logged server-side.
+
+    NOTE: the whole-artifact SHA-256 sidecar (verify_artifact_sha256) lives
+    next to the file on disk and is not present inside an uploaded ZIP; this
+    per-member check is the integrity guarantee available at the ingest
+    chokepoint from the ZIP alone.
+    """
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        logger.warning("[BACKUP] Refusing restore: manifest has no per-file hash list")
+        raise HTTPException(status_code=400, detail="Backup integrity check failed")
+
+    names = set(zf.namelist())
+    for entry in files:
+        if not isinstance(entry, dict):
+            logger.warning("[BACKUP] Refusing restore: malformed manifest file entry %r", entry)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        path = entry.get("path")
+        expected = entry.get("sha256")
+        if not isinstance(path, str) or not isinstance(expected, str):
+            logger.warning("[BACKUP] Refusing restore: malformed manifest file entry %r", entry)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        if path not in names:
+            logger.warning("[BACKUP] Refusing restore: manifest member %s absent from artifact", path)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        actual = hashlib.sha256(zf.read(path)).hexdigest()
+        if actual != expected:
+            logger.warning(
+                "[BACKUP] Refusing restore: integrity mismatch on member %s "
+                "(expected %s, got %s)", path, expected, actual,
+            )
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+
+
+def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
+    """Validate a new-format DBAS artifact at the restore-ingest chokepoint.
+
+    Runs BEFORE any restore mutation, in this order:
+
+    1. parse the cleartext ``manifest.json`` header,
+    2. **version gate** — refuse a newer/unknown schema_version (the highest
+       priority: an incompatible artifact is rejected before we even trust its
+       integrity claims), then
+    3. **integrity** — verify each manifest-listed member's SHA-256.
+
+    Returns the parsed manifest on success. Refusals raise ``HTTPException(400)``
+    with a user-facing message that leaks NO schema internals; the version
+    refusal message is EXACTLY :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE`. All
+    detail is logged server-side.
+    """
+    if ARTIFACT_MANIFEST_NAME not in zf.namelist():
+        logger.warning("[BACKUP] Refusing restore: artifact missing %s", ARTIFACT_MANIFEST_NAME)
+        raise HTTPException(status_code=400, detail="Not a valid ECM backup artifact")
+
+    try:
+        manifest = json.loads(zf.read(ARTIFACT_MANIFEST_NAME))
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.warning("[BACKUP] Refusing restore: unreadable artifact manifest: %s", e)
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+
+    if not isinstance(manifest, dict):
+        logger.warning("[BACKUP] Refusing restore: artifact manifest is not an object")
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+
+    # 2. Version gate FIRST — refuse an incompatible artifact before trusting
+    #    anything else about it. Translate the internal exception into the
+    #    HTTP error WITHOUT adding any version detail to the body.
+    try:
+        validate_restore_schema_version(manifest)
+    except UnsupportedBackupVersionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 3. Integrity AFTER the version is known-supported.
+    _verify_artifact_member_integrity(zf, manifest)
+
+    return manifest
+
+
 def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
     """Validate a backup zip file and return its manifest."""
     # Must contain manifest
