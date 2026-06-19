@@ -21,6 +21,54 @@ from journal import log_entry
 
 logger = logging.getLogger(__name__)
 
+# Task-parameter keys whose VALUE is a secret and must never be logged or written
+# to the journal audit row (which itself is included in backups). A manual
+# encrypted DBAS backup/restore (ADR-012 D12 / u81kh) passes an operator
+# ``passphrase`` as an ad-hoc parameter; without this scrub it would land in
+# cleartext in journal.db. Matched case-insensitively; additive.
+_SECRET_PARAM_KEYS = frozenset({
+    "passphrase", "password", "passwd", "token", "secret", "api_key",
+    "access_token", "refresh_token", "client_secret", "private_key",
+})
+_REDACTED_PARAM = "***REDACTED***"
+
+
+def _redact_task_parameters(parameters):
+    """Return a shallow copy of a task-parameters dict with secret VALUES masked.
+
+    Used for the journal audit ``after_value`` so a secret param (e.g. an
+    encrypted-backup passphrase) never enters the journal row in clear text. The
+    UNREDACTED dict still flows to ``update_config`` — only the journaled view is
+    masked.
+
+    NOTE: do NOT use this for ``logger`` calls. Logging sites use
+    :func:`_param_keys` (keys only, no values) instead — a static taint analyser
+    (CodeQL ``py/clear-text-logging-sensitive-data``) cannot see through this
+    value-level sanitiser and would flag the passphrase as reaching the log sink.
+    Logging only the key names removes the tainted values from the sink entirely.
+    """
+    if not isinstance(parameters, dict):
+        return parameters
+    return {
+        k: (_REDACTED_PARAM if isinstance(k, str) and k.lower() in _SECRET_PARAM_KEYS
+            and v not in (None, "") else v)
+        for k, v in parameters.items()
+    }
+
+
+def _param_keys(parameters):
+    """Return the sorted KEY names of a task-parameters dict — never the values.
+
+    Logging the parameter NAMES (e.g. ``['artifact_path', 'passphrase']``) tells
+    an operator which parameters a run used without ever putting a secret VALUE
+    in a log line, which keeps the generic engine log sites free of the
+    ``clear-text-logging-sensitive-data`` taint sink regardless of which task is
+    run or which params it carries.
+    """
+    if not isinstance(parameters, dict):
+        return parameters
+    return sorted(parameters.keys())
+
 # Configuration
 DEFAULT_CHECK_INTERVAL = 60  # Check for due tasks every 60 seconds
 MAX_CONCURRENT_TASKS = 3  # Maximum tasks running simultaneously
@@ -602,7 +650,8 @@ class TaskEngine:
             schedule_parameters = first_schedule.get_parameters()
             schedule_id = first_schedule.id
             if schedule_parameters:
-                logger.info("[%s] Using parameters from schedule %s: %s", task_id, schedule_id, schedule_parameters)
+                logger.info("[%s] Using parameters from schedule %s: %s", task_id, schedule_id,
+                            _param_keys(schedule_parameters))
 
         # Execute the task with parameters
         result = await self._execute_task(task_id, triggered_by, parameters=schedule_parameters, schedule_id=schedule_id)
@@ -717,7 +766,8 @@ class TaskEngine:
             if parameters and hasattr(instance, 'update_config'):
                 try:
                     instance.update_config(parameters)
-                    logger.info("[%s] Applied schedule parameters: %s", task_id, parameters)
+                    logger.info("[%s] Applied schedule parameters: %s", task_id,
+                                _param_keys(parameters))
                 except Exception as e:
                     logger.warning("[%s] Failed to apply parameters: %s", task_id, e)
 
@@ -772,7 +822,8 @@ class TaskEngine:
                 entity_name=instance.task_name,
                 description=f"Started {instance.task_name} ({triggered_by})",
                 entity_id=execution_id,
-                after_value={"task_id": task_id, "triggered_by": triggered_by, "parameters": parameters},
+                after_value={"task_id": task_id, "triggered_by": triggered_by,
+                             "parameters": _redact_task_parameters(parameters)},
                 user_initiated=(triggered_by == "manual"),
             )
 
@@ -1041,7 +1092,8 @@ class TaskEngine:
             TaskResult or None if task not found
         """
         if parameters:
-            logger.info("[%s] Manual run with ad-hoc parameters: %s", task_id, parameters)
+            logger.info("[%s] Manual run with ad-hoc parameters: %s", task_id,
+                        _param_keys(parameters))
             return await self._execute_task(task_id, triggered_by="manual", parameters=parameters)
 
         if schedule_id:
@@ -1057,7 +1109,8 @@ class TaskEngine:
                     ).first()
                     if schedule:
                         parameters = schedule.get_parameters()
-                        logger.info("[%s] Manual run using schedule %s parameters: %s", task_id, schedule_id, parameters)
+                        logger.info("[%s] Manual run using schedule %s parameters: %s", task_id, schedule_id,
+                                    _param_keys(parameters))
                 finally:
                     session.close()
             except Exception as e:

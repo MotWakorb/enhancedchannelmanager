@@ -44,8 +44,10 @@ upstream SDK body. The temp artifact is the endpoint's concern for mode/cleanup.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -112,8 +114,13 @@ class DbasRestoreTask(TaskScheduler):
         self.artifact_path: Optional[str] = None
         self.confirm_apply: bool = False
         self.cleanup_artifact: bool = True
+        # Operator passphrase for an encrypted artifact (ADR-012 D12 / u81kh).
+        # None for a plain artifact. NEVER logged or echoed in any TaskResult.
+        self.passphrase: Optional[str] = None
 
     def get_config(self) -> dict:
+        # The passphrase is DELIBERATELY excluded from get_config so it is never
+        # persisted to the schedule store, surfaced in the task list, or logged.
         return {
             "artifact_path": self.artifact_path,
             "confirm_apply": self.confirm_apply,
@@ -128,6 +135,9 @@ class DbasRestoreTask(TaskScheduler):
             self.confirm_apply = bool(config["confirm_apply"])
         if "cleanup_artifact" in config:
             self.cleanup_artifact = bool(config["cleanup_artifact"])
+        if "passphrase" in config:
+            val = config["passphrase"]
+            self.passphrase = str(val) if val else None
 
     # -- progress helpers ----------------------------------------------------
 
@@ -156,10 +166,86 @@ class DbasRestoreTask(TaskScheduler):
             return self._fail(started_at, "No artifact_path configured for restore")
 
         artifact_path = Path(artifact)
+
+        # --- Decrypt-at-ingest gate (ADR-012 D12 / u81kh). -----------------
+        # The SINGLE place an encrypted artifact is decrypted, BEFORE any ZIP is
+        # opened or any importer runs. A plain artifact passes straight through.
+        # On any gate failure NOTHING downstream runs (validate-before-mutate).
+        decrypted_path: Optional[Path] = None
         try:
-            return await self._run_restore(started_at, artifact_path)
+            effective_path, decrypted_path, gate_failure = await self._decrypt_gate(
+                started_at, artifact_path
+            )
+            if gate_failure is not None:
+                return gate_failure
+            return await self._run_restore(started_at, effective_path)
         finally:
             self._cleanup(artifact_path)
+            if decrypted_path is not None:
+                self._cleanup_decrypted(decrypted_path)
+
+    async def _decrypt_gate(self, started_at, artifact_path):
+        """Resolve the effective (possibly-decrypted) artifact path.
+
+        Returns ``(effective_path, decrypted_temp, failure_result)``:
+
+        * A PLAIN artifact -> ``(artifact_path, None, None)`` (no-op pass-through).
+        * An ENCRYPTED artifact -> decrypt to a sibling temp off the event loop
+          and return ``(temp, temp, None)``. The envelope ``format_version`` is
+          version-gated PRE-decrypt (no passphrase needed); a missing passphrase
+          or any decrypt failure returns a sanitized ``failure_result`` and NO
+          decryption output survives (the primitive releases zero plaintext).
+
+        Decrypt happens exactly ONCE here; the per-category importers (.10-.15)
+        need zero crypto awareness (spike 0zrse: a single ingest gate, not an
+        11-bead fan-out).
+        """
+        from dbas import artifact_crypto
+
+        if not artifact_path.exists():
+            return artifact_path, None, self._fail(started_at, "Restore artifact is missing")
+
+        if not artifact_crypto.is_encrypted_artifact(artifact_path):
+            return artifact_path, None, None  # plain artifact — unchanged path
+
+        # Pre-decrypt envelope version gate (checklist 30): refuse an unsupported
+        # format_version WITHOUT a passphrase. Sanitized user message; detail in
+        # the server log only (mirrors the .17 schema_version gate / S4).
+        try:
+            artifact_crypto.read_header(artifact_path)
+        except artifact_crypto.UnsupportedArtifactFormatError as exc:
+            logger.warning("[DBAS-RESTORE] Encrypted artifact rejected pre-decrypt: %s", exc)
+            return artifact_path, None, self._fail(started_at, "Unsupported backup version")
+
+        if not self.passphrase:
+            return artifact_path, None, self._fail(
+                started_at, "This backup is encrypted; a passphrase is required to restore it"
+            )
+
+        self._set_progress(
+            total=_TOTAL_STAGES, current=0, status="running", current_item="preflight",
+        )
+        fd, tmp_name = tempfile.mkstemp(
+            prefix="ecm-restore-dec-", suffix=".zip", dir=str(artifact_path.parent)
+        )
+        os.close(fd)
+        decrypted = Path(tmp_name)
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                artifact_crypto.decrypt_file,
+                artifact_path, self.passphrase, decrypted,
+            )
+        except artifact_crypto.ArtifactDecryptError:
+            # Wrong passphrase or corrupted artifact — IDENTICAL sanitized
+            # failure (no oracle); the primitive already released zero plaintext.
+            self._cleanup_decrypted(decrypted)
+            return artifact_path, None, self._fail(
+                started_at,
+                "Could not decrypt backup: wrong passphrase or corrupted artifact",
+            )
+        return decrypted, decrypted, None
 
     async def _run_restore(self, started_at: datetime, artifact_path: Path) -> TaskResult:
         # Local imports keep the heavy backup router / orchestrator off this
@@ -331,3 +417,19 @@ class DbasRestoreTask(TaskScheduler):
                 logger.info("[DBAS-RESTORE] Cleaned up temp artifact")
         except OSError as exc:
             logger.warning("[DBAS-RESTORE] Failed to clean up temp artifact: %s", exc)
+
+    def _cleanup_decrypted(self, decrypted_path: Path) -> None:
+        """Delete the transient DECRYPTED plaintext temp (always, best-effort).
+
+        Unlike the uploaded artifact, the decrypted plaintext ZIP holds the
+        operator's secrets in the clear, so it is ALWAYS removed regardless of
+        ``cleanup_artifact`` — it must never linger on disk after the restore.
+        """
+        try:
+            if decrypted_path.exists():
+                decrypted_path.unlink()
+                logger.info("[DBAS-RESTORE] Cleaned up decrypted plaintext temp")
+        except OSError as exc:
+            logger.warning(
+                "[DBAS-RESTORE] Failed to clean up decrypted temp: %s", exc
+            )

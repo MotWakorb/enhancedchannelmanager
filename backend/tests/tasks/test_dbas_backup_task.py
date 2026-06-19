@@ -168,7 +168,7 @@ async def test_execute_builds_artifact_in_backups_dir(
     backups_dir = tmp_path / "backups"
     captured = {}
 
-    async def _fake_build(dest_dir=None):
+    async def _fake_build(dest_dir=None, **_kwargs):
         captured["dest_dir"] = dest_dir
         return _fake_artifact(dest_dir)
 
@@ -207,7 +207,7 @@ async def test_no_cloud_target_config_runs_normally(
 
     backups_dir = tmp_path / "backups"
 
-    async def _fake_build(dest_dir=None):
+    async def _fake_build(dest_dir=None, **_kwargs):
         return _fake_artifact(dest_dir)
 
     with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir), patch.object(
@@ -260,7 +260,7 @@ async def _run_with_gate(
     the gate aborts. Returns (result, build_called)."""
     build_called = {"v": False}
 
-    async def _fake_build(dest_dir=None):
+    async def _fake_build(dest_dir=None, **_kwargs):
         build_called["v"] = True
         return _fake_artifact(dest_dir)
 
@@ -402,7 +402,7 @@ async def test_gate_passes_when_target_fresh(
     backups_dir = tmp_path / "backups"
     target = _make_target(test_session, enabled=True, credential_version=3)
 
-    async def _fake_build(dest_dir=None):
+    async def _fake_build(dest_dir=None, **_kwargs):
         return _fake_artifact(dest_dir)
 
     notify = AsyncMock(return_value={"id": 1})
