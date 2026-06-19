@@ -37,3 +37,23 @@ __all__ = [
     "import_users",
     "resolve_group",
 ]
+
+# --- enhancedchannelmanager-0i2vt.13: settings/agents bulk importer ---------
+# user agents + core settings + DVR rules + comskip (plugins EXCLUDED per ADR-012
+# D10; users restored by importers/users.py — l1p4p). Appended at the END to
+# minimize merge conflict with sibling importer appends.
+from dbas.importers.settings_agents import (
+    import_comskip,
+    import_core_settings,
+    import_dvr_rules,
+    import_settings_agents,
+    import_user_agents,
+)
+
+__all__ += [
+    "import_comskip",
+    "import_core_settings",
+    "import_dvr_rules",
+    "import_settings_agents",
+    "import_user_agents",
+]
