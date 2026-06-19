@@ -3822,13 +3822,19 @@ export interface DbasRestoreStartResult {
  * progress and the terminal `RestoreReport`.
  *
  * Dry-run is default-ON: pass `confirmApply=true` for the destructive apply.
+ *
+ * For an encrypted artifact (ADR-012 D12 / u81kh) pass the operator
+ * `passphrase`; it travels as a form field (never the query string, so it does
+ * not land in access logs). Omit it for a plain artifact.
  */
 export async function startDbasRestore(
   file: File,
-  confirmApply = false
+  confirmApply = false,
+  passphrase?: string
 ): Promise<DbasRestoreStartResult> {
   const formData = new FormData();
   formData.append('file', file);
+  if (passphrase) formData.append('passphrase', passphrase);
 
   const query = buildQuery({ confirm_apply: confirmApply });
   const response = await fetch(`${API_BASE}/backup/restore-dbas${query}`, {

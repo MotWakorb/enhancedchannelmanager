@@ -1,0 +1,84 @@
+/* Encrypted Backup (Migration) card — ADR-012 D12 / bead u81kh.
+   Reuses .backup-card / .backup-card-header / .backup-download-btn from
+   BackupRestoreSection.css; only the card-local form + hard-gate styles live here. */
+
+.encrypted-backup-card .ebc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  margin-bottom: 0.875rem;
+}
+
+.encrypted-backup-card .ebc-field label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #888);
+}
+
+.encrypted-backup-card .ebc-field input[type='password'] {
+  padding: 0.5rem 0.625rem;
+  background: var(--bg-tertiary, #2a2a4a);
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg, 8px);
+  font-size: 0.875rem;
+}
+
+.encrypted-backup-card .ebc-field input[type='password']:focus {
+  outline: none;
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.encrypted-backup-card .ebc-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted, #666);
+}
+
+.encrypted-backup-card .ebc-hint.is-error {
+  color: var(--error, #ef4444);
+}
+
+.encrypted-backup-card .ebc-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.875rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #888);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.encrypted-backup-card .ebc-checkbox input[type='checkbox'] {
+  margin-top: 0.1875rem;
+  flex-shrink: 0;
+}
+
+.encrypted-backup-card .ebc-checkbox strong {
+  color: var(--text-primary, #fff);
+}
+
+/* The lost-passphrase hard-gate warning — deliberately loud (danger level),
+   not a tooltip (checklist 34). */
+.encrypted-backup-card .ebc-unrecoverable-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: var(--radius-lg, 8px);
+  margin-bottom: 0.875rem;
+  font-size: 0.8125rem;
+  color: var(--error, #ef4444);
+  line-height: 1.5;
+}
+
+.encrypted-backup-card .ebc-unrecoverable-warning .material-icons {
+  font-size: 1.125rem;
+  flex-shrink: 0;
+  margin-top: 0.0625rem;
+}
+
+.encrypted-backup-card .ebc-ack strong {
+  color: var(--text-primary, #fff);
+}
