@@ -73,6 +73,7 @@ class EntityType(str, Enum):
     part of the on-disk format.
     """
 
+    M3U_ACCOUNT = "m3u_account"            # …-0i2vt.10 (Phase-2 first entity; producer of remap)
     CHANNEL_GROUP = "channel_group"        # …-0i2vt.12 (producer of remap)
     CHANNEL_PROFILE = "channel_profile"    # …-0i2vt.12 (producer of remap)
     STREAM_PROFILE = "stream_profile"      # …-0i2vt.12 (producer of remap)
