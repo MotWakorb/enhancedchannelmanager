@@ -16,9 +16,12 @@ Security (bead 0i2vt.8):
 * **Stream from disk.** ``MediaFileUpload(..., resumable=True)`` streams the
   artifact from the on-disk path in chunks — it never reads the whole file
   into RAM (HARD AC #2).
-* **Credential masking.** Logged/surfaced error strings pass through
-  :func:`cloud_storage.upload_security.mask_secrets` so bearer tokens never
-  reach the logs (HARD AC #5).
+* **Credential masking.** Error strings surfaced via the non-logging
+  :class:`UploadResult.error` / :class:`ConnectionTestResult.message` sinks pass
+  through :func:`cloud_storage.upload_security.mask_secrets` so bearer tokens are
+  redacted; the logger itself only ever receives known-safe fields (provider,
+  filename, folder id, byte count, duration) so no credential-derived or
+  SDK-exception string reaches the logs (HARD AC #5).
 """
 import asyncio
 import json
@@ -109,11 +112,14 @@ class GDriveAdapter(CloudStorageAdapter):
             return UploadResult(success=True, remote_url=remote_url, file_size=file_size, duration_ms=duration_ms)
         except SSRFError as e:
             duration_ms = int((time.time() - start) * 1000)
-            logger.warning("[GDRIVE] Upload refused by SSRF policy: %s", mask_secrets(str(e)))
+            # Log only safe fields (provider + target folder); the masked detail
+            # is surfaced via UploadResult.error (a non-logging sink) so no
+            # credential-derived string reaches the logger.
+            logger.warning("[GDRIVE] Upload to folder %s refused by SSRF policy", self.folder_id)
             return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
-            logger.warning("[GDRIVE] Upload failed: %s", mask_secrets(str(e)))
+            logger.warning("[GDRIVE] Upload to folder %s failed", self.folder_id)
             return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
 
     async def test_connection(self) -> ConnectionTestResult:
@@ -129,10 +135,12 @@ class GDriveAdapter(CloudStorageAdapter):
                 provider_info={"folder_id": self.folder_id, "folder_name": folder.get("name", "")},
             )
         except SSRFError as e:
-            logger.warning("[GDRIVE] Connection refused by SSRF policy: %s", mask_secrets(str(e)))
+            # Log only the safe target folder; masked detail goes to the
+            # non-logging ConnectionTestResult.message sink.
+            logger.warning("[GDRIVE] Connection to folder %s refused by SSRF policy", self.folder_id)
             return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
         except Exception as e:
-            logger.warning("[GDRIVE] Connection test failed: %s", mask_secrets(str(e)))
+            logger.warning("[GDRIVE] Connection test to folder %s failed", self.folder_id)
             return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
 
     async def delete(self, remote_path: str) -> bool:
@@ -152,8 +160,8 @@ class GDriveAdapter(CloudStorageAdapter):
                 )
             logger.info("[GDRIVE] Deleted %s", filename)
             return True
-        except Exception as e:
-            logger.warning("[GDRIVE] Delete failed: %s", mask_secrets(str(e)))
+        except Exception:
+            logger.warning("[GDRIVE] Delete from folder %s failed", self.folder_id)
             return False
 
     async def list_files(self, remote_path: str = "") -> list[str]:
@@ -167,6 +175,6 @@ class GDriveAdapter(CloudStorageAdapter):
                 ).execute()
             )
             return [f["name"] for f in results.get("files", [])]
-        except Exception as e:
-            logger.warning("[GDRIVE] List files failed: %s", mask_secrets(str(e)))
+        except Exception:
+            logger.warning("[GDRIVE] List files in folder %s failed", self.folder_id)
             return []
