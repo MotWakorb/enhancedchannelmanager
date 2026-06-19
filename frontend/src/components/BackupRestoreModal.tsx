@@ -1,5 +1,8 @@
 import { useState, useCallback } from 'react';
 import { ModalOverlay } from './ModalOverlay';
+import { RestoreProgress } from './RestoreProgress';
+import { useRestoreProgress } from '../hooks/useRestoreProgress';
+import { useNavigateAwayGuard } from '../hooks/useNavigateAwayGuard';
 import * as api from '../services/api';
 import type { BackupValidation, BackupRestoreResult } from '../services/api';
 import { getDateLocale } from '../utils/formatting';
@@ -20,6 +23,21 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
   const [restoreResult, setRestoreResult] = useState<BackupRestoreResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // SEAM: the multi-stage restore-trigger endpoint / restore TaskScheduler is a
+  // LATER bead (the orchestrator .18 exists but emits no _set_progress, and no
+  // restore task is wired to task_scheduler yet). When that endpoint lands it
+  // returns a task id; set it here and the progress surface polls it live. Until
+  // then this stays null and the current synchronous restore drives an
+  // indeterminate (stage-1) progress view — the navigate-away guard still arms.
+  const [restoreTaskId, setRestoreTaskId] = useState<string | null>(null);
+  const progress = useRestoreProgress({ taskId: restoreTaskId });
+
+  // Guard against closing the tab mid-restore — the compensating rollback
+  // depends on the op completing (ADR-012: Dispatcharr has no DB transactions).
+  // Armed only while the restore step is live; released on completion/failure.
+  const isRestoring = step === 'restoring';
+  useNavigateAwayGuard(isRestoring);
 
   const handleFile = useCallback(async (selectedFile: File) => {
     if (!selectedFile.name.match(/\.ya?ml$/i)) {
@@ -98,6 +116,12 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
     if (!file || selectedSections.size === 0) return;
     setStep('restoring');
     setError(null);
+    // SEAM: when the multi-stage restore-trigger endpoint lands it will return a
+    // task id to feed the live progress poller, e.g.
+    //   const { task_id } = await api.startRestoreTask(file, sections);
+    //   setRestoreTaskId(task_id);
+    // The current endpoint is synchronous, so leave the poller's task id null.
+    setRestoreTaskId(null);
 
     try {
       const result = await api.restoreBackupYaml(file, Array.from(selectedSections));
@@ -197,10 +221,25 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
           )}
 
           {step === 'restoring' && (
-            <div className="modal-loading">
-              <span className="material-icons">sync</span>
-              <p>Restoring selected sections...</p>
-            </div>
+            <RestoreProgress
+              mode="restore"
+              view={
+                // When a restore task id is wired (later bead) the polled view
+                // drives the stage indicator. Until then the restore is a single
+                // synchronous request with no per-stage signal, so render an
+                // indeterminate "running, stage 1" view.
+                restoreTaskId
+                  ? progress
+                  : {
+                      ...progress,
+                      status: 'running',
+                      isRunning: true,
+                      isError: false,
+                      isComplete: false,
+                      stageNumber: 1,
+                    }
+              }
+            />
           )}
 
           {step === 'results' && restoreResult && (
