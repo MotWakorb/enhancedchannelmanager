@@ -74,7 +74,12 @@ from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskSchedul
 
 import journal
 import observability
-from routers.backup import build_backup_artifact
+from dbas import retention
+from routers.backup import (
+    _get_backup_filename,
+    build_backup_artifact,
+    verify_artifact_sha256,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +145,24 @@ class DbasBackupTask(TaskScheduler):
         # gate above (which still aborts the whole run for backward-compat).
         self.cloud_targets: list[dict] = []
 
+        # Retention policy (bead 0i2vt.9). Pruning runs ONLY after a
+        # checksum-verified-successful new backup completes, per-destination, and
+        # never below the last-N floor (NEVER-ZERO). Defaults per PO decision:
+        # keep the newest 7, additionally drop beyond-N artifacts older than 30
+        # days. ``retention_enabled=False`` is the safe default — an operator
+        # opts in (a less-engaged operator never silently loses history).
+        self.retention_enabled: bool = False
+        self.retention_last_n: int = retention.DEFAULT_LAST_N
+        self.retention_max_age_days: int = retention.DEFAULT_MAX_AGE_DAYS
+
     def get_config(self) -> dict:
         return {
             "cloud_target_id": self.cloud_target_id,
             "cloud_credential_version": self.cloud_credential_version,
             "cloud_targets": list(self.cloud_targets),
+            "retention_enabled": self.retention_enabled,
+            "retention_last_n": self.retention_last_n,
+            "retention_max_age_days": self.retention_max_age_days,
         }
 
     def update_config(self, config: dict) -> None:
@@ -170,6 +188,16 @@ class DbasBackupTask(TaskScheduler):
                     ),
                 })
             self.cloud_targets = parsed
+        if "retention_enabled" in config:
+            self.retention_enabled = bool(config["retention_enabled"])
+        if "retention_last_n" in config:
+            val = config["retention_last_n"]
+            # Floor at 1 here too (defense in depth — select_prunable also
+            # clamps): a misconfigured 0 must never erode history to zero.
+            self.retention_last_n = max(int(val), 1) if val is not None else retention.DEFAULT_LAST_N
+        if "retention_max_age_days" in config:
+            val = config["retention_max_age_days"]
+            self.retention_max_age_days = int(val) if val is not None else retention.DEFAULT_MAX_AGE_DAYS
 
     async def execute(self) -> TaskResult:
         started_at = datetime.now(timezone.utc)
@@ -191,6 +219,15 @@ class DbasBackupTask(TaskScheduler):
             )
             artifact = await build_backup_artifact(dest_dir=BACKUPS_DIR)
 
+            # Give the artifact its CANONICAL, timestamped, allowlist-matching
+            # name (ecm-backup-<ts>.zip) so it is discoverable, sortable by the
+            # filename timestamp, and prunable by the retention policy. The
+            # builder writes a mkstemp temp name (ecm-artifact-<rand>.zip) which
+            # has no timestamp and does not match _BACKUP_ZIP_FILENAME_RE; the
+            # retention canonical-sort + allowlist both require the timestamped
+            # shape (bead 0i2vt.9).
+            artifact = self._canonicalize_artifact_name(artifact)
+
             filename = artifact.zip_path.name
             logger.info(
                 "[DBAS_BACKUP] Built artifact %s "
@@ -198,6 +235,19 @@ class DbasBackupTask(TaskScheduler):
                 filename, artifact.schema_version, artifact.file_count,
                 artifact.sha256,
             )
+
+            # NEVER-ZERO precondition: the LOCAL artifact is "verified-successful"
+            # only when its bytes match the SHA-256 sidecar (a checksum-verified
+            # success, NOT merely 'the coroutine returned'). Retention keys off
+            # THIS flag — a corrupt local write prunes nothing.
+            local_verified = verify_artifact_sha256(
+                artifact.zip_path, artifact.sidecar_path
+            )
+            if not local_verified:
+                logger.warning(
+                    "[DBAS_BACKUP] Local artifact %s failed checksum verification; "
+                    "retention will NOT prune (never-zero).", filename,
+                )
 
             # Cloud-upload step (bead 0i2vt.8). The local artifact is the core
             # value (host-failure survival starts with a redacted on-disk
@@ -207,6 +257,22 @@ class DbasBackupTask(TaskScheduler):
 
             run_result = upload_summary["run_result"]  # success|partial|failed
             _bump_metric(run_result)
+
+            # Retention (bead 0i2vt.9) — PER-DESTINATION, post-verified-success.
+            # LOCAL prune is gated on the local checksum verification above;
+            # cloud per-destination prune happens inside _upload_one_target right
+            # after each verified-successful upload. Both honor the last-N floor
+            # + age threshold and NEVER prune below the floor (never-zero).
+            if self.retention_enabled:
+                try:
+                    retention.prune_local_backups(
+                        verified_success=local_verified,
+                        last_n=self.retention_last_n,
+                        max_age_days=self.retention_max_age_days,
+                        backups_dir=BACKUPS_DIR,
+                    )
+                except Exception as e:  # retention must never fail the backup run
+                    logger.warning("[DBAS_BACKUP] Local retention prune failed: %s", e)
 
             self._set_progress(current=1, total=1, status="completed")
             details = {
@@ -522,6 +588,27 @@ class DbasBackupTask(TaskScheduler):
             await self._fail_target(target_id, target_name, reason, provider=provider)
             return {"target_id": target_id, "success": False, "reason": reason}
 
+        # Per-destination retention (bead 0i2vt.9). Prune THIS destination's old
+        # artifacts ONLY after THIS verified-successful upload (per-destination
+        # never-prune-on-failure — we are on the success path here). Routes
+        # through the adapter's list/delete (the .5 SSRF chokepoint +
+        # executor-wrap). Retention failures never fail the upload.
+        if self.retention_enabled:
+            try:
+                await retention.prune_cloud_destination(
+                    adapter=adapter,
+                    remote_dir=upload_path,
+                    dest_name=target_name,
+                    verified_success=True,
+                    last_n=self.retention_last_n,
+                    max_age_days=self.retention_max_age_days,
+                )
+            except Exception as e:  # retention must never fail the run
+                logger.warning(
+                    "[DBAS_BACKUP] Cloud retention prune for target id=%s failed: %s",
+                    target_id, e,
+                )
+
         return {
             "target_id": target_id,
             "success": True,
@@ -548,6 +635,50 @@ class DbasBackupTask(TaskScheduler):
                 )
             )
         return None
+
+    @staticmethod
+    def _canonicalize_artifact_name(artifact):
+        """Rename the built artifact (and its .sha256 sidecar) to the canonical
+        timestamped name ``ecm-backup-<UTC ts>.zip`` so it matches the retention
+        allowlist and is sortable by the filename timestamp.
+
+        The sidecar's first line is ``<sha>  <zip-name>``; it is rewritten so the
+        named file inside the sidecar tracks the renamed ZIP. On any failure the
+        original artifact is left untouched and returned (the backup still
+        succeeds — only retention discoverability is affected).
+        """
+        from routers.backup import BackupArtifact
+
+        try:
+            dest_dir = artifact.zip_path.parent
+            new_name = _get_backup_filename()  # ecm-backup-<UTC ts>.zip
+            new_zip = dest_dir / new_name
+            # Extremely unlikely collision (same-second run); fall back to the
+            # original name rather than clobber an existing artifact.
+            if new_zip.exists():
+                return artifact
+            new_sidecar = Path(str(new_zip) + ".sha256")
+            artifact.zip_path.rename(new_zip)
+            try:
+                artifact.sidecar_path.rename(new_sidecar)
+                new_sidecar.write_text(
+                    "%s  %s\n" % (artifact.sha256, new_zip.name), encoding="utf-8"
+                )
+            except OSError:
+                new_sidecar = artifact.sidecar_path  # keep whatever exists
+            return BackupArtifact(
+                zip_path=new_zip,
+                sidecar_path=new_sidecar,
+                schema_version=artifact.schema_version,
+                sha256=artifact.sha256,
+                file_count=artifact.file_count,
+            )
+        except OSError as e:
+            logger.warning(
+                "[DBAS_BACKUP] Could not canonicalize artifact name "
+                "(retention discoverability reduced): %s", e,
+            )
+            return artifact
 
     @staticmethod
     def _remote_paths(upload_path: str, artifact) -> tuple[str, str]:
