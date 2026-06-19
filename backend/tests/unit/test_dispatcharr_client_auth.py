@@ -255,3 +255,57 @@ def test_settings_hash_changes_when_any_field_changes():
         assert _settings_hash(mutated) != base_hash, (
             f"hash did not change when {field} mutated"
         )
+
+
+# ---------------------------------------------------------------------------
+# Clear-text-logging hygiene for the shared ``_request`` (bead 0i2vt.13).
+# CodeQL py/clear-text-logging-sensitive-data flagged 5 sinks in ``_request``
+# because a credential-named value can flow into ``path`` (e.g.
+# ``update_core_setting`` builds it from a settings key) and an httpx exception
+# can embed the full request URL with a token. The error path must log only the
+# HTTP method, status code, and exception TYPE -- never the path, the full
+# exception object, or ``str(e)``.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_request_error_log_omits_url_token_and_exception_text(caplog):
+    """On a request error, the log line carries no URL/token/full-exception."""
+    import logging
+
+    settings = DispatcharrSettings(
+        url="http://dispatcharr:8000",
+        auth_method="api_key",
+        api_key="key-abc",
+    )
+    client = DispatcharrClient(settings)
+    try:
+        # Simulate an httpx error whose text embeds a credentialed URL + token,
+        # exactly the kind of value CodeQL traces into the logging sink.
+        secret_token = "s3cr3t-bearer-token-DO-NOT-LOG"
+        boom = httpx.ConnectError(
+            f"failed connecting to http://dispatcharr:8000/api/x/?token={secret_token}"
+        )
+        request_mock = AsyncMock(side_effect=boom)
+
+        with patch.object(client._client, "request", request_mock):
+            with caplog.at_level(logging.DEBUG, logger="dispatcharr_client"):
+                with pytest.raises(httpx.ConnectError):
+                    # A path built from a (CodeQL-tainted) settings key.
+                    await client._request(
+                        "PATCH",
+                        "/api/core/settings/dispatcharr_api_key/",
+                    )
+
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        # No token, no full URL/path, no raw exception text may appear.
+        assert secret_token not in joined
+        assert "token=" not in joined
+        assert "dispatcharr_api_key" not in joined
+        assert "http://dispatcharr:8000" not in joined
+        assert "failed connecting" not in joined
+        # ...but the triage essentials must be present: method + exception type.
+        assert "PATCH" in joined
+        assert "ConnectError" in joined
+    finally:
+        await client._client.aclose()
