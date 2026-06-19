@@ -427,6 +427,7 @@ class DbasBackupTask(TaskScheduler):
         """
         from cloud_storage import get_adapter
         from cloud_storage.crypto import decrypt_credentials
+        from cloud_storage.upload_security import mask_secrets
         from database import get_session
         from export_models import CloudStorageTarget
 
@@ -481,7 +482,14 @@ class DbasBackupTask(TaskScheduler):
             zip_res = await adapter.upload(Path(artifact.zip_path), zip_remote)
             sidecar_res = await adapter.upload(Path(artifact.sidecar_path), sidecar_remote)
         except Exception as e:  # adapter construction / unexpected error
-            reason = "upload to target '%s' raised: %s" % (target_name, e)
+            # SEC-2: mask credential-shaped material before the raw exception
+            # text reaches the journal / notification. This is the one
+            # credential-adjacent surface in the task that bypasses the
+            # adapter-level masking (adapter-returned `error` fields are already
+            # masked at source), so mask it here.
+            reason = "upload to target '%s' raised: %s" % (
+                target_name, mask_secrets(str(e)),
+            )
             await self._fail_target(target_id, target_name, reason, provider=provider)
             _bump_upload_metric(provider, "failed")
             return {"target_id": target_id, "success": False, "reason": reason}
