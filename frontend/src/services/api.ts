@@ -3621,6 +3621,104 @@ export interface BackupRestoreResult {
   errors: string[];
 }
 
+// ---------------------------------------------------------------------------
+// DBAS Phase-2 restore report (mirrors backend/dbas/restore_contracts.py)
+//
+// ONE shape carries the dry-run plan (bead 0i2vt.16) AND the realized
+// restore/rollback result (bead 0i2vt.18); the restore-complete summary UX
+// (bead 0i2vt.20) renders both, distinguished by `is_dry_run`. Keep the enum
+// string values byte-for-byte aligned with the backend `str, Enum` values —
+// the wire payload carries the raw string and the UI maps it to a label.
+// ---------------------------------------------------------------------------
+
+/** A restorable Dispatcharr/ECM entity type (one per distinct ID namespace). */
+export type RestoreEntityType =
+  | 'm3u_account'
+  | 'epg_source'
+  | 'channel_group'
+  | 'channel_profile'
+  | 'stream_profile'
+  | 'channel'
+  | 'stream'
+  | 'user_agent'
+  | 'dvr_rule'
+  | 'user'
+  | 'logo';
+
+/** Why an entity was (or would be) skipped. */
+export type RestoreSkipReason =
+  | 'already_exists_identical'
+  | 'excluded_by_operator'
+  | 'current_admin_preserved'
+  | 'unsupported_in_this_version'
+  | 'dependency_unresolved';
+
+/** Why an entity failed to apply. */
+export type RestoreFailureReason =
+  | 'validation_error'
+  | 'dependency_unresolved'
+  | 'upstream_api_error'
+  | 'upstream_timeout'
+  | 'conflict'
+  | 'password_hash_unsupported'
+  | 'internal_error';
+
+/**
+ * Overall tri-state result of a realized restore. `null` on a dry-run (a plan
+ * has no realized outcome). NEVER `success` on mixed state — the two rolled-back
+ * states are explicit failures, surfaced as such by the summary UX.
+ */
+export type RestoreOutcome =
+  | 'success'
+  | 'partial_failed_rolled_back'
+  | 'failed_rollback_incomplete';
+
+/** One skipped entity, with the reason and an operator-facing label (never a secret). */
+export interface RestoreSkipDetail {
+  reason: RestoreSkipReason;
+  label: string;
+  source_export_id?: number | null;
+}
+
+/** One failed entity, with the reason and a sanitized operator-facing message. */
+export interface RestoreFailureDetail {
+  reason: RestoreFailureReason;
+  label: string;
+  message: string;
+  source_export_id?: number | null;
+}
+
+/**
+ * Per-entity-category counts for ONE category. Apply populates
+ * created/updated/skipped/failed; dry-run populates would_create/would_update/
+ * would_skip. The detail lists are the source of truth for reasons.
+ */
+export interface EntityCategoryReport {
+  entity_type: RestoreEntityType;
+  created: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  would_create: number;
+  would_update: number;
+  would_skip: number;
+  skip_details: RestoreSkipDetail[];
+  failure_details: RestoreFailureDetail[];
+}
+
+/** The one restore response schema — dry-run, apply, and summary. */
+export interface RestoreReport {
+  contract_version: number;
+  is_dry_run: boolean;
+  outcome: RestoreOutcome | null;
+  categories: EntityCategoryReport[];
+  /** Aggregate count of unresolved logo references — bead .19 surfaces a red banner when > 0. */
+  logo_misses: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  notes: string[];
+}
+
 export async function getExportSections(): Promise<{key: string; label: string}[]> {
   return fetchJson(`${API_BASE}/backup/export-sections`);
 }
