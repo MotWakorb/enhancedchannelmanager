@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ModalOverlay } from './ModalOverlay';
 import { RestoreProgress } from './RestoreProgress';
 import { RestoreCompleteSummary } from './RestoreCompleteSummary';
+import { LogoMissBanner } from './LogoMissBanner';
 import { useRestoreProgress } from '../hooks/useRestoreProgress';
 import { useNavigateAwayGuard } from '../hooks/useNavigateAwayGuard';
 import * as api from '../services/api';
@@ -32,6 +33,26 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Dispatcharr base URL (settings.url) — drives the logo-miss banner's
+  // "Fix in Dispatcharr" link (bead 0i2vt.19). Same source App.tsx reads for
+  // `dispatcharrUrl`. Best-effort: if settings can't be read the banner still
+  // fires, it just omits the link.
+  const [dispatcharrUrl, setDispatcharrUrl] = useState('');
+  useEffect(() => {
+    let active = true;
+    api
+      .getSettings()
+      .then((settings) => {
+        if (active) setDispatcharrUrl(settings.url ?? '');
+      })
+      .catch(() => {
+        /* non-fatal — banner omits the link when the base url is unknown */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // SEAM: the multi-stage restore-trigger endpoint / restore TaskScheduler is a
   // LATER bead (the orchestrator .18 exists but emits no _set_progress, and no
@@ -262,7 +283,13 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
               into RestoreCompleteSummary's `bannerSlot` prop. Falls back to the
               legacy section-level result view while restoreReport is null. */}
           {step === 'results' && restoreReport && (
-            <RestoreCompleteSummary report={restoreReport} mode="applied" />
+            <RestoreCompleteSummary
+              report={restoreReport}
+              mode="applied"
+              bannerSlot={
+                <LogoMissBanner report={restoreReport} dispatcharrUrl={dispatcharrUrl} />
+              }
+            />
           )}
 
           {step === 'results' && !restoreReport && restoreResult && (
