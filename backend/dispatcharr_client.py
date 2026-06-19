@@ -455,6 +455,46 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def create_stream(self, data: dict) -> dict:
+        """Create a new stream.
+
+        Used by the Channels restore importer (enhancedchannelmanager-nav0c):
+        channels carry embedded (non-standalone) streams, so restoring a channel
+        means recreating any of its streams that no matcher tier resolved to an
+        existing one.
+
+        Returns the created stream, or raises an exception with the response body
+        if creation fails. The error message uses the same
+        ``"<thing> failed: <status> - <body>"`` shape as ``create_channel`` /
+        ``create_channel_group`` so ``upstream_http_exception`` can parse the
+        upstream status + actionable detail (see restore_contracts mapper).
+        """
+        if not isinstance(data, dict):
+            raise ValueError("create_stream requires a dict payload")
+        response = await self._request(
+            "POST", "/api/channels/streams/", json=data
+        )
+        if response.status_code >= 400:
+            # Include response body in exception for better error handling
+            error_body = response.text
+            raise Exception(f"Stream creation failed: {response.status_code} - {error_body}")
+        return response.json()
+
+    async def delete_stream(self, stream_id: int) -> None:
+        """Delete a stream by ID.
+
+        Used as the rollback compensation for a previously created stream
+        (restore_contracts rollback ledger, enhancedchannelmanager-nav0c): if a
+        later step in the same restore fails, streams created earlier in the run
+        are deleted to avoid leaving orphans. A 404 here means the stream is
+        already gone, which the caller treats as a successful (idempotent)
+        compensation.
+        """
+        response = await self._request(
+            "DELETE", f"/api/channels/streams/{stream_id}/"
+        )
+        response.raise_for_status()
+
     async def get_streams_by_ids(self, ids: list[int]) -> list:
         """Get multiple streams by IDs."""
         response = await self._request(
