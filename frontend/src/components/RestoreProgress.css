@@ -1,0 +1,75 @@
+/**
+ * RestoreProgress styles
+ *
+ * Uses common.css for: .spinning (sync icon animation)
+ * Uses ModalBase.css for: .modal-progress, .modal-progress-bar,
+ *   .modal-progress-fill, .modal-progress-detail (overall progress bar)
+ *
+ * Only the stage-indicator layout (header, "Stage N of M", per-item counts,
+ * error text) is component-specific and lives here.
+ */
+
+.restore-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.restore-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.restore-progress-icon {
+  font-size: 1.5rem;
+  color: var(--text-secondary);
+}
+
+.restore-progress-icon.is-error {
+  color: var(--status-error, #ef4444);
+}
+
+.restore-progress-icon.is-complete {
+  color: var(--status-success, #22c55e);
+}
+
+.restore-progress-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.restore-progress-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.restore-progress-stage-counter {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.restore-progress-stage-name {
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.restore-progress-items {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.restore-progress-error {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  background-color: var(--bg-tertiary);
+  border-left: 3px solid var(--status-error, #ef4444);
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius-md);
+}
