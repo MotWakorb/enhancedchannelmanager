@@ -404,6 +404,7 @@ async def run_restore(
     report: RestoreReport,
     ledger: RollbackLedger,
     remap: object,
+    confirm_apply: bool = False,
     deferred_apply_fn: Callable[..., Awaitable[list[dict]]] | None = None,
     ledger_dir: Path | None = None,
     max_entities_per_category: int = None,  # type: ignore[assignment]
@@ -412,6 +413,14 @@ async def run_restore(
 
     The single orchestration chokepoint. Behaviour:
 
+    0. **Default-ON dry-run guardrail (bead ``…-0i2vt.16``).** A restore is a
+       counts-only DRY-RUN unless the caller passes ``confirm_apply=True``. Apply
+       is opt-IN, never opt-out: without an explicit confirm the run is FORCED to
+       ``report.is_dry_run = True`` and makes ZERO mutations no matter what the
+       caller put on the report. This is an architectural property of the entry
+       point — not a UI toggle a client could bypass. The destructive apply path
+       requires both ``confirm_apply=True`` AND a non-dry-run report; a caller that
+       sets ``is_dry_run`` on the report keeps the dry-run even with a confirm.
     1. **Pre-flight** (``run_preflight``). On a FAIL the restore is refused with
        ZERO mutation — no importer step is called — and the report is returned
        with ``outcome=FAILED_ROLLBACK_INCOMPLETE`` only if mutation had occurred;
@@ -435,6 +444,9 @@ async def run_restore(
         report: The shared restore report (populated by the importers).
         ledger: The shared rollback ledger (populated by the importers).
         remap: The shared IdRemapTable (threaded through importers).
+        confirm_apply: The explicit opt-in to MUTATE. ``False`` (default) forces a
+            dry-run — no importer mutates, no rollback, no deferred phase. ``True``
+            lets the apply proceed ONLY when ``report.is_dry_run`` is also False.
         deferred_apply_fn: The deferred-apply coroutine (defaults to the M3U
             ``apply_deferred_auto_sync``); applied LAST on a clean run.
         ledger_dir: Override the durable ledger directory (tests).
@@ -443,6 +455,23 @@ async def run_restore(
     Returns:
         The :class:`RestoreReport` with its tri-state ``outcome`` set.
     """
+    # --- 0. Default-ON, UNBYPASSABLE dry-run guardrail. ---
+    # Apply is opt-IN. Absent an explicit confirm, the run degrades to a dry-run
+    # and makes ZERO mutations — the importers, rollback, and deferred phase all
+    # branch on ``report.is_dry_run`` below, so forcing it here is the single,
+    # architectural enforcement point. There is NO path that mutates without
+    # confirm_apply=True; a caller can never opt OUT of the dry-run.
+    if not confirm_apply and not report.is_dry_run:
+        report.is_dry_run = True
+        report.notes.append(
+            "apply not confirmed (confirm_apply=False) — produced a counts-only "
+            "dry-run; no mutation performed."
+        )
+        logger.info(
+            "[DBAS-RESTORE] Apply NOT confirmed; forcing counts-only dry-run "
+            "(default-ON guardrail)."
+        )
+
     report.started_at = report.started_at or datetime.now(timezone.utc)
 
     # --- 1. Pre-flight — refuse with ZERO mutation on failure. ---
@@ -493,12 +522,16 @@ async def run_restore(
                 step.entity_type.value,
                 type(exc).__name__,
             )
-            persist_ledger(ledger, ledger_dir=ledger_dir)
+            # A dry-run never creates, so there is nothing durable to persist — and
+            # it must make ZERO disk writes to the ledger path.
+            if not report.is_dry_run:
+                persist_ledger(ledger, ledger_dir=ledger_dir)
             break
 
         if deferred:
             ctx.deferred.extend(deferred)
-        persist_ledger(ledger, ledger_dir=ledger_dir)
+        if not report.is_dry_run:
+            persist_ledger(ledger, ledger_dir=ledger_dir)
 
         # A step that reports a category failure (without raising) also rolls back
         # — mixed state must never be reported as success.
@@ -542,11 +575,17 @@ async def run_restore(
             report.notes.append("deferred auto-sync phase reported an error; entities intact.")
 
     # --- 4. Outcome. ---
-    report.outcome = compute_outcome(
-        report=report,
-        failure_occurred=failure_occurred,
-        rollback=rollback,
-    )
+    # A DRY-RUN is a plan, not a realized restore — it has no outcome (kxuj2
+    # contract: ``outcome`` is None on a dry-run). Only an apply computes the
+    # tri-state outcome.
+    if report.is_dry_run:
+        report.outcome = None
+    else:
+        report.outcome = compute_outcome(
+            report=report,
+            failure_occurred=failure_occurred,
+            rollback=rollback,
+        )
     report.completed_at = datetime.now(timezone.utc)
 
     if report.outcome == RestoreOutcome.SUCCESS and not report.is_dry_run:
@@ -595,11 +634,55 @@ def default_importer_steps() -> list[ImporterStep]:
     The ORDER is the contract even where a slot is a seam — when an importer
     lands it slots into its place without reshuffling the sequence.
     """
+    s = _importer_step_builders()
+    # NOTE on the EPG-sources seam (…-0i2vt.11): EPG sources are not an FK-bearing
+    # remapped type, so the rollback ledger has no EntityType for them and the
+    # contracts module (read-only here) defines none. The EPG step therefore lives
+    # in the ordering as a documented position between M3U and channel groups, but
+    # is not a discrete ImporterStep row — when its importer lands it registers
+    # here (and, if it ever needs compensation, the contracts module gains the
+    # EntityType in its own bead, not this one).
+    return [
+        ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
+        # <- EPG sources (…-0i2vt.11) order position; SEAM, see note above.
+        ImporterStep(EntityType.CHANNEL_GROUP, None),                  # SEAM …-0i2vt.12
+        ImporterStep(EntityType.CHANNEL_PROFILE, None),               # SEAM …-0i2vt.12
+        ImporterStep(EntityType.STREAM_PROFILE, None),                # SEAM …-0i2vt.12
+        ImporterStep(EntityType.USER_AGENT, None),                    # SEAM …-0i2vt.13
+        ImporterStep(EntityType.USER, s["users"]),                    # WIRED …-l1p4p
+        ImporterStep(EntityType.CHANNEL, s["channels"]),              # WIRED …-4vouz
+        # logos SEAM …-0i2vt.15 — no EntityType row of its own; attaches to channels
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Dry-run registry — bead …-0i2vt.16. EVERY importer wired, counts-only.
+# ---------------------------------------------------------------------------
+
+
+def _importer_step_builders() -> dict[str, ImporterCallable]:
+    """Build the per-category importer-step callables, shared by both registries.
+
+    Each callable adapts one importer's keyword signature to the
+    :class:`ApplyContext`. The SAME callables back the apply registry
+    (:func:`default_importer_steps`) and the dry-run registry
+    (:func:`dry_run_importer_steps`); they thread ``ctx.is_dry_run`` straight into
+    each importer so the dry-run count comes from the importer's OWN plan/match
+    logic (the same code that decides create/update/skip on apply), never a
+    parallel counter. This is the anti-drift guarantee the parity test rests on.
+    """
     from dbas.importers.channels import import_channels
+    from dbas.importers.epg_sources import import_epg_sources
+    from dbas.importers.groups_profiles import (
+        import_channel_groups,
+        import_channel_profiles,
+        import_stream_profiles,
+    )
+    from dbas.importers.logos import import_logos
     from dbas.importers.m3u_accounts import import_m3u_accounts
     from dbas.importers.users import import_users
 
-    def _category_entities(ctx: ApplyContext, entity_type: EntityType) -> list[dict]:
+    def _entities(ctx: ApplyContext, entity_type: EntityType) -> list[dict]:
         cat = ctx.plan.category(entity_type)
         return list(cat.entities) if cat else []
 
@@ -609,7 +692,7 @@ def default_importer_steps() -> list[ImporterStep]:
 
     async def _m3u(ctx: ApplyContext) -> list[dict] | None:
         result = await import_m3u_accounts(
-            archive_accounts=_category_entities(ctx, EntityType.M3U_ACCOUNT),
+            archive_accounts=_entities(ctx, EntityType.M3U_ACCOUNT),
             client=ctx.client,
             selected=_selected(ctx, EntityType.M3U_ACCOUNT),
             report=ctx.report,
@@ -619,11 +702,47 @@ def default_importer_steps() -> list[ImporterStep]:
         )
         return result.deferred_auto_sync_settings or None
 
-    async def _channels(ctx: ApplyContext) -> list[dict] | None:
-        await import_channels(
-            archive_channels=_category_entities(ctx, EntityType.CHANNEL),
+    async def _epg(ctx: ApplyContext) -> list[dict] | None:
+        await import_epg_sources(
+            archive_sources=_entities(ctx, EntityType.EPG_SOURCE),
             client=ctx.client,
-            selected=_selected(ctx, EntityType.CHANNEL),
+            selected=_selected(ctx, EntityType.EPG_SOURCE),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _channel_groups(ctx: ApplyContext) -> list[dict] | None:
+        await import_channel_groups(
+            archive_rows=_entities(ctx, EntityType.CHANNEL_GROUP),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.CHANNEL_GROUP),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _channel_profiles(ctx: ApplyContext) -> list[dict] | None:
+        await import_channel_profiles(
+            archive_rows=_entities(ctx, EntityType.CHANNEL_PROFILE),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.CHANNEL_PROFILE),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _stream_profiles(ctx: ApplyContext) -> list[dict] | None:
+        await import_stream_profiles(
+            archive_rows=_entities(ctx, EntityType.STREAM_PROFILE),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.STREAM_PROFILE),
             report=ctx.report,
             ledger=ctx.ledger,
             remap=ctx.remap,
@@ -633,7 +752,7 @@ def default_importer_steps() -> list[ImporterStep]:
 
     async def _users(ctx: ApplyContext) -> list[dict] | None:
         await import_users(
-            archive_users=_category_entities(ctx, EntityType.USER),
+            archive_users=_entities(ctx, EntityType.USER),
             client=ctx.client,
             selected=_selected(ctx, EntityType.USER),
             report=ctx.report,
@@ -642,21 +761,131 @@ def default_importer_steps() -> list[ImporterStep]:
         )
         return None
 
-    # NOTE on the EPG-sources seam (…-0i2vt.11): EPG sources are not an FK-bearing
-    # remapped type, so the rollback ledger has no EntityType for them and the
-    # contracts module (read-only here) defines none. The EPG step therefore lives
-    # in the ordering as a documented position between M3U and channel groups, but
-    # is not a discrete ImporterStep row — when its importer lands it registers
-    # here (and, if it ever needs compensation, the contracts module gains the
-    # EntityType in its own bead, not this one).
+    async def _channels(ctx: ApplyContext) -> list[dict] | None:
+        await import_channels(
+            archive_channels=_entities(ctx, EntityType.CHANNEL),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.CHANNEL),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _logos(ctx: ApplyContext) -> list[dict] | None:
+        # clear_existing is the DESTRUCTIVE bulk-delete pre-step; the logos
+        # importer itself guards it behind ``not is_dry_run``, and a dry-run plan
+        # never carries an apply confirm — so it can never fire here on a dry-run.
+        await import_logos(
+            archive_logos=_entities(ctx, EntityType.LOGO),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.LOGO),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+            clear_existing=False,
+        )
+        return None
+
+    return {
+        "m3u": _m3u,
+        "epg": _epg,
+        "channel_groups": _channel_groups,
+        "channel_profiles": _channel_profiles,
+        "stream_profiles": _stream_profiles,
+        "users": _users,
+        "channels": _channels,
+        "logos": _logos,
+    }
+
+
+def dry_run_importer_steps() -> list[ImporterStep]:
+    """The Phase-2 ordering with EVERY importer WIRED for the counts-only dry-run.
+
+    Bead ``…-0i2vt.16``. Unlike :func:`default_importer_steps` — whose seams for
+    EPG sources / groups-profiles / logos await each importer's apply-path +
+    rollback wiring (bead ``.18`` / their own beads) — the dry-run registry wires
+    ALL importers, because every importer is provably zero-mutation on a dry-run
+    (it only reads to plan and increments ``would_*``). Wiring them here lets the
+    dry-run aggregate the ``would_*`` counts for the WHOLE archive into one
+    :class:`RestoreReport`, which is the point of the engine.
+
+    The order is the same hard Phase-2 sequence
+    (``M3U → EPG → groups/profiles → user-agents → users → channels → logos``);
+    on a dry-run the order is not load-bearing for mutation (there is none) but is
+    kept identical so the plan the operator previews mirrors what apply will do.
+
+    This registry is for DRY-RUN ONLY. It must not be handed to an apply
+    (``confirm_apply=True``) run until each wired importer's apply/rollback path is
+    registered in :func:`default_importer_steps` — the guardrail in
+    :func:`run_restore` forces ``is_dry_run`` when apply is not confirmed, so a
+    misuse degrades safely to a dry-run rather than mutating through an unwired
+    rollback path.
+    """
+    s = _importer_step_builders()
     return [
-        ImporterStep(EntityType.M3U_ACCOUNT, _m3u, defers=True),
-        # <- EPG sources (…-0i2vt.11) order position; SEAM, see note above.
-        ImporterStep(EntityType.CHANNEL_GROUP, None),                  # SEAM …-0i2vt.12
-        ImporterStep(EntityType.CHANNEL_PROFILE, None),               # SEAM …-0i2vt.12
-        ImporterStep(EntityType.STREAM_PROFILE, None),                # SEAM …-0i2vt.12
-        ImporterStep(EntityType.USER_AGENT, None),                    # SEAM …-0i2vt.13
-        ImporterStep(EntityType.USER, _users),                        # WIRED …-l1p4p
-        ImporterStep(EntityType.CHANNEL, _channels),                  # WIRED …-4vouz
-        # logos SEAM …-0i2vt.15 — no EntityType row of its own; attaches to channels
+        ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
+        ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
+        ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
+        ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
+        ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
+        ImporterStep(EntityType.USER_AGENT, None),  # SEAM …-0i2vt.13 (no importer yet)
+        ImporterStep(EntityType.USER, s["users"]),
+        ImporterStep(EntityType.CHANNEL, s["channels"]),
+        ImporterStep(EntityType.LOGO, s["logos"]),
     ]
+
+
+async def run_dry_run(
+    *,
+    plan: ImportPlan,
+    client: DispatcharrClient,
+    steps: list[ImporterStep] | None = None,
+    ledger_dir: Path | None = None,
+    max_entities_per_category: int = None,  # type: ignore[assignment]
+) -> RestoreReport:
+    """Produce the counts-only restore PLAN for an archive — never mutates.
+
+    Bead ``…-0i2vt.16``. The default-ON entry: the restore UX ALWAYS calls this
+    first so the operator sees "would create N / update M / skip K" before any
+    apply. It runs every importer with dry-run on (``dry_run_importer_steps``),
+    aggregating each category's ``would_create`` / ``would_update`` / ``would_skip``
+    into one :class:`RestoreReport` whose ``is_dry_run`` is True and whose
+    ``outcome`` is ``None`` (a plan has no realized outcome).
+
+    Because it delegates to :func:`run_restore` with ``confirm_apply=False`` and a
+    dry-run report, the engine's guardrail guarantees ZERO mutation: no create,
+    update, delete, upload, bulk-delete, rollback, or deferred auto-sync fires.
+
+    Args:
+        plan: The restore plan (categories + manifest + any pre-known remap).
+        client: The Dispatcharr API client (only its READ methods are exercised).
+        steps: Override the importer registry (tests / a future endpoint that
+            shares the apply registry for the parity check). Defaults to
+            :func:`dry_run_importer_steps`.
+        ledger_dir: Override the durable ledger directory (tests). The dry-run
+            never writes ledger entries, but pre-flight refusal paths share the
+            signature.
+        max_entities_per_category: Pre-flight count bound override (tests).
+
+    Returns:
+        A :class:`RestoreReport` with ``is_dry_run=True`` carrying the per-category
+        ``would_*`` counts and the ``logo_misses`` aggregate.
+    """
+    report = RestoreReport(is_dry_run=True)
+    ledger = RollbackLedger(restore_id=new_restore_id())
+    from dbas.restore_contracts import IdRemapTable
+
+    return await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps if steps is not None else dry_run_importer_steps(),
+        report=report,
+        ledger=ledger,
+        remap=plan.existing_remap or IdRemapTable(),
+        confirm_apply=False,
+        ledger_dir=ledger_dir,
+        max_entities_per_category=max_entities_per_category,
+    )

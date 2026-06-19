@@ -420,6 +420,13 @@ async def import_m3u_accounts(
 
         if is_dry_run:
             cat.would_create += 1
+            # Provisional remap so a DOWNSTREAM importer's FK to this would-be-
+            # created account resolves on the dry-run exactly as it would on apply
+            # (anti-drift: dry-run and apply must agree on what is creatable). The
+            # source id is used as a stable provisional destination id — never sent
+            # upstream, only consulted by the in-run remap.
+            if source_id is not None:
+                remap.add(EntityType.M3U_ACCOUNT, int(source_id), int(source_id))
             continue
 
         payload = _build_create_payload(archive_account)
