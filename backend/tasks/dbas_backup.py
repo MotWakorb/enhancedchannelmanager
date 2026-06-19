@@ -591,7 +591,14 @@ class DbasBackupTask(TaskScheduler):
     ) -> None:
         """Non-silent per-target failure: WARN + journal + notification."""
         msg = "DBAS backup upload to target id=%s failed — %s" % (target_id, reason)
-        logger.warning("[DBAS_BACKUP] %s", msg)
+        # The logger receives ONLY the safe target id, never `reason`/`msg`:
+        # `reason` can carry a masked-but-credential-derived adapter error or a
+        # masked SDK-exception string, and CodeQL traces that value into any
+        # logging sink (it does not recognise mask_secrets() as a sanitizer).
+        # The masked detail still reaches the operator via the journal
+        # description and the notification message below (non-logging sinks
+        # that are stored/displayed, not logged).
+        logger.warning("[DBAS_BACKUP] Upload to target id=%s failed (see journal/notification for detail)", target_id)
         try:
             journal.log_entry(
                 category="backup_outbound",
@@ -618,12 +625,19 @@ class DbasBackupTask(TaskScheduler):
     async def _notify_upload_outcome(self, summary: dict, total: int) -> None:
         """Fire the run-level partial/failed notification (PO decision)."""
         run_result = summary["run_result"]
+        succeeded = summary["succeeded"]
         msg = (
             "DBAS backup cloud upload %s: %d of %d configured targets succeeded. "
             "The local artifact was written; review the cloud target "
-            "configuration." % (run_result, summary["succeeded"], total)
+            "configuration." % (run_result, succeeded, total)
         )
-        logger.warning("[DBAS_BACKUP] %s", msg)
+        # Log only the safe run-level counts (no per-target reason strings flow
+        # here); the full message goes to the notification sink below. This keeps
+        # the source-tainted `summary` out of any logging sink.
+        logger.warning(
+            "[DBAS_BACKUP] Cloud upload %s: %d of %d targets succeeded",
+            run_result, succeeded, total,
+        )
         try:
             await create_notification_internal(
                 notification_type="error" if run_result == "failed" else "warning",
