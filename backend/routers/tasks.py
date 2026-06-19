@@ -10,12 +10,22 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, model_validator
 
+from auth import ResolveIsAdminIfEnabled
 from database import get_session
 from dispatcharr_client import get_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Tasks"])
+
+# Task ids that may ONLY be driven by an admin (or in auth-disabled setup mode).
+# These tasks restore/produce credential-bearing backup artifacts and reach the
+# same destructive restore path as the admin-gated /restore-dbas endpoint. The
+# generic POST /api/tasks/{task_id}/run endpoint is reachable by ordinary users
+# for ordinary tasks, so it must NOT carry a blanket admin dependency — instead
+# it admin-gates exactly these privileged ids (O8TBV-1). Keep this set in sync
+# with any new privileged task registered in backend/tasks/.
+PRIVILEGED_TASK_IDS = frozenset({"dbas_restore", "dbas_backup"})
 
 
 # -------------------------------------------------------------------------
@@ -543,9 +553,23 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
 
 
 @router.post("/api/tasks/{task_id}/run", tags=["Tasks"])
-async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
-    """Manually trigger a task execution."""
+async def run_task(
+    task_id: str,
+    request: Optional[TaskRunRequest] = None,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+):
+    """Manually trigger a task execution.
+
+    Ordinary, user-triggerable tasks are unchanged. Privileged tasks
+    (:data:`PRIVILEGED_TASK_IDS` — the DBAS backup/restore tasks that reach the
+    admin-gated restore path) are refused for authenticated non-admins (O8TBV-1).
+    """
     logger.debug("[TASKS] POST /api/tasks/%s/run", task_id)
+    if task_id in PRIVILEGED_TASK_IDS and not is_admin:
+        logger.warning(
+            "[TASKS] Refusing privileged task run for non-admin: task=%s", task_id
+        )
+        raise HTTPException(status_code=403, detail="Admin access required")
     try:
         from task_engine import get_engine
         engine = get_engine()
@@ -565,9 +589,19 @@ async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
 
 
 @router.post("/api/tasks/{task_id}/cancel", tags=["Tasks"])
-async def cancel_task(task_id: str):
-    """Cancel a running task."""
+async def cancel_task(task_id: str, is_admin: bool = ResolveIsAdminIfEnabled):
+    """Cancel a running task.
+
+    Privileged tasks (:data:`PRIVILEGED_TASK_IDS`) are refused for non-admins,
+    mirroring :func:`run_task` (O8TBV-1) so a non-admin can neither start nor
+    interfere with a privileged task.
+    """
     logger.debug("[TASKS] POST /api/tasks/%s/cancel", task_id)
+    if task_id in PRIVILEGED_TASK_IDS and not is_admin:
+        logger.warning(
+            "[TASKS] Refusing privileged task cancel for non-admin: task=%s", task_id
+        )
+        raise HTTPException(status_code=403, detail="Admin access required")
     try:
         from task_engine import get_engine
         engine = get_engine()

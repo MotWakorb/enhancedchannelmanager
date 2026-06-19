@@ -4,6 +4,7 @@ Backup & Restore router — create and restore ECM configuration backups.
 Backs up: settings.json, journal.db, uploads/logos/, tls/, m3u_uploads/
 YAML export: settings + DB tables + Dispatcharr state in a single file.
 """
+import asyncio
 import hashlib
 import io
 import json
@@ -12,7 +13,9 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -360,6 +363,36 @@ ARTIFACT_BINARY_URL_MAPPINGS = "binary/url-mappings.json"
 # Streaming chunk size for SHA-256 computation over the finished artifact.
 _SHA256_CHUNK = 1024 * 1024  # 1 MiB
 
+# Restore-upload streaming chunk size — the uploaded artifact is streamed to a
+# temp file ONE chunk at a time (never read whole-in-RAM, mirrors the .7/.15
+# streaming discipline; ADR-008 D8). 1 MiB chunks keep the per-read buffer small.
+_RESTORE_UPLOAD_CHUNK = 1024 * 1024  # 1 MiB
+
+# Hard cap on an uploaded restore artifact (the binary logo subtree can be large,
+# but a multi-GB upload is an abuse signal / DoS surface). The stream loop aborts
+# and cleans up the moment cumulative bytes exceed this — it never buffers the
+# whole upload to discover the size. 2 GiB is generous headroom over a realistic
+# redacted artifact while still bounding the temp-file write.
+_RESTORE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+
+# --- Decompression-bomb (D2) caps. -----------------------------------------
+# The 2 GiB upload cap above bounds only the COMPRESSED bytes. A small ZIP with a
+# high compression ratio can still expand to gigabytes on zf.read(), OOMing the
+# single-process container — reachable even on the admin dry-run path. These caps
+# implement the threat-model D2 control (docs/security/threat_model_dbas_import.md
+# §3.5 D2 / checklist 5): they are enforced by iterating zf.infolist() BEFORE any
+# zf.read(), so the bomb member is never decompressed. Values mirror the
+# checklist's ratified defaults (A4): 100x per-entry ratio, 1 GiB cumulative
+# uncompressed, 10,000 entries.
+_ARTIFACT_MAX_ENTRIES = 10_000
+_ARTIFACT_MAX_TOTAL_UNCOMPRESSED = 1 * 1024 * 1024 * 1024  # 1 GiB cumulative
+_ARTIFACT_MAX_ENTRY_RATIO = 100  # max decompressed:compressed per entry
+# A small stored entry (e.g. a 12-byte manifest) has a degenerate ratio; only
+# entries whose compressed size exceeds this floor are ratio-checked, so a tiny
+# stored file is not falsely flagged. The cumulative + per-entry-size caps still
+# bound everything below the floor.
+_ARTIFACT_RATIO_MIN_COMPRESSED = 1024  # 1 KiB
+
 # Headroom multiplier for the pre-build free-disk check. The redacted source
 # (logos + journal.db) is read once into a compressed ZIP; we conservatively
 # require free space >= estimated_source_bytes (the ZIP is typically smaller,
@@ -704,6 +737,244 @@ def verify_artifact_sha256(zip_path: Path, sidecar_path: Path) -> bool:
     return actual == expected
 
 
+# ---------------------------------------------------------------------------
+# Restore-ingest schema_version gate (0i2vt.17, ADR-008 D1 + S4)
+#
+# The new-format DBAS artifact (build_backup_artifact) carries a CLEARTEXT
+# manifest.json whose dedicated integer ``schema_version`` is the restore
+# compatibility gate. On restore we MUST refuse an artifact built by a NEWER
+# ECM (schema_version > BACKUP_SCHEMA_VERSION) BEFORE any mutation — a v0.19
+# archive restored on a v0.18 build would otherwise silently partial-restore
+# and corrupt state. The rule (mirrors build_backup_artifact's contract):
+# manifest schema_version <= BACKUP_SCHEMA_VERSION is accepted; anything newer
+# (or missing/malformed) is refused.
+#
+# SECURITY (D1 + S4 — no schema-internals leakage): the user-facing message is
+# EXACTLY "Unsupported backup version" with NO version numbers and NO schema
+# internals. The actual detail (got X, support up to Y) is logged SERVER-SIDE
+# only for operator troubleshooting.
+#
+# NOTE: the manifest ``schema_version`` and the embedded journal.db
+# alembic_version are TWO DISTINCT axes. This gate is ONLY the manifest
+# schema_version.
+# ---------------------------------------------------------------------------
+
+# The ONLY user-facing string for a version refusal. No interpolation: it must
+# never carry a version number or any schema internal.
+UNSUPPORTED_BACKUP_VERSION_MESSAGE = "Unsupported backup version"
+
+
+class UnsupportedBackupVersionError(Exception):
+    """Raised when a restore artifact's manifest schema_version is unsupported.
+
+    ``str(err)`` is EXACTLY :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE` — the
+    user-facing message — and carries NO version numbers or schema internals
+    (ADR-008 D1 + S4). The actual version detail is logged server-side by the
+    raiser before this is raised.
+    """
+
+    def __init__(self, message: str = UNSUPPORTED_BACKUP_VERSION_MESSAGE):
+        super().__init__(message)
+
+
+def validate_restore_schema_version(manifest) -> None:
+    """Refuse a restore artifact whose manifest schema_version is unsupported.
+
+    Reusable version comparator for the restore-ingest chokepoint. Applies the
+    same rule build_backup_artifact stamps: ``schema_version <=
+    BACKUP_SCHEMA_VERSION`` is accepted; a NEWER artifact (or one with a
+    missing/malformed schema_version) is REFUSED.
+
+    Raises :class:`UnsupportedBackupVersionError` whose message is EXACTLY
+    :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE` (no version leak). The actual
+    detail is logged server-side (lazy %%-formatting) BEFORE raising.
+
+    Args:
+        manifest: The parsed manifest dict. A non-dict, a missing
+            ``schema_version``, or a non-int (bool excluded) value is treated as
+            unknown/invalid and refused — never accepted by default.
+
+    Returns:
+        None on an accepted (supported) version.
+    """
+    version = manifest.get("schema_version") if isinstance(manifest, dict) else None
+
+    # bool is an int subclass; reject it explicitly so True/False can't pass.
+    if not isinstance(version, int) or isinstance(version, bool):
+        logger.warning(
+            "[BACKUP] Refusing restore: manifest schema_version missing or "
+            "malformed (got %r); this build supports up to %d",
+            version, BACKUP_SCHEMA_VERSION,
+        )
+        raise UnsupportedBackupVersionError()
+
+    if version > BACKUP_SCHEMA_VERSION:
+        logger.warning(
+            "[BACKUP] Refusing restore: artifact schema_version=%d is newer "
+            "than supported (this build supports up to %d). Refuse before any "
+            "mutation to avoid a silent partial restore.",
+            version, BACKUP_SCHEMA_VERSION,
+        )
+        raise UnsupportedBackupVersionError()
+
+    logger.debug(
+        "[BACKUP] Restore artifact schema_version=%d accepted (supported up to %d)",
+        version, BACKUP_SCHEMA_VERSION,
+    )
+
+
+def guard_artifact_against_zip_bomb(zf: zipfile.ZipFile) -> None:
+    """Refuse a decompression-bomb archive BEFORE any member is ``zf.read()``.
+
+    Implements the threat-model D2 control
+    (``docs/security/threat_model_dbas_import.md`` §3.5 / checklist 5). The 2 GiB
+    upload cap bounds only the COMPRESSED bytes; a small high-ratio ZIP can still
+    expand to gigabytes and OOM the single-process container. This guard iterates
+    ``zf.infolist()`` (header metadata only — it never decompresses) and refuses
+    the archive if any of the D2 caps is exceeded:
+
+    * entry count   > :data:`_ARTIFACT_MAX_ENTRIES`
+    * per-entry decompressed:compressed ratio > :data:`_ARTIFACT_MAX_ENTRY_RATIO`
+      (only for entries whose compressed size exceeds
+      :data:`_ARTIFACT_RATIO_MIN_COMPRESSED`, so a tiny stored file is not
+      falsely flagged), and
+    * cumulative declared uncompressed size > :data:`_ARTIFACT_MAX_TOTAL_UNCOMPRESSED`.
+
+    This is the SINGLE shared guard called at the start of validation
+    (:func:`validate_artifact_manifest`) AND at the start of decode
+    (:func:`dbas.restore_artifact.decode_artifact_to_plan`) so both read sites are
+    protected from one place. The refusal message is GENERIC — it leaks no sizes,
+    ratios, or member names to the caller; the specifics are logged server-side.
+
+    Note: ``ZipInfo.file_size`` is the archive's own DECLARED uncompressed size and
+    is attacker-controlled, but that is exactly the point — a bomb DECLARES a huge
+    size, so refusing on the declared size stops the read before CPython would
+    decompress to discover the real size. A liar that under-declares to slip past
+    the ratio/cumulative check is still bounded by the per-entry write loop in the
+    importers (D8 one-at-a-time decode) and the 2 GiB compressed cap.
+    """
+    infos = zf.infolist()
+    if len(infos) > _ARTIFACT_MAX_ENTRIES:
+        logger.warning(
+            "[BACKUP] Refusing restore: archive has %d entries (max %d)",
+            len(infos), _ARTIFACT_MAX_ENTRIES,
+        )
+        raise HTTPException(status_code=400, detail="Backup archive rejected")
+
+    total_uncompressed = 0
+    for info in infos:
+        uncompressed = info.file_size
+        compressed = info.compress_size
+        total_uncompressed += uncompressed
+        if total_uncompressed > _ARTIFACT_MAX_TOTAL_UNCOMPRESSED:
+            logger.warning(
+                "[BACKUP] Refusing restore: cumulative uncompressed size exceeds "
+                "%d bytes (member %s)",
+                _ARTIFACT_MAX_TOTAL_UNCOMPRESSED, info.filename,
+            )
+            raise HTTPException(status_code=400, detail="Backup archive rejected")
+        if compressed > _ARTIFACT_RATIO_MIN_COMPRESSED:
+            ratio = uncompressed / compressed
+            if ratio > _ARTIFACT_MAX_ENTRY_RATIO:
+                logger.warning(
+                    "[BACKUP] Refusing restore: member %s compression ratio %.1f "
+                    "exceeds %dx (%d -> %d bytes)",
+                    info.filename, ratio, _ARTIFACT_MAX_ENTRY_RATIO,
+                    compressed, uncompressed,
+                )
+                raise HTTPException(status_code=400, detail="Backup archive rejected")
+
+
+def _verify_artifact_member_integrity(zf: zipfile.ZipFile, manifest: dict) -> None:
+    """Verify each manifest-listed member's SHA-256 against the ZIP bytes.
+
+    Pairs with the version gate at the same chokepoint (grooming: validate
+    version + integrity together BEFORE mutation). A member whose bytes do not
+    match the manifest hash, or a manifest member absent from the ZIP, refuses
+    the restore with a generic integrity message that leaks NO schema internals
+    (no schema_version numbers). The detail (which member, hash mismatch) is
+    logged server-side.
+
+    NOTE: the whole-artifact SHA-256 sidecar (verify_artifact_sha256) lives
+    next to the file on disk and is not present inside an uploaded ZIP; this
+    per-member check is the integrity guarantee available at the ingest
+    chokepoint from the ZIP alone.
+    """
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        logger.warning("[BACKUP] Refusing restore: manifest has no per-file hash list")
+        raise HTTPException(status_code=400, detail="Backup integrity check failed")
+
+    names = set(zf.namelist())
+    for entry in files:
+        if not isinstance(entry, dict):
+            logger.warning("[BACKUP] Refusing restore: malformed manifest file entry %r", entry)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        path = entry.get("path")
+        expected = entry.get("sha256")
+        if not isinstance(path, str) or not isinstance(expected, str):
+            logger.warning("[BACKUP] Refusing restore: malformed manifest file entry %r", entry)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        if path not in names:
+            logger.warning("[BACKUP] Refusing restore: manifest member %s absent from artifact", path)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        actual = hashlib.sha256(zf.read(path)).hexdigest()
+        if actual != expected:
+            logger.warning(
+                "[BACKUP] Refusing restore: integrity mismatch on member %s "
+                "(expected %s, got %s)", path, expected, actual,
+            )
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+
+
+def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
+    """Validate a new-format DBAS artifact at the restore-ingest chokepoint.
+
+    Runs BEFORE any restore mutation, in this order:
+
+    1. parse the cleartext ``manifest.json`` header,
+    2. **version gate** — refuse a newer/unknown schema_version (the highest
+       priority: an incompatible artifact is rejected before we even trust its
+       integrity claims), then
+    3. **integrity** — verify each manifest-listed member's SHA-256.
+
+    Returns the parsed manifest on success. Refusals raise ``HTTPException(400)``
+    with a user-facing message that leaks NO schema internals; the version
+    refusal message is EXACTLY :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE`. All
+    detail is logged server-side.
+    """
+    # D2 zip-bomb guard FIRST — before any zf.read(), including the manifest read
+    # below. A high-ratio member must be refused before it can be decompressed.
+    guard_artifact_against_zip_bomb(zf)
+
+    if ARTIFACT_MANIFEST_NAME not in zf.namelist():
+        logger.warning("[BACKUP] Refusing restore: artifact missing %s", ARTIFACT_MANIFEST_NAME)
+        raise HTTPException(status_code=400, detail="Not a valid ECM backup artifact")
+
+    try:
+        manifest = json.loads(zf.read(ARTIFACT_MANIFEST_NAME))
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.warning("[BACKUP] Refusing restore: unreadable artifact manifest: %s", e)
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+
+    if not isinstance(manifest, dict):
+        logger.warning("[BACKUP] Refusing restore: artifact manifest is not an object")
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+
+    # 2. Version gate FIRST — refuse an incompatible artifact before trusting
+    #    anything else about it. Translate the internal exception into the
+    #    HTTP error WITHOUT adding any version detail to the body.
+    try:
+        validate_restore_schema_version(manifest)
+    except UnsupportedBackupVersionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 3. Integrity AFTER the version is known-supported.
+    _verify_artifact_member_integrity(zf, manifest)
+
+    return manifest
+
+
 def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
     """Validate a backup zip file and return its manifest."""
     # Must contain manifest
@@ -1037,6 +1308,207 @@ async def restore_backup_initial(file: UploadFile = File(...)):
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+    }
+
+
+# ---------------------------------------------------------------------------
+# DBAS async restore-trigger endpoint (bead enhancedchannelmanager-o8tbv)
+#
+# The new-format DBAS artifact restore — the async, progress-emitting path that
+# makes restore user-triggerable. UNTRUSTED-ARTIFACT-UPLOAD surface:
+#   * admin-auth only (RequireAdminIfEnabled, like every restore endpoint here),
+#   * the upload is STREAMED to a temp file on the CONFIG partition one chunk at
+#     a time (never read whole-in-RAM — ADR-008 D8), mode 0600,
+#   * a hard size cap aborts + cleans up an oversize upload mid-stream,
+#   * validation (.17 version + integrity) runs INSIDE the task BEFORE any
+#     mutation, and the orchestrator's default-ON dry-run guardrail means APPLY
+#     requires an explicit confirm flag.
+# The endpoint kicks the DbasRestoreTask in the background and returns its
+# task id immediately; the frontend polls /api/tasks/{id} for per-stage progress.
+# ---------------------------------------------------------------------------
+
+DBAS_RESTORE_TASK_ID = "dbas_restore"
+_DBAS_RESTORE_TMP_DIR = CONFIG_DIR / "dbas" / "restore_uploads"
+
+# Age after which an abandoned restore temp is swept (O8TBV-4). The DbasRestoreTask
+# normally deletes its own temp in a finally; this only catches temps orphaned
+# when the fire-and-forget coroutine returns BEFORE execute() runs (task-not-found
+# or an ALREADY_RUNNING concurrency reject — neither reaches the task's finally).
+# A few hours is comfortably longer than the longest realistic restore, so the
+# sweep never races a live run that still owns its temp.
+_DBAS_RESTORE_TMP_MAX_AGE_SECONDS = 6 * 60 * 60  # 6 hours
+
+
+def _sweep_stale_restore_temps(dest_dir: Path) -> None:
+    """Best-effort removal of abandoned restore temp artifacts (O8TBV-4).
+
+    The DbasRestoreTask owns teardown of its own temp in a ``finally`` block, so
+    the common path leaves nothing behind. But the trigger endpoint schedules the
+    task fire-and-forget via ``asyncio.create_task``; if that coroutine returns
+    before ``execute()`` ever runs — ``run_task`` returns ``None`` (task id not
+    registered) or an ``ALREADY_RUNNING`` result for a concurrent run — the task's
+    ``finally`` never fires and the 0600 temp ZIP is orphaned. This sweep, run at
+    the START of each restore trigger, removes temps older than
+    :data:`_DBAS_RESTORE_TMP_MAX_AGE_SECONDS` so an orphan cannot accumulate.
+
+    It never deletes a fresh temp (a live run still owns it — the age floor is far
+    longer than any realistic restore) and never double-deletes (a finished task
+    already unlinked its own). Any error is swallowed with a WARN — a sweep
+    failure must never block a legitimate restore.
+    """
+    if not dest_dir.exists():
+        return
+    cutoff = time.time() - _DBAS_RESTORE_TMP_MAX_AGE_SECONDS
+    removed = 0
+    try:
+        candidates = list(dest_dir.glob("ecm-restore-*.zip"))
+    except OSError as exc:
+        logger.warning("[BACKUP] Could not list restore temp dir for sweep: %s", exc)
+        return
+    for candidate in candidates:
+        try:
+            if candidate.stat().st_mtime < cutoff:
+                candidate.unlink()
+                removed += 1
+        except FileNotFoundError:
+            # Already gone (raced with a task's own finally) — fine.
+            continue
+        except OSError as exc:
+            logger.warning(
+                "[BACKUP] Failed to sweep stale restore temp %s: %s", candidate, exc
+            )
+    if removed:
+        logger.info("[BACKUP] Swept %d stale restore temp artifact(s)", removed)
+
+
+async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
+    """Stream an uploaded artifact to a 0600 temp file, chunk by chunk.
+
+    NEVER reads the whole upload into RAM (ADR-008 D8) — it copies
+    ``_RESTORE_UPLOAD_CHUNK`` bytes at a time and enforces
+    :data:`_RESTORE_MAX_UPLOAD_BYTES`, aborting + unlinking the partial temp the
+    moment the cumulative size exceeds the cap (so an oversize upload can never
+    fill the partition). The temp file is created mode 0600 (owner-only) because
+    the artifact may carry credential-bearing material (journal.db) even though
+    it is redacted-by-default.
+
+    Returns the temp file path on success. Raises ``HTTPException(413)`` on
+    oversize and ``HTTPException(400)`` on a read error — the partial temp is
+    cleaned up in both cases.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix="ecm-restore-", suffix=".zip", dir=str(dest_dir))
+    tmp_path = Path(tmp_name)
+    # Owner read/write only — the artifact may carry sensitive (if redacted) data.
+    try:
+        os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:  # pragma: no cover — platform without fchmod
+        pass
+
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                try:
+                    chunk = await file.read(_RESTORE_UPLOAD_CHUNK)
+                except Exception as exc:  # noqa: BLE001 - any read error is a 400
+                    raise HTTPException(status_code=400, detail="Failed to read uploaded artifact") from exc
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _RESTORE_MAX_UPLOAD_BYTES:
+                    logger.warning(
+                        "[BACKUP] Refusing restore: upload exceeded size cap (%d bytes max)",
+                        _RESTORE_MAX_UPLOAD_BYTES,
+                    )
+                    raise HTTPException(
+                        status_code=413, detail="Uploaded artifact is too large"
+                    )
+                out.write(chunk)
+    except Exception:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to clean up partial restore upload: %s", exc)
+        raise
+
+    if total == 0:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="Uploaded artifact is empty")
+
+    logger.info("[BACKUP] Streamed restore artifact to temp (%d bytes)", total)
+    return tmp_path
+
+
+@router.post("/restore-dbas")
+async def restore_dbas_artifact(
+    file: UploadFile = File(...),
+    confirm_apply: bool = Query(
+        default=False,
+        description="False (default) runs a counts-only dry-run; True runs the apply.",
+    ),
+    _admin=RequireAdminIfEnabled,
+):
+    """Trigger an async DBAS artifact restore. Admin only.
+
+    Streams the uploaded artifact to a temp file on the CONFIG partition, then
+    kicks the :class:`tasks.dbas_restore.DbasRestoreTask` in the background and
+    returns its ``task_id`` so the frontend can poll ``/api/tasks/{task_id}`` for
+    per-stage progress and the terminal ``RestoreReport``.
+
+    DRY-RUN is default-ON: without ``confirm_apply=True`` the run is a counts-only
+    plan that makes ZERO mutation (the orchestrator's .16 guardrail enforces this
+    even if this flag were bypassed). Validation (.17 version + integrity) runs
+    inside the task BEFORE any decode or importer.
+    """
+    logger.info(
+        "[BACKUP] DBAS restore requested (filename=%s, confirm_apply=%s)",
+        file.filename, confirm_apply,
+    )
+
+    # Sweep any temp orphaned by a previous fire-and-forget run that returned
+    # before its task's finally could clean up (task-not-found / ALREADY_RUNNING).
+    _sweep_stale_restore_temps(_DBAS_RESTORE_TMP_DIR)
+
+    tmp_path = await _stream_upload_to_temp(file, _DBAS_RESTORE_TMP_DIR)
+
+    # Configure + kick the restore task. The task owns temp-artifact teardown
+    # (cleanup_artifact=True) so the file never outlives the run.
+    parameters = {
+        "artifact_path": str(tmp_path),
+        "confirm_apply": bool(confirm_apply),
+        "cleanup_artifact": True,
+    }
+
+    try:
+        from task_engine import get_engine
+
+        engine = get_engine()
+        # Fire-and-forget: run_task awaits to completion, so schedule it as a
+        # background asyncio task and return the task id immediately. The
+        # frontend polls /api/tasks/{id} for live progress. The task's own
+        # finally-block cleans up the temp artifact on success AND failure.
+        asyncio.create_task(
+            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters)
+        )
+    except Exception as exc:
+        logger.exception("[BACKUP] Failed to schedule DBAS restore task: %s", exc)
+        # Scheduling failed before the task could own cleanup — remove the temp.
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail="Failed to start restore")
+
+    return {
+        "status": "started",
+        "task_id": DBAS_RESTORE_TASK_ID,
+        "is_dry_run": not confirm_apply,
     }
 
 

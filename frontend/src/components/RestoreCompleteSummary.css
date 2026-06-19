@@ -1,0 +1,222 @@
+/**
+ * RestoreCompleteSummary styles
+ *
+ * Uses common.css for: .badge, .badge-warning, .badge-error, .badge-sm
+ *   (skip/failure reason chips)
+ *
+ * The outcome banner, per-category counts grid, expandable reason lists, and
+ * the rollback residue note are component-specific and live here. The error
+ * tone reuses the semantic --error / --error-bg theme tokens (see index.css)
+ * so dark/light/high-contrast modes all stay legible.
+ */
+
+.restore-complete-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+/* --- Outcome banner ------------------------------------------------------- */
+
+.rcs-outcome-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.75rem 0.875rem;
+  border-radius: var(--radius-md);
+  border-left: 4px solid transparent;
+}
+
+.rcs-tone-success {
+  background-color: var(--success-bg);
+  border-left-color: var(--success);
+}
+
+.rcs-tone-error {
+  background-color: var(--error-bg);
+  border-left-color: var(--error);
+}
+
+.rcs-outcome-icon {
+  font-size: 1.5rem;
+  line-height: 1.4;
+}
+
+.rcs-tone-success .rcs-outcome-icon {
+  color: var(--success);
+}
+
+.rcs-tone-error .rcs-outcome-icon {
+  color: var(--error);
+}
+
+.rcs-outcome-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rcs-outcome-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.rcs-outcome-detail {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+/* --- Rollback residue note (failed_rollback_incomplete) ------------------- */
+
+.rcs-residue-note {
+  background-color: var(--error-bg);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-md);
+  padding: 0.625rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.rcs-residue-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--error);
+}
+
+.rcs-residue-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+.rcs-residue-list li {
+  margin: 0.125rem 0;
+}
+
+/* --- Per-category breakdown ---------------------------------------------- */
+
+.rcs-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rcs-empty {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  padding: 0.75rem;
+  text-align: center;
+  border: 1px dashed var(--border-primary);
+  border-radius: var(--radius-md);
+}
+
+.rcs-category {
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-secondary);
+  padding: 0.625rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rcs-category-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.rcs-category-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.rcs-counts {
+  display: flex;
+  gap: 1rem;
+}
+
+.rcs-count {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 3.5rem;
+}
+
+.rcs-count-value {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.rcs-count-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+/* --- Expandable reason lists --------------------------------------------- */
+
+.rcs-detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.rcs-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.rcs-detail-toggle.is-failure {
+  color: var(--error);
+}
+
+.rcs-detail-toggle .material-icons {
+  font-size: 1.1rem;
+}
+
+.rcs-detail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rcs-detail-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+}
+
+.rcs-detail-label {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.rcs-detail-message {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
