@@ -736,6 +736,35 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             registry=registry,
         ),
         # ----------------------------------------------------------------
+        # DBAS cloud upload outcomes (bead 0i2vt.8).
+        #
+        # ``ecm_backup_upload_total`` labels by ``provider`` and ``result``:
+        #   provider ∈ {s3, gdrive, webdav} — the three shipping adapters in
+        #            v0.18.0 (dropbox/onedrive deferred to v0.18.x). Cardinality
+        #            is bounded by the get_adapter() provider_type allowlist.
+        #   result   ∈ {success, failed} — one increment per outbound upload of
+        #            the sealed artifact (and its .sha256 sidecar) to a
+        #            configured+enabled target. A target that is skipped by the
+        #            fire-time freshness gate does NOT increment this counter
+        #            (it increments ecm_backup_runs_total{result="skipped"} once
+        #            for the run, not per-target here).
+        #
+        # SRE: the ratio failed / (success + failed) is the cloud-upload error
+        # SLI for DBAS offsite backups; a sustained non-zero failed rate means
+        # backups are being produced locally but not landing offsite — the host
+        # is one disk failure away from total backup loss.
+        # ----------------------------------------------------------------
+        "backup_upload_total": Counter(
+            "ecm_backup_upload_total",
+            "Cumulative count of DBAS cloud-upload attempts, labeled by "
+            "provider (s3|gdrive|webdav) and result (success|failed). One "
+            "increment per outbound artifact upload to a configured+enabled "
+            "target. Freshness-gate skips are counted on ecm_backup_runs_total "
+            "(result=skipped), not here.",
+            ["provider", "result"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
         # Database file size (bd-ygoqr — paired with the CleanupTask CRON
         # default flip; together they give operators "is my DB growing?"
         # signal AND an automatic weekly VACUUM that bounds the growth).
