@@ -85,7 +85,7 @@ def _adapter(upload_side_effect, list_return=None):
 
 
 async def _run(dbas_backup, DbasBackupTask, backups_dir, config, adapters):
-    async def _fake_build(dest_dir=None):
+    async def _fake_build(dest_dir=None, **_kwargs):
         return _fake_artifact_factory(dest_dir)
 
     def _get_adapter(provider, creds):
