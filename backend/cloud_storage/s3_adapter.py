@@ -111,11 +111,14 @@ class S3Adapter(CloudStorageAdapter):
             return UploadResult(success=True, remote_url=remote_url, file_size=file_size, duration_ms=duration_ms)
         except SSRFError as e:
             duration_ms = int((time.time() - start) * 1000)
-            logger.warning("[S3] Upload refused by SSRF policy: %s", mask_secrets(str(e)))
+            # Log only safe fields (provider + remote path); the masked detail
+            # is surfaced via UploadResult.error (a non-logging sink) so no
+            # credential-derived string reaches the logger.
+            logger.warning("[S3] Upload to bucket %s refused by SSRF policy", self.bucket)
             return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
-            logger.warning("[S3] Upload failed: %s", mask_secrets(str(e)))
+            logger.warning("[S3] Upload to bucket %s path %s failed", self.bucket, remote_path)
             return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
 
     async def test_connection(self) -> ConnectionTestResult:
@@ -131,10 +134,10 @@ class S3Adapter(CloudStorageAdapter):
                 provider_info={"bucket": self.bucket, "region": region},
             )
         except SSRFError as e:
-            logger.warning("[S3] Connection refused by SSRF policy: %s", mask_secrets(str(e)))
+            logger.warning("[S3] Connection to bucket %s refused by SSRF policy", self.bucket)
             return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
         except Exception as e:
-            logger.warning("[S3] Connection test failed: %s", mask_secrets(str(e)))
+            logger.warning("[S3] Connection test to bucket %s failed", self.bucket)
             return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
 
     async def delete(self, remote_path: str) -> bool:
@@ -144,8 +147,8 @@ class S3Adapter(CloudStorageAdapter):
             await asyncio.to_thread(client.delete_object, Bucket=self.bucket, Key=remote_path)
             logger.info("[S3] Deleted %s from %s", remote_path, self.bucket)
             return True
-        except Exception as e:
-            logger.warning("[S3] Delete failed: %s", mask_secrets(str(e)))
+        except Exception:
+            logger.warning("[S3] Delete of %s from bucket %s failed", remote_path, self.bucket)
             return False
 
     async def list_files(self, remote_path: str = "") -> list[str]:
@@ -156,6 +159,6 @@ class S3Adapter(CloudStorageAdapter):
                 client.list_objects_v2, Bucket=self.bucket, Prefix=remote_path
             )
             return [obj["Key"] for obj in response.get("Contents", [])]
-        except Exception as e:
-            logger.warning("[S3] List files failed: %s", mask_secrets(str(e)))
+        except Exception:
+            logger.warning("[S3] List files under prefix %s in bucket %s failed", remote_path, self.bucket)
             return []

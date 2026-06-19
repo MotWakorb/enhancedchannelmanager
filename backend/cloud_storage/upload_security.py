@@ -33,12 +33,27 @@ import logging
 import re
 import ssl
 
-from security.ssrf import (  # noqa: F401 — re-exported for adapter convenience
+from security.ssrf import (
     SSRFError,
     ResolvedTarget,
     get_ssrf_mode,
     validate_outbound_url,
 )
+
+# Re-exported for adapter convenience: the S3/GDrive/WebDAV adapters import
+# ``SSRFError`` from this module rather than reaching into ``security.ssrf``.
+# Declaring it in ``__all__`` marks it as an intentional public re-export so it
+# is not reported as an unused import (CodeQL ``py/unused-import`` honours
+# ``__all__`` membership; this is the §B re-export, not dead code).
+__all__ = [
+    "SSRFError",
+    "ResolvedTarget",
+    "UPLOAD_TIMEOUT_SECONDS",
+    "mask_secrets",
+    "preresolve_endpoint",
+    "pinned_async_client",
+    "pinned_request_url",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +90,7 @@ _AMZ_SECURITY_TOKEN_RE = re.compile(r"(?i)(X-Amz-Security-Token=)([^&\s'\"]+)")
 # key=value or key: value form (access_key_id / secret_access_key / aws_secret…).
 _AWS_AKID_RE = re.compile(r"\b((?:AKIA|ASIA)[A-Z0-9]{8,})\b")
 _SECRET_KV_RE = re.compile(
-    r"(?i)((?:secret_access_key|aws_secret_access_key|access_key_id|"
-    r"client_secret|access_token|secret|password|passwd|api_key)"
-    r"\s*[:=]\s*)(['\"]?)([^'\"\s,}&]+)",
+    r"(?i)((?:secret_access_key|aws_secret_access_key|access_key_id|client_secret|access_token|secret|password|passwd|api_key)\s*[:=]\s*)(['\"]?)([^'\"\s,}&]+)",
 )
 
 # Order is significant — signed-URL params and KV pairs first, then the broad

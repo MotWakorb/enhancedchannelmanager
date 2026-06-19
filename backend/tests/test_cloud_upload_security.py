@@ -13,17 +13,15 @@ All network/SDK is mocked — NO live cloud calls.
 """
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cloud_storage import get_adapter
 from cloud_storage import upload_security
 from cloud_storage import webdav_adapter as webdav_mod
-from cloud_storage import gdrive_adapter as gdrive_mod
 from cloud_storage.upload_security import mask_secrets
 from security import ssrf
 
@@ -80,6 +78,15 @@ class TestMaskSecrets:
     def test_masks_secret_access_key_kv(self):
         out = mask_secrets("secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
         assert "wJalrXUtnFEMI" not in out
+
+    def test_masks_aws_secret_access_key_kv_single_literal_re(self):
+        # Guards the Semgrep single-raw-string-literal collapse of _SECRET_KV_RE:
+        # the pattern must still mask an aws_secret_access_key=<value> KV pair.
+        out = mask_secrets("aws_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYzzz token=keep")
+        assert "wJalrXUtnFEMIK7MDENGbPxRfiCYzzz" not in out
+        assert "REDACTED" in out
+        # The key name is preserved; only the value is redacted.
+        assert "aws_secret_access_key=" in out
 
     def test_masks_x_amz_signature(self):
         url = (
