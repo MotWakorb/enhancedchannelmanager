@@ -112,6 +112,16 @@ def upstream_http_exception(exc: Exception):
 # cache-key derivation).
 _SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 
+# DBAS-restore endpoint paths (enhancedchannelmanager-0i2vt.13). Isolated as
+# constants so a single live-verification follow-up can correct any path string
+# without editing the methods. Dispatcharr groups core resources under
+# ``/api/core/`` (confirmed for streamprofiles/version/system-events); the DVR
+# module lives under ``/api/dvr/``. These specific paths are best-known and not
+# yet live-confirmed — see the method block for the deferred-verification note.
+_USER_AGENTS_PATH = "/api/core/useragents/"
+_CORE_SETTINGS_PATH = "/api/core/settings/"
+_DVR_RULES_PATH = "/api/dvr/rules/"
+
 
 class DispatcharrClient:
     """API client for Dispatcharr with JWT authentication."""
@@ -1419,6 +1429,113 @@ class DispatcharrClient:
         response = await self._request("POST", f"/proxy/ts/stop_client/{channel_id}")
         response.raise_for_status()
         return response.json() if response.content else {"success": True}
+
+    # -------------------------------------------------------------------------
+    # DBAS Restore — User Agents / Core Settings / DVR Rules / Comskip
+    # (enhancedchannelmanager-0i2vt.13)
+    #
+    # These methods back the Phase-2 ``settings_agents`` restore importer. They
+    # were ADDED by 0i2vt.13 — none existed before (verify-then-size: ``grep
+    # user_agent / comskip / dvr / core_settings dispatcharr_client.py`` = 0
+    # method hits at the start of the bead).
+    #
+    # ENDPOINT NOTE (verify-then-size): Dispatcharr groups core resources under
+    # the ``/api/core/`` namespace (confirmed live for ``streamprofiles``,
+    # ``version``, ``system-events`` — see those methods above), so user agents and
+    # core settings are placed there. The DVR-rules path lives under Dispatcharr's
+    # DVR module (``/api/dvr/``). The exact path strings below are the best-known
+    # values from the Dispatcharr REST surface; they are isolated to module-level
+    # constants so a single live-verification follow-up can correct any one path
+    # without touching the importer. No live Dispatcharr instance was available to
+    # confirm them tonight — flagged as a deferred verification follow-up.
+    # -------------------------------------------------------------------------
+
+    async def get_user_agents(self) -> list:
+        """Get all Dispatcharr user-agent records.
+
+        Used by the DBAS settings/agents restore importer
+        (enhancedchannelmanager-0i2vt.13) to detect name collisions before
+        creating. Returns the raw list as Dispatcharr serializes it.
+        """
+        response = await self._request("GET", _USER_AGENTS_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def create_user_agent(self, data: dict) -> dict:
+        """Create a Dispatcharr user-agent record.
+
+        A user agent is a benign label + UA string (e.g. ``VLC/3.0.20``). It
+        carries no credential material, so the payload and any error body are
+        safe to forward. Mirrors ``create_m3u_account`` shape.
+        """
+        response = await self._request("POST", _USER_AGENTS_PATH, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_user_agent(self, user_agent_id: int) -> None:
+        """Delete a Dispatcharr user agent by ID (rollback compensation).
+
+        A 404 means it is already gone — the caller treats that as a successful
+        idempotent compensation (restore_contracts rollback ledger).
+        """
+        response = await self._request("DELETE", f"{_USER_AGENTS_PATH}{user_agent_id}/")
+        response.raise_for_status()
+
+    async def get_dvr_rules(self) -> list:
+        """Get all Dispatcharr DVR / recording rules.
+
+        Used by the DBAS restore importer (enhancedchannelmanager-0i2vt.13) to
+        detect collisions by name/title before creating.
+        """
+        response = await self._request("GET", _DVR_RULES_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def create_dvr_rule(self, data: dict) -> dict:
+        """Create a Dispatcharr DVR / recording rule.
+
+        FK references (e.g. ``channel``) MUST already be remapped to destination
+        ids by the caller — this method forwards the payload as given.
+        """
+        response = await self._request("POST", _DVR_RULES_PATH, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_dvr_rule(self, rule_id: int) -> None:
+        """Delete a Dispatcharr DVR rule by ID (rollback compensation).
+
+        A 404 means already-gone — treated as successful idempotent compensation.
+        """
+        response = await self._request("DELETE", f"{_DVR_RULES_PATH}{rule_id}/")
+        response.raise_for_status()
+
+    async def get_core_settings(self) -> dict:
+        """Get Dispatcharr's core/global settings as a key->value mapping.
+
+        WARNING (DBAS restore, enhancedchannelmanager-0i2vt.13): the response can
+        carry credential/instance-identity material (API keys, auth config). The
+        caller (settings_agents importer) MUST sanitize before logging/reporting.
+        Returns the raw mapping; callers normalize a list-of-{key,value} response
+        into a dict themselves.
+        """
+        response = await self._request("GET", _CORE_SETTINGS_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def update_core_setting(self, key: str, value) -> dict:
+        """Apply ONE core setting key->value via PATCH.
+
+        Per-key application (NOT a bulk PUT that could clobber unrelated keys).
+        The DBAS importer only calls this for ALLOWLISTED safe keys — never for a
+        credential/auth/instance-identity key. ``value`` is forwarded as-is; this
+        method NEVER logs the value (it may be sensitive for a non-allowlisted key
+        if a future caller misuses it).
+        """
+        response = await self._request(
+            "PATCH", f"{_CORE_SETTINGS_PATH}{key}/", json={"value": value}
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {"key": key}
 
     # -------------------------------------------------------------------------
     # Cleanup
