@@ -335,6 +335,54 @@ async def test_deferred_provider_is_non_silent_failure(
 
 
 # ---------------------------------------------------------------------------
+# SEC-2 — a raw exception in the upload seam must be credential-masked before
+# it reaches the journal description / notification message.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_upload_seam_exception_reason_is_masked(
+    _wire_db, _reset_metrics, test_session, tmp_path
+):
+    """When adapter.upload() raises an exception whose text carries a
+    secret-looking token, the journaled + notified failure reason is masked —
+    no raw secret substring survives into the audit row or notification."""
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    secret = "AKIAIOSFODNN7EXAMPLE"  # AWS access-key-id shape masked by mask_secrets
+
+    def _raise_with_secret(*_a, **_k):
+        raise RuntimeError(
+            "boto3 endpoint refused; aws_secret_access_key=%s leaked" % secret
+        )
+
+    t1 = _make_target(test_session, name="seam-raise")
+    result, notify = await _run(
+        dbas_backup, DbasBackupTask, tmp_path / "backups",
+        {"cloud_targets": [{"cloud_target_id": t1.id, "cloud_credential_version": 1}]},
+        [_adapter(_raise_with_secret)],
+    )
+
+    assert result.success is False
+    assert result.details["upload"]["run_result"] == "failed"
+
+    # The journaled failure description must not carry the raw secret.
+    entries = test_session.query(JournalEntry).filter(
+        JournalEntry.action_type == "cloud_upload_failed",
+    ).all()
+    assert len(entries) == 1
+    description = entries[0].description
+    assert secret not in description
+    assert "***REDACTED***" in description
+    # The masked surface still names the target + the raised-exception path.
+    assert "raised" in description
+
+    # The notification message must likewise be masked.
+    messages = [c.kwargs.get("message", "") for c in notify.await_args_list]
+    assert any("***REDACTED***" in m for m in messages)
+    assert all(secret not in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
 # Config round-trip for the new cloud_targets list
 # ---------------------------------------------------------------------------
 def test_cloud_targets_config_round_trip():
