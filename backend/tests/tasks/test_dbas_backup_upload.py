@@ -93,7 +93,7 @@ def _fail_upload(*_a, **_k):
 async def _run(dbas_backup, DbasBackupTask, backups_dir, config, adapter_map, notify=None):
     """Run execute() with build + adapters mocked. adapter_map maps a call
     sequence: each get_adapter call returns the next adapter from the list."""
-    async def _fake_build(dest_dir=None):
+    async def _fake_build(dest_dir=None, **_kwargs):
         return _fake_artifact(dest_dir)
 
     notify = notify or AsyncMock(return_value={"id": 1})
