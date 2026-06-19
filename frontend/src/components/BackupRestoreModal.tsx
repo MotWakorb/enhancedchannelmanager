@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react';
 import { ModalOverlay } from './ModalOverlay';
 import { RestoreProgress } from './RestoreProgress';
+import { RestoreCompleteSummary } from './RestoreCompleteSummary';
 import { useRestoreProgress } from '../hooks/useRestoreProgress';
 import { useNavigateAwayGuard } from '../hooks/useNavigateAwayGuard';
 import * as api from '../services/api';
-import type { BackupValidation, BackupRestoreResult } from '../services/api';
+import type { BackupValidation, BackupRestoreResult, RestoreReport } from '../services/api';
 import { getDateLocale } from '../utils/formatting';
 import './ModalBase.css';
 import './BackupRestoreModal.css';
@@ -21,6 +22,14 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
   const [validation, setValidation] = useState<BackupValidation | null>(null);
   const [selectedSections, setSelectedSections] = useState<Set<string>>(new Set());
   const [restoreResult, setRestoreResult] = useState<BackupRestoreResult | null>(null);
+  // SEAM (bead 0i2vt.20): the DBAS Phase-2 restore-complete summary. The
+  // async restore-trigger endpoint that returns a terminal `RestoreReport`
+  // does not exist yet (same null seam as `restoreTaskId` below). When that
+  // endpoint lands, set this from its terminal report and the
+  // RestoreCompleteSummary renders the tri-state outcome + per-entity counts.
+  // Until then it stays null and the results step falls back to the legacy
+  // section-level `BackupRestoreResult` view.
+  const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -117,11 +126,16 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
     setStep('restoring');
     setError(null);
     // SEAM: when the multi-stage restore-trigger endpoint lands it will return a
-    // task id to feed the live progress poller, e.g.
+    // task id to feed the live progress poller, and a terminal RestoreReport to
+    // feed the RestoreCompleteSummary, e.g.
     //   const { task_id } = await api.startRestoreTask(file, sections);
     //   setRestoreTaskId(task_id);
-    // The current endpoint is synchronous, so leave the poller's task id null.
+    //   ...poll until terminal, then:
+    //   setRestoreReport(terminalReport);  // RestoreCompleteSummary renders it
+    // The current endpoint is synchronous and returns the legacy
+    // BackupRestoreResult, so leave the poller's task id and the report null.
     setRestoreTaskId(null);
+    setRestoreReport(null);
 
     try {
       const result = await api.restoreBackupYaml(file, Array.from(selectedSections));
@@ -242,7 +256,16 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
             />
           )}
 
-          {step === 'results' && restoreResult && (
+          {/* SEAM (bead 0i2vt.20): once the async restore endpoint returns a
+              terminal RestoreReport, the DBAS summary renders the tri-state
+              outcome + per-entity counts. Bead .19's logo-miss RED banner slots
+              into RestoreCompleteSummary's `bannerSlot` prop. Falls back to the
+              legacy section-level result view while restoreReport is null. */}
+          {step === 'results' && restoreReport && (
+            <RestoreCompleteSummary report={restoreReport} mode="applied" />
+          )}
+
+          {step === 'results' && !restoreReport && restoreResult && (
             <div className="brm-results">
               <div
                 className={`brm-results-banner ${restoreResult.success ? 'is-success' : 'is-partial'}`}
