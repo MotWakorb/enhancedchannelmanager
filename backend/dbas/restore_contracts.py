@@ -77,6 +77,7 @@ class EntityType(str, Enum):
     CHANNEL_PROFILE = "channel_profile"    # …-0i2vt.12 (producer of remap)
     STREAM_PROFILE = "stream_profile"      # …-0i2vt.12 (producer of remap)
     CHANNEL = "channel"                    # …-4vouz (consumer of remap)
+    STREAM = "stream"                      # …-ahygg (synthesized custom-stream orphans)
     USER_AGENT = "user_agent"              # …-0i2vt.13
     DVR_RULE = "dvr_rule"                  # …-0i2vt.13
     USER = "user"                          # …-l1p4p (crown-jewel, opt-in)
