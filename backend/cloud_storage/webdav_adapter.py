@@ -135,9 +135,12 @@ class WebDAVAdapter(CloudStorageAdapter):
                 resp.raise_for_status()
 
             duration_ms = int((time.time() - start) * 1000)
+            # Log only safe fields (filename, byte count, duration, validated
+            # host). The display URL — which can carry credential-bearing query
+            # material — is returned via UploadResult.remote_url, never logged.
             logger.info(
-                "[WEBDAV] Uploaded %s to %s (%s bytes, %sms)",
-                local_path.name, mask_secrets(display_url), file_size, duration_ms,
+                "[WEBDAV] Uploaded %s to host %s (%s bytes, %sms)",
+                local_path.name, target.hostname, file_size, duration_ms,
             )
             return UploadResult(
                 success=True, remote_url=display_url, file_size=file_size,
@@ -145,11 +148,13 @@ class WebDAVAdapter(CloudStorageAdapter):
             )
         except SSRFError as e:
             duration_ms = int((time.time() - start) * 1000)
-            logger.warning("[WEBDAV] Upload refused by SSRF policy: %s", mask_secrets(str(e)))
+            # Masked detail goes only to UploadResult.error (non-logging sink);
+            # the logger gets generic safe text so no sensitive source reaches it.
+            logger.warning("[WEBDAV] Upload of %s refused by SSRF policy", local_path.name)
             return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
-            logger.warning("[WEBDAV] Upload failed: %s", mask_secrets(str(e)))
+            logger.warning("[WEBDAV] Upload of %s failed", local_path.name)
             return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
 
     async def test_connection(self) -> ConnectionTestResult:
@@ -170,10 +175,10 @@ class WebDAVAdapter(CloudStorageAdapter):
                 provider_info={"host": target.hostname},
             )
         except SSRFError as e:
-            logger.warning("[WEBDAV] Connection refused by SSRF policy: %s", mask_secrets(str(e)))
+            logger.warning("[WEBDAV] Connection refused by SSRF policy")
             return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
         except Exception as e:
-            logger.warning("[WEBDAV] Connection test failed: %s", mask_secrets(str(e)))
+            logger.warning("[WEBDAV] Connection test failed")
             return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
 
     async def delete(self, remote_path: str) -> bool:
@@ -187,8 +192,8 @@ class WebDAVAdapter(CloudStorageAdapter):
                 resp.raise_for_status()
             logger.info("[WEBDAV] Deleted %s", remote_path)
             return True
-        except Exception as e:
-            logger.warning("[WEBDAV] Delete failed: %s", mask_secrets(str(e)))
+        except Exception:
+            logger.warning("[WEBDAV] Delete of %s failed", remote_path)
             return False
 
     async def list_files(self, remote_path: str = "") -> list[str]:
@@ -203,8 +208,8 @@ class WebDAVAdapter(CloudStorageAdapter):
                 resp.raise_for_status()
                 body = resp.text
             return _parse_propfind_names(body)
-        except Exception as e:
-            logger.warning("[WEBDAV] List files failed: %s", mask_secrets(str(e)))
+        except Exception:
+            logger.warning("[WEBDAV] List files under %s failed", remote_path)
             return []
 
 

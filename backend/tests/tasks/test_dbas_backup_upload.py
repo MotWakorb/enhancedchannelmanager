@@ -10,7 +10,7 @@ All adapters are mocked — NO live cloud calls.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import sessionmaker
