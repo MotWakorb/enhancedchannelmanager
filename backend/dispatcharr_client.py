@@ -1243,6 +1243,132 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_current_user(self) -> dict:
+        """Return the AUTH SUBJECT of the credentials in use.
+
+        Reads ``/api/accounts/users/me/`` — the user that the configured
+        Dispatcharr credentials (api_key or JWT) authenticate as. This is the
+        load-bearing security control for the Users restore importer
+        (enhancedchannelmanager-l1p4p): the *current operator* must be identified
+        by auth subject, NOT by a username or id from the archive. A cross-instance
+        restore remaps ids, and a malicious or stale archive can carry a username
+        that collides with the operator's — so the operator is matched against
+        whoever ``/users/me/`` reports here, never against archive data.
+
+        Works in both ``api_key`` and ``password`` auth modes (the endpoint is the
+        same; ``_request`` attaches the right credential). Raises on a non-2xx
+        response: the importer MUST NOT proceed without a confirmed operator
+        identity (fail closed rather than guess).
+        """
+        response = await self._request("GET", "/api/accounts/users/me/")
+        response.raise_for_status()
+        return response.json()
+
+    async def create_user(self, data: dict) -> dict:
+        """Create a Dispatcharr (Django) user account — NO password ever sent.
+
+        Used by the Users restore importer (enhancedchannelmanager-l1p4p). Per
+        spike tsfv0 (live-confirmed vs Dispatcharr 0.26.0): the User serializer
+        exposes ``password`` as a WRITE-ONLY plaintext field and there is no
+        retrievable hash, so a restored user is created OMITTING ``password``
+        entirely -> Django stores an unusable password and the operator resets it
+        out-of-band (force-reset).
+
+        This method **strips ``password`` and any ``password_hash`` key** from the
+        payload defensively, so a password/hash can never cross the boundary even
+        if a caller accidentally includes one. NEVER fabricate, derive, or rehash
+        a password; never forward an incoming hash field.
+
+        The error message uses the same ``"<thing> failed: <status> - <body>"``
+        shape as ``create_channel`` / ``create_stream`` so ``upstream_http_exception``
+        (restore_contracts mapper) can parse the upstream status + detail.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("create_user requires a dict payload")
+        # Defense in depth: never let a secret cross the boundary, regardless of
+        # what the caller passed. The importer already omits these; this is the
+        # last line of defense at the client edge.
+        payload = {
+            k: v for k, v in data.items() if k not in ("password", "password_hash")
+        }
+        if not payload.get("username"):
+            raise ValueError("create_user requires a username")
+        response = await self._request("POST", "/api/accounts/users/", json=payload)
+        if response.status_code >= 400:
+            error_body = response.text
+            raise Exception(f"User creation failed: {response.status_code} - {error_body}")
+        return response.json()
+
+    async def delete_user(self, user_id: int) -> None:
+        """Delete a Dispatcharr user by ID.
+
+        Used as the rollback compensation for a previously created user
+        (restore_contracts rollback ledger, enhancedchannelmanager-l1p4p): if a
+        later step in the same restore fails, users created earlier in the run are
+        deleted to avoid leaving orphans. A 404 here means the user is already
+        gone, which the caller treats as a successful (idempotent) compensation.
+        """
+        response = await self._request("DELETE", f"/api/accounts/users/{user_id}/")
+        response.raise_for_status()
+
+    async def get_user_schema_write_fields(self) -> set:
+        """Return the set of WRITABLE request-body field names for user-create.
+
+        Reads the OpenAPI document at ``/api/schema/`` and extracts the property
+        names of the request body for ``POST /api/accounts/users/`` (resolving a
+        ``$ref`` into ``components.schemas`` when present), excluding any property
+        flagged ``readOnly``.
+
+        This feeds the Users importer's capability check
+        (enhancedchannelmanager-l1p4p): if a ``password_hash`` (or similar
+        pre-hashed-password) WRITE field ever appears in this set, the importer
+        fails the users category CLOSED rather than silently begin writing hashes.
+        Returns an empty set if the schema cannot be parsed — the importer treats
+        an unparseable schema as "cannot confirm safety" and also fails closed.
+        """
+        response = await self._request("GET", "/api/schema/")
+        response.raise_for_status()
+        doc = response.json()
+        if not isinstance(doc, dict):
+            return set()
+
+        post_op = (
+            doc.get("paths", {})
+            .get("/api/accounts/users/", {})
+            .get("post", {})
+        )
+        body_schema = (
+            post_op.get("requestBody", {})
+            .get("content", {})
+            .get("application/json", {})
+            .get("schema", {})
+        )
+        if not isinstance(body_schema, dict):
+            return set()
+
+        # Resolve a local $ref into components.schemas (one hop is sufficient for
+        # the User-create request body; we do not chase nested refs).
+        ref = body_schema.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/"):
+            target: object = doc
+            for part in ref.lstrip("#/").split("/"):
+                if isinstance(target, dict):
+                    target = target.get(part, {})
+                else:
+                    target = {}
+                    break
+            if isinstance(target, dict):
+                body_schema = target
+
+        props = body_schema.get("properties", {})
+        if not isinstance(props, dict):
+            return set()
+        return {
+            name
+            for name, spec in props.items()
+            if not (isinstance(spec, dict) and spec.get("readOnly") is True)
+        }
+
     async def get_channel_stats(self) -> dict:
         """Get status of all active channels.
 
