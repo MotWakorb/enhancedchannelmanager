@@ -322,3 +322,45 @@ def require_admin_if_enabled():
 
 
 RequireAdminIfEnabled = Depends(require_admin_if_enabled())
+
+
+def resolve_is_admin_if_enabled():
+    """Factory: resolve whether the caller is privileged, WITHOUT rejecting.
+
+    Mirrors :func:`require_admin_if_enabled` exactly for the auth-disabled
+    (setup-incomplete / ``require_auth=False``) case — it returns ``True`` so
+    behaviour is identical to the rest of the app in setup mode. The difference
+    is that an authenticated **non-admin** does NOT get a 403 here; the caller
+    receives ``False`` and decides what to do.
+
+    This is for endpoints that are reachable by ordinary users for ordinary
+    work but must gate a *subset* of their behaviour to admins (e.g. the
+    generic task-run endpoint, which serves user-triggerable tasks but must
+    refuse privileged task ids for non-admins). It lets the handler enforce the
+    admin requirement only for the privileged path while leaving ordinary
+    behaviour unchanged.
+
+    Returns:
+        A dependency that yields ``True`` when the caller is an admin (or auth
+        is disabled) and ``False`` when the caller is an authenticated
+        non-admin. A missing/invalid token in auth-enabled mode still raises
+        via :func:`get_current_user` (the endpoint is not anonymous).
+    """
+    async def check(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> bool:
+        settings = get_auth_settings()
+
+        # Auth disabled (setup mode) — treat as privileged, exactly like
+        # RequireAdminIfEnabled, so setup-mode behaviour is unchanged.
+        if not settings.require_auth or not settings.setup_complete:
+            return True
+
+        user = await get_current_user(request, session)
+        return bool(user.is_admin)
+
+    return check
+
+
+ResolveIsAdminIfEnabled = Depends(resolve_is_admin_if_enabled())
