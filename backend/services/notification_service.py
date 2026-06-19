@@ -122,7 +122,13 @@ async def create_notification_internal(
                 )
             )
 
-        logger.debug("[NOTIFY-SVC] Created notification: %s - %s", notification_type, title or message[:50])
+        # Log only safe routing identifiers (type + source), never the title or
+        # message body: callers may pass a credential-derived (masked) detail in
+        # `message`, and CodeQL traces any message/title value into this logging
+        # sink (it does not recognise mask_secrets() as a sanitizer). The body is
+        # still persisted to the notification row and dispatched to alert
+        # channels — both non-logging sinks.
+        logger.debug("[NOTIFY-SVC] Created notification: type=%s source=%s source_id=%s", notification_type, source, source_id)
         return result
     except Exception as e:
         logger.exception("[NOTIFY-SVC] Failed to create notification: %s", e)
