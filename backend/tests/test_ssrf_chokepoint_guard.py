@@ -59,11 +59,14 @@ CLOUD_DIR = Path(__file__).resolve().parent.parent / "cloud_storage"
 # tolerates these specific modules so it does not falsely fail before .8, but
 # FAILS LOUDLY if a brand-new adapter shows up with a raw outbound primitive.
 # bead .8 MUST shrink this set as it migrates each adapter.
+# bead .8 migrated s3/gdrive/webdav onto the chokepoint (boto3/google imports
+# now carry the `# ssrf-ok:` tag because the endpoint is pre-validated via
+# security.ssrf before the SDK call). onedrive/dropbox were DEFERRED to a
+# v0.18.x follow-up (PO decision 2026-06-17 — drop them from v0.18.0), so they
+# keep their raw outbound calls and remain on the baseline.
 _PRE_8_BASELINE = {
-    "s3_adapter.py",       # boto3.client — needs pre-resolve+IP-pin shim (.8)
-    "onedrive_adapter.py",  # httpx.AsyncClient — route through validated client (.8)
-    "dropbox_adapter.py",   # SDK / httpx — (.8)
-    "gdrive_adapter.py",    # Google SDK — pre-resolve+validate endpoint (.8)
+    "onedrive_adapter.py",  # DEFERRED (v0.18.x) — raw httpx, not migrated
+    "dropbox_adapter.py",   # DEFERRED (v0.18.x) — raw dropbox SDK, not migrated
 }
 
 
