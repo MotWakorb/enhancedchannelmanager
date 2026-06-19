@@ -238,6 +238,15 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
         whole archive is in scope; a caller may deselect categories before
         handing the plan to the orchestrator.
     """
+    # D2 zip-bomb guard at the START of decode too — defence in depth. The
+    # caller (DbasRestoreTask) runs validate_artifact_manifest first, which
+    # already guards, but decode is a separately-callable read site, so re-assert
+    # the cap before any zf.read() here. Imported lazily to keep the heavy backup
+    # router off this module's import path (see module docstring).
+    from routers.backup import guard_artifact_against_zip_bomb
+
+    guard_artifact_against_zip_bomb(zf)
+
     manifest = _parse_manifest(zf)
     categories = _decode_categories(zf)
 
