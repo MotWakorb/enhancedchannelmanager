@@ -325,6 +325,12 @@ async def import_channels(
 
         if is_dry_run:
             cat.would_create += 1
+            # Provisional remap so a downstream reference to this would-be-created
+            # channel resolves on the dry-run as it would on apply (anti-drift).
+            # Source id used as a stable provisional destination id — never sent
+            # upstream.
+            if source_id is not None:
+                remap.add(EntityType.CHANNEL, int(source_id), int(source_id))
             continue
 
         try:
