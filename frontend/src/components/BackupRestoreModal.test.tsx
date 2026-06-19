@@ -10,6 +10,10 @@ import type { BackupValidation, BackupRestoreResult } from '../services/api';
 vi.mock('../services/api', () => ({
   validateBackup: vi.fn(),
   restoreBackupYaml: vi.fn(),
+  // getSettings supplies the Dispatcharr base url that drives the logo-miss
+  // banner's "Fix in Dispatcharr" link (bead 0i2vt.19). Default to a resolved
+  // settings object so the modal's mount effect doesn't reject.
+  getSettings: vi.fn(),
 }));
 
 import * as api from '../services/api';
@@ -39,6 +43,11 @@ describe('BackupRestoreModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: a resolved settings object with a Dispatcharr base url so the
+    // modal's mount effect (logo-miss banner link source) settles cleanly.
+    vi.mocked(api.getSettings).mockResolvedValue({
+      url: 'https://dispatcharr.example.test',
+    } as Awaited<ReturnType<typeof api.getSettings>>);
   });
 
   describe('upload step', () => {
