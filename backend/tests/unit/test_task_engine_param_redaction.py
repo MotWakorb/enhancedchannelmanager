@@ -3,7 +3,7 @@
 ``passphrase`` as an ad-hoc parameter; it must NEVER reach a log line or the
 journal audit row (which is itself included in backups).
 """
-from task_engine import _redact_task_parameters, _REDACTED_PARAM
+from task_engine import _redact_task_parameters, _param_keys, _REDACTED_PARAM
 
 
 def test_passphrase_value_is_masked():
@@ -40,3 +40,15 @@ def test_original_dict_is_not_mutated():
     original = {"passphrase": "secret"}
     _redact_task_parameters(original)
     assert original["passphrase"] == "secret"  # only the returned copy is masked
+
+
+def test_param_keys_returns_only_key_names_never_values():
+    # The logger sites log KEY NAMES only — a secret VALUE must never appear, so
+    # the generic engine log lines stay clear of the clear-text-logging sink.
+    out = _param_keys({"artifact_path": "/tmp/x.zip", "passphrase": "hunter2-secret"})
+    assert out == ["artifact_path", "passphrase"]  # sorted key names
+    assert "hunter2-secret" not in out
+
+
+def test_param_keys_passthrough_for_non_dict():
+    assert _param_keys(None) is None
