@@ -315,6 +315,11 @@ async def import_epg_sources(
 
         if is_dry_run:
             cat.would_create += 1
+            # Provisional remap so a downstream FK to this would-be-created source
+            # resolves on the dry-run as it would on apply (anti-drift). Source id
+            # used as a stable provisional destination id — never sent upstream.
+            if source_id is not None:
+                remap.add(EntityType.EPG_SOURCE, int(source_id), int(source_id))
             continue
 
         payload = _build_create_payload(archive_source, m3u_dest_id)
