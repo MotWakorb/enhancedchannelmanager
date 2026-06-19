@@ -706,6 +706,36 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             registry=registry,
         ),
         # ----------------------------------------------------------------
+        # DBAS scheduled/manual backup outcomes (bead 0i2vt.6).
+        #
+        # ``ecm_backup_runs_total`` labels by ``result`` — a bounded set:
+        #   'success'  the DbasBackupTask built a sealed artifact + sidecar.
+        #   'skipped'  the fire-time credential-freshness gate aborted the
+        #              run (target missing / disabled / revoked / rotated).
+        #              This is a SKIP, not a failure — it is the operator's
+        #              own configuration change taking effect, but it is NOT
+        #              silent: a WARN log, journal entry and NotificationCenter
+        #              notification accompany every increment (a backup that
+        #              silently stops = false safety).
+        #   'failed'   the artifact build itself raised (disk, IO, gather).
+        #
+        # SRE: a sustained 'skipped'/'failed' rate with a zero 'success'
+        # rate over the alerting window is the #1 op risk for this feature
+        # (a scheduled backup that has quietly stopped producing artifacts).
+        # Cardinality is fixed at three series.
+        "backup_runs_total": Counter(
+            "ecm_backup_runs_total",
+            "Cumulative count of DBAS backup task runs, labeled by result. "
+            "result ∈ {success, skipped, failed}. 'success' = a sealed "
+            "artifact + sidecar were written. 'skipped' = the fire-time "
+            "credential-freshness gate aborted the run (target missing, "
+            "disabled, revoked, or credential rotated) — a non-silent abort "
+            "that also emits a WARN log, journal entry and notification. "
+            "'failed' = the artifact build itself raised.",
+            ["result"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
         # Database file size (bd-ygoqr — paired with the CleanupTask CRON
         # default flip; together they give operators "is my DB growing?"
         # signal AND an automatic weekly VACUUM that bounds the growth).
