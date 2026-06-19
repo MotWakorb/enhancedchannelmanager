@@ -73,13 +73,17 @@ class EntityType(str, Enum):
     part of the on-disk format.
     """
 
+    M3U_ACCOUNT = "m3u_account"            # …-0i2vt.10 (Phase-2 first entity; producer of remap)
+    EPG_SOURCE = "epg_source"              # …-0i2vt.11 (Phase-2; restored after M3U, before Channels)
     CHANNEL_GROUP = "channel_group"        # …-0i2vt.12 (producer of remap)
     CHANNEL_PROFILE = "channel_profile"    # …-0i2vt.12 (producer of remap)
     STREAM_PROFILE = "stream_profile"      # …-0i2vt.12 (producer of remap)
     CHANNEL = "channel"                    # …-4vouz (consumer of remap)
+    STREAM = "stream"                      # …-ahygg (synthesized custom-stream orphans)
     USER_AGENT = "user_agent"              # …-0i2vt.13
     DVR_RULE = "dvr_rule"                  # …-0i2vt.13
     USER = "user"                          # …-l1p4p (crown-jewel, opt-in)
+    LOGO = "logo"                          # …-0i2vt.15 (streaming upload; 3-tier match)
 
 
 class RestoreActionKind(str, Enum):
