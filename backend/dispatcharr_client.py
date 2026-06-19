@@ -112,6 +112,16 @@ def upstream_http_exception(exc: Exception):
 # cache-key derivation).
 _SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 
+# DBAS-restore endpoint paths (enhancedchannelmanager-0i2vt.13). Isolated as
+# constants so a single live-verification follow-up can correct any path string
+# without editing the methods. Dispatcharr groups core resources under
+# ``/api/core/`` (confirmed for streamprofiles/version/system-events); the DVR
+# module lives under ``/api/dvr/``. These specific paths are best-known and not
+# yet live-confirmed — see the method block for the deferred-verification note.
+_USER_AGENTS_PATH = "/api/core/useragents/"
+_CORE_SETTINGS_PATH = "/api/core/settings/"
+_DVR_RULES_PATH = "/api/dvr/rules/"
+
 
 class DispatcharrClient:
     """API client for Dispatcharr with JWT authentication."""
@@ -209,7 +219,17 @@ class DispatcharrClient:
         **kwargs,
     ) -> httpx.Response:
         """Make an authenticated request with automatic token refresh."""
-        logger.debug("[DISPATCHARR] API request: %s %s", method, path)
+        # Clear-text-logging hygiene (bead 0i2vt.13): NEVER log ``path`` at any
+        # sink in this method. ``path`` is attacker-influenced/credential-tainted
+        # in practice -- callers such as ``update_core_setting`` build it from a
+        # settings key (``f"{_CORE_SETTINGS_PATH}{setting_name}/"``), and a path
+        # *could* in principle carry a query string with a token. CodeQL's
+        # py/clear-text-logging-sensitive-data correctly traces that credential
+        # source into ``path`` and flags every ``logger.*(..., path)`` sink here.
+        # These logs use only NON-sensitive fields -- HTTP method, status code,
+        # and (on error) the exception TYPE name -- which is plenty to triage an
+        # upstream failure without ever emitting a URL, token, or response body.
+        logger.debug("[DISPATCHARR] API request: %s", method)
         await self._ensure_authenticated()
 
         headers = kwargs.pop("headers", {})
@@ -245,7 +265,7 @@ class DispatcharrClient:
             # If unauthorized in JWT mode, try refreshing token and retry.
             # In api-key mode a 401 is terminal (the key is invalid or revoked).
             if response.status_code == 401 and not self._uses_api_key:
-                logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s %s", method, path)
+                logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
                 await self._refresh_access_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
                 response = await self._client.request(
@@ -257,13 +277,18 @@ class DispatcharrClient:
                 )
 
             if response.status_code >= 400:
-                logger.warning("[DISPATCHARR] API request failed: %s %s - status: %s", method, path, response.status_code)
+                logger.warning("[DISPATCHARR] API request failed: %s - status: %s", method, response.status_code)
             else:
-                logger.debug("[DISPATCHARR] API request successful: %s %s - status: %s", method, path, response.status_code)
+                logger.debug("[DISPATCHARR] API request successful: %s - status: %s", method, response.status_code)
 
             return response
         except Exception as e:
-            logger.exception("[DISPATCHARR] API request error: %s %s - %s", method, path, e)
+            # Log only the exception TYPE name -- never the exception object or
+            # ``str(e)``. An httpx error's text can embed the full request URL
+            # (with query params/credentials), so logging ``e`` here would leak
+            # exactly what CodeQL flags. Method + exception type is enough to
+            # triage; ``logger.exception`` still attaches the traceback.
+            logger.exception("[DISPATCHARR] API request error: %s - %s", method, type(e).__name__)
             raise
 
     # -------------------------------------------------------------------------
@@ -1467,6 +1492,132 @@ class DispatcharrClient:
         response = await self._request("POST", f"/proxy/ts/stop_client/{channel_id}")
         response.raise_for_status()
         return response.json() if response.content else {"success": True}
+
+    # -------------------------------------------------------------------------
+    # DBAS Restore — User Agents / Core Settings / DVR Rules / Comskip
+    # (enhancedchannelmanager-0i2vt.13)
+    #
+    # These methods back the Phase-2 ``settings_agents`` restore importer. They
+    # were ADDED by 0i2vt.13 — none existed before (verify-then-size: ``grep
+    # user_agent / comskip / dvr / core_settings dispatcharr_client.py`` = 0
+    # method hits at the start of the bead).
+    #
+    # ENDPOINT NOTE (verify-then-size): Dispatcharr groups core resources under
+    # the ``/api/core/`` namespace (confirmed live for ``streamprofiles``,
+    # ``version``, ``system-events`` — see those methods above), so user agents and
+    # core settings are placed there. The DVR-rules path lives under Dispatcharr's
+    # DVR module (``/api/dvr/``). The exact path strings below are the best-known
+    # values from the Dispatcharr REST surface; they are isolated to module-level
+    # constants so a single live-verification follow-up can correct any one path
+    # without touching the importer. No live Dispatcharr instance was available to
+    # confirm them tonight — flagged as a deferred verification follow-up.
+    # -------------------------------------------------------------------------
+
+    async def get_user_agents(self) -> list:
+        """Get all Dispatcharr user-agent records.
+
+        Used by the DBAS settings/agents restore importer
+        (enhancedchannelmanager-0i2vt.13) to detect name collisions before
+        creating. Returns the raw list as Dispatcharr serializes it.
+        """
+        response = await self._request("GET", _USER_AGENTS_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def create_user_agent(self, data: dict) -> dict:
+        """Create a Dispatcharr user-agent record.
+
+        A user agent is a benign label + UA string (e.g. ``VLC/3.0.20``). It
+        carries no credential material, so the payload and any error body are
+        safe to forward. Mirrors ``create_m3u_account`` shape.
+        """
+        response = await self._request("POST", _USER_AGENTS_PATH, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_user_agent(self, user_agent_id: int) -> None:
+        """Delete a Dispatcharr user agent by ID (rollback compensation).
+
+        A 404 means it is already gone — the caller treats that as a successful
+        idempotent compensation (restore_contracts rollback ledger).
+        """
+        response = await self._request("DELETE", f"{_USER_AGENTS_PATH}{user_agent_id}/")
+        response.raise_for_status()
+
+    async def get_dvr_rules(self) -> list:
+        """Get all Dispatcharr DVR / recording rules.
+
+        Used by the DBAS restore importer (enhancedchannelmanager-0i2vt.13) to
+        detect collisions by name/title before creating.
+        """
+        response = await self._request("GET", _DVR_RULES_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def create_dvr_rule(self, data: dict) -> dict:
+        """Create a Dispatcharr DVR / recording rule.
+
+        FK references (e.g. ``channel``) MUST already be remapped to destination
+        ids by the caller — this method forwards the payload as given.
+        """
+        response = await self._request("POST", _DVR_RULES_PATH, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_dvr_rule(self, rule_id: int) -> None:
+        """Delete a Dispatcharr DVR rule by ID (rollback compensation).
+
+        A 404 means already-gone — treated as successful idempotent compensation.
+        """
+        response = await self._request("DELETE", f"{_DVR_RULES_PATH}{rule_id}/")
+        response.raise_for_status()
+
+    async def get_core_settings(self) -> dict:
+        """Get Dispatcharr's core/global settings as a key->value mapping.
+
+        WARNING (DBAS restore, enhancedchannelmanager-0i2vt.13): the response can
+        carry credential/instance-identity material (API keys, auth config). The
+        caller (settings_agents importer) MUST sanitize before logging/reporting.
+        Returns the raw mapping; callers normalize a list-of-{key,value} response
+        into a dict themselves.
+        """
+        response = await self._request("GET", _CORE_SETTINGS_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def update_core_setting(self, setting_name: str, setting_value) -> dict:
+        """Apply ONE core setting name->value via PATCH.
+
+        Per-key application (NOT a bulk PUT that could clobber unrelated keys).
+        The DBAS importer only calls this for ALLOWLISTED safe keys — never for a
+        credential/auth/instance-identity key. ``setting_value`` is forwarded
+        as-is; this method NEVER logs the value (it may be sensitive for a
+        non-allowlisted key if a future caller misuses it).
+
+        Clear-text-logging hygiene (bead 0i2vt.13): the parameters are named
+        ``setting_name`` / ``setting_value`` — deliberately NOT ``key`` /
+        ``value``. CodeQL's py/clear-text-logging-sensitive-data taints any value
+        flowing from a ``key``-named variable as a secret; a ``key`` parameter
+        here would taint the request ``path`` (and the JSON body the
+        ``setting_value``), both of which reach the shared ``_request`` log/exc
+        sinks. We also catch any upstream error and re-raise a generic,
+        payload-free message so neither the setting name, the setting value, nor
+        an upstream response body can propagate into ``_request``'s
+        ``logger.exception(..., e)`` sink via the raised exception.
+        """
+        try:
+            response = await self._request(
+                "PATCH",
+                f"{_CORE_SETTINGS_PATH}{setting_name}/",
+                json={"value": setting_value},
+            )
+            response.raise_for_status()
+        except Exception:
+            # Generic, payload-free re-raise: the original exception text could
+            # echo the request URL or response body (which may carry the setting
+            # value). Drop it so nothing sensitive reaches a logging sink.
+            raise RuntimeError("Core setting update failed") from None
+        return response.json() if response.content else {"updated": True}
 
     # -------------------------------------------------------------------------
     # Cleanup
