@@ -115,6 +115,33 @@ class TestS3Adapter:
         assert files == ["a.m3u", "b.xml"]
 
     @pytest.mark.asyncio
+    async def test_list_files_paginates_beyond_1000(self):
+        """list_objects_v2 caps a single response at 1000 keys; list_files must
+        follow the ContinuationToken so retention sees the FULL keyset (bead
+        0i2vt.9). A two-page response returns all keys from both pages."""
+        adapter = self._make_adapter()
+        mock_client = MagicMock()
+        page1 = {
+            "Contents": [{"Key": "k%04d" % i} for i in range(1000)],
+            "IsTruncated": True,
+            "NextContinuationToken": "TOKEN-1",
+        }
+        page2 = {
+            "Contents": [{"Key": "k%04d" % i} for i in range(1000, 1500)],
+            "IsTruncated": False,
+        }
+        mock_client.list_objects_v2.side_effect = [page1, page2]
+        with patch.object(adapter, "_get_client", return_value=mock_client):
+            files = await adapter.list_files("backups/")
+
+        assert len(files) == 1500
+        assert files[0] == "k0000"
+        assert files[-1] == "k1499"
+        # Second call must carry the continuation token from page 1.
+        second_call = mock_client.list_objects_v2.call_args_list[1]
+        assert second_call.kwargs.get("ContinuationToken") == "TOKEN-1"
+
+    @pytest.mark.asyncio
     async def test_custom_endpoint(self):
         adapter = self._make_adapter(endpoint_url="https://minio.local:9000")
         assert adapter.endpoint_url == "https://minio.local:9000"
