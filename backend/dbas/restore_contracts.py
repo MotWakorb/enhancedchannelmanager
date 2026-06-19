@@ -74,6 +74,7 @@ class EntityType(str, Enum):
     """
 
     M3U_ACCOUNT = "m3u_account"            # …-0i2vt.10 (Phase-2 first entity; producer of remap)
+    EPG_SOURCE = "epg_source"              # …-0i2vt.11 (Phase-2; restored after M3U, before Channels)
     CHANNEL_GROUP = "channel_group"        # …-0i2vt.12 (producer of remap)
     CHANNEL_PROFILE = "channel_profile"    # …-0i2vt.12 (producer of remap)
     STREAM_PROFILE = "stream_profile"      # …-0i2vt.12 (producer of remap)
