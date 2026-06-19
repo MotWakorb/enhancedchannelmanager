@@ -920,6 +920,54 @@ class DispatcharrClient:
         response = await self._request("DELETE", f"/api/channels/logos/{logo_id}/")
         response.raise_for_status()
 
+    async def bulk_delete_logos(self, logo_ids: list[int]) -> dict:
+        """Bulk-delete logos by id (DBAS restore bulk-delete pre-step, bead 0i2vt.15).
+
+        Issues a single ``DELETE /api/channels/logos/bulk-delete/`` with
+        ``{"logo_ids": [...]}``. Used by the logos importer to clear existing
+        logos before a streaming re-upload. An empty ``logo_ids`` is a no-op
+        (nothing to delete) and never hits the API.
+
+        Credential/path hygiene: this method logs only the COUNT of ids, never
+        the upstream response body (the response can echo names/paths) — the
+        importer surfaces a sanitized failure if the call raises.
+        """
+        if not logo_ids:
+            return {"deleted": 0}
+        response = await self._request(
+            "DELETE",
+            "/api/channels/logos/bulk-delete/",
+            json={"logo_ids": logo_ids},
+        )
+        if response.status_code >= 400:
+            # Do NOT echo the response body — it may carry logo names/paths. The
+            # status code alone is a safe operator-facing signal.
+            raise Exception(f"Logo bulk-delete failed: {response.status_code}")
+        return response.json() if response.content else {"deleted": len(logo_ids)}
+
+    async def get_all_logos_paginated(self, page_size: int = 500) -> list[dict]:
+        """Return ALL logos by walking every page (DBAS restore, bead 0i2vt.15).
+
+        Paginates ``GET /api/channels/logos/`` until the ``next`` link is
+        exhausted and returns the flattened list of logo records. Used by the
+        logos importer to (a) build the bulk-delete id list for the destructive
+        pre-step and (b) enumerate destination logos for the 3-tier match.
+
+        Mirrors :meth:`find_logo_by_url`'s pagination convention. Logs only the
+        running count — never a logo url/name/path.
+        """
+        logos: list[dict] = []
+        page = 1
+        while True:
+            result = await self.get_logos(page=page, page_size=page_size)
+            results = result.get("results", []) if isinstance(result, dict) else result
+            logos.extend(r for r in (results or []) if isinstance(r, dict))
+            if not (isinstance(result, dict) and result.get("next")):
+                break
+            page += 1
+        logger.debug("[DISPATCHARR] Fetched %d logo(s) across all pages.", len(logos))
+        return logos
+
     # -------------------------------------------------------------------------
     # EPG Sources
     # -------------------------------------------------------------------------
