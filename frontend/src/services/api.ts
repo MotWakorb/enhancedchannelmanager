@@ -3804,6 +3804,47 @@ export async function restoreBackupYaml(file: File, sections: string[]): Promise
   return response.json();
 }
 
+/** Response of the async DBAS restore-trigger endpoint (bead o8tbv). */
+export interface DbasRestoreStartResult {
+  status: string;
+  /** Poll `/api/tasks/{task_id}` for per-stage progress + the terminal report. */
+  task_id: string;
+  /** True when the run is a counts-only dry-run (default; apply requires confirm). */
+  is_dry_run: boolean;
+}
+
+/**
+ * Trigger an async DBAS artifact restore (bead o8tbv).
+ *
+ * Streams the new-format artifact (.zip) to the backend, which kicks the
+ * `dbas_restore` task in the background and returns its `task_id`. The caller
+ * polls `/api/tasks/{task_id}` (see `useRestoreProgress`) for the 13-stage
+ * progress and the terminal `RestoreReport`.
+ *
+ * Dry-run is default-ON: pass `confirmApply=true` for the destructive apply.
+ */
+export async function startDbasRestore(
+  file: File,
+  confirmApply = false
+): Promise<DbasRestoreStartResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const query = buildQuery({ confirm_apply: confirmApply });
+  const response = await fetch(`${API_BASE}/backup/restore-dbas${query}`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Restore failed' }));
+    throw new Error(error.detail || 'Restore failed');
+  }
+
+  return response.json();
+}
+
 // ── Status / Monitoring API ────────────────────────────────────────
 
 import type { ServiceWithStatus, ServiceAlertRule } from '../types';
