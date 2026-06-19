@@ -172,3 +172,35 @@ async def test_update_core_setting_patches_single_key():
         assert rm.await_args.kwargs["json"] == {"value": "dark"}
     finally:
         await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_core_setting_error_carries_no_payload():
+    """On upstream failure the re-raised error message must be GENERIC — it must
+    NOT echo the setting name, the setting value, or any upstream response body.
+
+    This is the clear-text-logging hygiene contract (bead 0i2vt.13): a setting
+    value can be a secret, and the shared ``_request`` exception sink logs the
+    raised exception's text. ``update_core_setting`` therefore re-raises a
+    payload-free message so nothing sensitive can propagate to that log.
+    """
+    client = _make_client()
+    secret_value = "super-secret-token-value-9f3a"
+    setting_name = "smtp_relay_endpoint"
+    try:
+        # _request raises with an exception text that echoes the value+name —
+        # exactly the leak we must not let propagate.
+        leaky = RuntimeError(
+            f"500 applying {setting_name}=value '{secret_value}' upstream body"
+        )
+        rm = AsyncMock(side_effect=leaky)
+        with patch.object(client, "_request", rm):
+            with pytest.raises(Exception) as excinfo:
+                await client.update_core_setting(setting_name, secret_value)
+        message = str(excinfo.value)
+        assert secret_value not in message
+        assert setting_name not in message
+        # And the original leaky exception is not chained back in (from None).
+        assert excinfo.value.__cause__ is None
+    finally:
+        await client._client.aclose()
