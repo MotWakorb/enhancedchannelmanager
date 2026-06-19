@@ -34,6 +34,11 @@ from dbas.importers.m3u_accounts import (
     resolve_group,
 )
 from dbas.importers.users import import_users
+from dbas.importers.logos import (
+    LogoImportResult,
+    import_logos,
+    resolve_logo_match,
+)
 
 __all__ = [
     "apply_deferred_auto_sync",
@@ -46,6 +51,9 @@ __all__ = [
     "import_stream_profiles",
     "import_users",
     "resolve_group",
+    "LogoImportResult",
+    "import_logos",
+    "resolve_logo_match",
 ]
 
 # --- enhancedchannelmanager-0i2vt.13: settings/agents bulk importer ---------

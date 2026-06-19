@@ -352,6 +352,13 @@ async def _import_category(
 
         if is_dry_run:
             cat.would_create += 1
+            # Provisional remap so the Channels importer's FK to this would-be-
+            # created group/profile resolves on the dry-run exactly as it would on
+            # apply (anti-drift: a channel referencing a creatable group must
+            # would_create, not would_skip DEPENDENCY_UNRESOLVED). Source id used as
+            # a stable provisional destination id — never sent upstream.
+            if source_id is not None:
+                remap.add(config.entity_type, int(source_id), int(source_id))
             continue
 
         try:

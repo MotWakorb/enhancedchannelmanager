@@ -176,6 +176,7 @@ async def test_preflight_failure_refuses_with_zero_mutation(tmp_path):
         report=report,
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         ledger_dir=tmp_path,
     )
     assert called["n"] == 0  # zero mutation
@@ -201,6 +202,7 @@ async def test_preflight_pass_apply_proceeds(tmp_path):
         report=report,
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         ledger_dir=tmp_path,
     )
     assert out.outcome == RestoreOutcome.SUCCESS
@@ -235,6 +237,7 @@ async def test_failure_midrun_rolls_back_in_compensation_order(tmp_path):
         report=report,
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         ledger_dir=tmp_path,
     )
     assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
@@ -304,6 +307,7 @@ async def test_failure_with_non_404_rollback_error_outcome_incomplete(tmp_path):
         report=report,
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         ledger_dir=tmp_path,
     )
     assert out.outcome == RestoreOutcome.FAILED_ROLLBACK_INCOMPLETE
@@ -351,6 +355,7 @@ async def test_happy_path_success_and_deferred_runs_last(tmp_path):
         report=report,
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         deferred_apply_fn=_deferred_apply,
         ledger_dir=tmp_path,
     )
@@ -373,6 +378,7 @@ async def test_clean_success_removes_ledger_file(tmp_path):
         report=_report(),
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         ledger_dir=tmp_path,
     )
     assert not _ledger_path("rid-clean", tmp_path).exists()
@@ -397,6 +403,7 @@ async def test_ledger_persisted_during_rollback(tmp_path):
         report=_report(),
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         ledger_dir=tmp_path,
     )
     # Rollback INCOMPLETE (channel 500) → ledger file retained with the residue.
@@ -462,6 +469,7 @@ async def test_reported_failure_triggers_rollback(tmp_path):
         report=report,
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         ledger_dir=tmp_path,
     )
     assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
@@ -486,6 +494,7 @@ async def test_seam_step_is_noop(tmp_path):
         report=report,
         ledger=ledger,
         remap=IdRemapTable(),
+        confirm_apply=True,
         ledger_dir=tmp_path,
     )
     assert out.outcome == RestoreOutcome.SUCCESS
