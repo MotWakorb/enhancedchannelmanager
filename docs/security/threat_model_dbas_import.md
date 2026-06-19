@@ -669,6 +669,22 @@ must be the only thing standing between the artifact and full credential disclos
 
 ### 10.2 Construction (from spike `0zrse` — build-ready)
 
+> **Implementation status (2026-06-19): BUILT (`u81kh`).** The construction below is
+> implemented in `backend/dbas/artifact_crypto.py` (the new primitive: scrypt + chunked
+> ChaCha20-Poly1305, authenticated cleartext header, structural no-oracle), wired at exactly the
+> two seams — the encrypt stage in `routers.backup.build_backup_artifact` (opt-in `passphrase` +
+> `include_credentials` + `acknowledge_unrecoverable`) and the decrypt-at-ingest gate in
+> `tasks.dbas_restore.DbasRestoreTask._decrypt_gate`. Dep choice settled at build start:
+> **`cryptography`-only** (0 new deps), per PO. The passphrase never touches a log line or the
+> journal audit row (task-parameter redactor in `task_engine`). Encrypted backups are **manual-run
+> only** (a passphrase is never persisted to the schedule store). The C1–C6 rows below read
+> "to-build" historically; all are now built under `u81kh` except the **operator-facing
+> `acknowledge_unrecoverable` checkbox UX (C6)**, whose *gate* is API-mandatory today (the build
+> refuses without the ack) and whose *checkbox* lands with the DBAS backup/restore UI wiring.
+> Tests: `backend/tests/dbas/test_artifact_crypto.py` (primitive),
+> `backend/tests/routers/test_dbas_passphrase_encryption.py` (both seams),
+> `backend/tests/unit/test_task_engine_param_redaction.py` (passphrase log/journal scrub).
+
 - **KDF:** **scrypt**, **N ≥ 2¹⁵** (floor), r=8, p=1; **per-artifact random salt**. KDF parameters and
   salt are stored in a **cleartext, authenticated header** (so a future ECM — or the `0i2vt.17`
   version check — can read them before attempting decryption).
