@@ -16,7 +16,7 @@ def get_adapter(provider_type: str, credentials: dict) -> CloudStorageAdapter:
     """Factory function to create the appropriate cloud storage adapter.
 
     Args:
-        provider_type: One of "s3", "gdrive", "onedrive", "dropbox".
+        provider_type: One of "s3", "gdrive", "onedrive", "dropbox", "webdav".
         credentials: Provider-specific configuration dict.
 
     Returns:
@@ -38,5 +38,8 @@ def get_adapter(provider_type: str, credentials: dict) -> CloudStorageAdapter:
     elif provider_type == "dropbox":
         from cloud_storage.dropbox_adapter import DropboxAdapter
         return DropboxAdapter(credentials)
+    elif provider_type == "webdav":
+        from cloud_storage.webdav_adapter import WebDAVAdapter
+        return WebDAVAdapter(credentials)
     else:
         raise ValueError(f"Unknown cloud storage provider: {provider_type}")
