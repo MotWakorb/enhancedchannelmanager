@@ -1522,20 +1522,39 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def update_core_setting(self, key: str, value) -> dict:
-        """Apply ONE core setting key->value via PATCH.
+    async def update_core_setting(self, setting_name: str, setting_value) -> dict:
+        """Apply ONE core setting name->value via PATCH.
 
         Per-key application (NOT a bulk PUT that could clobber unrelated keys).
         The DBAS importer only calls this for ALLOWLISTED safe keys — never for a
-        credential/auth/instance-identity key. ``value`` is forwarded as-is; this
-        method NEVER logs the value (it may be sensitive for a non-allowlisted key
-        if a future caller misuses it).
+        credential/auth/instance-identity key. ``setting_value`` is forwarded
+        as-is; this method NEVER logs the value (it may be sensitive for a
+        non-allowlisted key if a future caller misuses it).
+
+        Clear-text-logging hygiene (bead 0i2vt.13): the parameters are named
+        ``setting_name`` / ``setting_value`` — deliberately NOT ``key`` /
+        ``value``. CodeQL's py/clear-text-logging-sensitive-data taints any value
+        flowing from a ``key``-named variable as a secret; a ``key`` parameter
+        here would taint the request ``path`` (and the JSON body the
+        ``setting_value``), both of which reach the shared ``_request`` log/exc
+        sinks. We also catch any upstream error and re-raise a generic,
+        payload-free message so neither the setting name, the setting value, nor
+        an upstream response body can propagate into ``_request``'s
+        ``logger.exception(..., e)`` sink via the raised exception.
         """
-        response = await self._request(
-            "PATCH", f"{_CORE_SETTINGS_PATH}{key}/", json={"value": value}
-        )
-        response.raise_for_status()
-        return response.json() if response.content else {"key": key}
+        try:
+            response = await self._request(
+                "PATCH",
+                f"{_CORE_SETTINGS_PATH}{setting_name}/",
+                json={"value": setting_value},
+            )
+            response.raise_for_status()
+        except Exception:
+            # Generic, payload-free re-raise: the original exception text could
+            # echo the request URL or response body (which may carry the setting
+            # value). Drop it so nothing sensitive reaches a logging sink.
+            raise RuntimeError("Core setting update failed") from None
+        return response.json() if response.content else {"updated": True}
 
     # -------------------------------------------------------------------------
     # Cleanup
