@@ -66,6 +66,12 @@ def _client(*, existing_channels=None, profiles=None, create_side_effect=None):
     client.create_channel = AsyncMock(side_effect=create_side_effect or _default_create)
     client.update_profile_channel = AsyncMock(return_value={"success": True})
     client.delete_channel = AsyncMock(return_value=None)
+    # Stream layer (0i2vt.14): an empty destination-stream candidate set + an
+    # attach call. The 4vouz tests use channels with no embedded streams, so the
+    # stream layer is a no-op for them; these stubs keep the candidate fetch from
+    # hitting an auto-generated MagicMock.
+    client.get_streams = AsyncMock(return_value={"results": [], "count": 0})
+    client.update_channel = AsyncMock(return_value={"success": True})
     return client
 
 
@@ -287,30 +293,38 @@ async def test_non_remappable_fk_fields_dropped_not_sent_stale():
 
 
 @pytest.mark.asyncio
-async def test_stream_fields_not_attached_seam_for_dot14():
-    """SCOPE SEAM: this importer creates the channel row only — it does NOT match
-    or attach streams. Any embedded stream payload is stripped from the create and
-    never forwarded to a stream-add call (bead 0i2vt.14 owns attachment)."""
+async def test_streams_stripped_from_create_payload():
+    """The embedded ``streams`` payload is never part of the channel CREATE body —
+    the destination assigns the channel its own id, then streams are attached
+    separately (the 0i2vt.14 stream layer, tested in test_channels_integration.py).
+    Here we only assert the create payload carries no ``streams`` key; the stream
+    layer is patched out so this test stays scoped to the create body."""
+    from unittest.mock import patch
+    import dbas.importers.channels as channels_mod
+    from dbas.custom_stream_fallback import CustomStreamFallbackResult
+
     client = _client()
+    client.get_streams = AsyncMock(return_value={"results": [], "count": 0})
+    client.update_channel = AsyncMock(return_value={"success": True})
     report = _report()
     ledger = _ledger()
     remap = _remap()
 
-    await import_channels(
-        archive_channels=[
-            {"id": 5, "name": "CNN", "streams": [{"id": 1}, {"id": 2}]}
-        ],
-        client=client,
-        selected=True,
-        report=report,
-        ledger=ledger,
-        remap=remap,
-    )
+    synth = AsyncMock(return_value=CustomStreamFallbackResult())
+    with patch.object(channels_mod, "synthesize_custom_streams", synth):
+        await import_channels(
+            archive_channels=[
+                {"id": 5, "name": "CNN", "streams": [{"id": 1}, {"id": 2}]}
+            ],
+            client=client,
+            selected=True,
+            report=report,
+            ledger=ledger,
+            remap=remap,
+        )
 
     payload = client.create_channel.await_args.args[0]
     assert "streams" not in payload
-    # no stream-attach client method was invoked by THIS importer
-    assert not hasattr(client, "add_stream") or not client.add_stream.await_count
 
 
 # ---------------------------------------------------------------------------

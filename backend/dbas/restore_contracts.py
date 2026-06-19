@@ -87,6 +87,7 @@ class EntityType(str, Enum):
                                            # NOT ledgered (a setting is config, not a
                                            # created entity) — see settings_agents.py.
     USER = "user"                          # …-l1p4p (crown-jewel, opt-in)
+    LOGO = "logo"                          # …-0i2vt.15 (streaming upload; 3-tier match)
 
 
 class RestoreActionKind(str, Enum):
