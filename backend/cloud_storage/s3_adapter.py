@@ -155,10 +155,23 @@ class S3Adapter(CloudStorageAdapter):
         try:
             self._validate_endpoint()
             client = self._get_client()
-            response = await asyncio.to_thread(
-                client.list_objects_v2, Bucket=self.bucket, Prefix=remote_path
-            )
-            return [obj["Key"] for obj in response.get("Contents", [])]
+            # list_objects_v2 caps a single response at 1000 keys. Follow the
+            # ContinuationToken to the end so callers (e.g. retention pruning,
+            # bead 0i2vt.9) see the FULL keyset, not just the first page.
+            keys: list[str] = []
+            token = None
+            while True:
+                kwargs = {"Bucket": self.bucket, "Prefix": remote_path}
+                if token:
+                    kwargs["ContinuationToken"] = token
+                response = await asyncio.to_thread(client.list_objects_v2, **kwargs)
+                keys.extend(obj["Key"] for obj in response.get("Contents", []))
+                if not response.get("IsTruncated"):
+                    break
+                token = response.get("NextContinuationToken")
+                if not token:
+                    break
+            return keys
         except Exception:
             logger.warning("[S3] List files under prefix %s in bucket %s failed", remote_path, self.bucket)
             return []
