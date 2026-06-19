@@ -83,6 +83,7 @@ class EntityType(str, Enum):
     USER_AGENT = "user_agent"              # …-0i2vt.13
     DVR_RULE = "dvr_rule"                  # …-0i2vt.13
     USER = "user"                          # …-l1p4p (crown-jewel, opt-in)
+    LOGO = "logo"                          # …-0i2vt.15 (streaming upload; 3-tier match)
 
 
 class RestoreActionKind(str, Enum):
