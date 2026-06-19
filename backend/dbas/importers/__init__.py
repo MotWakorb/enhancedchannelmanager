@@ -22,6 +22,12 @@ attach streams — this importer never matches or attaches a stream.
 
 from dbas.importers.channels import import_channels
 from dbas.importers.epg_sources import import_epg_sources
+from dbas.importers.groups_profiles import (
+    import_channel_groups,
+    import_channel_profiles,
+    import_groups_profiles,
+    import_stream_profiles,
+)
 from dbas.importers.m3u_accounts import (
     apply_deferred_auto_sync,
     import_m3u_accounts,
@@ -31,9 +37,13 @@ from dbas.importers.users import import_users
 
 __all__ = [
     "apply_deferred_auto_sync",
+    "import_channel_groups",
+    "import_channel_profiles",
     "import_channels",
     "import_epg_sources",
+    "import_groups_profiles",
     "import_m3u_accounts",
+    "import_stream_profiles",
     "import_users",
     "resolve_group",
 ]
