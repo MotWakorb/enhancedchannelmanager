@@ -1233,6 +1233,22 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def delete_stream_profile(self, profile_id: int) -> None:
+        """Delete a stream profile by ID.
+
+        Backs the DBAS restore/sync compensating rollback
+        (enhancedchannelmanager-v1uz9): when an apply fails AFTER a stream profile
+        was created, the orchestrator issues this single-id DELETE to undo it.
+
+        Dispatcharr exposes ``/api/core/streamprofiles/`` as a standard DRF
+        ModelViewSet — the detail route allows DELETE (live-confirmed:
+        ``OPTIONS /api/core/streamprofiles/{id}/`` → ``Allow: GET, PUT, PATCH,
+        DELETE, HEAD, OPTIONS``), mirroring ``delete_channel_profile``. A 404 here
+        means the profile is already gone, which the rollback treats as success.
+        """
+        response = await self._request("DELETE", f"/api/core/streamprofiles/{profile_id}/")
+        response.raise_for_status()
+
     # -------------------------------------------------------------------------
     # Channel Profiles
     # -------------------------------------------------------------------------
