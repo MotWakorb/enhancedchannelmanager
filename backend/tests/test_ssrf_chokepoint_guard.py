@@ -54,6 +54,20 @@ _ALLOW_TAG = "ssrf-ok:"
 
 CLOUD_DIR = Path(__file__).resolve().parent.parent / "cloud_storage"
 
+# Sync module home (bead enhancedchannelmanager-1t3al / threat model §11
+# Addendum D row D1). The cross-instance remote-client factory makes the SAME
+# class of operator-configurable outbound request the cloud adapters make, so it
+# is subject to the SAME SSRF chokepoint. Without this extension the guard would
+# scan ONLY cloud_storage/ and SSRF enforcement would be theatre for the new
+# outbound path: a raw httpx/requests call in the sync module would slip through.
+# The sync factory (tasks/dbas_sync_client.py) imports httpx ONLY to build the
+# pinned SSRF transport and tags that import `# ssrf-ok:`, so it passes the guard
+# while a NEW untagged raw outbound call in any tasks/dbas_sync*.py turns it red.
+SYNC_DIR = Path(__file__).resolve().parent.parent / "tasks"
+# Only the sync-client modules in tasks/ are in scope (the rest of tasks/ is the
+# local scheduler surface, not operator-configurable outbound destinations).
+_SYNC_GLOB = "dbas_sync*.py"
+
 # Known pre-.8 baseline: modules that still make raw outbound calls today and
 # are scheduled to be migrated onto the chokepoint in bead .8. The guard
 # tolerates these specific modules so it does not falsely fail before .8, but
@@ -71,7 +85,9 @@ _PRE_8_BASELINE = {
 
 
 def _adapter_modules():
-    return sorted(p for p in CLOUD_DIR.glob("*.py") if p.name != "__init__.py")
+    cloud = [p for p in CLOUD_DIR.glob("*.py") if p.name != "__init__.py"]
+    sync = list(SYNC_DIR.glob(_SYNC_GLOB))
+    return sorted(set(cloud + sync))
 
 
 def _has_allow_tag(source: str, lineno: int) -> bool:
@@ -148,6 +164,47 @@ class TestCloudStorageChokepointGuard:
             f"genuinely the validated path, tag the line with '# {_ALLOW_TAG} "
             f"<reason>'. See docs/security/threat_model_dbas_import.md §9.4 "
             f"item 1 / row B4."
+        )
+
+    def test_sync_module_is_in_scope(self):
+        """The guard MUST cover the sync module dir (bead 1t3al / D1).
+
+        Regression guard for the extension itself: if the sync-client module
+        stops being scanned (glob typo, file move), SSRF enforcement silently
+        reverts to theatre for the new outbound path. Assert the real factory
+        module is among the scanned set.
+        """
+        scanned = {p.name for p in _adapter_modules()}
+        assert "dbas_sync_client.py" in scanned, (
+            "sync remote-client factory is NOT scanned by the SSRF chokepoint "
+            "guard — the D1 guard-extension AC is unenforced"
+        )
+
+    def test_sync_factory_passes_only_via_tagged_import(self):
+        """The real sync factory passes BECAUSE its httpx import is # ssrf-ok:.
+
+        Proves the guard actually works: strip the allow-tag and the same module
+        becomes a FAILING finding; with the tag it is clean. This is the
+        red-before-green proof that the chokepoint guard catches a raw outbound
+        call in the sync module rather than rubber-stamping it.
+        """
+        path = SYNC_DIR / "dbas_sync_client.py"
+        assert path.exists(), f"sync factory not found at {path}"
+        source = path.read_text()
+
+        # As-shipped: the httpx import carries the # ssrf-ok: tag -> clean.
+        assert not _forbidden_outbound_nodes(source), (
+            "sync factory has an UNTAGGED raw outbound primitive — it must route "
+            "through security.ssrf or tag the validated path '# ssrf-ok:'"
+        )
+
+        # Strip the allow-tag from the httpx import line -> the guard fires.
+        untagged = source.replace("# ssrf-ok:", "# (tag removed for test):")
+        findings = _forbidden_outbound_nodes(untagged)
+        assert findings, (
+            "guard FAILED to flag a raw httpx import once the # ssrf-ok: tag was "
+            "removed — the chokepoint guard is not actually enforcing on the sync "
+            "module"
         )
 
     def test_baseline_does_not_grow_silently(self):
