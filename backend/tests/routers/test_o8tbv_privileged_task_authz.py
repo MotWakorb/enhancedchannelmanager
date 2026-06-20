@@ -44,9 +44,11 @@ def _override_admin(app, is_admin: bool):
 @pytest.mark.asyncio
 class TestPrivilegedTaskRunGate:
     async def test_privileged_run_ids_are_dbas(self):
-        assert PRIVILEGED_TASK_IDS == frozenset({"dbas_restore", "dbas_backup"})
+        assert PRIVILEGED_TASK_IDS == frozenset(
+            {"dbas_restore", "dbas_backup", "dbas_sync"}
+        )
 
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup"])
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
     async def test_non_admin_run_privileged_task_forbidden(self, async_client, task_id):
         from main import app
 
@@ -63,7 +65,7 @@ class TestPrivilegedTaskRunGate:
         # The engine must never have been reached for a refused privileged task.
         engine.run_task.assert_not_called()
 
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup"])
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
     async def test_admin_run_privileged_task_allowed(self, async_client, task_id):
         from main import app
 
@@ -116,7 +118,7 @@ class TestPrivilegedTaskRunGate:
 
 @pytest.mark.asyncio
 class TestPrivilegedTaskCancelGate:
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup"])
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
     async def test_non_admin_cancel_privileged_task_forbidden(self, async_client, task_id):
         from main import app
 

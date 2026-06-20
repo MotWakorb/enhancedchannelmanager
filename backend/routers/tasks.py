@@ -19,13 +19,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Tasks"])
 
 # Task ids that may ONLY be driven by an admin (or in auth-disabled setup mode).
-# These tasks restore/produce credential-bearing backup artifacts and reach the
-# same destructive restore path as the admin-gated /restore-dbas endpoint. The
-# generic POST /api/tasks/{task_id}/run endpoint is reachable by ordinary users
-# for ordinary tasks, so it must NOT carry a blanket admin dependency — instead
-# it admin-gates exactly these privileged ids (O8TBV-1). Keep this set in sync
-# with any new privileged task registered in backend/tasks/.
-PRIVILEGED_TASK_IDS = frozenset({"dbas_restore", "dbas_backup"})
+# These tasks restore/produce credential-bearing backup artifacts or push config
+# OUTBOUND to a remote instance, and reach the same destructive restore path as
+# the admin-gated /restore-dbas endpoint. The generic POST /api/tasks/{task_id}/run
+# endpoint is reachable by ordinary users for ordinary tasks, so it must NOT carry
+# a blanket admin dependency — instead it admin-gates exactly these privileged ids
+# (O8TBV-1). ``dbas_sync`` is here because it is an outbound-write op (it mutates a
+# remote Dispatcharr-B on apply) — equally privileged to backup/restore (bead
+# 5gzg5). Keep this set in sync with any new privileged task registered in
+# backend/tasks/.
+PRIVILEGED_TASK_IDS = frozenset({"dbas_restore", "dbas_backup", "dbas_sync"})
 
 
 # -------------------------------------------------------------------------
