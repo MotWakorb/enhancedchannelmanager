@@ -1,0 +1,269 @@
+/* Cross-Instance Sync card — epic i39wu / bead nnl9s.
+   Reuses .backup-card / .backup-card-header / .backup-card-description and the
+   .btn-primary / .btn-secondary buttons from BackupRestoreSection.css; only the
+   card-local list, status badge, toggle, and add-form styles live here. */
+
+.sync-targets-card .stc-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius-lg, 8px);
+  margin-bottom: 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.sync-targets-card .stc-warning .material-icons {
+  font-size: 1.125rem;
+  flex-shrink: 0;
+  margin-top: 0.0625rem;
+}
+
+.sync-targets-card .stc-warning strong {
+  color: var(--text-primary, #fff);
+}
+
+/* One-way overwrite — danger level (load-bearing expectation, ADR-013). */
+.sync-targets-card .stc-warning-oneway {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: var(--error, #ef4444);
+}
+
+/* Credentials-not-synced — caution level. */
+.sync-targets-card .stc-warning-creds {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: var(--warning, #f59e0b);
+}
+
+.sync-targets-card .stc-empty {
+  padding: 0.875rem;
+  text-align: center;
+  color: var(--text-muted, #666);
+  font-size: 0.875rem;
+}
+
+/* --- Target list --- */
+.sync-targets-card .stc-target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.875rem;
+}
+
+.sync-targets-card .stc-target-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-tertiary, #2a2a4a);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg, 8px);
+  flex-wrap: wrap;
+}
+
+.sync-targets-card .stc-target-row.is-disabled {
+  opacity: 0.6;
+}
+
+.sync-targets-card .stc-target-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  min-width: 12rem;
+  flex: 1 1 auto;
+}
+
+.sync-targets-card .stc-target-name {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.sync-targets-card .stc-target-url {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  word-break: break-all;
+}
+
+.sync-targets-card .stc-target-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.125rem;
+  flex-wrap: wrap;
+}
+
+.sync-targets-card .stc-last-synced {
+  font-size: 0.75rem;
+  color: var(--text-muted, #666);
+}
+
+/* --- Tri-state status badge --- */
+.sync-targets-card .stc-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  border: 1px solid transparent;
+}
+
+.sync-targets-card .stc-badge-success {
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--success, #22c55e);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.sync-targets-card .stc-badge-partial {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning, #f59e0b);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.sync-targets-card .stc-badge-failure {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error, #ef4444);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.sync-targets-card .stc-badge-none {
+  background: rgba(136, 136, 136, 0.12);
+  color: var(--text-muted, #888);
+  border-color: rgba(136, 136, 136, 0.3);
+}
+
+/* --- Per-target actions --- */
+.sync-targets-card .stc-target-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.sync-targets-card .stc-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  padding: 0.375rem 0.625rem;
+}
+
+.sync-targets-card .stc-action-btn .material-icons {
+  font-size: 1rem;
+}
+
+.sync-targets-card .stc-delete-btn {
+  color: var(--error, #ef4444);
+}
+
+/* Kill-switch toggle */
+.sync-targets-card .stc-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--radius-lg, 8px);
+  border: 1px solid var(--border-color, #3a3a5a);
+  background: var(--bg-secondary, #20203a);
+  color: var(--text-muted, #888);
+  cursor: pointer;
+}
+
+.sync-targets-card .stc-toggle.is-on {
+  color: var(--success, #22c55e);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.sync-targets-card .stc-toggle .material-icons {
+  font-size: 1.125rem;
+}
+
+.sync-targets-card .stc-toggle:disabled,
+.sync-targets-card .stc-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Add-target form --- */
+.sync-targets-card .stc-add-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.sync-targets-card .stc-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0.75rem;
+  margin-top: 0.5rem;
+  background: var(--bg-secondary, #20203a);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg, 8px);
+}
+
+.sync-targets-card .stc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+}
+
+.sync-targets-card .stc-field label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #888);
+}
+
+.sync-targets-card .stc-field input,
+.sync-targets-card .stc-field select {
+  padding: 0.5rem 0.625rem;
+  background: var(--bg-tertiary, #2a2a4a);
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg, 8px);
+  font-size: 0.875rem;
+}
+
+.sync-targets-card .stc-field input:focus,
+.sync-targets-card .stc-field select:focus {
+  outline: none;
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.sync-targets-card .stc-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #888);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.sync-targets-card .stc-checkbox input[type='checkbox'] {
+  margin-top: 0.1875rem;
+  flex-shrink: 0;
+}
+
+.sync-targets-card .stc-checkbox strong {
+  color: var(--text-primary, #fff);
+}
+
+.sync-targets-card .stc-add-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.sync-targets-card .stc-add-actions .btn-primary,
+.sync-targets-card .stc-add-actions .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
