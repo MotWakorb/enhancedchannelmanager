@@ -2643,6 +2643,96 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireAdminIfEn
     }
 
 
+class RestoreDbasSavedRequest(BaseModel):
+    filename: str
+    confirm_apply: bool = False
+    # Operator passphrase for an encrypted artifact (ADR-012 D12 / u81kh). Omit
+    # for a plain artifact. Travels in the JSON body of this admin-only endpoint,
+    # never a query string, so it does not land in access logs. It is forwarded
+    # to the restore task (which excludes it from get_config) and is NEVER logged
+    # or echoed back in the response by this endpoint.
+    passphrase: Optional[str] = None
+
+
+@router.post("/restore-dbas-saved")
+async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIfEnabled):
+    """Trigger an async DBAS restore from an on-disk SAVED artifact. Admin only.
+
+    Takes ``{"filename": "ecm-backup-<ts>.zip", "confirm_apply": false,
+    "passphrase": null}``, resolves the filename to its saved
+    ``/config/backups/`` path through the strict regex + containment guard, then
+    kicks :class:`tasks.dbas_restore.DbasRestoreTask` in the background (the SAME
+    fire-and-forget pattern as POST /restore-dbas) and returns its ``task_id`` so
+    the caller can poll ``/api/tasks/{task_id}`` for the terminal RestoreReport.
+
+    This is the SAVED-file analogue of the upload-based POST /restore-dbas, and
+    handles the v0.18.0 DBAS artifact format (incl. encrypted artifacts via
+    ``passphrase``) — unlike the LEGACY POST /restore-saved, which only restores
+    old-format ZIPs.
+
+    DRY-RUN is default-ON: without ``confirm_apply=True`` the run is a counts-only
+    plan that makes ZERO mutation. ``cleanup_artifact`` is DELIBERATELY False
+    here — the artifact is the operator's SAVED backup, NOT a throwaway temp, so
+    it MUST survive the restore.
+    """
+    filename = req.filename
+    logger.info(
+        "[BACKUP] DBAS restore-from-saved requested (filename=%s, confirm_apply=%s)",
+        filename, req.confirm_apply,
+    )
+    # NB: req.passphrase is intentionally NOT logged here (and is excluded from
+    # the task's get_config) — it must never surface in a log line or response.
+
+    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
+    # the containment barrier is not tracked across a function-return boundary,
+    # so the barrier and the path that becomes the task's artifact_path must live
+    # in this same function). Mirrors restore_saved_backup's proven inline guard.
+    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch so a
+    # trailing newline cannot pass the anchor).
+    if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+    try:
+        safe_root = BACKUPS_DIR.resolve()
+        path = (BACKUPS_DIR / filename).resolve()
+        path.relative_to(safe_root)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    # Kick the restore task against the SAVED path. cleanup_artifact=False so the
+    # operator's saved backup is NOT deleted after the restore.
+    parameters = {
+        "artifact_path": str(path),
+        "confirm_apply": bool(req.confirm_apply),
+        "cleanup_artifact": False,
+    }
+    # Forward the passphrase only when present (encrypted artifact). The task
+    # excludes it from get_config so it is never persisted or logged.
+    if req.passphrase:
+        parameters["passphrase"] = req.passphrase
+
+    try:
+        from task_engine import get_engine
+
+        engine = get_engine()
+        # Fire-and-forget: schedule as a background asyncio task and return the
+        # task id immediately. The caller polls /api/tasks/{id} for progress.
+        asyncio.create_task(
+            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters)
+        )
+    except Exception as exc:
+        logger.exception("[BACKUP] Failed to schedule DBAS restore-from-saved task: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to start restore")
+
+    return {
+        "status": "started",
+        "task_id": DBAS_RESTORE_TASK_ID,
+        "is_dry_run": not req.confirm_apply,
+    }
+
+
 @router.get("/saved/{filename}")
 async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
     """Download a saved backup file (YAML export or ZIP archive)."""

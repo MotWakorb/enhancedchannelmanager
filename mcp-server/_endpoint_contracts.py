@@ -897,6 +897,20 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/backup/restore-saved",
         request_fields=frozenset({"filename"}),  # RestoreSavedRequest
     ),
+    # bd-0wmeg — POST /api/backup/restore-dbas-saved restores a SAVED on-disk
+    # DBAS artifact by filename (RestoreDbasSavedRequest body = {filename,
+    # confirm_apply, passphrase}). The saved-file analogue of the upload-based
+    # POST /restore-dbas; handles the v0.18.0 DBAS format incl. encrypted
+    # artifacts (passphrase). Backend validates the filename via the strict
+    # regex + containment guard and kicks the async dbas_restore task with
+    # cleanup_artifact=False (the operator's saved file survives). Admin-guarded.
+    # SECURITY: ``passphrase`` is forwarded to the task but never logged/echoed.
+    "backup_restore_dbas_saved": Endpoint(
+        name="backup_restore_dbas_saved",
+        method="POST",
+        path="/api/backup/restore-dbas-saved",
+        request_fields=frozenset({"filename", "confirm_apply", "passphrase"}),
+    ),
     "journal_list": Endpoint(
         name="journal_list",
         method="GET",
