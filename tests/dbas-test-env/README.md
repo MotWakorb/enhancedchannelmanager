@@ -103,3 +103,47 @@ Dispatcharr reachable from the authoring sandbox).
 - [ ] **Snapshot table names** in `capture-snapshot.sh` manifest query reflect
       the real schema (the row-count query is schema-introspecting, so it's
       tolerant, but eyeball the manifest).
+
+---
+
+## Two-instance sync tier (epic `i39wu`) — A + B
+
+Cross-instance live sync (`docs/adr/ADR-013-cross-instance-live-sync.md`) pushes
+the config of **Dispatcharr-A** to **Dispatcharr-B** over B's WRITE API. Testing
+it has **two tiers** (see `docs/testing/dbas-test-env.md` →
+"Cross-instance sync test strategy"):
+
+| Tier | What | Where | Status |
+|------|------|-------|--------|
+| **Fast (per-PR)** | STATEFUL two-instance MOCK harness — convergence / idempotency / partial-failure / never-users / redaction | `backend/tests/fixtures/sync_harness.py` + `backend/tests/tasks/test_sync_roundtrip.py` | **BUILT** (bead `46pkq`) — runs in the normal pytest suite |
+| **Live (nightly)** | Two REAL non-colliding Dispatcharr instances; validates the mock's write-contract fidelity (409 / async write completion) against reality | `docker-compose.dbas-sync-test.yml` (this dir) | **DEFERRED** — scaffold only; **not run in CI** until a reachable Dispatcharr-B image is wired |
+
+### Bring up the live two-stack (DEFERRED tier — not yet validated)
+
+> The fast mock tier is the one that runs today. The block below is the
+> ready-to-wire scaffold for the live tier. Do **not** assume it works until the
+> DEFERRED checklist in `docs/testing/dbas-test-env.md` is closed.
+
+```bash
+cd tests/dbas-test-env
+docker compose -p dbas-sync-testenv -f docker-compose.dbas-sync-test.yml up -d
+docker compose -p dbas-sync-testenv -f docker-compose.dbas-sync-test.yml ps
+# A = source  -> host 9601 (pg 5446);  B = dest -> host 9602 (pg 5447)
+# In-cluster, A reaches B at  http://dispatcharr-b-web:9191  (the SyncTarget base_url
+# analogue — exercises the SSRF chokepoint on B's url).
+
+# Tear down (throwaway):
+docker compose -p dbas-sync-testenv -f docker-compose.dbas-sync-test.yml down -v
+```
+
+### Isolation contract for the sync stack
+
+Same non-negotiable rules as the single-instance stack, with **distinct**
+project name / ports / volumes so all three (ECM, single-instance, two-instance)
+can coexist:
+
+- Project name `-p dbas-sync-testenv`.
+- Host ports **9601/5446** (A) and **9602/5447** (B) — off ECM's 6100/6143/6101,
+  the live 9191, and the single-instance stack's 9591/5436.
+- Volumes/network are project-scoped (`dbas-sync-testenv_*`).
+- Tear down with `-v` — throwaway.
