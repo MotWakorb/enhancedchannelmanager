@@ -489,3 +489,82 @@ async def test_channel_without_streams_no_attach_no_fallback():
     assert report.category(EntityType.CHANNEL).created == 1
     client.update_channel.assert_not_awaited()
     synth.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Stream FLOOR (spike xp6mp ruling 1b) — sync path floors at Tier-3 exact;
+# fuzzy is opt-in per target and reports low-confidence, never silent.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_floor_default_does_not_fuzzy_match_stream():
+    """allow_fuzzy_stream_match=False (the sync default): a stream that only a
+    Tier-4 fuzzy rung would catch is NOT attached — it routes to the fallback as
+    an orphan (ruling 1b). No fuzzy guess silently shadows a real stream."""
+    # Destination stream matches ONLY by fuzzy name (token-set), not exact.
+    dest_streams = [
+        {"id": 9001, "name": "ESPN East HD", "url": "http://prov/x", "m3u_account": 99},
+    ]
+    client = _client(dest_streams=dest_streams)
+    report, ledger, remap = _report(), _ledger(), _remap()
+
+    archived_stream = {"id": 1, "name": "ESPN HD East", "url": "http://prov/old"}
+
+    captured = {}
+
+    async def _synth(*, orphans, client, remap, ledger, report, state=None):
+        captured["orphans"] = list(orphans)
+        return CustomStreamFallbackResult(orphan_count=len(orphans))
+
+    synth = AsyncMock(side_effect=_synth)
+    with _patched_fallback(synth):
+        await import_channels(
+            archive_channels=[_channel(5, "ESPN", [archived_stream])],
+            client=client,
+            selected=True,
+            report=report,
+            ledger=ledger,
+            remap=remap,
+            allow_fuzzy_stream_match=False,
+        )
+
+    # Floored: the fuzzy-only candidate was NOT attached as an updated stream;
+    # the archived stream was routed to the fallback as an orphan instead.
+    synth.assert_awaited_once()
+    assert captured["orphans"] == [archived_stream]
+    assert report.category(EntityType.STREAM).updated == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_fuzzy_opt_in_attaches_and_reports_low_confidence():
+    """allow_fuzzy_stream_match=True (per-target opt-in): a Tier-4 fuzzy hit IS
+    attached, but is flagged LOW-CONFIDENCE in report.notes — never a silent
+    ``updated`` (ruling 1b)."""
+    dest_streams = [
+        {"id": 9001, "name": "ESPN East HD", "url": "http://prov/x", "m3u_account": 99},
+    ]
+    client = _client(dest_streams=dest_streams)
+    report, ledger, remap = _report(), _ledger(), _remap()
+
+    archived_stream = {"id": 1, "name": "ESPN HD East", "url": "http://prov/old"}
+
+    synth = AsyncMock(return_value=CustomStreamFallbackResult())
+    with _patched_fallback(synth):
+        await import_channels(
+            archive_channels=[_channel(5, "ESPN", [archived_stream])],
+            client=client,
+            selected=True,
+            report=report,
+            ledger=ledger,
+            remap=remap,
+            allow_fuzzy_stream_match=True,
+        )
+
+    # The fuzzy hit attached the matched dest id (9001); no orphan/fallback.
+    synth.assert_not_awaited()
+    dest_channel_id = remap.resolve(EntityType.CHANNEL, 5)
+    client.update_channel.assert_awaited_once_with(dest_channel_id, {"streams": [9001]})
+    assert report.category(EntityType.STREAM).updated == 1
+    # NOT silent: a low-confidence note was surfaced for the fuzzy attach.
+    assert any("low-confidence stream match (fuzzy)" in n for n in report.notes)

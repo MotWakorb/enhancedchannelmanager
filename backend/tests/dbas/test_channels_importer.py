@@ -468,6 +468,76 @@ async def test_existing_identical_channel_skipped_already_exists():
 
 
 @pytest.mark.asyncio
+async def test_null_number_collision_surfaced_as_conflict_not_silent_skip():
+    """COLLISION FLOOR (spike xp6mp ruling 1a — the load-bearing test).
+
+    A source channel (name, channel_number=None) that "matches" a destination
+    channel (name, channel_number=None) is AMBIGUOUS — a name alone does not prove
+    identity. It must be surfaced as FailureReason.CONFLICT (failed-with-reason),
+    NEVER a silent ALREADY_EXISTS_IDENTICAL. Under continuous sync that silent
+    skip would be permanent recurring divergence (B never converges on A).
+    """
+    client = _client(
+        # Destination channel with NO channel_number.
+        existing_channels=[{"id": 30, "name": "CNN"}]
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channels(
+        # Source channel with NO channel_number — null on both sides == ambiguous.
+        archive_channels=[{"id": 5, "name": "CNN"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    # Surfaced as a CONFLICT failure, NOT a silent skip, and NOT re-created.
+    client.create_channel.assert_not_awaited()
+    cat = report.category(EntityType.CHANNEL)
+    assert cat.failed == 1
+    assert cat.skipped == 0
+    assert cat.failure_details[0].reason == FailureReason.CONFLICT
+    assert cat.failure_details[0].label == "CNN"
+    # No silent ALREADY_EXISTS_IDENTICAL skip detail was recorded.
+    assert all(
+        d.reason != SkipReason.ALREADY_EXISTS_IDENTICAL for d in cat.skip_details
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_null_number_match_stays_already_exists_identical():
+    """The COMPLEMENT of ruling 1a: a (name, channel_number) match where the
+    number is NON-null and EQUAL on both sides is a real identity — it stays
+    ALREADY_EXISTS_IDENTICAL (NOT a CONFLICT)."""
+    client = _client(
+        existing_channels=[{"id": 30, "name": "CNN", "channel_number": 5}]
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channels(
+        archive_channels=[{"id": 5, "name": "CNN", "channel_number": 5}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    client.create_channel.assert_not_awaited()
+    cat = report.category(EntityType.CHANNEL)
+    assert cat.failed == 0
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert remap.resolve(EntityType.CHANNEL, 5) == 30
+
+
+@pytest.mark.asyncio
 async def test_create_conflict_recorded_as_failure_conflict():
     """If create_channel raises a CONFLICT-shaped upstream error (race: a colliding
     channel appeared between the pre-check and the create), it is recorded as
