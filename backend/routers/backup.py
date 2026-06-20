@@ -2683,18 +2683,23 @@ async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIf
     # NB: req.passphrase is intentionally NOT logged here (and is excluded from
     # the task's get_config) — it must never surface in a log line or response.
 
-    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
-    # the containment barrier is not tracked across a function-return boundary,
-    # so the barrier and the path that becomes the task's artifact_path must live
-    # in this same function). Mirrors restore_saved_backup's proven inline guard.
+    # Three-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99).
+    # Unlike restore_saved_backup (whose validated path never leaves the
+    # function), this path ESCAPES as the dbas_restore task's ``artifact_path``,
+    # so the in-function containment barrier alone is not tracked to that sink.
+    # Layer 0 — os.path.basename() strips any directory component: a
+    # CodeQL-recognized path-injection sanitizer AND a real traversal strip, so
+    # the value that flows on to the task is provably free of ``..`` / separators.
+    safe_name = os.path.basename(filename)
     # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch so a
-    # trailing newline cannot pass the anchor).
-    if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
+    # trailing newline cannot pass the anchor) — and basename must be a no-op on
+    # a legitimate name (reject anything that carried a path component).
+    if safe_name != filename or not _BACKUP_ZIP_FILENAME_RE.fullmatch(safe_name):
         raise HTTPException(status_code=400, detail="Invalid filename")
     # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
     try:
         safe_root = BACKUPS_DIR.resolve()
-        path = (BACKUPS_DIR / filename).resolve()
+        path = (BACKUPS_DIR / safe_name).resolve()
         path.relative_to(safe_root)
     except (ValueError, OSError):
         raise HTTPException(status_code=400, detail="Invalid filename")
