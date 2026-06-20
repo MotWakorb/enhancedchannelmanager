@@ -149,17 +149,33 @@ def test_never_sync_constant_contains_users():
 
 
 def test_config_categories_exclude_users_channels_streams_logos():
-    """This bead's config set is topology-config-only; the heavy slices are out."""
+    """The CONFIG set stays topology-config-only — channels are a SEPARATE set
+    (kcxie), users/logos are never in either."""
     assert SYNC_CONFIG_CATEGORIES == frozenset(
         {"m3u_accounts", "epg_sources", "channel_groups",
          "channel_profiles", "stream_profiles"}
     )
     assert "users" not in SYNC_CONFIG_CATEGORIES
+    # Channels are NOT a config category — they are gathered separately (kcxie).
     assert "channels" not in SYNC_CONFIG_CATEGORIES
     assert "streams" not in SYNC_CONFIG_CATEGORIES
     assert "logos" not in SYNC_CONFIG_CATEGORIES
     # The config set and the never-sync set never overlap.
     assert SYNC_CONFIG_CATEGORIES.isdisjoint(SYNC_NEVER_CATEGORIES)
+
+
+def test_all_categories_add_channels_but_never_logos_or_users():
+    """The full per-cycle surface (kcxie) = config + channels; logos/users excluded
+    (ADR-013 S9 / D3)."""
+    from tasks.dbas_sync_engine import SYNC_ALL_CATEGORIES, SYNC_CHANNEL_CATEGORIES
+
+    assert SYNC_CHANNEL_CATEGORIES == frozenset({"channels"})
+    assert SYNC_ALL_CATEGORIES == SYNC_CONFIG_CATEGORIES | {"channels"}
+    # Logos carry a destructive clear_existing + streaming cost — never per cycle.
+    assert "logos" not in SYNC_ALL_CATEGORIES
+    # Users are never synced (D3).
+    assert "users" not in SYNC_ALL_CATEGORIES
+    assert SYNC_ALL_CATEGORIES.isdisjoint(SYNC_NEVER_CATEGORIES)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +186,7 @@ def test_config_categories_exclude_users_channels_streams_logos():
 @pytest.mark.asyncio
 async def test_plan_carries_schema_version_and_config_categories():
     """The assembled plan stamps schema_version (orchestrator pre-flight gate)
-    and carries exactly the config categories — never users."""
+    and carries the config categories PLUS channels (kcxie) — never users/logos."""
     from routers.backup import BACKUP_SCHEMA_VERSION
 
     with patch.object(backup_mod, "get_client", return_value=_source_client()):
@@ -185,9 +201,11 @@ async def test_plan_carries_schema_version_and_config_categories():
     assert EntityType.CHANNEL_GROUP in present
     assert EntityType.CHANNEL_PROFILE in present
     assert EntityType.STREAM_PROFILE in present
-    # D3: users are NEVER a category in a sync plan, even though the source has them.
+    # Channels are now IN the plan (bead kcxie) — appended last after config deps.
+    assert EntityType.CHANNEL in present
+    # D3 / S9: users and logos are NEVER a category in a sync plan, even though the
+    # source has them.
     assert EntityType.USER not in present
-    assert EntityType.CHANNEL not in present
     assert EntityType.LOGO not in present
 
 
@@ -345,3 +363,192 @@ async def test_run_sync_journals_the_run(tmp_path):
     log_entry.assert_called()
     kwargs = log_entry.call_args.kwargs
     assert kwargs.get("category") == "sync_outbound"
+
+
+# ---------------------------------------------------------------------------
+# CHANNELS + STREAMS sync (bead kcxie) — convergence, idempotency, the
+# collision-safe floor (ruling 1a) and the per-target fuzzy flag (ruling 1b).
+# ---------------------------------------------------------------------------
+
+
+def _source_client_with_channels(*, channels, channel_streams=None) -> MagicMock:
+    """A source-A client that also serves channels + their embedded streams.
+
+    ``channels`` is the paginated channel list; ``channel_streams`` maps a channel
+    id -> its stream records (what get_channel_streams returns).
+    """
+    client = _source_client()
+    client.get_channels = AsyncMock(
+        return_value={"results": channels, "count": len(channels)}
+    )
+    streams_by_channel = channel_streams or {}
+
+    async def _channel_streams(channel_id):
+        return streams_by_channel.get(channel_id, [])
+
+    client.get_channel_streams = AsyncMock(side_effect=_channel_streams)
+    return client
+
+
+def _dest_client_for_channels(
+    *, existing_channels=None, dest_streams=None
+) -> AsyncMock:
+    """An empty-config dest-B that also answers the channel/stream getters."""
+    client = _empty_dest_client()
+    client.get_channels = AsyncMock(
+        return_value={
+            "results": existing_channels or [],
+            "count": len(existing_channels or []),
+        }
+    )
+    client.get_streams = AsyncMock(
+        return_value={"results": dest_streams or [], "count": len(dest_streams or [])}
+    )
+    created = {"n": 700}
+
+    async def _create_channel(payload):
+        created["n"] += 1
+        return {"id": created["n"], **payload}
+
+    client.create_channel = AsyncMock(side_effect=_create_channel)
+    client.update_channel = AsyncMock(return_value={"success": True})
+    client.update_profile_channel = AsyncMock(return_value={"success": True})
+    return client
+
+
+@pytest.mark.asyncio
+async def test_sync_channels_converge_on_empty_b(tmp_path):
+    """Convergence: apply pushes A's channels onto an empty B (created)."""
+    src = _source_client_with_channels(
+        channels=[{"id": 5, "name": "CNN", "channel_number": 5, "streams": []}],
+        channel_streams={5: []},
+    )
+    dest = _dest_client_for_channels()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.create_channel.assert_awaited()
+    assert report.category(EntityType.CHANNEL).created == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_channels_idempotent_non_colliding(tmp_path):
+    """Idempotency: a re-run against a B that already holds A's channel (same
+    non-null number) is a no-op — ALREADY_EXISTS_IDENTICAL, zero creates."""
+    src = _source_client_with_channels(
+        channels=[{"id": 5, "name": "CNN", "channel_number": 5, "streams": []}],
+        channel_streams={5: []},
+    )
+    dest = _dest_client_for_channels(
+        existing_channels=[{"id": 88, "name": "CNN", "channel_number": 5}]
+    )
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.create_channel.assert_not_called()
+    cat = report.category(EntityType.CHANNEL)
+    assert cat.created == 0
+    assert cat.skipped == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_channels_null_number_collision_is_conflict(tmp_path):
+    """The load-bearing floor (ruling 1a) end-to-end: a source channel (name,
+    null) matching a dest channel (name, null) surfaces as a CONFLICT in the
+    sync report — never a silent skip."""
+    src = _source_client_with_channels(
+        channels=[{"id": 5, "name": "CNN", "streams": []}],  # no channel_number
+        channel_streams={5: []},
+    )
+    dest = _dest_client_for_channels(
+        existing_channels=[{"id": 88, "name": "CNN"}]  # no channel_number
+    )
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.create_channel.assert_not_called()
+    cat = report.category(EntityType.CHANNEL)
+    assert cat.failed == 1
+    from dbas.restore_contracts import FailureReason
+    assert cat.failure_details[0].reason == FailureReason.CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_sync_threads_fuzzy_flag_off_by_default(tmp_path):
+    """Ruling 1b seam: a target with fuzzy_stream_matching off (default) floors
+    the stream matcher — a fuzzy-only source stream is NOT attached (routes to the
+    custom-stream fallback as an orphan)."""
+    # Source channel carries an embedded stream that only fuzzy-matches B's stream.
+    src = _source_client_with_channels(
+        channels=[{"id": 5, "name": "ESPN", "channel_number": 7, "streams": []}],
+        channel_streams={
+            5: [{"id": 1, "name": "ESPN HD East", "url": "http://a/old"}]
+        },
+    )
+    dest = _dest_client_for_channels(
+        dest_streams=[
+            {"id": 9001, "name": "ESPN East HD", "url": "http://b/x", "m3u_account": 99}
+        ]
+    )
+    target = _sync_target()
+    target.fuzzy_stream_matching = False
+
+    synth = AsyncMock()
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None), \
+         patch("dbas.importers.channels.synthesize_custom_streams", synth):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    # Floored: no fuzzy attach (zero updated streams); the orphan went to fallback.
+    assert report.category(EntityType.STREAM).updated == 0
+    synth.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_fuzzy_opt_in_attaches_low_confidence(tmp_path):
+    """Ruling 1b seam: a target with fuzzy_stream_matching ON attaches a fuzzy
+    stream hit but flags it LOW-CONFIDENCE in the report notes (not silent)."""
+    src = _source_client_with_channels(
+        channels=[{"id": 5, "name": "ESPN", "channel_number": 7, "streams": []}],
+        channel_streams={
+            5: [{"id": 1, "name": "ESPN HD East", "url": "http://a/old"}]
+        },
+    )
+    dest = _dest_client_for_channels(
+        dest_streams=[
+            {"id": 9001, "name": "ESPN East HD", "url": "http://b/x", "m3u_account": 99}
+        ]
+    )
+    target = _sync_target()
+    target.fuzzy_stream_matching = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.category(EntityType.STREAM).updated == 1
+    assert any("low-confidence stream match (fuzzy)" in n for n in report.notes)
