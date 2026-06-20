@@ -347,3 +347,46 @@ def test_fuzzy_floor_is_inclusive_boundary():
     can't silently flip ``>=`` to ``>``.
     """
     assert STREAM_FUZZY_FLOOR == 0.60
+
+
+# ---------------------------------------------------------------------------
+# allow_fuzzy floor (spike xp6mp ruling 1b — the sync-path stream floor).
+# ---------------------------------------------------------------------------
+
+
+def test_allow_fuzzy_false_floors_at_tier3_miss_on_fuzzy_only():
+    """allow_fuzzy=False: a pair that ONLY a Tier-4 fuzzy rung would catch is a
+    MISS — the sync path does not admit a fuzzy guess (ruling 1b)."""
+    stream = _stream(name="ESPN HD East", url="http://p/old.ts", m3u_account=7)
+    candidates = [
+        # Token-set fuzzy would score 1.0 here, but no exact tier hits.
+        _stream(id_=40, name="ESPN East HD", url="http://q/x.ts", m3u_account=99),
+    ]
+    # Default ladder (DBAS restore) DOES catch it at Tier-4.
+    assert match_stream(stream, candidates) == (MatchTier.FUZZY_NORMALIZED_NAME, 40)
+    # Floored ladder (sync) does NOT.
+    assert match_stream(stream, candidates, allow_fuzzy=False) == (MatchTier.MISS, None)
+
+
+def test_allow_fuzzy_false_still_matches_exact_tiers():
+    """allow_fuzzy=False floors ONLY Tier-4; Tiers 1-3 still match exactly so a
+    real (exact) stream still attaches on the sync path."""
+    stream = _stream(name="ESPN HD", url="http://p/espn.ts", m3u_account=7)
+    # Tier-1 exact URL.
+    url_cands = [_stream(id_=10, name="x", url="http://p/espn.ts", m3u_account=99)]
+    assert match_stream(stream, url_cands, allow_fuzzy=False) == (MatchTier.EXACT_URL, 10)
+    # Tier-3 exact normalized name (different url + provider).
+    name_cands = [_stream(id_=20, name="ESPN HD", url="http://other/y.ts", m3u_account=99)]
+    assert match_stream(stream, name_cands, allow_fuzzy=False) == (
+        MatchTier.EXACT_NORMALIZED_NAME,
+        20,
+    )
+
+
+def test_allow_fuzzy_default_is_true_preserves_restore_behavior():
+    """The default (allow_fuzzy=True) preserves the full 4-tier ladder so the
+    DBAS one-shot restore path is unchanged."""
+    stream = _stream(name="ESPN HD East", url="http://p/old.ts", m3u_account=7)
+    candidates = [_stream(id_=40, name="ESPN East HD", url="http://q/x.ts", m3u_account=99)]
+    # No keyword == default == fuzzy allowed.
+    assert match_stream(stream, candidates) == (MatchTier.FUZZY_NORMALIZED_NAME, 40)
