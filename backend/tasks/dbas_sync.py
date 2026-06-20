@@ -66,6 +66,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import journal
+import observability
 from services.notification_service import create_notification_internal
 from task_registry import register_task
 from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskScheduler
@@ -73,6 +74,21 @@ from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskSchedul
 from tasks.dbas_sync_engine import run_sync
 
 logger = logging.getLogger(__name__)
+
+
+def _bump_sync_metric(result: str) -> None:
+    """Increment ecm_sync_runs_total for a result label, best-effort.
+
+    Mirrors :func:`tasks.dbas_backup._bump_metric`. ``result`` is the bounded
+    tri-state {success, partial, failed}; a 'success' increment is the run that
+    ALSO stamps ecm_task_schedule_last_success_timestamp (via the task_engine),
+    so a sustained absence of 'success' is what the ECMSyncStalledTargetDrift
+    staleness alert detects.
+    """
+    try:
+        observability.get_metric("sync_runs_total").labels(result=result).inc()
+    except Exception as e:  # pragma: no cover — metrics best-effort
+        logger.warning("[DBAS_SYNC] Failed to increment sync_runs_total: %s", e)
 
 
 @register_task
@@ -221,6 +237,10 @@ class DbasSyncTask(TaskScheduler):
             "Cross-instance sync skipped — %s. No sync was performed. Review the "
             "sync target configuration or update the sync schedule." % reason
         )
+        # A freshness-gate abort is a non-clean terminal run — count it as
+        # 'failed' (the target drifted because no sync was applied). The
+        # WARN/journal/notification side effects are emitted by _emit_abort.
+        _bump_sync_metric("failed")
         self._set_progress(current=0, total=1, status="failed", skipped_count=1)
         return TaskResult(
             success=False,
@@ -283,6 +303,13 @@ class DbasSyncTask(TaskScheduler):
             status="completed" if succeeded else "failed",
         )
 
+        # Tri-state metric (mirror ecm_backup_runs_total): a clean
+        # success/dry-run is 'success'; a mixed/rolled-back apply is 'partial'
+        # (target B drifting — never reported as a clean success). Only the
+        # 'success' increment coincides with the task_engine stamping
+        # ecm_task_schedule_last_success_timestamp.
+        _bump_sync_metric("success" if succeeded else "partial")
+
         message = self._summary_message(report, is_dry_run, outcome)
         logger.info(
             "[DBAS_SYNC] Sync task complete (mode=%s, outcome=%s, %d categories)",
@@ -331,6 +358,7 @@ class DbasSyncTask(TaskScheduler):
     ) -> TaskResult:
         """Build a failed TaskResult and mark progress failed (sanitized message)."""
         logger.warning("[DBAS_SYNC] %s", message)
+        _bump_sync_metric("failed")
         self._set_progress(status="failed", current_item="finalize")
         return TaskResult(
             success=False,
