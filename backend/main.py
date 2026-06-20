@@ -104,6 +104,7 @@ tags_metadata = [
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
     {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
     {"name": "Emby", "description": "Emby actions — clear cached channel logos so Emby re-fetches them (GH #475)"},
+    {"name": "Sync Targets", "description": "Cross-instance live-sync destinations (remote Dispatcharr-B) — CRUD for sync targets (epic i39wu)"},
 ]
 
 app = FastAPI(
@@ -130,7 +131,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0006",
+    version="0.17.6-0007",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
