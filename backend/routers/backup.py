@@ -2683,27 +2683,29 @@ async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIf
     # NB: req.passphrase is intentionally NOT logged here (and is excluded from
     # the task's get_config) — it must never surface in a log line or response.
 
-    # Three-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99).
-    # Unlike restore_saved_backup (whose validated path never leaves the
-    # function), this path ESCAPES as the dbas_restore task's ``artifact_path``,
-    # so the in-function containment barrier alone is not tracked to that sink.
-    # Layer 0 — os.path.basename() strips any directory component: a
-    # CodeQL-recognized path-injection sanitizer AND a real traversal strip, so
-    # the value that flows on to the task is provably free of ``..`` / separators.
-    safe_name = os.path.basename(filename)
-    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch so a
-    # trailing newline cannot pass the anchor) — and basename must be a no-op on
-    # a legitimate name (reject anything that carried a path component).
-    if safe_name != filename or not _BACKUP_ZIP_FILENAME_RE.fullmatch(safe_name):
+    # Path resolution by TRUSTED ENUMERATION (CodeQL py/path-injection,
+    # CWE-22/23/36/73/99). Unlike restore_saved_backup — whose validated path is
+    # consumed in-function — this path ESCAPES as the dbas_restore task's
+    # ``artifact_path`` (used to open the file in another function), so an
+    # in-function containment barrier is not tracked to that sink. Instead of
+    # building a path FROM the request, we enumerate the real saved backups (a
+    # trusted filesystem source) and select the matching one: the path we use
+    # then originates from ``iterdir()`` — a direct-child listing of BACKUPS_DIR,
+    # so no traversal is representable and the user value never reaches the sink.
+    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch).
+    if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+    # Layer 2: select from the trusted directory listing (breaks the taint flow —
+    # the chosen Path comes from iterdir, not from the request body).
+    saved_backups = {}
     try:
-        safe_root = BACKUPS_DIR.resolve()
-        path = (BACKUPS_DIR / safe_name).resolve()
-        path.relative_to(safe_root)
-    except (ValueError, OSError):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    if not path.exists():
+        for entry in BACKUPS_DIR.iterdir():
+            if entry.is_file():
+                saved_backups[entry.name] = entry
+    except OSError:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    path = saved_backups.get(filename)
+    if path is None:
         raise HTTPException(status_code=404, detail="Backup not found")
 
     # Kick the restore task against the SAVED path. cleanup_artifact=False so the
