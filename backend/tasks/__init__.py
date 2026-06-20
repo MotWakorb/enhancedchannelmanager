@@ -20,6 +20,7 @@ from tasks.export_publish import ExportPublishTask
 from tasks.yaml_backup import YamlBackupTask
 from tasks.dbas_backup import DbasBackupTask
 from tasks.dbas_restore import DbasRestoreTask
+from tasks.dbas_sync import DbasSyncTask
 from tasks.stats_v2_rollup import StatsV2RollupTask
 
 __all__ = [
@@ -38,5 +39,6 @@ __all__ = [
     "YamlBackupTask",
     "DbasBackupTask",
     "DbasRestoreTask",
+    "DbasSyncTask",
     "StatsV2RollupTask",
 ]
