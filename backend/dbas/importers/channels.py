@@ -74,6 +74,22 @@ source id is still remapped to the existing destination id so a later profile
 reattach can resolve it. A create that races into an upstream uniqueness conflict
 is failed ``CONFLICT``.
 
+AMBIGUOUS NULL-NUMBER COLLISION (spike ``xp6mp`` DBA ruling 1a — UNIFORM fix).
+``channel_number`` is OPTIONAL on a Dispatcharr channel. A ``(name, None)``
+archived channel that "matches" a ``(name, None)`` destination channel is NOT a
+proven identity — two distinct channels can share a name when neither carries a
+number, so a silent ``ALREADY_EXISTS_IDENTICAL`` would let a real, different
+channel be skipped. Under the CONTINUOUS cross-instance sync that reuses this
+importer (epic ``i39wu``, bead ``kcxie``) that silent skip becomes *permanent*
+recurring divergence — B never converges on A's channel because every cycle the
+ambiguous name-only key re-collides and is silently no-op'd. So a name match
+where ``channel_number`` is null/absent on BOTH sides is surfaced as
+``FailureReason.CONFLICT`` (a failed-with-reason in the report), never a silent
+skip. This is a CORRECTNESS fix inside this one importer; it applies UNIFORMLY
+(DBAS restore too — it was a latent one-shot bug). A NON-null number equality
+match stays ``ALREADY_EXISTS_IDENTICAL`` (a real channel-number IS a stable
+identity).
+
 Opt-in. The category does nothing unless the operator selected it (``selected``).
 
 Integration with the restore contracts (bead ``kxuj2``): results land in the
@@ -182,10 +198,29 @@ def _build_create_payload(archive_channel: dict, remap: IdRemapTable) -> dict:
 def _existing_channel_key(channel: dict) -> tuple:
     """Identity key for an existing destination channel: (name, channel_number).
 
-    A restored channel that matches an existing one on this key is a no-op
-    (ALREADY_EXISTS_IDENTICAL); ``channel_number`` may be absent on either side.
+    A restored channel that matches an existing one on this key is a candidate
+    no-op (ALREADY_EXISTS_IDENTICAL) ONLY when ``channel_number`` is non-null on
+    both sides; ``channel_number`` may be absent on either side, in which case the
+    match is ambiguous and handled separately (see :func:`_is_ambiguous_null_key`,
+    spike ``xp6mp`` ruling 1a).
     """
     return (channel.get("name"), channel.get("channel_number"))
+
+
+def _is_ambiguous_null_key(archive_channel: dict, existing: dict) -> bool:
+    """True when a (name, channel_number) match is AMBIGUOUS — number null on both.
+
+    Spike ``xp6mp`` ruling 1a: a name match where ``channel_number`` is null/absent
+    on BOTH the archived row and the matched destination row does not PROVE the two
+    are the same channel (a name is not a unique identity without a number). Such a
+    match is surfaced ``FailureReason.CONFLICT`` (failed-with-reason), never a
+    silent ``ALREADY_EXISTS_IDENTICAL``. A non-null number equality match is a real
+    identity and is NOT ambiguous.
+    """
+    return (
+        archive_channel.get("channel_number") is None
+        and existing.get("channel_number") is None
+    )
 
 
 def _failure_reason_for(exc: Exception) -> FailureReason:
@@ -214,6 +249,7 @@ async def import_channels(
     ledger: RollbackLedger,
     remap: IdRemapTable,
     is_dry_run: bool = False,
+    allow_fuzzy_stream_match: bool = True,
 ) -> None:
     """Restore the CHANNEL category: create channel rows + reattach profiles.
 
@@ -237,6 +273,16 @@ async def import_channels(
         is_dry_run: When ``True``, nothing is created or reattached — the importer
             only reports ``would_create`` / ``would_skip`` so the operator sees
             the plan.
+        allow_fuzzy_stream_match: Whether the embedded-stream matcher may use its
+            Tier-4 fuzzy rung. ``True`` (default) keeps the full 4-tier ladder —
+            the DBAS archive-restore behaviour. ``False`` FLOORS stream matching
+            at Tier-3 exact-normalized (spike ``xp6mp`` ruling 1b): the
+            cross-instance sync path passes the per-``SyncTarget``
+            ``fuzzy_stream_matching`` flag (default off) so a continuous sync does
+            not let a fuzzy name guess silently shadow a real stream every cycle.
+            When fuzzy IS allowed and a Tier-4 hit wins, the attach is flagged
+            LOW-CONFIDENCE in ``report.notes`` rather than counted as a silent
+            ``updated``.
     """
     cat = report.category(EntityType.CHANNEL)
 
@@ -292,9 +338,37 @@ async def import_channels(
         label = _channel_label(archive_channel)
         source_id = archive_channel.get("id")
 
-        # Collision: an identical (name, number) already on the destination.
+        # Collision: a (name, channel_number) match already on the destination.
         existing = existing_by_key.get(_existing_channel_key(archive_channel))
         if existing is not None:
+            # AMBIGUOUS null-number collision (spike xp6mp ruling 1a, UNIFORM): a
+            # name match with channel_number null on BOTH sides is not a proven
+            # identity. Surface CONFLICT (failed-with-reason) instead of silently
+            # skipping a possibly-different channel — under continuous sync that
+            # silent skip is permanent recurring divergence.
+            if _is_ambiguous_null_key(archive_channel, existing):
+                cat.failed += 1
+                cat.failure_details.append(
+                    FailureDetail(
+                        reason=FailureReason.CONFLICT,
+                        label=label,
+                        message=(
+                            "ambiguous collision: a channel named %r with no "
+                            "channel_number already exists on the destination; "
+                            "cannot prove identity without a channel_number."
+                            % label
+                        ),
+                        source_export_id=source_id,
+                    )
+                )
+                logger.warning(
+                    "[DBAS-CHANNELS] Channel '%s' is an AMBIGUOUS null-number "
+                    "collision (name matches an existing numberless channel); "
+                    "surfaced as CONFLICT (ruling 1a), not silently skipped.",
+                    label,
+                )
+                continue
+
             _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
             # Still remap source -> existing dest id so a later profile reattach
             # (and the stream-attachment bead) can resolve this channel.
@@ -309,6 +383,7 @@ async def import_channels(
                         int(existing_id),
                         candidate_streams,
                         report,
+                        allow_fuzzy_stream_match,
                     )
             continue
 
@@ -360,7 +435,12 @@ async def import_channels(
             ledger.record_created(EntityType.CHANNEL, dest_id, label)
             reattach_queue.append((archive_channel, dest_id))
             _plan_streams(
-                stream_plans, archive_channel, dest_id, candidate_streams, report
+                stream_plans,
+                archive_channel,
+                dest_id,
+                candidate_streams,
+                report,
+                allow_fuzzy_stream_match,
             )
         logger.info("[DBAS-CHANNELS] Restored channel '%s' (id=%s).", label, dest_id)
 
@@ -473,6 +553,7 @@ def _plan_streams(
     dest_channel_id: int,
     candidates: list[dict],
     report: RestoreReport,
+    allow_fuzzy: bool = True,
 ) -> None:
     """Build a channel's ordered stream-attach plan via the 4-tier matcher.
 
@@ -483,6 +564,12 @@ def _plan_streams(
     * a MISS records the archived stream as an orphan slot for the batched
       fallback to synthesize.
 
+    ``allow_fuzzy`` floors the matcher at Tier-3 exact-normalized when ``False``
+    (spike ``xp6mp`` ruling 1b — the sync path's collision-safe stream floor). A
+    Tier-4 fuzzy hit (only possible when ``allow_fuzzy`` is True) is still
+    attached, but is flagged LOW-CONFIDENCE in ``report.notes`` so it is never a
+    silent ``updated`` — the operator sees which attaches rest on a fuzzy guess.
+
     A channel with no archived streams produces no plan (nothing to attach).
     """
     archived = _archived_streams(archive_channel)
@@ -490,14 +577,27 @@ def _plan_streams(
         return
 
     stream_cat = report.category(EntityType.STREAM)
-    plan = _ChannelStreamPlan(dest_channel_id=dest_channel_id, label=_channel_label(archive_channel))
+    label = _channel_label(archive_channel)
+    plan = _ChannelStreamPlan(dest_channel_id=dest_channel_id, label=label)
     for archived_stream in archived:
-        tier, match_id = match_stream(archived_stream, candidates)
+        tier, match_id = match_stream(
+            archived_stream, candidates, allow_fuzzy=allow_fuzzy
+        )
         if tier != MatchTier.MISS and match_id is not None:
             plan.slots.append(_StreamSlot(dest_id=match_id))
             # Matched an EXISTING destination stream: attached, not created — so
             # it is an ``updated`` STREAM, never ledgered (nothing to roll back).
             stream_cat.updated += 1
+            # A Tier-4 fuzzy hit is LOW-CONFIDENCE: surface it (ruling 1b) so it
+            # is not a silent ``updated``. The stream name is operator-trusted
+            # (no secret) — safe to put in a sanitized note.
+            if tier == MatchTier.FUZZY_NORMALIZED_NAME:
+                stream_label = archived_stream.get("name") or "<unknown>"
+                report.notes.append(
+                    "low-confidence stream match (fuzzy): attached stream '%s' on "
+                    "channel '%s' via a fuzzy name match — verify it is correct."
+                    % (stream_label, label)
+                )
         else:
             plan.slots.append(_StreamSlot(orphan=archived_stream))
     plans.append(plan)

@@ -187,6 +187,8 @@ def _provider_id(record: Mapping) -> object:
 def match_stream(
     stream: Mapping,
     candidates: Sequence[Mapping],
+    *,
+    allow_fuzzy: bool = True,
 ) -> tuple[int, int | None]:
     """Match one archived ``stream`` against destination ``candidates``.
 
@@ -203,6 +205,15 @@ def match_stream(
             carrying at least ``id`` plus the same fields. Never mutated. May be
             empty (→ MISS). Order does not affect the result (deterministic
             tie-break).
+        allow_fuzzy: Whether Tier-4 fuzzy (``token_set_ratio``) matching is
+            permitted. ``True`` (default) keeps the full 4-tier ladder — the
+            DBAS one-shot archive restore behaviour. ``False`` FLOORS the ladder
+            at Tier-3 exact-normalized: a Tier-4 fuzzy candidate is NOT admitted
+            and the call returns ``MISS`` instead. The cross-instance sync path
+            (epic ``i39wu``, spike ``xp6mp`` ruling 1b) passes ``allow_fuzzy``
+            from the per-``SyncTarget`` ``fuzzy_stream_matching`` flag (default
+            off) so a continuous sync does not let a fuzzy name guess silently
+            shadow a real stream on every cycle.
 
     Returns:
         ``(tier, match_id)`` where ``tier`` is the :class:`MatchTier` integer of
@@ -259,6 +270,12 @@ def match_stream(
         return (MatchTier.EXACT_NORMALIZED_NAME, match_id)
 
     # ---- Tier 4: FUZZY NORMALIZED NAME (>= STREAM_FUZZY_FLOOR). ----
+    # Floored off for the sync path (allow_fuzzy=False, ruling 1b): a fuzzy name
+    # guess is not admitted; the call returns MISS so the orphan falls through to
+    # the custom-stream fallback rather than silently attaching a wrong stream.
+    if not allow_fuzzy:
+        return (MatchTier.MISS, None)
+
     # Iterate explicitly so we can apply the lowest-id tie-break across the BEST
     # fuzzy score: pick the highest score, breaking ties on lowest id. This is
     # the only tier where candidates can score *differently*, so the helper
