@@ -2,7 +2,7 @@
 
 > **Audience:** Operator setting up backups, migrating to a new install, or recovering from a failure.
 >
-> **Status:** Placeholder. The first user-facing import workflow ships with bd-gb5r5.3 (DBAS import). The full Backup & Restore operator surface is the v0.18.0 epic (bd-0i2vt). UX has confirmed the in-UI label is **Backup & Restore** — the internal acronym DBAS only appears in dev docs and the threat model.
+> **Status:** In progress. Cross-instance sync shipped in v0.18.1. Earlier DBAS articles (backup, restore, migration) are planned; see the articles table below. UX has confirmed the in-UI label is **Backup & Restore** — the internal acronym DBAS only appears in dev docs and the threat model.
 
 ## Section purpose (planned)
 
@@ -23,17 +23,18 @@ This section is unusually high-stakes — restore is a one-way door for the conf
 
 End users do not read this section, but they care intensely about the outcome (their channels still working after a restore).
 
-## Planned articles
+## Articles
 
-| Article | Purpose |
-|-|-|
-| `backup-overview.md` | What a backup contains, what it does **not** contain (e.g., the SQLite journal vs. config), recommended backup frequency. |
-| `take-a-backup.md` | The Backup & Restore tab — exporting a backup, where the file lives, naming conventions. |
-| `verify-a-backup.md` | The dry-run workflow before restoring, what the dry-run output tells you. |
-| `restore-a-backup.md` | The actual restore flow, conflict resolution semantics, category ordering, what to expect post-restore. **Step-by-step, written for the operator under pressure.** |
-| `migrate-to-a-new-install.md` | End-to-end migration: backup on old install, install on new host, restore, verify. |
-| `import-from-elsewhere.md` | Importing configuration that didn't come from an ECM backup (DBAS import; see threat model for security context). |
-| `troubleshoot-restore.md` | "The restore reported conflicts" / "the restore appeared to succeed but my channels are different" — diagnostic patterns. |
+| Article | Purpose | Status |
+|-|-|-|
+| [`cross-instance-sync.md`](cross-instance-sync.md) | One-way A→B config replication for DR standbys and multi-instance setups. Covers setup, semantics, credential handling, and troubleshooting. | **Shipped — v0.18.1** |
+| `backup-overview.md` | What a backup contains, what it does **not** contain (e.g., the SQLite journal vs. config), recommended backup frequency. | Planned |
+| `take-a-backup.md` | The Backup & Restore tab — exporting a backup, where the file lives, naming conventions. | Planned |
+| `verify-a-backup.md` | The dry-run workflow before restoring, what the dry-run output tells you. | Planned |
+| `restore-a-backup.md` | The actual restore flow, conflict resolution semantics, category ordering, what to expect post-restore. **Step-by-step, written for the operator under pressure.** | Planned |
+| `migrate-to-a-new-install.md` | End-to-end migration: backup on old install, install on new host, restore, verify. | Planned |
+| `import-from-elsewhere.md` | Importing configuration that didn't come from an ECM backup (DBAS import; see threat model for security context). | Planned |
+| `troubleshoot-restore.md` | "The restore reported conflicts" / "the restore appeared to succeed but my channels are different" — diagnostic patterns. | Planned |
 
 ## Going deeper (for now)
 

@@ -55,9 +55,13 @@ Code `.mcp.json` path, both using the static `?api_key=` authentication method.
 - **[MCP Integration](integrations/mcp.md)** — step-by-step mcp-remote bridge
   setup, Claude Code `.mcp.json`, key rotation, and troubleshooting.
 
-### 9. [Backup & Restore](backup-restore/index.md) — Placeholder
+### 9. [Backup & Restore](backup-restore/index.md) — In progress
 
-Backing up your ECM configuration and restoring it on a new install. Currently a placeholder; the v0.18.0 epic (bd-0i2vt) and the immediate import work (bd-gb5r5.3) will fill in the operator workflow.
+Backing up your ECM configuration and restoring it on a new install.
+
+- **[Cross-Instance Sync](backup-restore/cross-instance-sync.md)** (v0.18.1) — One-way A→B config replication for DR standbys and multi-instance setups. Covers setup, the two load-bearing semantics (one-way, credentials not synced), and troubleshooting.
+
+Earlier DBAS articles (backup, restore, migration) are planned for a follow-on release.
 
 ### 10. [Troubleshooting](troubleshooting/index.md) — Stub
 
