@@ -169,19 +169,19 @@ async def test_partial_failure_rolls_back_then_reconverges(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_partial_failure_on_late_step_surfaces_residue(tmp_path):
-    """A LATE-step failure (after categories without a rollback compensator were
-    created) surfaces INCOMPLETE rollback honestly — and a re-run still heals.
+async def test_partial_failure_on_late_step_rolls_back_cleanly(tmp_path):
+    """A LATE-step failure (after epg_source + stream_profile were created) now
+    rolls back COMPLETELY — and a re-run still heals.
 
-    This documents a REAL orchestrator property the harness makes visible: the
-    rollback dispatch (``restore_orchestrator._delete_dispatch``) registers
-    compensators only for M3U / group / profile / channel / stream / user — NOT
-    for ``epg_source`` or ``stream_profile``. So a channel-step failure (the last
-    step) cannot fully undo the EPG source + stream profile created earlier; the
-    outcome is FAILED_ROLLBACK_INCOMPLETE with that residue left on B, reported
-    loudly (never a silent clean-success). A clean re-run still converges (the
-    residue matches → skip), proving the idempotent-recovery floor holds even from
-    an incompletely-rolled-back state.
+    v1uz9 closed the rollback-compensator gap: ``_delete_dispatch`` previously
+    registered compensators only for M3U / group / profile / channel / stream /
+    user — NOT for ``epg_source`` or ``stream_profile`` — so a channel-step
+    failure (the last step) could only reach FAILED_ROLLBACK_INCOMPLETE, leaving
+    those two rows as residue on B. With ``EntityType.EPG_SOURCE`` and
+    ``EntityType.STREAM_PROFILE`` now wired to ``delete_epg_source`` /
+    ``delete_stream_profile``, the late-step failure fully undoes EVERYTHING
+    created earlier → PARTIAL_FAILED_ROLLED_BACK with B left EMPTY (no residue).
+    A clean re-run still converges, proving the idempotent-recovery floor holds.
     """
     source = StatefulDispatcharrFake.seeded_source()
     dest = StatefulDispatcharrFake.empty_dest()
@@ -195,13 +195,14 @@ async def test_partial_failure_on_late_step_surfaces_residue(tmp_path):
 
     failed = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
 
-    assert failed.outcome == RestoreOutcome.FAILED_ROLLBACK_INCOMPLETE
-    assert any("INCOMPLETE" in note for note in failed.notes)
-    # The residue (epg_source + stream_profile — no compensator) is left on B.
-    assert dest.total_rows() > 0
+    # v1uz9: the late failure now rolls back epg_source + stream_profile cleanly,
+    # so the outcome is the COMPLETE-rollback state, not INCOMPLETE.
+    assert failed.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    assert any("rollback completed" in note for note in failed.notes)
+    # B is left CONSISTENT (empty) — no half-applied residue.
+    assert dest.total_rows() == 0
 
-    # A clean re-run heals despite the residue: the leftover rows match → skip,
-    # everything else is created → B converges to A.
+    # A clean re-run heals: everything is created → B converges to A.
     dest.inject_fault(None)
     healed = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
     assert healed.outcome == RestoreOutcome.SUCCESS
