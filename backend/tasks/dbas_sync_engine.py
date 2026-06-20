@@ -27,13 +27,37 @@ There are **zero edits to ``backend/dbas/``** — the orchestrator + importers a
 reused as-is. The only new code here is the live-source plan reader, the
 config-only step registry, ``run_sync``, and the shared never-sync constant.
 
-Scope of THIS bead (ADR-013 phasing / S9)
------------------------------------------
-CONFIG categories only: ``m3u_accounts``, ``epg_sources``, ``channel_groups``,
-``channel_profiles``, ``stream_profiles``. Channels / streams / logos are bead
-``kcxie`` (Phase-2). Users NEVER sync (D3). The deferred auto-sync / EPG-download
-phase is **not** run per cycle (S9) — the config step registry passes no deferred
-settings to the orchestrator.
+Scope of THIS engine (ADR-013 phasing / S9)
+-------------------------------------------
+CONFIG categories (bead ``tjaey``): ``m3u_accounts``, ``epg_sources``,
+``channel_groups``, ``channel_profiles``, ``stream_profiles``.
+
+CHANNELS + STREAMS (bead ``kcxie``, Phase-2): the channels category is gathered
+WITH its embedded streams and synced AFTER the config categories, through the
+SAME reused ``import_channels`` importer, but with the spike ``xp6mp`` DBA
+collision-safe floor applied for the continuous-sync context:
+
+* **Channels (ruling 1a)** — a ``(name, channel_number)`` name match where the
+  number is null/absent on BOTH sides is AMBIGUOUS and is surfaced as a
+  ``CONFLICT`` (failed-with-reason), never a silent ``ALREADY_EXISTS_IDENTICAL``.
+  That fix lives uniformly in ``dbas/importers/channels.py`` (it was a latent
+  one-shot bug); this engine simply reuses the corrected importer.
+* **Streams (ruling 1b)** — the embedded-stream matcher is FLOORED at Tier-3
+  exact-normalized for the sync path. Tier-4 fuzzy (``token_set_ratio``) is
+  opt-in per ``SyncTarget`` via ``fuzzy_stream_matching`` (default off); when on,
+  a fuzzy hit is flagged LOW-CONFIDENCE in ``report.notes``, never a silent
+  ``updated``. The flag threads from the target row into ``import_channels`` via
+  its ``allow_fuzzy_stream_match`` parameter.
+
+LOGOS are NOT synced per cycle (ADR-013 S9): the logos importer carries a
+DESTRUCTIVE ``clear_existing`` bulk-delete plus a per-logo streaming-upload cost
+and an N-uploads bandwidth profile that does not belong in a routine per-cycle
+slice. Logos are deliberately EXCLUDED from the sync category set here; a future
+bead can add a guarded, ``clear_existing=False``, opt-in logo sync if needed.
+
+Users NEVER sync (D3). The deferred auto-sync / EPG-download phase is **not** run
+per cycle (S9) — the step registry passes a deferred-apply no-op to the
+orchestrator.
 
 This module is the ENGINE FUNCTION. The scheduled-task wrapper + manual trigger
 (``TaskScheduler`` subclass, overlap guard) is a separate bead (``5gzg5``);
@@ -58,11 +82,15 @@ from dbas.restore_contracts import (
     RollbackLedger,
 )
 from dbas.restore_orchestrator import (
+    ApplyContext,
+    ImporterCallable,
     ImporterStep,
     _importer_step_builders,
     new_restore_id,
     run_restore,
 )
+from dbas.importers.channels import import_channels
+from routers import backup as backup_mod
 from routers.backup import (
     BACKUP_SCHEMA_VERSION,
     _gather_dispatcharr_sections,
@@ -107,6 +135,17 @@ SYNC_CONFIG_CATEGORIES: frozenset[str] = frozenset(
     }
 )
 
+# Bead kcxie adds the CHANNELS category (with embedded streams). It is gathered
+# separately from the config sections (channels are not a backup RESTORABLE_SECTION
+# the config gather knows) and synced AFTER config, with the collision-safe floor
+# (ruling 1a/1b). LOGOS are deliberately NOT here (ADR-013 S9 — destructive
+# clear_existing + streaming-upload cost is not a per-cycle slice).
+SYNC_CHANNEL_CATEGORIES: frozenset[str] = frozenset({"channels"})
+
+# The full per-cycle sync surface = config + channels. Logos / users are excluded
+# (S9 / D3). Exposed as one auditable constant.
+SYNC_ALL_CATEGORIES: frozenset[str] = SYNC_CONFIG_CATEGORIES | SYNC_CHANNEL_CATEGORIES
+
 
 # ---------------------------------------------------------------------------
 # Live-source plan reader — gather LOCAL config -> redact -> ImportPlan.
@@ -128,6 +167,75 @@ def _assert_no_never_sync(section_key: str) -> None:
         )
 
 
+async def _gather_live_channels() -> list[dict]:
+    """Gather source-A channels WITH their embedded streams (bead kcxie).
+
+    Channels are not a backup ``RESTORABLE_SECTION`` the config gather knows, so
+    this reader fetches them directly from the LOCAL ``get_client()`` (the same
+    source the config gather reads). For each channel it resolves the channel's
+    stream RECORDS (via :meth:`get_channel_streams`) and embeds them under the
+    ``streams`` key the channels importer consumes — the same shape the DBAS
+    archive decoder produces. Channel-profile memberships are passed through as
+    the channel object carries them.
+
+    Best-effort and fail-soft (mirrors :func:`_gather_dispatcharr_sections`): an
+    unavailable local client, or a per-channel stream-fetch error, degrades to an
+    empty/partial list and a WARN rather than crashing the sync cycle. No secret
+    is logged (only channel names + counts).
+
+    Returns:
+        A list of channel records, each a dict with an embedded ``streams`` list
+        of full stream dicts. Empty when the local client is unavailable.
+    """
+    # Resolve the LOCAL client through the routers.backup module (the SAME seam
+    # _gather_dispatcharr_sections uses) so the gather is patchable in tests and
+    # there is one local-client lookup point.
+    client = backup_mod.get_client()
+    if not client:
+        logger.warning(
+            "[SYNC] Local Dispatcharr not connected — channels slice skipped."
+        )
+        return []
+
+    channels: list[dict] = []
+    try:
+        page = 1
+        while True:
+            resp = await client.get_channels(page=page, page_size=1000)
+            results = resp.get("results", []) if isinstance(resp, dict) else resp
+            page_items = [c for c in (results or []) if isinstance(c, dict)]
+            channels.extend(page_items)
+            # Stop on the last page (fewer than requested) or a non-paginated shape.
+            if not isinstance(resp, dict) or len(page_items) < 1000:
+                break
+            page += 1
+    except Exception as exc:  # noqa: BLE001 - fail-soft: no channels rather than crash
+        logger.warning("[SYNC] Could not list source channels: %s", exc)
+        return []
+
+    # Resolve each channel's embedded stream records so the importer can match
+    # them against B's streams. A per-channel failure leaves that channel with no
+    # embedded streams (it still syncs its row) rather than aborting the cycle.
+    for channel in channels:
+        channel_id = channel.get("id")
+        if channel_id is None:
+            continue
+        try:
+            streams = await client.get_channel_streams(int(channel_id))
+            channel["streams"] = [s for s in (streams or []) if isinstance(s, dict)]
+        except Exception as exc:  # noqa: BLE001 - best-effort per channel
+            logger.warning(
+                "[SYNC] Could not fetch streams for channel '%s' (id=%s): %s",
+                channel.get("name") or "<unknown>",
+                channel_id,
+                exc,
+            )
+            channel["streams"] = []
+
+    logger.info("[SYNC] Gathered %d source channel(s) with embedded streams.", len(channels))
+    return channels
+
+
 async def build_live_source_plan() -> ImportPlan:
     """Gather the LOCAL source-A config, redact it, and assemble an ImportPlan.
 
@@ -143,8 +251,10 @@ async def build_live_source_plan() -> ImportPlan:
     restore and refuses a plan without it (spike ``xp6mp`` empirical find).
 
     Returns:
-        An :class:`ImportPlan` of the redacted config categories, ready for the
-        orchestrator. The ``users`` category is NEVER present (D3).
+        An :class:`ImportPlan` of the redacted config categories PLUS the channels
+        category (with embedded streams, gathered separately — bead kcxie), ready
+        for the orchestrator. The ``users`` and ``logos`` categories are NEVER
+        present (D3 / ADR-013 S9).
     """
     # Gather ONLY the config categories (never users; never channels/streams/
     # logos — those are other beads). _gather_dispatcharr_sections owns the LOCAL
@@ -168,6 +278,24 @@ async def build_live_source_plan() -> ImportPlan:
         entities = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
         categories.append(PlanCategory(entity_type=entity_type, entities=entities))
 
+    # CHANNELS (bead kcxie) — gathered separately (not a config RESTORABLE_SECTION)
+    # WITH embedded streams, then redacted through the SAME deep denylist (D2). The
+    # redactor strips only secret-NAMED keys (password/token/...); stream ``url``
+    # — the matcher's Tier-1 identity — is NOT a redact key and survives, so the
+    # stream floor still works on the wire. The CHANNEL category is appended LAST
+    # so it applies after every config dependency (groups/profiles/M3U) is created.
+    channels = await _gather_live_channels()
+    redacted_channels = _redact_credentials_deep(
+        {"channels": channels}, preserve_keys=frozenset()
+    )
+    channel_rows = redacted_channels.get("channels") if isinstance(redacted_channels, dict) else None
+    channel_entities = (
+        [c for c in channel_rows if isinstance(c, dict)] if isinstance(channel_rows, list) else []
+    )
+    categories.append(
+        PlanCategory(entity_type=EntityType.CHANNEL, entities=channel_entities)
+    )
+
     plan = ImportPlan(
         # The schema_version stamp is the load-bearing manifest field: pre-flight
         # refuses a plan without it (preflight.py -> validate_restore_schema_version).
@@ -186,14 +314,51 @@ async def build_live_source_plan() -> ImportPlan:
 # ---------------------------------------------------------------------------
 
 
-def sync_config_importer_steps() -> list[ImporterStep]:
-    """The CONFIG-category step registry for a sync cycle — reuse, no-defer.
+def _sync_channels_step(*, allow_fuzzy_stream_match: bool) -> ImporterCallable:
+    """Build the CHANNELS importer step for the sync path (bead kcxie).
+
+    Unlike the orchestrator's shared ``_channels`` builder, this one threads the
+    per-``SyncTarget`` ``allow_fuzzy_stream_match`` flag into ``import_channels``
+    so the embedded-stream matcher is FLOORED at Tier-3 exact-normalized unless
+    the target explicitly opted into fuzzy (spike ``xp6mp`` ruling 1b). The
+    channel-row collision-safe floor (ruling 1a) is inside ``import_channels``
+    itself, so it always applies regardless of this flag.
+    """
+
+    async def _channels(ctx: ApplyContext) -> list[dict] | None:
+        cat = ctx.plan.category(EntityType.CHANNEL)
+        await import_channels(
+            archive_channels=list(cat.entities) if cat else [],
+            client=ctx.client,
+            selected=bool(cat.selected) if cat else False,
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+            allow_fuzzy_stream_match=allow_fuzzy_stream_match,
+        )
+        return None
+
+    return _channels
+
+
+def sync_config_importer_steps(
+    *, allow_fuzzy_stream_match: bool = False
+) -> list[ImporterStep]:
+    """The step registry for a sync cycle — config categories + channels.
 
     Reuses :func:`dbas.restore_orchestrator._importer_step_builders` (the SAME
-    callables that back the archive apply + dry-run registries) so there is no
-    second importer path. It wires ONLY this bead's config categories in the hard
-    Phase-2 dependency order (M3U → EPG → groups/profiles); channels / streams /
-    logos / users are excluded (other beads / never).
+    callables that back the archive apply + dry-run registries) for the config
+    categories so there is no second importer path, then appends the CHANNELS
+    step (bead kcxie) in its hard Phase-2 position (LAST, after every config
+    dependency — groups/profiles/M3U — is created). Users / logos are excluded
+    (D3 / ADR-013 S9).
+
+    The CHANNELS step threads ``allow_fuzzy_stream_match`` (the per-``SyncTarget``
+    ``fuzzy_stream_matching`` flag, default off) into ``import_channels`` so the
+    embedded-stream matcher floors at Tier-3 exact-normalized for the sync path
+    (spike ``xp6mp`` ruling 1b). The channel-row collision-safe floor (ruling 1a)
+    is inside the importer and always applies.
 
     CRITICAL (ADR-013 S9): the M3U step is registered with ``defers=False`` and
     the orchestrator is given a deferred-apply no-op, so the per-cycle deferred
@@ -210,6 +375,11 @@ def sync_config_importer_steps() -> list[ImporterStep]:
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
+        # CHANNELS (+ embedded streams) LAST — after every config dependency.
+        ImporterStep(
+            EntityType.CHANNEL,
+            _sync_channels_step(allow_fuzzy_stream_match=allow_fuzzy_stream_match),
+        ),
     ]
 
 
@@ -270,7 +440,7 @@ def _journal_sync_run(
             )
             description = (
                 "Cross-instance sync run (mode=%s, redaction_mode=topology_only, "
-                "categories=%s)" % (result, sorted(SYNC_CONFIG_CATEGORIES))
+                "categories=%s)" % (result, sorted(SYNC_ALL_CATEGORIES))
             )
         journal.log_entry(
             category="sync_outbound",
@@ -363,12 +533,15 @@ async def run_sync(
     plan = await build_live_source_plan()
 
     # --- 4. Restore (reused orchestrator) — dry-run default, source-wins apply. ---
+    # The per-target fuzzy-stream-matching opt-in (default off) threads into the
+    # channels step; off => the stream matcher floors at Tier-3 exact (ruling 1b).
+    allow_fuzzy = bool(getattr(sync_target, "fuzzy_stream_matching", False))
     report = RestoreReport(is_dry_run=not confirm_apply)
     ledger = RollbackLedger(restore_id=new_restore_id())
     result = await run_restore(
         plan=plan,
         client=client,
-        steps=sync_config_importer_steps(),
+        steps=sync_config_importer_steps(allow_fuzzy_stream_match=allow_fuzzy),
         report=report,
         ledger=ledger,
         remap=IdRemapTable(),
