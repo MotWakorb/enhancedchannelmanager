@@ -84,16 +84,20 @@ describe('SyncTargetsCard', () => {
     (api.createSyncTarget as Mock).mockResolvedValue({ ...TARGET, id: 8, name: 'New B' });
     await renderCard([]);
 
-    fireEvent.click(screen.getByRole('button', { name: /add sync target/i }));
+    // Wait for the async list-load to settle before interacting (the add button
+    // + form only render once the loading state clears).
+    fireEvent.click(await screen.findByRole('button', { name: /add sync target/i }));
 
-    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: 'New B' } });
+    fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: 'New B' } });
     fireEvent.change(screen.getByLabelText(/base url/i), {
       target: { value: 'https://new-b.example.com' },
     });
     fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'admin' } });
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'secret' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /^create target/i }));
+    // The button's accessible name includes the leading material-icon ligature
+    // ("add Create target"), so match on the label substring, not an anchor.
+    fireEvent.click(screen.getByRole('button', { name: /create target/i }));
 
     await waitFor(() => expect(api.createSyncTarget).toHaveBeenCalledTimes(1));
     expect(api.createSyncTarget).toHaveBeenCalledWith(
