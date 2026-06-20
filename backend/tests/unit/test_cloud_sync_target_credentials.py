@@ -205,19 +205,17 @@ class TestSyncTargetCredentialVersion:
         assert "SECRET-CIPHERTEXT" not in str(d)
 
 
-class TestSyncTargetExcludedFromOpenAPI:
-    """SyncTarget is schema-present / code-absent: it must NOT leak into the
-    public OpenAPI surface in v0.18.0 (no endpoints, no Pydantic schema)."""
+class TestSyncTargetExposedInOpenAPI:
+    """v0.18.1 (bead vigbu, epic i39wu): the SyncTarget CRUD router is now
+    deliberately exposed — the v0.18.0 "schema-present / code-absent" invariant
+    was intentionally reversed when the live-sync feature shipped its consumers.
+    The /api/sync-targets paths must appear in the public OpenAPI surface."""
 
-    def test_sync_target_not_in_openapi_schema(self):
+    def test_sync_target_router_in_openapi_schema(self):
         from main import app
 
         schema = app.openapi()
-        blob = str(schema)
-        # No path, schema component, or operation should reference SyncTarget /
-        # sync_targets in v0.18.0.
-        assert "sync_targets" not in blob
-        assert "SyncTarget" not in blob
-        # Defensive: no /sync-targets path exposed.
-        for path in schema.get("paths", {}):
-            assert "sync-target" not in path.lower()
+        paths = schema.get("paths", {})
+        # The CRUD root + item paths are registered.
+        assert "/api/sync-targets" in paths
+        assert "/api/sync-targets/{target_id}" in paths
