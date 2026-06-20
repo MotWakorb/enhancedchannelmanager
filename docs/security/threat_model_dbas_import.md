@@ -2,8 +2,8 @@
 
 **Bead:** bd-qmuij (informs bd-gb5r5.3 — DBAS import engine); §8–§9 addenda + checklist 18–26: `enhancedchannelmanager-0i2vt.3` (Phase 0, v0.18.0 DBAS absorption)
 **Author:** Security Engineer persona (Claude)
-**Date:** 2026-04-20 · **Addenda A & B added:** 2026-05-12 · **Re-pointed at ADR-012, lifted to Accepted, Addendum C added:** 2026-06-17
-**Status:** Accepted — assumptions (§6) and the Addendum A residual (§8.4) resolved by PO; cross-instance scope corrected to ADR-012 D11; passphrase encryption covered by Addendum C (ADR-012 D12)
+**Date:** 2026-04-20 · **Addenda A & B added:** 2026-05-12 · **Re-pointed at ADR-012, lifted to Accepted, Addendum C added:** 2026-06-17 · **Addendum D (cross-instance live sync) added:** 2026-06-19
+**Status:** Accepted — assumptions (§6) and the Addendum A residual (§8.4) resolved by PO; cross-instance scope corrected to ADR-012 D11; passphrase encryption covered by Addendum C (ADR-012 D12); v0.18.1 cross-instance live sync covered by Addendum D ([ADR-013](../adr/ADR-013-cross-instance-live-sync.md), epic `i39wu`)
 **Related:** bd-ppe28 (closed, OWASP hardening), ADR-002 (restore transaction model, pending), ADR-004 (DBAS instance trust — referenced), [ADR-012](../adr/ADR-012-dbas-absorption-approach.md) (DBAS absorption — source of truth), epic `enhancedchannelmanager-0i2vt` (DBAS absorption), beads `0i2vt.4` (Fernet credential models) / `0i2vt.5` (SSRF wizard) / `0i2vt.7` (ZIP builder) / `0i2vt.8` (cloud upload) / `u81kh` + `0zrse` (whole-artifact passphrase encryption — Addendum C) / `l1p4p` + `tsfv0` (users importer + Dispatcharr user-API spike — §3.6 P2 / §6 A3)
 
 ---
@@ -761,3 +761,53 @@ must be the only thing standing between the artifact and full credential disclos
   maintenance) **vs.** add a vetted streaming AEAD library (PyNaCl `secretstream` / `age` — security's
   preference, removes framing risk, adds a dependency + supply-chain review). **Not a threat-model
   decision; settle at `u81kh` build start.** Either choice must still satisfy the construction in §10.2.
+
+---
+
+## 11. Addendum D — Cross-Instance Live Sync (v0.18.1 one-way A→B config replication)
+
+**Added:** 2026-06-19 · **Epic:** `enhancedchannelmanager-i39wu` · **Architecture:** [ADR-013](../adr/ADR-013-cross-instance-live-sync.md) · **Crypto/feasibility design:** spike `enhancedchannelmanager-xp6mp` (closed — architect + engineer + security + DBA + SRE; reuse-seam demonstrated). **This addendum GATES build** the same way Addendum C gated `u81kh`: no sync build bead opens until §11 is reviewed and the D2/D3/D7 hard lines are PO-ratified (they are — see ADR-013 S2/S3).
+
+### 11.1 Scope and posture
+
+ADR-013 ships **one-way** A→B continuous config replication: ECM-A reads its configuration and **writes** it into a remote Dispatcharr-B on a schedule, so B converges to A. This is the first ECM surface that makes **continuous, unattended, outbound WRITES into a second live instance**. It is *not* symmetric to DBAS restore: DBAS restore is the operator pulling an archive *onto themselves*; sync is **ECM-A reaching out and writing into B**, so the blast radius is a *remote* instance and the actor for B's safety is A's outbound code, not B's admin. That asymmetry drives every row below.
+
+**The load-bearing posture facts (PO-ratified, ADR-013):**
+- **One-way only** (S2). Bidirectional is a separate epic with its own inbound-write trust boundary on A.
+- **Redact-by-default / topology only** (S3/S7). The sync payload carries **no** secrets — same shared `_REDACT_KEYS` denylist as the backup ZIP. Secret *migration* stays the `u81kh` encrypted-artifact path, not a continuous live channel.
+- **Users never sync** (S3). Continuous one-way push of the `users` category would repeatedly overwrite B's privilege flags / lock out B's operator.
+
+The hard primitives already exist and were designed for this: `backend/security/ssrf.py` names "a second Dispatcharr instance" in its own docstring; the `SyncTarget` model's credential-freshness columns + same-txn version-bump listeners are byte-for-byte the `CloudStorageTarget` contract; Addendum B §9 already wrote the SSRF + credential-freshness contract anticipating v0.18.1. **The risk is concentrated in what enters the payload (D2/D3) and the direction (D7) — both design decisions, not missing tech.**
+
+### 11.2 STRIDE rows — Cross-Instance Live Sync
+
+| # | Surface | STRIDE | Threat | Mitigation | Status | Sev |
+|---|---------|--------|--------|------------|--------|-----|
+| **D1** | `SyncTarget.base_url` | Spoofing / EoP | An operator-typed `base_url` points the recurring, unattended sync at IMDS / an internal host / loopback — a scheduled internal scanner / credential thief / proxy. | `ssrf.py` `validate_outbound_url()` on **every** request (initial connect, each pagination page, each write, each retry, each redirect), at **execute time** not config-save time (DNS-rebinding); resolve-then-connect-by-IP; reject-whole-request if any A/AAAA is denied; `https→http` downgrade refusal. **The CI grep that forbids raw `httpx`/`requests` in `cloud_storage/` adapters MUST extend to the sync module** (`test_ssrf_chokepoint_guard.py` currently scans only `cloud_storage/` — without the extension, SSRF is unenforced for the new path). | to-build (reuse `0i2vt.5`; guard-extension = AC on `1t3al`) | **High** |
+| **D2** | Sync payload | Information Disclosure | Replicating "config" naively streams live M3U/EPG/XC/SMTP/cloud secrets to B on a schedule — worse than the one-shot artifact (no operator/passphrase in the loop per fire; a wrong/typo'd `base_url` leaks every credential, silently, every cycle). | **Redact-by-default** via the shared `_REDACT_KEYS` deep redactor before serialize — topology only, **no plaintext-cred path in v0.18.1** (PO-ratified, ADR-013 S3/S7). Cred-carrying continuous sync is **not shipped**; secret migration stays the `u81kh` passphrase-artifact path. Test: assemble a sync payload from source state with a known M3U/SMTP/cloud secret; assert none appears in the serialized bytes (reuse Addendum A `A1`). | to-build | **High** |
+| **D3** | `users` category | Elevation of Privilege | Continuous one-way push of `users` repeatedly overwrites B's `is_superuser`/`is_staff`/`user_level` from A — an operator-lockout / privilege-escalation primitive under automation. `password_hash` is non-transportable anyway (spike `tsfv0`: Dispatcharr exposes `password` write-only). | **`users` is a permanent, code-enforced never-sync exclusion** (S3) — a single shared never-sync constant imported by the payload assembler AND its test, treated like the always-on SSRF denylist (unconditional, no settings key). Test asserts the `users` category is never assembled into a sync payload. | to-build (enforced exclusion) | **High** |
+| **D4** | Category registry | Tampering | An unknown or secret-bearing category is synced. | Category **allowlist** (topology only; the S3 set); reject unknown keys; secret fields stripped pre-serialize via the shared denylist (D2). | to-build | Med |
+| **D5** | Stale credential | Tampering / Repudiation | A scheduled sync fires after B's token was rotated/revoked and writes with the stale token. | `credential_version` + `token_revoked_at` (schema present, listeners present) → capture `credential_version` at enqueue (task-config JSON, no new column), re-read FRESH + `token_revoked_at` hard-stop at execute, **abort + WARN + `journal.log_entry`** (`category='sync_outbound'`, `aborted=stale_credential`) on change/revoke. The version bump is gated on `credentials` being dirty, so a rename/`enabled` toggle does not invalidate a live schedule (verified `export_models.py`). Mirrors `dbas_backup` `_check_credential_freshness` verbatim. | to-build (schema exists) | Med |
+| **D6** | TLS | Tampering | `insecure=true` MITM on the continuous channel. | `verify=True` default; `insecure=true` writes a `journal.log_entry` audit row (`tls_verified=false`) **on every cycle** (not once at config time); **forbidden-by-construction if the payload is ever non-redacted** (moot while redact-by-default holds — topology has no creds to expose; the coupling is stated so a future cred-carrying toggle cannot silently combine with `insecure`). | to-build | Med |
+| **D7** | Direction | Integrity / EoP | Bidirectional opens an **inbound-write boundary on A** (a remote instance becomes an authenticated writer into A) + last-write-wins/loop amplification. | **One-way A→B only** for v0.18.1 (ADR-013 S2, PO-ratified). Bidirectional is gated on a separate ADR + an inbound-authn design for A. | design-decision (one-way set) | **High** (if bidir) |
+| **D8** | Partial failure | Integrity / Availability | Sync dies mid-replication → B in a half-written state surfaced as success. | **Idempotency is the recovery mechanism** (ADR-013 S8): upsert-by-stable-identity, so a partial/failed run is re-run to convergence next cycle. Reuse the `RollbackLedger` + the tri-state `RestoreOutcome` (never SUCCESS on mixed state); a `partial` run does not advance the freshness gauge (so the staleness alert fires on sustained partial drift). No partial state is reported as success. | to-build (reuse) | Med |
+| **D9** | Audit | Repudiation | No trail of what A pushed to B, when, with what result. | `journal.log_entry` per sync run: target id, categories, counts, `redaction_mode`, result, request id (mirror Addendum A `A5`). Per-cycle `insecure` audit row (D6). | to-build | Med |
+| **D10** | Trigger | DoS | A change-driven trigger storms B (every edit → a sync). | **Scheduled-interval default** over change-driven for v1 (ADR-013 S6); the `ALREADY_RUNNING` overlap guard prevents a run overlapping itself; change-driven (if ever added) requires debounce/coalesce + rate-cap. | to-build | Low |
+
+### 11.3 Mitigations summary (Addendum D)
+
+1. **One-way only.** A is system-of-record; bidirectional is a separate epic with a separate threat model. (D7 / ADR-013 S2.)
+2. **Redact-by-default, no secrets on the wire.** Shared `_REDACT_KEYS` denylist strips all secret fields before serialize; cred-carrying continuous sync is not shipped. (D2 / S7.)
+3. **Users never sync — enforced, not scoped.** A shared never-sync constant + a test that the payload assembler refuses the `users` category and the credential columns. (D3 / S3.)
+4. **SSRF on every request, execute-time, and the CI guard extends to the sync module.** Without the guard extension the chokepoint is theatre for the new path. (D1.)
+5. **Credential-freshness at fire time.** Capture-at-enqueue / re-check-at-execute / abort+audit; mirrors the shipped CloudStorageTarget contract. (D5.)
+6. **TLS verify default; per-cycle insecure audit; insecure forbidden if payload ever carries creds.** (D6.)
+7. **Idempotency is recovery.** Upsert-by-stable-identity + reuse the rollback ledger + tri-state outcome; retry converges, no new saga machinery. (D8 / S8.)
+8. **No new crypto.** Under redact-by-default the payload is topology-only, so TLS is the complete in-transit control — ADR-012 D3's "no new crypto surface" holds for the redacted sync path. (D2/D6.)
+
+### 11.4 Residual risk (Addendum D)
+
+- **Residual: topology disclosure to B — Low, accepted.** Even redacted, the sync payload reveals the deployment shape (channel names, source URLs minus creds). Inherent to replicating config at all; B is an operator-trusted destination. Same accepted residual as the redacted backup artifact (Addendum A §8.4).
+- **Residual: credential re-entry friction on B — accepted (availability, not confidentiality).** Redact-by-default means the operator re-enters M3U/EPG passwords on B after first sync. The deliberate trade for not streaming live secrets continuously; secret migration remains the `u81kh` artifact path.
+- **Residual: no live-B integration coverage at build time — tracked.** The build + unit/contract tests run against mocks/fakes; the live A→B round-trip + the live half of the test harness are gated on a reachable second Dispatcharr (bead `46pkq`). Flagged, not silently skipped.
+- **Residual: `insecure=true` on a recurring channel — Low, accepted with per-cycle audit.** A one-shot insecure upload is one auditable event; a recurring insecure sync ships topology over unverified TLS every interval — bounded by the per-cycle audit row (D6) so the operator sees recurring exposure, and forbidden the moment the payload is non-redacted.
