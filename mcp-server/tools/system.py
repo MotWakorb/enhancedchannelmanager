@@ -246,6 +246,167 @@ def register(mcp: FastMCP):
             return f"Error restoring backup: {e}"
 
     @mcp.tool()
+    async def create_dbas_backup(
+        passphrase: str | None = None,
+        include_credentials: bool = False,
+        acknowledge_unrecoverable: bool = False,
+    ) -> str:
+        """Create a v0.18.0 DBAS backup artifact (ecm-backup-<ts>.zip) on the
+        server, optionally PASSPHRASE-ENCRYPTED and credential-carrying.
+
+        Triggers the ``dbas_backup`` task. By default (no passphrase) the
+        artifact is a REDACTED backup — settings-class credentials (SMTP
+        password, API keys, bot tokens) are scrubbed — suitable for review and
+        host-failure recovery.
+
+        ENCRYPTED MODE (ADR-012 D12): to produce a backup that PRESERVES
+        credentials, you MUST pass BOTH ``passphrase`` AND
+        ``acknowledge_unrecoverable=True`` AND ``include_credentials=True``. The
+        whole artifact is encrypted under the passphrase.
+
+        WARNING — UNRECOVERABLE: if the passphrase is lost, the encrypted backup
+        CANNOT be decrypted or restored by anyone. There is no recovery, reset,
+        or backdoor. Store the passphrase somewhere safe BEFORE relying on the
+        backup. ``acknowledge_unrecoverable=True`` is your confirmation that you
+        understand this.
+
+        SECURITY: the passphrase is sent to the server only; it is NEVER logged,
+        echoed in this tool's result, or returned in any response. The result
+        reports only the artifact filename and status.
+
+        Args:
+            passphrase: Optional. When set (with the two acknowledgement flags),
+                encrypts the whole artifact under this secret. Omit for a
+                redacted, unencrypted backup. NEVER logged or echoed back.
+            include_credentials: Preserve settings-class credentials in the
+                artifact instead of redacting them. Only honored with a
+                passphrase (an unencrypted cred-carrying backup is refused by
+                the backend). Default False.
+            acknowledge_unrecoverable: Required True for an encrypted backup —
+                your acknowledgement that a lost passphrase means the backup is
+                permanently unrecoverable. Default False.
+        """
+        try:
+            # Build the ad-hoc task parameters. The passphrase rides in the JSON
+            # body of POST /api/tasks/dbas_backup/run; the backend task_engine
+            # redacts it from logs/journal and the task excludes it from
+            # get_config so it is never persisted.
+            parameters: dict = {
+                "include_credentials": bool(include_credentials),
+                "acknowledge_unrecoverable": bool(acknowledge_unrecoverable),
+            }
+            encrypted = bool(passphrase)
+            if encrypted:
+                parameters["passphrase"] = passphrase
+
+            # Log WITHOUT the passphrase value — only that an encrypted backup
+            # was requested. NEVER interpolate the passphrase into a log line.
+            logger.info(
+                "[MCP] create_dbas_backup requested (encrypted=%s, include_credentials=%s)",
+                encrypted, bool(include_credentials),
+            )
+
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["tasks_run"],
+                path_args={"task_id": "dbas_backup"},
+                body={"parameters": parameters},
+                timeout=300.0,
+            )
+
+            # Surface ONLY the filename + status/message — never the passphrase.
+            if isinstance(result, dict):
+                status = result.get("status", "")
+                details = result.get("details") if isinstance(result.get("details"), dict) else {}
+                filename = details.get("filename", "?")
+                mode = "encrypted" if encrypted else "redacted"
+                status_info = f" Status: {status}." if status else ""
+                return (
+                    f"DBAS backup ({mode}) created: {filename}.{status_info} "
+                    "List with list_saved_backups."
+                ).rstrip()
+            return "DBAS backup task started."
+        except Exception as e:
+            # NB: the passphrase is NOT in `e` — call_endpoint surfaces the
+            # endpoint path + HTTP status + backend detail, never the body.
+            logger.error("[MCP] create_dbas_backup failed: %s", e)
+            return f"Error creating DBAS backup: {e}"
+
+    @mcp.tool()
+    async def restore_dbas_backup_saved(
+        filename: str,
+        confirm_apply: bool = False,
+        passphrase: str | None = None,
+    ) -> str:
+        """Restore from a SAVED v0.18.0 DBAS artifact on the server, by filename.
+
+        DRY-RUN BY DEFAULT: with ``confirm_apply`` omitted/False this runs a
+        counts-only PREVIEW that makes ZERO mutation — use it to see what a
+        restore WOULD do. Pass ``confirm_apply=True`` only when you intend to
+        APPLY the restore, which OVERWRITES current ECM state from the artifact.
+        This is destructive and cannot be undone except by restoring another
+        backup. Confirm with the operator before applying.
+
+        ENCRYPTED ARTIFACTS: a passphrase-encrypted backup (created via
+        create_dbas_backup with a passphrase) requires that SAME passphrase here
+        to decrypt. Omit ``passphrase`` for a plain/redacted artifact.
+
+        This is the SAVED-file restore path (no file upload over MCP). The
+        artifact must already be on the server — list candidates with
+        list_saved_backups. The saved file is NOT deleted by the restore.
+
+        SECURITY: the passphrase is sent to the server only; it is NEVER logged,
+        echoed in this tool's result, or returned in any response.
+
+        Triggers the async ``dbas_restore`` task and returns its task_id; poll
+        task history / status for the terminal RestoreReport.
+
+        Args:
+            filename: The saved DBAS artifact filename, e.g.
+                ecm-backup-2026-05-24_120000.zip (from list_saved_backups).
+            confirm_apply: False (default) = dry-run preview (no changes). True =
+                APPLY the restore (OVERWRITES current state).
+            passphrase: Required for an encrypted artifact; the same passphrase
+                used to create it. NEVER logged or echoed back. Omit for a plain
+                artifact.
+        """
+        try:
+            body: dict = {
+                "filename": filename,
+                "confirm_apply": bool(confirm_apply),
+            }
+            encrypted = bool(passphrase)
+            if encrypted:
+                body["passphrase"] = passphrase
+
+            # Log WITHOUT the passphrase value.
+            logger.info(
+                "[MCP] restore_dbas_backup_saved requested (filename=%s, confirm_apply=%s, encrypted=%s)",
+                filename, bool(confirm_apply), encrypted,
+            )
+
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["backup_restore_dbas_saved"],
+                body=body,
+                timeout=300.0,
+            )
+
+            if isinstance(result, dict):
+                task_id = result.get("task_id", "dbas_restore")
+                is_dry_run = result.get("is_dry_run", not confirm_apply)
+                mode = "DRY-RUN preview (no changes)" if is_dry_run else "APPLY (state overwritten)"
+                return (
+                    f"DBAS restore-from-saved started for {filename} — {mode}. "
+                    f"Poll task '{task_id}' history for the restore report."
+                )
+            return f"DBAS restore-from-saved started for {filename}."
+        except Exception as e:
+            # The passphrase is NOT in `e` — call_endpoint never echoes the body.
+            logger.error("[MCP] restore_dbas_backup_saved failed: %s", e)
+            return f"Error restoring DBAS backup: {e}"
+
+    @mcp.tool()
     async def get_journal(
         limit: int = 20,
         category: str | None = None,
