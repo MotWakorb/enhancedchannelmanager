@@ -71,8 +71,10 @@ def _client(*, delete_side_effects=None):
     client = AsyncMock()
     for name in (
         "delete_m3u_account",
+        "delete_epg_source",
         "delete_channel_group",
         "delete_channel_profile",
+        "delete_stream_profile",
         "delete_channel",
         "delete_stream",
         "delete_user",
@@ -408,6 +410,108 @@ async def test_ledger_persisted_during_rollback(tmp_path):
     )
     # Rollback INCOMPLETE (channel 500) → ledger file retained with the residue.
     assert _ledger_path("rid-residue", tmp_path).exists()
+
+
+# ---------------------------------------------------------------------------
+# 6b. EPG_SOURCE + STREAM_PROFILE compensators (enhancedchannelmanager-v1uz9)
+#
+# Before v1uz9 the rollback dispatch had NO compensator for epg_source or
+# stream_profile, so a late-step failure after those were created could only
+# reach FAILED_ROLLBACK_INCOMPLETE (residue left on the destination). These
+# tests pin the closed gap: a late failure now rolls back BOTH new types
+# cleanly → PARTIAL_FAILED_ROLLED_BACK, and 404-on-already-deleted is still
+# treated as success for the new compensators.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_late_failure_rolls_back_epg_source_complete(tmp_path):
+    # M3U + EPG_SOURCE created, then a late channel step raises. The EPG source
+    # MUST be compensated (delete_epg_source) → COMPLETE rollback, not residue.
+    client = _client()
+    plan = _plan(
+        _cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]),
+        _cat(EntityType.CHANNEL, [{"id": 1, "name": "ESPN"}]),
+    )
+    report = _report()
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.M3U_ACCOUNT, 901),
+        _creating_step(EntityType.EPG_SOURCE, 701),
+        _raising_step(EntityType.CHANNEL),  # late boom
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=report,
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    client.delete_epg_source.assert_awaited_once_with(701)
+    client.delete_m3u_account.assert_awaited_once_with(901)
+    assert all(e.compensated for e in ledger.entries)
+
+
+@pytest.mark.asyncio
+async def test_late_failure_rolls_back_stream_profile_complete(tmp_path):
+    # M3U + STREAM_PROFILE created, then a late channel step raises. The stream
+    # profile MUST be compensated (delete_stream_profile) → COMPLETE rollback.
+    client = _client()
+    plan = _plan(
+        _cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]),
+        _cat(EntityType.CHANNEL, [{"id": 1, "name": "ESPN"}]),
+    )
+    report = _report()
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.M3U_ACCOUNT, 901),
+        _creating_step(EntityType.STREAM_PROFILE, 801),
+        _raising_step(EntityType.CHANNEL),
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=report,
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    client.delete_stream_profile.assert_awaited_once_with(801)
+    assert all(e.compensated for e in ledger.entries)
+
+
+@pytest.mark.asyncio
+async def test_rollback_404_counts_as_success_for_new_compensators(tmp_path):
+    # Both new compensators 404 (already gone) — still a COMPLETE rollback.
+    client = _client(
+        delete_side_effects={
+            "delete_epg_source": _http_error(404),
+            "delete_stream_profile": _http_error(404),
+        }
+    )
+    ledger = _ledger()
+    ledger.record_created(EntityType.EPG_SOURCE, 701, "epg")
+    ledger.record_created(EntityType.STREAM_PROFILE, 801, "sp")
+    result = await run_rollback(ledger=ledger, client=client, ledger_dir=tmp_path)
+    assert result.complete is True
+    assert result.residue == []
+    assert all(e.compensated for e in ledger.entries)
+
+
+def test_delete_dispatch_registers_epg_and_stream_profile():
+    from dbas.restore_orchestrator import _delete_dispatch
+
+    dispatch = _delete_dispatch(_client())
+    # The v1uz9 gap closure: both types now have a registered compensator.
+    assert EntityType.EPG_SOURCE in dispatch
+    assert EntityType.STREAM_PROFILE in dispatch
 
 
 # ---------------------------------------------------------------------------

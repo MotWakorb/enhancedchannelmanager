@@ -169,8 +169,10 @@ def _delete_dispatch(client: DispatcharrClient) -> dict[EntityType, Callable[[in
     """Build the EntityType -> single-id delete coroutine map for ``client``."""
     return {
         EntityType.M3U_ACCOUNT: client.delete_m3u_account,
+        EntityType.EPG_SOURCE: client.delete_epg_source,
         EntityType.CHANNEL_GROUP: client.delete_channel_group,
         EntityType.CHANNEL_PROFILE: client.delete_channel_profile,
+        EntityType.STREAM_PROFILE: client.delete_stream_profile,
         EntityType.CHANNEL: client.delete_channel,
         EntityType.STREAM: client.delete_stream,
         EntityType.USER: client.delete_user,
@@ -635,13 +637,14 @@ def default_importer_steps() -> list[ImporterStep]:
     lands it slots into its place without reshuffling the sequence.
     """
     s = _importer_step_builders()
-    # NOTE on the EPG-sources seam (…-0i2vt.11): EPG sources are not an FK-bearing
-    # remapped type, so the rollback ledger has no EntityType for them and the
-    # contracts module (read-only here) defines none. The EPG step therefore lives
-    # in the ordering as a documented position between M3U and channel groups, but
-    # is not a discrete ImporterStep row — when its importer lands it registers
-    # here (and, if it ever needs compensation, the contracts module gains the
-    # EntityType in its own bead, not this one).
+    # NOTE on the EPG-sources seam (…-0i2vt.11): the EPG importer's APPLY path is
+    # still a separate bead, so EPG sources occupy a documented ordering position
+    # between M3U and channel groups but are not yet a discrete ImporterStep row in
+    # this APPLY registry. Compensation, however, IS wired: EntityType.EPG_SOURCE
+    # (and EntityType.STREAM_PROFILE) now have rollback compensators in
+    # ``_delete_dispatch`` (enhancedchannelmanager-v1uz9), so any EPG-source /
+    # stream-profile row recorded in the ledger by an in-flight importer is undone
+    # cleanly on a late-step failure instead of being left as residue.
     return [
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         # <- EPG sources (…-0i2vt.11) order position; SEAM, see note above.

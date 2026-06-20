@@ -364,6 +364,12 @@ class StatefulDispatcharrFake:
         self._check_fault("create_stream_profile", data)
         return self.stream_profiles.create(data)
 
+    async def delete_stream_profile(self, profile_id: int) -> None:
+        # Compensating delete for a created stream profile (v1uz9). A 404 on an
+        # already-gone id is raised as FakeNotFoundError, which the rollback's
+        # 404-as-success path treats as a successful compensation.
+        self.stream_profiles.delete(profile_id)
+
     # ----- channels --------------------------------------------------------
 
     async def get_channels(
