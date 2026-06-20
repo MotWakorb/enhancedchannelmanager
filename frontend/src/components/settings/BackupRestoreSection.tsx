@@ -4,6 +4,7 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { BackupRestoreModal } from '../BackupRestoreModal';
 import { DbasRestoreModal } from '../DbasRestoreModal';
 import { EncryptedBackupCard } from './EncryptedBackupCard';
+import { SyncTargetsCard } from './SyncTargetsCard';
 import { getDateLocale } from '../../utils/formatting';
 import './BackupRestoreSection.css';
 
@@ -349,6 +350,9 @@ export function BackupRestoreSection({ isAdmin }: Props) {
 
       {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
       <EncryptedBackupCard />
+
+      {/* Cross-Instance Sync — epic i39wu / nnl9s */}
+      <SyncTargetsCard />
 
       {/* DBAS artifact restore (.zip, incl. encrypted) — bead 7euap */}
       <div className="backup-card">

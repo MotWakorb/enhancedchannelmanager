@@ -4124,3 +4124,86 @@ export async function dismissPendingMerge(mergeId: number): Promise<DismissMerge
     method: 'POST',
   });
 }
+
+// -------------------------------------------------------------------------
+// Sync Targets — cross-instance live-sync destinations (epic i39wu).
+//
+// A SyncTarget is a remote Dispatcharr-B instance ECM pushes config to via the
+// one-way sync engine. The CRUD mirrors backend/routers/sync_targets.py:
+// credentials are WRITE-ONLY (Fernet-encrypted at rest, never echoed back
+// decrypted — responses mask them to last-4). The actual sync is driven by
+// `runTask('dbas_sync', undefined, { sync_target_id, confirm_apply })`.
+// -------------------------------------------------------------------------
+
+/**
+ * Read shape of a sync target. `credentials` is always masked (last-4 only) —
+ * never plaintext. Status fields (`last_full_sync_at`, `last_outcome`) drive
+ * the per-target badge in the UI.
+ */
+export interface SyncTarget {
+  id: number;
+  name: string;
+  base_url: string;
+  credentials: Record<string, unknown>;
+  enabled: boolean;
+  insecure: boolean;
+  fuzzy_stream_matching: boolean;
+  credential_version: number;
+  token_revoked_at?: string | null;
+  last_full_sync_at?: string | null;
+  last_outcome?: string | null;
+  last_source_fingerprint?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** Create payload — `credentials` is write-only (username/password or api_key). */
+export interface SyncTargetCreateRequest {
+  name: string;
+  base_url: string;
+  credentials?: Record<string, string>;
+  enabled?: boolean;
+  insecure?: boolean;
+  fuzzy_stream_matching?: boolean;
+}
+
+/**
+ * Update payload — all fields optional (partial update). Omit `credentials`
+ * to leave the stored secret untouched; supplying it re-encrypts and bumps
+ * `credential_version`. The `enabled` toggle is the KILL SWITCH.
+ */
+export interface SyncTargetUpdateRequest {
+  name?: string;
+  base_url?: string;
+  credentials?: Record<string, string>;
+  enabled?: boolean;
+  insecure?: boolean;
+  fuzzy_stream_matching?: boolean;
+}
+
+export async function listSyncTargets(): Promise<SyncTarget[]> {
+  return fetchJson(`${API_BASE}/sync-targets`);
+}
+
+export async function createSyncTarget(req: SyncTargetCreateRequest): Promise<SyncTarget> {
+  return fetchJson(`${API_BASE}/sync-targets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function updateSyncTarget(
+  id: number,
+  req: SyncTargetUpdateRequest,
+): Promise<SyncTarget> {
+  return fetchJson(`${API_BASE}/sync-targets/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function deleteSyncTarget(id: number): Promise<void> {
+  await fetchJson(`${API_BASE}/sync-targets/${id}`, { method: 'DELETE' });
+}
