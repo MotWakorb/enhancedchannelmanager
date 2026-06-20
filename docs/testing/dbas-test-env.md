@@ -128,6 +128,99 @@ hard rule (acceptance criterion #3):
 This keeps the per-PR loop fast **and** keeps the fake honest: the fake's
 correctness is *derived from* the live instance, never *assumed*.
 
+## Cross-instance sync test strategy (epic `i39wu`)
+
+Cross-instance live sync (`docs/adr/ADR-013-cross-instance-live-sync.md`) is
+**"restore over HTTP"**: ECM gathers the config of **Dispatcharr-A** and PUSHES
+it to **Dispatcharr-B** through B's WRITE API. The least-validated surface sync
+depends on is exactly that write contract — `create` (returns the created object
+with a NEW id), a **409 conflict** on a duplicate create, `update` mutation,
+async write completion — which the *read*-oriented restore mocks never covered
+(QA panel: the #1 sync test risk). Bead `enhancedchannelmanager-46pkq` builds the
+test substrate for it. **Two-tier gate**, mirroring the restore gate above:
+
+| Tier | What it proves | Where | Status |
+|------|----------------|-------|--------|
+| **Fast (per-PR)** | The sync ENGINE's convergence / idempotency / partial-failure logic against a FAITHFUL fake of B's write contract | `backend/tests/fixtures/sync_harness.py` + `backend/tests/tasks/test_sync_roundtrip.py` | **BUILT** — runs in the normal pytest suite |
+| **Live (nightly / pre-merge)** | That the fake's write-contract fidelity holds against REAL Dispatcharr (the actual 409 shape, async write completion, real id assignment) | `tests/dbas-test-env/docker-compose.dbas-sync-test.yml` (two non-colliding A+B instances) | **DEFERRED** — scaffold only, **not run in CI** |
+
+### Fast tier (BUILT) — the stateful two-instance mock harness
+
+The pre-existing engine tests (`test_dbas_sync_engine.py`) mock dest-B as
+independent `AsyncMock` methods and assert on **call counts** — proving the
+engine *calls* B, but not that B *converged* (a stateless mock's `get_*` ignores
+prior `create_*`, so "idempotency" can only be checked against a *separate*
+hand-built "already-converged" mock).
+
+The harness instead models **B as a real instance**
+(`StatefulDispatcharrFake`): every write is APPLIED — `create_*` stores the row
+and returns it with a NEW server-assigned id; a **duplicate `create_*`** (same
+natural key) raises a real `httpx` **409**; `update_*` mutates; `delete_*` (the
+rollback compensator) removes it, 404 when already gone. That statefulness makes
+the keystone assertions REAL rather than call-count proxies:
+
+- **Convergence** — `B.state_by_key() == A.state_by_key()` after an apply (every
+  source entity present on B under its natural key; ids differ — B owns its own).
+- **Idempotency** — a GENUINE second `run_sync` against the now-populated B is a
+  no-op (importers match B's own state → `ALREADY_EXISTS_IDENTICAL`, zero creates).
+- **Partial failure** — a real injected mid-sync write error on B drives the
+  orchestrator's compensating rollback against the state B actually stored; the
+  suite asserts B is left consistent and that a clean re-run **heals** (converges).
+- **Never-sync-users (D3)** and **redact-by-default (D2)** end-to-end through the
+  whole gather → redact → plan → importer → B-write pipeline.
+
+The harness is the sync analogue of `tests/dbas/test_restore_roundtrip.py` — a
+shareable keystone the downstream sync beads (`tjaey`, `kcxie`) extend.
+
+> **A real orchestrator property the harness surfaces** (documented, not a bug):
+> the rollback dispatch (`restore_orchestrator._delete_dispatch`) registers
+> compensators only for M3U / group / profile / channel / stream / user — **not**
+> `epg_source` or `stream_profile`. So a *late*-step failure can only
+> `FAILED_ROLLBACK_INCOMPLETE` (those earlier-created rows are residue on B), vs
+> an *early* failure that rolls back cleanly. Both are exercised; a clean re-run
+> heals from either. If completeness of cross-instance rollback is later deemed
+> required, registering those two compensators is the fix — tracked as a follow-up.
+
+### Live tier (DEFERRED) — what still needs a reachable Dispatcharr-B
+
+The live two-stack tier is **scaffolded but unbuilt**: no second (or first)
+Dispatcharr is reachable in this environment, so the compose file +
+write-contract fidelity against reality were authored, not run. The fast mock
+tier is the substrate that ships today; the live tier is the honest gap.
+
+**DEFERRED follow-up checklist** (a reachable Dispatcharr-B is the hard
+prerequisite — none of this could be live-validated at authoring time):
+
+- [ ] **Single-instance `zqtjj` first-bring-up checklist closed.** The two-stack
+      compose inherits every assumption in the single-instance stack (seed-admin
+      env names, `entrypoint.celery.sh` path, modular env vars, snapshot tables).
+      Those are still **authored-not-live-validated** — close
+      `tests/dbas-test-env/README.md` → "First-bring-up validation checklist"
+      against a live 0.26.0 BEFORE trusting the two-stack.
+- [ ] **Bring up `docker-compose.dbas-sync-test.yml`** (`-p dbas-sync-testenv`)
+      and confirm A (9601) + B (9602) both reach `healthy`, with B reachable from
+      A at `http://dispatcharr-b-web:9191` (the `SyncTarget.base_url` analogue).
+- [ ] **Capture the WRITE-API contract fixtures** from live B — the shapes the
+      `StatefulDispatcharrFake` reproduces: `create_*` success body (does B echo
+      the payload + a new `id`?), the **409 conflict** body on a duplicate
+      create, `update_*` response, and **async write completion** semantics (does
+      a create return synchronously, or is there a celery-backed settle the
+      importers must poll for?). Pin the fake to these with a contract test, just
+      like the restore fake (above).
+- [ ] **Run the keystone round-trip against live A→B** — seed A, `run_sync`
+      apply, assert B converged; re-run for idempotency; inject a failure
+      (e.g. revoke B mid-run) for the partial-failure path. This is the live
+      analogue of `test_sync_roundtrip.py`.
+- [ ] **Wire the nightly/pre-merge job** that runs the live tier and **fails on
+      drift** between the fake and live B (mirrors the restore two-tier gate).
+- [ ] **SSRF chokepoint, live** — confirm `security/ssrf.py` validates B's
+      `base_url` at execute time against the real in-cluster DNS name, and that
+      the insecure-TLS escape hatch still emits its per-cycle audit row.
+
+Until that checklist is closed, the per-PR mock tier is the **only** validated
+sync gate — honest about what it does and does not cover: it proves the engine's
+logic against a faithful *model* of B's write contract, not against B itself.
+
 ## Status / follow-ups
 
 Authored as infra + tooling. **Not yet live-validated** — no Dispatcharr was
@@ -138,3 +231,8 @@ endpoint/field names, celery entrypoint path, snapshot table names) is in
 `tests/dbas-test-env/README.md`. Building the validated CI fake itself is a
 follow-up (specified above, gated on a first live bring-up to capture the
 contract fixtures).
+
+For cross-instance **sync** specifically: the fast mock tier (the stateful
+two-instance harness) is **BUILT and running per-PR**; the live two-stack tier is
+**DEFERRED** with the explicit checklist above — it needs a reachable
+Dispatcharr-B, which this environment does not have.

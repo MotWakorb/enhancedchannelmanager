@@ -1,0 +1,237 @@
+# =============================================================================
+# CROSS-INSTANCE SYNC test stack — TWO non-colliding Dispatcharr instances (A + B)
+# =============================================================================
+#
+# STATUS: SCAFFOLD for the DEFERRED live nightly tier. NOT run in CI, NOT yet
+# live-validated. The per-PR fast tier (the STATEFUL mock harness) is the BUILT
+# half of bead enhancedchannelmanager-46pkq and lives at
+# backend/tests/fixtures/sync_harness.py + backend/tests/tasks/test_sync_roundtrip.py.
+# This file + the README "Two-instance sync tier" section + the
+# docs/testing/dbas-test-env.md "Cross-instance sync test strategy" section are
+# the documented, ready-to-wire scaffold for when a reachable Dispatcharr-B
+# image is wired into CI. See the DEFERRED checklist in dbas-test-env.md.
+#
+# Purpose (when live)
+# -------------------
+# Cross-instance live sync (epic i39wu) is "restore over HTTP": ECM gathers the
+# config of Dispatcharr-A and PUSHES it to Dispatcharr-B via B's WRITE API
+# (create/update/delete, 409 conflict, async write completion). The mock harness
+# validates the engine's convergence/idempotency/partial-failure logic against a
+# FAITHFUL fake of that write contract; THIS stack validates the fake's fidelity
+# against the REAL Dispatcharr write API — the least-validated surface sync
+# depends on (QA panel #1 risk).
+#
+# Extends the single-instance docker-compose.dbas-test.yml to TWO complete,
+# fully-isolated stacks. A = the sync SOURCE, B = the sync DESTINATION (managed
+# replica). One-way only (A -> B); B never writes back to A (ADR-013 S3).
+#
+# Version pin — same as the single-instance stack
+# -----------------------------------------------
+# Both instances pin Dispatcharr ${DISPATCHARR_VERSION:-0.26.0} (the operator's
+# live version). Mixed-version A/B sync is a SEPARATE matrix dimension and is out
+# of scope for this scaffold — A and B are the SAME version here.
+#
+# Isolation contract (NON-NEGOTIABLE — must never touch ecm-ecm-1 OR the single-
+# instance dbas-testenv stack)
+# -----------------------------------------------------------------------------
+#   * ALWAYS run with the distinct project name:  -p dbas-sync-testenv
+#   * Instance A host ports: web 9601, pg 5446.
+#   * Instance B host ports: web 9602, pg 5447.
+#     (Deliberately away from ECM's 6100/6143/6101, the operator's live 9191, AND
+#      the single-instance stack's 9591/5436.)
+#   * Per-instance named volumes + a shared project-scoped network (A reaches B
+#     by service DNS `dispatcharr-b-web:9191` — the in-cluster analogue of the
+#     SyncTarget base_url; the SSRF chokepoint is exercised against that URL).
+#   * Tear DOWN when done:
+#       docker compose -p dbas-sync-testenv -f docker-compose.dbas-sync-test.yml down -v
+# =============================================================================
+
+name: dbas-sync-testenv
+
+x-dispatcharr-web: &dispatcharr-web-base
+  image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.26.0}
+  restart: "no"
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+x-dispatcharr-celery: &dispatcharr-celery-base
+  image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.26.0}
+  restart: "no"
+  entrypoint: ["/app/docker/entrypoint.celery.sh"]
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  # ===========================================================================
+  # INSTANCE A — the sync SOURCE (web + celery + postgres + redis).
+  # ===========================================================================
+  dispatcharr-a-web:
+    <<: *dispatcharr-web-base
+    ports:
+      - "${DBAS_SYNC_A_HTTP_PORT:-9601}:9191"
+    depends_on:
+      dispatcharr-a-db:
+        condition: service_healthy
+      dispatcharr-a-redis:
+        condition: service_healthy
+    volumes:
+      - dbas-sync-a-data:/data
+    environment:
+      - DISPATCHARR_ENV=modular
+      - POSTGRES_HOST=dispatcharr-a-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+      - REDIS_HOST=dispatcharr-a-redis
+      - REDIS_PORT=6379
+      - DISPATCHARR_LOG_LEVEL=info
+      - DISPATCHARR_SUPERUSER_USERNAME=${DBAS_SYNC_A_ADMIN_USER:-ecmtest-a}
+      - DISPATCHARR_SUPERUSER_PASSWORD=${DBAS_SYNC_A_ADMIN_PASS:-ecmtestpass-a}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9191/api/core/version/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  dispatcharr-a-celery:
+    <<: *dispatcharr-celery-base
+    depends_on:
+      dispatcharr-a-db:
+        condition: service_healthy
+      dispatcharr-a-redis:
+        condition: service_healthy
+      dispatcharr-a-web:
+        condition: service_started
+    volumes:
+      - dbas-sync-a-data:/data
+    environment:
+      - DISPATCHARR_ENV=modular
+      - DISPATCHARR_PORT=9191
+      - POSTGRES_HOST=dispatcharr-a-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+      - REDIS_HOST=dispatcharr-a-redis
+      - REDIS_PORT=6379
+      - DISPATCHARR_LOG_LEVEL=info
+      - DJANGO_SETTINGS_MODULE=dispatcharr.settings
+      - PYTHONUNBUFFERED=1
+
+  dispatcharr-a-db:
+    image: postgres:17
+    restart: "no"
+    ports:
+      - "${DBAS_SYNC_A_PG_PORT:-5446}:5432"
+    environment:
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+    volumes:
+      - dbas-sync-a-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatcharr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dispatcharr-a-redis:
+    image: redis:7
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ===========================================================================
+  # INSTANCE B — the sync DESTINATION / managed replica (web + celery + pg + redis).
+  # ===========================================================================
+  dispatcharr-b-web:
+    <<: *dispatcharr-web-base
+    ports:
+      - "${DBAS_SYNC_B_HTTP_PORT:-9602}:9191"
+    depends_on:
+      dispatcharr-b-db:
+        condition: service_healthy
+      dispatcharr-b-redis:
+        condition: service_healthy
+    volumes:
+      - dbas-sync-b-data:/data
+    environment:
+      - DISPATCHARR_ENV=modular
+      - POSTGRES_HOST=dispatcharr-b-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+      - REDIS_HOST=dispatcharr-b-redis
+      - REDIS_PORT=6379
+      - DISPATCHARR_LOG_LEVEL=info
+      - DISPATCHARR_SUPERUSER_USERNAME=${DBAS_SYNC_B_ADMIN_USER:-ecmtest-b}
+      - DISPATCHARR_SUPERUSER_PASSWORD=${DBAS_SYNC_B_ADMIN_PASS:-ecmtestpass-b}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9191/api/core/version/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  dispatcharr-b-celery:
+    <<: *dispatcharr-celery-base
+    depends_on:
+      dispatcharr-b-db:
+        condition: service_healthy
+      dispatcharr-b-redis:
+        condition: service_healthy
+      dispatcharr-b-web:
+        condition: service_started
+    volumes:
+      - dbas-sync-b-data:/data
+    environment:
+      - DISPATCHARR_ENV=modular
+      - DISPATCHARR_PORT=9191
+      - POSTGRES_HOST=dispatcharr-b-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+      - REDIS_HOST=dispatcharr-b-redis
+      - REDIS_PORT=6379
+      - DISPATCHARR_LOG_LEVEL=info
+      - DJANGO_SETTINGS_MODULE=dispatcharr.settings
+      - PYTHONUNBUFFERED=1
+
+  dispatcharr-b-db:
+    image: postgres:17
+    restart: "no"
+    ports:
+      - "${DBAS_SYNC_B_PG_PORT:-5447}:5432"
+    environment:
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+    volumes:
+      - dbas-sync-b-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatcharr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dispatcharr-b-redis:
+    image: redis:7
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dbas-sync-a-data:
+  dbas-sync-a-pg:
+  dbas-sync-b-data:
+  dbas-sync-b-pg:
