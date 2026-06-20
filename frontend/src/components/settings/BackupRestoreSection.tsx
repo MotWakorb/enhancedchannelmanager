@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { BackupRestoreModal } from '../BackupRestoreModal';
+import { DbasRestoreModal } from '../DbasRestoreModal';
 import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { getDateLocale } from '../../utils/formatting';
 import './BackupRestoreSection.css';
@@ -17,6 +18,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [restoring, setRestoring] = useState(false);
   const [restoreResult, setRestoreResult] = useState<api.RestoreResult | null>(null);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [showDbasRestoreModal, setShowDbasRestoreModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Export section selection
@@ -348,6 +350,23 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
       <EncryptedBackupCard />
 
+      {/* DBAS artifact restore (.zip, incl. encrypted) — bead 7euap */}
+      <div className="backup-card">
+        <div className="backup-card-header">
+          <span className="material-icons">restore</span>
+          <h3>Restore DBAS Backup</h3>
+        </div>
+        <p className="backup-card-description">
+          Restore a v0.18.0 backup artifact (.zip) — the format produced by scheduled backups and
+          the Encrypted Backup card. Preview the changes first (dry run), then apply. Encrypted
+          artifacts prompt for the passphrase.
+        </p>
+        <button className="btn-primary" onClick={() => setShowDbasRestoreModal(true)}>
+          <span className="material-icons">upload_file</span>
+          Restore from artifact...
+        </button>
+      </div>
+
       {/* Full ZIP Restore */}
       <div className="backup-card">
         <div className="backup-card-header">
@@ -403,6 +422,10 @@ export function BackupRestoreSection({ isAdmin }: Props) {
 
       {showRestoreModal && (
         <BackupRestoreModal onClose={() => setShowRestoreModal(false)} />
+      )}
+
+      {showDbasRestoreModal && (
+        <DbasRestoreModal onClose={() => setShowDbasRestoreModal(false)} />
       )}
     </div>
   );
