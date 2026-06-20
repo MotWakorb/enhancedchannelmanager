@@ -35,6 +35,7 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 import database
+import observability
 from dbas.restore_contracts import RestoreOutcome, RestoreReport
 from export_models import SyncTarget
 from models import JournalEntry, Notification
@@ -55,6 +56,22 @@ def _wire_db(test_engine, monkeypatch):
     )
     monkeypatch.setattr(database, "_SessionLocal", TestSessionLocal)
     return TestSessionLocal
+
+
+@pytest.fixture
+def _reset_metrics():
+    """Fresh metric registry around each metric-asserting test (mirror the
+    DbasBackupTask metric tests)."""
+    observability.reset_for_tests()
+    observability.install_metrics()
+    yield
+    observability.reset_for_tests()
+
+
+def _sync_counter_value(result_label: str) -> float:
+    """Read the current ecm_sync_runs_total value for a result label."""
+    counter = observability.get_metric("sync_runs_total")
+    return counter.labels(result=result_label)._value.get()
 
 
 def _make_target(session, **overrides) -> SyncTarget:
@@ -430,3 +447,161 @@ async def test_fresh_target_passes_gate_and_runs(_wire_db):
 
     assert mock_run.await_count == 1
     assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# Metric: ecm_sync_runs_total{result} — tri-state {success, partial, failed}
+# ---------------------------------------------------------------------------
+
+
+def test_sync_runs_total_is_registered(_reset_metrics):
+    """The tri-state run-outcome counter must be registered (mirrors
+    ecm_backup_runs_total)."""
+    counter = observability.get_metric("sync_runs_total")
+    # Bounded label set — each result label materializes its own series.
+    for result in ("success", "partial", "failed"):
+        assert counter.labels(result=result)._value.get() == 0.0
+
+
+@pytest.mark.asyncio
+async def test_success_run_bumps_success_metric(_wire_db, _reset_metrics):
+    """A clean SUCCESS apply increments ecm_sync_runs_total{result="success"}
+    exactly once (and nothing else)."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        result = await task.execute()
+
+    assert result.success is True
+    assert _sync_counter_value("success") == 1.0
+    assert _sync_counter_value("partial") == 0.0
+    assert _sync_counter_value("failed") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_dry_run_bumps_success_metric(_wire_db, _reset_metrics):
+    """A dry-run preview (no realized outcome) is a clean success for metric
+    purposes — it produced a plan."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        return _dry_run_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id})
+        await task.execute()
+
+    assert _sync_counter_value("success") == 1.0
+    assert _sync_counter_value("partial") == 0.0
+    assert _sync_counter_value("failed") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_partial_run_bumps_partial_metric(_wire_db, _reset_metrics):
+    """A mixed/rolled-back apply increments {result="partial"} — NOT success
+    (tri-state discipline). A sustained partial loop is what also keeps the
+    last-success gauge stale and trips ECMSyncStalledTargetDrift."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        return _partial_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        result = await task.execute()
+
+    assert result.success is False
+    assert _sync_counter_value("partial") == 1.0
+    assert _sync_counter_value("success") == 0.0
+    assert _sync_counter_value("failed") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_exception_run_bumps_failed_metric(_wire_db, _reset_metrics):
+    """An exception inside run_sync increments {result="failed"}."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _boom(sync_target, *, confirm_apply=False, session=None, **_kw):
+        raise RuntimeError("remote-b unreachable")
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_boom):
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id})
+        result = await task.execute()
+
+    assert result.success is False
+    assert _sync_counter_value("failed") == 1.0
+    assert _sync_counter_value("success") == 0.0
+    assert _sync_counter_value("partial") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_no_target_bumps_failed_metric(_wire_db, _reset_metrics):
+    """No sync_target_id configured -> {result="failed"}, run_sync never called."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        task = DbasSyncTask()
+        result = await task.execute()
+
+    assert mock_run.await_count == 0
+    assert result.success is False
+    assert _sync_counter_value("failed") == 1.0
+
+
+@pytest.mark.asyncio
+async def test_freshness_abort_bumps_failed_metric(_wire_db, _reset_metrics):
+    """A credential-freshness abort increments {result="failed"} — a target
+    that drifted because no sync was applied."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session, enabled=False)
+    target_id = target.id
+    session.close()
+
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        task = DbasSyncTask()
+        task.update_config(
+            {"sync_target_id": target_id, "cloud_credential_version": 1}
+        )
+        result = await task.execute()
+
+    assert mock_run.await_count == 0
+    assert result.error == "CREDENTIAL_FRESHNESS_ABORT"
+    assert _sync_counter_value("failed") == 1.0
+    assert _sync_counter_value("success") == 0.0
+    assert _sync_counter_value("partial") == 0.0
