@@ -1,0 +1,91 @@
+/* DBAS artifact restore modal (bead 7euap + u81kh passphrase path).
+   Reuses .brm-dropzone / .brm-file-info / .modal-* from BackupRestoreModal.css
+   + ModalBase.css; only the passphrase field, mode picker, and warning are
+   defined here. */
+
+.dbr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  margin: 0.875rem 0;
+}
+
+.dbr-field label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #888);
+}
+
+.dbr-field input[type='password'] {
+  padding: 0.5rem 0.625rem;
+  background: var(--bg-tertiary, #2a2a4a);
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg, 8px);
+  font-size: 0.875rem;
+}
+
+.dbr-field input[type='password']:focus {
+  outline: none;
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.dbr-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.875rem 0;
+}
+
+.dbr-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg, 8px);
+  cursor: pointer;
+}
+
+.dbr-mode-option.is-active {
+  border-color: var(--accent-primary, #6366f1);
+  background: rgba(99, 102, 241, 0.06);
+}
+
+.dbr-mode-option input[type='radio'] {
+  margin-top: 0.1875rem;
+  flex-shrink: 0;
+}
+
+.dbr-mode-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  font-size: 0.875rem;
+  color: var(--text-primary, #fff);
+}
+
+.dbr-mode-option .dbr-mode-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted, #666);
+}
+
+/* Apply-mode warning (mirrors the section's restore-warning, scoped here so the
+   modal does not depend on BackupRestoreSection.css). */
+.backup-restore-modal-container .restore-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius-lg, 8px);
+  font-size: 0.8125rem;
+  color: var(--warning, #f59e0b);
+  line-height: 1.5;
+}
+
+.backup-restore-modal-container .restore-warning .material-icons {
+  font-size: 1.125rem;
+  flex-shrink: 0;
+  margin-top: 0.0625rem;
+}
