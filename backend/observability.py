@@ -765,6 +765,53 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             registry=registry,
         ),
         # ----------------------------------------------------------------
+        # DBAS cross-instance sync outcomes (bead enhancedchannelmanager-k78ja,
+        # epic i39wu).
+        #
+        # ``ecm_sync_runs_total`` labels by ``result`` — a bounded tri-state set
+        # mirroring ``ecm_backup_runs_total``:
+        #   'success'  the DbasSyncTask completed a clean run — a dry-run plan
+        #              that produced a preview, or an APPLY whose RestoreReport
+        #              outcome was SUCCESS. This is also the ONLY result that
+        #              stamps ecm_task_schedule_last_success_timestamp (the
+        #              task_engine stamps it on TaskResult.success), so a
+        #              'success' increment is the heartbeat the staleness alert
+        #              keys off.
+        #   'partial'  an APPLY whose outcome was mixed / rolled-back (tri-state
+        #              discipline — NEVER reported as a clean success). The
+        #              per-task success gauge is NOT stamped on a partial, so a
+        #              SUSTAINED partial loop ALSO trips ECMSyncStalledTargetDrift
+        #              (the staleness clock never resets). That is correct:
+        #              target B is drifting either way.
+        #   'failed'   the run raised, the freshness gate aborted (target
+        #              missing / disabled / revoked / rotated), or no
+        #              sync_target_id was configured — every non-clean,
+        #              non-partial terminal state. Freshness aborts are
+        #              non-silent (WARN + journal + notification) independent of
+        #              this counter.
+        #
+        # SRE: the #1 operator risk for cross-instance sync is SILENT DRIFT —
+        # a sync quietly failing (or looping on partial) for N cycles while B
+        # diverges from A, discovered only at failover. A sustained
+        # 'partial'/'failed' rate with a zero 'success' rate is that signal;
+        # the freshness/last-success staleness alert (ECMSyncStalledTargetDrift)
+        # is the time-since-success counterpart. Cardinality is fixed at three
+        # series.
+        # ----------------------------------------------------------------
+        "sync_runs_total": Counter(
+            "ecm_sync_runs_total",
+            "Cumulative count of DBAS cross-instance sync task runs, labeled by "
+            "result. result ∈ {success, partial, failed}. 'success' = a clean "
+            "dry-run plan or an APPLY with a SUCCESS outcome (also the heartbeat "
+            "that stamps ecm_task_schedule_last_success_timestamp). 'partial' = "
+            "an APPLY with a mixed/rolled-back outcome (target B drifting; "
+            "tri-state discipline — never a clean success, and does NOT stamp "
+            "the last-success gauge). 'failed' = the run raised, the credential-"
+            "freshness gate aborted, or no target was configured.",
+            ["result"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
         # Database file size (bd-ygoqr — paired with the CleanupTask CRON
         # default flip; together they give operators "is my DB growing?"
         # signal AND an automatic weekly VACUUM that bounds the growth).
