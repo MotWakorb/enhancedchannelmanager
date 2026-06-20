@@ -181,6 +181,26 @@ class SyncTarget(Base):
     token_revoked_at = Column(DateTime, nullable=True)
     # Per-target TLS-verification skip flag (see CloudStorageTarget.insecure).
     insecure = Column(Boolean, nullable=False, default=False)
+    # --- Persisted sync state (v0.18.1, bead vigbu; SPIKE xp6mp DBA Ruling 2) ---
+    # These columns land ADDITIVELY onto a table that already exists (created in
+    # 0023). The three bookkeeping columns are NULLABLE — there is genuinely no
+    # last sync yet for a freshly-configured target — so they need NO
+    # server_default (a NULL backfill is the correct "never synced" sentinel).
+    # ``fuzzy_stream_matching`` is the one NOT-NULL add and therefore DOES carry
+    # a server_default('0'): a NOT NULL column added to a populated table fails
+    # on SQLite without one (docs/database_migrations.md — the smart-bootstrap
+    # stamp-skip trap). Existing rows backfill to False (exact stream matching).
+    # Timestamp of the last completed full sync run (NULL == never synced).
+    last_full_sync_at = Column(DateTime, nullable=True)
+    # Outcome of the last sync run ("success", "failed", "partial", ...);
+    # NULL == never synced. Free-form short string set by the sync engine (tjaey).
+    last_outcome = Column(String(40), nullable=True)
+    # Fingerprint of the source config the last sync pushed, for idempotent
+    # skip-if-unchanged on the next run (NULL == never synced).
+    last_source_fingerprint = Column(Text, nullable=True)
+    # Opt-in: include the stream floor in the sync and fuzzy-match streams on the
+    # remote instead of requiring exact identity. Default False (exact matching).
+    fuzzy_stream_matching = Column(Boolean, nullable=False, server_default=text("0"), default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -194,6 +214,10 @@ class SyncTarget(Base):
             "credential_version": self.credential_version,
             "token_revoked_at": self.token_revoked_at.isoformat() + "Z" if self.token_revoked_at else None,
             "insecure": self.insecure,
+            "last_full_sync_at": self.last_full_sync_at.isoformat() + "Z" if self.last_full_sync_at else None,
+            "last_outcome": self.last_outcome,
+            "last_source_fingerprint": self.last_source_fingerprint,
+            "fuzzy_stream_matching": self.fuzzy_stream_matching,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
         }
