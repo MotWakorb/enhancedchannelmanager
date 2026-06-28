@@ -98,7 +98,11 @@ class TestListSavedBackups:
         text = _text(result)
         assert "ecm-backup-2026-05-24_120000.zip" in text
         assert "ecm-backup-2026-05-01_030000.yaml" in text
-        assert "zip" in text and "yaml" in text
+        # The tool renders [zip] / [yaml] type labels — assert the bracketed form
+        # so the test fails if the label is removed or changed, not just if the
+        # filename extension appears (which is incidental).
+        assert "[zip]" in text, f"Expected '[zip]' type label in output, got: {text!r}"
+        assert "[yaml]" in text, f"Expected '[yaml]' type label in output, got: {text!r}"
 
     @pytest.mark.asyncio
     async def test_empty(self):
