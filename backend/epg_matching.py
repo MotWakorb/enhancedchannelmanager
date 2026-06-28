@@ -34,6 +34,18 @@ logger = logging.getLogger(__name__)
 
 MIN_PREFIX_LENGTH = 4
 
+# EPG source priority is a banded tiebreaker, NOT a confidence override.
+# Candidates whose confidence scores fall in the same band (width
+# PRIORITY_TIEBREAK_BAND) are reordered so the higher-priority source wins;
+# a candidate more than one band better on confidence is never demoted.
+# N=5 is the smallest meaningful confidence signal (HD variant = 5 pts), so
+# priority only arbitrates genuine near-ties. See bead s5vyz.1 for the decision.
+PRIORITY_TIEBREAK_BAND = 5
+
+# Sentinel rank for an EPG source absent from the priority map: sorts after
+# every ranked source within a confidence band (but never reorders across bands).
+_UNRANKED_SOURCE = 1_000_000
+
 LEAGUE_SUFFIXES = [
     "nfl", "nba", "mlb", "nhl", "mls", "wnba", "ncaa", "cfb", "cbb",
     "epl", "premierleague", "laliga", "bundesliga", "seriea", "ligue1",
@@ -444,28 +456,64 @@ def _compute_confidence(
     return score
 
 
+def _epg_source_id(epg_source) -> Optional[int]:
+    """Resolve an EPG source id from either a ``{id, name}`` dict or a bare int.
+
+    Dispatcharr's epgdata may serialize ``epg_source`` as a nested object or as
+    a plain foreign-key id depending on version; handle both.
+    """
+    if isinstance(epg_source, dict):
+        return epg_source.get("id")
+    if isinstance(epg_source, int):
+        return epg_source
+    return None
+
+
+def build_source_priority_order(epg_sources: list[dict]) -> dict[int, int]:
+    """Map EPG ``source_id -> rank`` where rank 0 is the most-preferred source.
+
+    Sources are ranked by their ``priority`` field DESCENDING — higher priority
+    number = more preferred, matching the EPG Manager UI convention
+    (EPGManagerTab sorts ``b.priority - a.priority``). Ties broken by source id
+    so the ranking is deterministic regardless of fetch order.
+    """
+    ranked = sorted(
+        (s for s in epg_sources if s.get("id") is not None),
+        key=lambda s: (-(s.get("priority") or 0), s["id"]),
+    )
+    return {s["id"]: rank for rank, s in enumerate(ranked)}
+
+
 def _sort_matches(
     matches: list[EPGMatchWithScore],
     channel_league: Optional[str],
     channel_normalized: str,
+    source_order: Optional[dict[int, int]] = None,
 ) -> list[EPGMatchWithScore]:
     """Sort matches by priority rules.
 
     Sort priority:
     1. League match (if channel has league prefix)
-    2. Country match
-    3. Exact over prefix (for names > 2 chars)
-    4. Special punctuation match
-    5. Channel-is-prefix-of-EPG preferred
-    6. Length similarity (closer = better)
-    7. Regional variant matching
-    8. HD + call sign combined scoring
-    9. Alphabetical
+    2. Confidence band (higher confidence first, bucketed by
+       PRIORITY_TIEBREAK_BAND)
+    3. EPG source priority — within a confidence band only (rank 0 = best)
+    4. Raw confidence (higher first, within band + source)
+    5. Exact over prefix (for names > 2 chars)
+    6. Special punctuation match
+    7. Channel-is-prefix-of-EPG preferred
+    8. Length similarity (closer = better)
+    9. Regional variant matching
+    10. Alphabetical, then EPG id (fully deterministic)
+
+    ``source_order`` maps EPG ``source_id -> rank`` (0 = most preferred). It is a
+    *banded tiebreaker*: it only reorders candidates that share a confidence
+    band, so it never promotes a candidate more than one band worse on
+    confidence. When ``source_order`` is None/empty every match gets an equal
+    rank, and because the band is a monotonic function of confidence the result
+    is identical to ordering by raw confidence alone (no behavior change).
     """
 
     def sort_key(m: EPGMatchWithScore) -> tuple:
-        # Higher confidence first (negate for descending)
-        # Then apply tiebreaker rules
         epg_norm = normalize_for_epg_match(m.epg_name)
 
         # 1. League match bonus
@@ -473,26 +521,39 @@ def _sort_matches(
         if channel_league and m.match_type == "league":
             league_bonus = -1  # Sort first
 
-        # 2. Country (encoded in confidence already)
-        # 3. Exact over prefix
+        # 2. Confidence band (negate for descending). Coarser than raw
+        #    confidence so near-ties share a band and can be broken by source.
+        confidence_band = -(m.confidence // PRIORITY_TIEBREAK_BAND)
+
+        # 3. Source priority rank — only differentiates within a band.
+        if source_order:
+            source_rank = source_order.get(
+                _epg_source_id(m.epg_source), _UNRANKED_SOURCE
+            )
+        else:
+            source_rank = 0
+
+        # 4. Raw confidence (still prefer the better match within band + source)
+        # 5. Exact over prefix
         exact_bonus = 0 if m.match_type == "exact" else 1
 
-        # 4. Special punctuation
+        # 6. Special punctuation
         has_special = 1 if _SPECIAL_PUNCT_RE.search(m.epg_name) else 0
 
-        # 5. Channel is prefix of EPG
+        # 7. Channel is prefix of EPG
         is_prefix = 0 if epg_norm.startswith(channel_normalized) else 1
 
-        # 6. Length similarity
+        # 8. Length similarity
         len_diff = abs(len(channel_normalized) - len(epg_norm))
 
-        # 7. Regional variant
+        # 9. Regional variant
         has_regional = 1 if _REGIONAL_RE.search(m.epg_name) else 0
 
-        # 8. HD + call sign (encoded in confidence)
-        # 9. Alphabetical
+        # 10. Alphabetical, then EPG id as a final deterministic tiebreaker
         return (
             league_bonus,
+            confidence_band,
+            source_rank,
             -m.confidence,
             exact_bonus,
             has_special,
@@ -500,6 +561,7 @@ def _sort_matches(
             len_diff,
             has_regional,
             m.epg_name.lower(),
+            m.epg_id,
         )
 
     return sorted(matches, key=sort_key)
@@ -699,22 +761,12 @@ def find_epg_matches_with_lookup(
                         match_type="league",
                     ))
 
-    # Apply source order preference if provided
-    if source_order and matches:
-        for match in matches:
-            source_id = None
-            if isinstance(match.epg_source, dict):
-                source_id = match.epg_source.get("id")
-            if source_id is not None and source_id in source_order:
-                # Boost confidence slightly for preferred sources
-                order = source_order[source_id]
-                if order == 0:
-                    match.confidence = min(100, match.confidence + 3)
-                elif order == 1:
-                    match.confidence = min(100, match.confidence + 1)
-
-    # Sort matches
-    matches = _sort_matches(matches, channel_league, channel_normalized)
+    # Sort matches. Source priority is applied inside the sort as a banded
+    # tiebreaker (see _sort_matches) — confidence is never mutated, so the
+    # reported score stays an honest measure of match quality.
+    matches = _sort_matches(
+        matches, channel_league, channel_normalized, source_order,
+    )
 
     result.matches = matches
     result.best_match = matches[0] if matches else None

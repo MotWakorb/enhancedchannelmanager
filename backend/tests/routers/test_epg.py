@@ -614,3 +614,95 @@ class TestProgramPoster:
         assert response.headers["content-type"] == "image/png"
         assert response.content == b"\xff\xd8\xff-image-bytes"
         mock_client.get_program_poster.assert_called_once_with(42)
+
+
+class TestMatchChannelsToEPG:
+    """Tests for POST /api/epg/match — server-side source-priority ranking."""
+
+    @staticmethod
+    def _client(sources):
+        """Mock client: one ESPN channel, two tying ESPN.us EPG entries."""
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = sources
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 1, "name": "ESPN", "streams": [1]}],
+        }
+        mock_client.get_streams.return_value = {
+            "results": [{"id": 1, "name": "US | ESPN",
+                         "channel_group_name": "US Sports"}],
+            "next": None,
+        }
+        mock_client.get_epg_data.return_value = [
+            {"id": 100, "name": "ESPN", "tvg_id": "ESPN.us",
+             "epg_source": {"id": 2, "name": "Backup"}},
+            {"id": 101, "name": "ESPN", "tvg_id": "ESPN.us",
+             "epg_source": {"id": 1, "name": "Primary"}},
+        ]
+        return mock_client
+
+    @staticmethod
+    def _best(data):
+        bucket = data["multiple"] or data["exact"]
+        return bucket[0]["matches"][0]
+
+    @pytest.mark.asyncio
+    async def test_priority_resolved_server_side(self, async_client):
+        """The preferred source (higher priority) wins the tie, from the server."""
+        from cache import get_cache
+        get_cache().clear()
+        sources = [
+            {"id": 1, "name": "Primary", "priority": 10},
+            {"id": 2, "name": "Backup", "priority": 1},
+        ]
+        mock_client = self._client(sources)
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post("/api/epg/match", json={
+                "channel_ids": [1],
+            })
+        assert response.status_code == 200
+        mock_client.get_epg_sources.assert_awaited()
+        assert self._best(response.json())["epg_source"]["id"] == 1
+
+    @pytest.mark.asyncio
+    async def test_priority_change_busts_cache(self, async_client):
+        """Reordering source priority changes the cache key and the winner."""
+        from cache import get_cache
+        get_cache().clear()
+        # First call: source 1 preferred.
+        mock_a = self._client([
+            {"id": 1, "name": "Primary", "priority": 10},
+            {"id": 2, "name": "Backup", "priority": 1},
+        ])
+        with patch("routers.epg.get_client", return_value=mock_a):
+            first = await async_client.post("/api/epg/match", json={"channel_ids": [1]})
+        assert self._best(first.json())["epg_source"]["id"] == 1
+
+        # Second call: priorities flipped — must NOT serve the stale cached result.
+        mock_b = self._client([
+            {"id": 1, "name": "Primary", "priority": 1},
+            {"id": 2, "name": "Backup", "priority": 10},
+        ])
+        with patch("routers.epg.get_client", return_value=mock_b):
+            second = await async_client.post("/api/epg/match", json={"channel_ids": [1]})
+        # Fresh matching ran (cache busted) and the new preferred source wins.
+        mock_b.get_epg_data.assert_awaited()
+        assert self._best(second.json())["epg_source"]["id"] == 2
+
+    @pytest.mark.asyncio
+    async def test_deprecated_source_order_ignored(self, async_client):
+        """A client-sent source_order is ignored; server priority still wins."""
+        from cache import get_cache
+        get_cache().clear()
+        sources = [
+            {"id": 1, "name": "Primary", "priority": 10},
+            {"id": 2, "name": "Backup", "priority": 1},
+        ]
+        mock_client = self._client(sources)
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post("/api/epg/match", json={
+                "channel_ids": [1],
+                # Deprecated: tries to make source 2 win — must be ignored.
+                "source_order": [2, 1],
+            })
+        assert response.status_code == 200
+        assert self._best(response.json())["epg_source"]["id"] == 1

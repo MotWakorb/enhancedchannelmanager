@@ -7569,6 +7569,7 @@ export function ChannelsPane({
               id: s.id,
               name: s.name,
               source_type: s.source_type,
+              priority: s.priority,
             }))}
             channelGroups={channelGroups}
             streamProfiles={streamProfiles}

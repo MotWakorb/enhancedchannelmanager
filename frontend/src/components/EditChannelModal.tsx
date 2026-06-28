@@ -19,7 +19,7 @@ export interface EditChannelModalProps {
   channel: Channel;
   logos: Logo[];
   epgData: { id: number; tvg_id: string; name: string; icon_url: string | null; epg_source: number }[];
-  epgSources: { id: number; name: string; source_type?: string }[];
+  epgSources: { id: number; name: string; source_type?: string; priority?: number }[];
   streamProfiles: { id: number; name: string; is_active: boolean }[];
   onClose: () => void;
   onSave: (changes: ChannelMetadataChanges) => Promise<void>;
@@ -42,6 +42,17 @@ export const EditChannelModal = memo(function EditChannelModal({
 }: EditChannelModalProps) {
   // Create a map for quick EPG source name lookup
   const epgSourceMap = new Map(epgSources.map((s) => [s.id, s.name]));
+  // Source priority lookup (higher = more preferred), used to order search
+  // results so the operator's preferred sources surface first.
+  const epgSourcePriority = new Map(epgSources.map((s) => [s.id, s.priority ?? 0]));
+  // Sort EPG search results by source priority DESC. Array.sort is stable, so
+  // entries from the same source keep their existing relevance order. This MUST
+  // run before the result list is sliced for display, or higher-priority
+  // entries beyond the cap would be truncated out of view.
+  const bySourcePriority = (
+    a: { epg_source: number },
+    b: { epg_source: number },
+  ) => (epgSourcePriority.get(b.epg_source) ?? 0) - (epgSourcePriority.get(a.epg_source) ?? 0);
 
   // Channel basic info state
   const [channelNumber, setChannelNumber] = useState<string>(String(channel.channel_number));
@@ -331,7 +342,7 @@ export const EditChannelModal = memo(function EditChannelModal({
       epg.name.toLowerCase().includes(searchTerm) ||
       epg.tvg_id.toLowerCase().includes(searchTerm)
     );
-  });
+  }).sort(bySourcePriority);
 
   const filteredTvgIdEpgData = epgData.filter((epg) => {
     // First filter by EPG source (same logic)
@@ -349,7 +360,7 @@ export const EditChannelModal = memo(function EditChannelModal({
       epg.name.toLowerCase().includes(searchTerm) ||
       epg.tvg_id.toLowerCase().includes(searchTerm)
     );
-  });
+  }).sort(bySourcePriority);
 
   const handleSelectTvgIdFromEpg = (epg: { tvg_id: string }) => {
     setTvgId(epg.tvg_id);
