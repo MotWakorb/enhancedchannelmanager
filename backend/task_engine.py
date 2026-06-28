@@ -9,10 +9,12 @@ Background service that manages and executes scheduled tasks:
 - Provides error handling and retry logic
 """
 import asyncio
+import contextlib
 import logging
 from datetime import datetime
 from typing import Optional
 
+import journal
 from database import get_session
 from models import TaskExecution
 from task_registry import get_registry
@@ -20,6 +22,44 @@ from task_scheduler import TaskResult
 from journal import log_entry
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _scheduler_mutation_source_scope(triggered_by: str):
+    """Stamp ``mutation_source="scheduler"`` for the duration of a scheduled run.
+
+    W3-follow-up A (enhancedchannelmanager-t44t2): a scheduled/background task
+    carries NO HTTP request, so the actor-source middleware (``main.py``) never
+    fires and every ``journal.log_entry`` it makes would land with
+    ``mutation_source=NULL``. This is the single execution chokepoint
+    (``TaskEngine._execute_task`` runs EVERY task through here), so setting the
+    journal contextvar once around the run attributes all journal calls inside
+    it to ``"scheduler"`` without instrumenting each ``tasks/*`` job.
+
+    Scope is limited to ``triggered_by == "scheduled"``. Manual/API runs reach
+    the engine from an HTTP request whose middleware already stamped ``"ui"`` /
+    ``"mcp_ai"`` — overriding that with ``"scheduler"`` would mislabel the audit
+    row — so for those this is a no-op and the existing value is left intact.
+
+    Explicit-vs-contextvar precedence is owned by
+    ``journal._resolve_mutation_source``: an explicit ``mutation_source=`` passed
+    at a call site (e.g. the auto-creation pipeline's ``"auto_creation"`` calls)
+    always wins over this contextvar, so an auto-creation run TRIGGERED by the
+    scheduler still journals its channel mutations as ``"auto_creation"`` while
+    the surrounding task start/complete rows become ``"scheduler"``.
+
+    The token is reset in ``finally`` (even on exception) so the actor never
+    leaks past this job into a sibling async task.
+    """
+    if triggered_by != "scheduled":
+        yield
+        return
+
+    token = journal.set_mutation_source(journal.MUTATION_SOURCE_SCHEDULER)
+    try:
+        yield
+    finally:
+        journal.reset_mutation_source(token)
 
 # Task-parameter keys whose VALUE is a secret and must never be logged or written
 # to the journal audit row (which itself is included in backups). A manual
@@ -761,6 +801,19 @@ class TaskEngine:
             logger.exception("[%s] Failed to create execution record: %s", task_id, e)
             execution_id = None
 
+        # Attribute every journal row made by this run to "scheduler" when the
+        # run was triggered by the scheduler (no HTTP request, so the actor-source
+        # middleware never fired). No-op for manual/API runs — see
+        # _scheduler_mutation_source_scope. Explicit call-site sources (e.g. the
+        # auto-creation pipeline's "auto_creation") still win via
+        # journal._resolve_mutation_source. Reset in the active-task ``finally``
+        # below so the actor never leaks into a sibling async task.
+        _scheduler_source_token = (
+            journal.set_mutation_source(journal.MUTATION_SOURCE_SCHEDULER)
+            if triggered_by == "scheduled"
+            else None
+        )
+
         try:
             # Apply schedule parameters to the task instance
             if parameters and hasattr(instance, 'update_config'):
@@ -1076,6 +1129,8 @@ class TaskEngine:
             )
 
         finally:
+            if _scheduler_source_token is not None:
+                journal.reset_mutation_source(_scheduler_source_token)
             async with self._lock:
                 self._active_tasks.discard(task_id)
 

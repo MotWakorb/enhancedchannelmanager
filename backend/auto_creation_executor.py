@@ -340,11 +340,49 @@ class ActionExecutor:
                 len(pending),
             )
 
+    def _journal_manual_channel_adoption(
+        self, channel: dict, stream_ctx: StreamContext, action_type: str
+    ) -> None:
+        """Record that an opt-in rule adopted a hand-built MANUAL channel.
+
+        enhancedchannelmanager-orzck (W1): when ``allow_manual_channel_merge``
+        is True and the resolved merge/update/rename target is a manual channel
+        (``auto_created`` missing/falsy), write an audit entry so an operator can
+        see exactly which manual channels an auto-creation run touched. Reuses
+        the buffered journal the executor already flushes in batches. A None
+        ``_execution_id`` (direct-construct callers/tests) disables journaling,
+        same as the per-merge writer.
+        """
+        if self._execution_id is None:
+            return
+        self._journal_buffer.append({
+            "category": "auto_creation",
+            "action_type": "manual_channel_adopted",
+            "entity_id": channel.get("id"),
+            "entity_name": channel.get("name"),
+            "description": (
+                "Auto-creation adopted MANUAL channel '%s' (id=%s) as merge "
+                "target for stream '%s' (allow_manual_channel_merge=True)"
+                % (channel.get("name"), channel.get("id"), stream_ctx.stream_name)
+            ),
+            "before_value": {
+                "auto_created": False,
+                "action_type": action_type,
+            },
+            "after_value": {"stream_id": stream_ctx.stream_id},
+            "user_initiated": False,
+            "mutation_source": journal.MUTATION_SOURCE_AUTO_CREATION,
+            "batch_id": str(self._execution_id),
+        })
+        if len(self._journal_buffer) >= self._journal_flush_threshold:
+            self._flush_journal_buffer()
+
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
                       normalization_group_ids: list[int] = None,
-                      match_scope_target_group: bool = False,
+                      match_scope_target_group: bool = True,
                       rule_scope_group_id: int = None,
+                      allow_manual_channel_merge: bool = False,
                       rule_id: int = None) -> ActionResult:
         """
         Execute a single action.
@@ -372,6 +410,15 @@ class ActionExecutor:
                 match (merge_streams has no action group_id). None (default)
                 preserves prior behavior: create_channel falls back to the
                 derived group, merge_streams stays group-agnostic.
+            allow_manual_channel_merge: When False (default —
+                enhancedchannelmanager-orzck / W1), auto-creation will NOT adopt
+                a hand-built MANUAL channel (``auto_created`` missing/falsy) as a
+                merge/update/rename target on a name collision — the manual
+                channel is treated as "not found" and a new auto channel is
+                created instead. When True, the rule opts back into the legacy
+                behavior and may adopt manual channels (the adoption is
+                journaled). Threaded into the resolution chokepoint as
+                ``block_manual = not allow_manual_channel_merge``.
 
         Returns:
             ActionResult with execution details
@@ -409,7 +456,8 @@ class ActionExecutor:
                 action, stream_ctx, exec_ctx, template_ctx, rule_target_group_id,
                 normalization_group_ids=normalization_group_ids,
                 match_scope_target_group=match_scope_target_group,
-                rule_scope_group_id=rule_scope_group_id
+                rule_scope_group_id=rule_scope_group_id,
+                allow_manual_channel_merge=allow_manual_channel_merge,
             )
         elif action_type == ActionType.CREATE_GROUP:
             result = await self._execute_create_group(action, stream_ctx, exec_ctx, template_ctx)
@@ -418,6 +466,7 @@ class ActionExecutor:
                                                          normalization_group_ids=normalization_group_ids,
                                                          match_scope_target_group=match_scope_target_group,
                                                          rule_scope_group_id=rule_scope_group_id,
+                                                         allow_manual_channel_merge=allow_manual_channel_merge,
                                                          rule_id=rule_id)
         elif action_type == ActionType.ASSIGN_LOGO:
             result = await self._execute_assign_logo(action, stream_ctx, exec_ctx, template_ctx)
@@ -629,8 +678,9 @@ class ActionExecutor:
                                        exec_ctx: ExecutionContext, template_ctx: dict,
                                        rule_target_group_id: int = None,
                                        normalization_group_ids: list[int] = None,
-                                       match_scope_target_group: bool = False,
-                                       rule_scope_group_id: int = None) -> ActionResult:
+                                       match_scope_target_group: bool = True,
+                                       rule_scope_group_id: int = None,
+                                       allow_manual_channel_merge: bool = False) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
@@ -686,7 +736,15 @@ class ActionExecutor:
         # falling back to the action's derived group_id. NULL rule_scope_group_id
         # preserves the prior behavior (scope = derived group_id).
         scope_group_id = (rule_scope_group_id or group_id) if match_scope_target_group else None
-        existing = self._find_channel_by_name(channel_name, scope_group_id=scope_group_id)
+        # enhancedchannelmanager-orzck (W1): block adoption of hand-built MANUAL
+        # channels unless the rule explicitly opts in.
+        existing = self._find_channel_by_name(
+            channel_name, scope_group_id=scope_group_id,
+            block_manual=not allow_manual_channel_merge,
+        )
+        if existing is not None and allow_manual_channel_merge \
+                and self._is_manual_channel(existing):
+            self._journal_manual_channel_adoption(existing, stream_ctx, action.type)
         logger.debug(
             "[AUTO-CREATE-EXEC] Lookup '%s' (scope_group_id=%s): %s",
             channel_name, scope_group_id,
@@ -847,7 +905,13 @@ class ActionExecutor:
             dry_id = self._next_dry_run_id
             self._next_dry_run_id -= 1
             simulated = {"id": dry_id, "name": channel_name, "channel_number": channel_number,
-                         "channel_group_id": group_id, "streams": [stream_ctx.stream_id]}
+                         "channel_group_id": group_id, "streams": [stream_ctx.stream_id],
+                         # enhancedchannelmanager-orzck (W1): a channel the engine
+                         # creates in THIS run is an auto channel — mark it so the
+                         # manual-channel gate lets later streams in the same run
+                         # dedup-merge into it (otherwise the missing key would be
+                         # read as "manual/protected" and block the merge).
+                         "auto_created": True}
             if stream_ctx.tvg_id:
                 simulated["tvg_id"] = stream_ctx.tvg_id
             self._created_channels[channel_name.lower()] = simulated
@@ -899,7 +963,13 @@ class ActionExecutor:
             except Exception:  # pragma: no cover
                 logger.debug("[AUTO-CREATE-EXEC] metric increment failed", exc_info=True)
 
-            # Track the new channel
+            # Track the new channel. enhancedchannelmanager-orzck (W1): the
+            # engine just auto-created it, so mark auto_created=True regardless of
+            # whether the API response echoed the flag — otherwise the
+            # manual-channel gate would read the missing/falsy key as
+            # "manual/protected" and block later same-run streams from
+            # dedup-merging into this freshly-created channel.
+            new_channel["auto_created"] = True
             self._created_channels[channel_name.lower()] = new_channel
             self._channel_by_id[new_channel["id"]] = new_channel
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
@@ -1112,6 +1182,7 @@ class ActionExecutor:
             "before_value": {"stream_ids": list(before_ids)},
             "after_value": after_value,
             "user_initiated": False,
+            "mutation_source": journal.MUTATION_SOURCE_AUTO_CREATION,
             "batch_id": str(self._execution_id),
         })
         if len(self._journal_buffer) >= self._journal_flush_threshold:
@@ -1271,8 +1342,9 @@ class ActionExecutor:
     async def _execute_merge_streams(self, action: Action, stream_ctx: StreamContext,
                                       exec_ctx: ExecutionContext, template_ctx: dict,
                                       normalization_group_ids: list[int] = None,
-                                      match_scope_target_group: bool = False,
+                                      match_scope_target_group: bool = True,
                                       rule_scope_group_id: int = None,
+                                      allow_manual_channel_merge: bool = False,
                                       rule_id: int = None) -> ActionResult:
         """Execute merge_streams action.
 
@@ -1338,7 +1410,10 @@ class ActionExecutor:
 
             if find_channel_by == "name_exact":
                 expanded_name = TemplateVariables.expand_template(find_channel_value or "", template_ctx, exec_ctx.custom_variables)
-                channel = self._find_channel_by_name(expanded_name, scope_group_id=effective_scope_group_id)
+                channel = self._find_channel_by_name(
+                    expanded_name, scope_group_id=effective_scope_group_id,
+                    block_manual=not allow_manual_channel_merge,
+                )
             elif find_channel_by == "name_regex":
                 channel = self._find_channel_by_regex(find_channel_value)
             elif find_channel_by == "tvg_id":
@@ -1383,7 +1458,8 @@ class ActionExecutor:
                 # the legacy fuzzy lookup.
                 channel = self._find_channel_by_name(
                     lookup_name, scope_group_id=effective_scope_group_id,
-                    exact_only=not loose_name_match
+                    exact_only=not loose_name_match,
+                    block_manual=not allow_manual_channel_merge,
                 )
 
             # Core-name fallback (LEGACY FUZZY — bd-0emgo.1): strip country prefix
@@ -1446,6 +1522,30 @@ class ActionExecutor:
                             logger.debug("[AUTO-CREATE-EXEC] Call sign matched '%s' (id=%s)", channel.get('name'), channel.get('id'))
                 except Exception as e:
                     logger.debug("[AUTO-CREATE-EXEC] Call sign fallback failed: %s", e)
+
+            # enhancedchannelmanager-orzck (W1): post-resolution MANUAL-channel
+            # reject. The name-keyed and fuzzy paths above — name_regex, tvg_id,
+            # the global fallback maps (_core_name_to_channel,
+            # _callsign_to_channel), the deparen / word-prefix lookups, and the
+            # scored-fuzzy resolver — do NOT route through the
+            # _find_channel_by_name chokepoint, so its block_manual gate cannot
+            # protect them. Mirror the GH #298 scope reject below: whatever path
+            # produced the candidate, if it is a hand-built manual channel
+            # (auto_created missing/falsy) and the rule did not opt in, treat it
+            # as "not found" so the merge does not adopt the manual channel.
+            if channel and not allow_manual_channel_merge \
+                    and self._is_manual_channel(channel):
+                logger.info(
+                    "[AUTO-CREATE-EXEC] Manual-channel reject: candidate '%s' "
+                    "(id=%s) is a hand-built manual channel (auto_created falsy) "
+                    "and allow_manual_channel_merge is off — treating as not found",
+                    channel.get('name'), channel.get('id'),
+                )
+                channel = None
+            elif channel and allow_manual_channel_merge \
+                    and self._is_manual_channel(channel):
+                # Opt-in path adopted a manual channel — record it for audit.
+                self._journal_manual_channel_adoption(channel, stream_ctx, action.type)
 
             # GH #298 (bd-kncun): post-resolution scope enforcement. The name-
             # keyed paths above — name_regex, tvg_id, and especially the global
@@ -2880,8 +2980,24 @@ class ActionExecutor:
         )
         return best_channel, provenance
 
+    @staticmethod
+    def _is_manual_channel(channel: Optional[dict]) -> bool:
+        """True when ``channel`` is a hand-built MANUAL channel (protected).
+
+        enhancedchannelmanager-orzck: a channel is MANUAL when its
+        ``auto_created`` key is missing or falsy. This mirrors the ADR-010
+        snapshot precedent (``auto_creation_engine._capture_snapshot`` →
+        ``not ch.get("auto_created", False)``): a missing key means manual /
+        protected, NOT auto. Only an explicit truthy ``auto_created`` makes a
+        channel an unprotected auto-created merge candidate.
+        """
+        if channel is None:
+            return False
+        return not channel.get("auto_created", False)
+
     def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None,
-                              exact_only: bool = False) -> Optional[dict]:
+                              exact_only: bool = False,
+                              block_manual: bool = True) -> Optional[dict]:
         """Find channel by exact name (case-insensitive).
 
         Also checks the base-name mapping so that a lookup for "USA Network"
@@ -2909,9 +3025,23 @@ class ActionExecutor:
         used by merge_streams target=auto to default to exact normalized-name
         equality. ``exact_only=False`` (default) preserves the GH-104
         duplicate-prevention fallbacks for channel CREATION.
+
+        When ``block_manual`` is True (default — enhancedchannelmanager-orzck /
+        W1), any candidate that is a MANUAL channel (``auto_created`` missing or
+        falsy) is treated as "not found" so auto-creation never adopts a
+        hand-built channel as a merge/update/rename target. The manual channel
+        is deliberately LEFT in the lookup maps (so GH-104 dedup still sees it
+        and does not create a second copy) — it is rejected only at this
+        resolution chokepoint, yielding None so the caller creates a new auto
+        channel instead. Callers pass ``block_manual = not
+        allow_manual_channel_merge``; the rule-level ``allow_manual_channel_merge``
+        flag (default False) is the only way to opt a rule back into adopting
+        manual channels.
         """
         def _in_scope(c: Optional[dict]) -> bool:
             if c is None:
+                return False
+            if block_manual and self._is_manual_channel(c):
                 return False
             if scope_group_id is None:
                 return True

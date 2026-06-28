@@ -179,14 +179,31 @@ def register(mcp: FastMCP):
             return f"Error updating M3U account {account_id}: {e}"
 
     @mcp.tool()
-    async def delete_m3u_account(account_id: int) -> str:
+    async def delete_m3u_account(account_id: int, confirm: bool = False) -> str:
         """Delete an M3U provider account and all its streams.
+
+        CONFIRM GATING (bd-onazy): this is a two-call operation and DESTRUCTIVE
+        (it removes the account AND all its streams). The first call
+        (``confirm=False``, the default) fetches the account and returns a
+        preview naming it, deleting NOTHING. Re-invoke with ``confirm=True`` to
+        actually delete.
 
         Args:
             account_id: The M3U account ID to delete
+            confirm: Set True on the second call to perform the deletion.
         """
         try:
             client = get_ecm_client()
+            if not confirm:
+                acct = await client.call_endpoint(
+                    ENDPOINTS["m3u_get_account"], path_args={"account_id": account_id}
+                )
+                name = acct.get("name", "?") if isinstance(acct, dict) else "?"
+                url = acct.get("url", "") if isinstance(acct, dict) else ""
+                return (
+                    f"M3U account {account_id} '{name}' ({url}) and ALL its streams "
+                    f"will be deleted — re-invoke with confirm=True to delete."
+                )
             await client.call_endpoint(ENDPOINTS["m3u_delete_account"], path_args={"account_id": account_id})
             return f"M3U account {account_id} deleted."
         except Exception as e:

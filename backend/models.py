@@ -30,6 +30,15 @@ class JournalEntry(Base):
     after_value = Column(Text, nullable=True)  # JSON of new state
     user_initiated = Column(Boolean, default=True, nullable=False)  # Manual vs automatic
     batch_id = Column(String(50), nullable=True)  # Groups related changes
+    # Actor / origin of the mutation (enhancedchannelmanager-vp1rx / W3).
+    # One of: "ui" (operator via JWT), "mcp_ai" (AI agent via static MCP key),
+    # "scheduler" (a scheduled task), "auto_creation" (the auto-creation pipeline).
+    # NULL for legacy rows and any path that did not stamp an actor — distinct
+    # from ``user_initiated`` (manual-vs-automatic), which is left untouched for
+    # back-compat. ``mutation_source`` answers WHO/WHAT initiated the change so
+    # an AI-driven mutation is traceable and recoverable; ``user_initiated`` only
+    # answers whether a human clicked a button.
+    mutation_source = Column(String(20), nullable=True)
 
     # Indexes for common queries.
     #
@@ -51,6 +60,10 @@ class JournalEntry(Base):
         Index("idx_journal_action_type", action_type),
         Index("idx_journal_batch_id", batch_id),
         Index("idx_journal_entity", category, entity_id, timestamp.desc()),
+        # Single-column index for the "show me everything the AI did" forensic
+        # query (``WHERE mutation_source='mcp_ai'``) surfaced by the journal API
+        # filter (enhancedchannelmanager-vp1rx / W3).
+        Index("idx_journal_mutation_source", mutation_source),
     )
 
     def to_dict(self) -> dict:
@@ -67,6 +80,7 @@ class JournalEntry(Base):
             "after_value": json.loads(self.after_value) if self.after_value else None,
             "user_initiated": self.user_initiated,
             "batch_id": self.batch_id,
+            "mutation_source": self.mutation_source,
         }
 
     def __repr__(self):
@@ -1953,6 +1967,17 @@ class AutoCreationRule(Base):
     # group instead of matching same-name channels in any group.
     match_scope_group_id = Column(Integer, nullable=True)
 
+    # Manual-channel isolation (enhancedchannelmanager-orzck / W1). When False
+    # (the default, and the safe behavior), auto-creation will NOT adopt a
+    # hand-built MANUAL channel (a channel whose ``auto_created`` flag is
+    # missing/falsy) as a merge/update/rename target on a name collision — the
+    # manual channel is treated as "not found" and a new auto channel is created
+    # instead. This fixes the reported bleed where merging auto-created channels
+    # overwrote regular (manual) channels' names/metadata/filters. Set True to
+    # opt a rule back into the legacy behavior of adopting same-name manual
+    # channels; each adoption is journaled for audit.
+    allow_manual_channel_merge = Column(Boolean, default=False, nullable=False)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -2057,6 +2082,7 @@ class AutoCreationRule(Base):
             "orphan_action": self.orphan_action or "delete",
             "match_scope_target_group": self.match_scope_target_group or False,
             "match_scope_group_id": self.match_scope_group_id,
+            "allow_manual_channel_merge": self.allow_manual_channel_merge or False,
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),
             "match_count": self.match_count or 0,

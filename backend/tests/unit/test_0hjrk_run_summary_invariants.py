@@ -308,7 +308,7 @@ class TestMatchByIsNoOp:
         client = MagicMock()
         client.update_channel = AsyncMock(return_value={})
         existing = [{"id": 50, "name": "SKY Sport 4K", "streams": [],
-                     "channel_group_id": 9}]
+                     "channel_group_id": 9, "auto_created": True}]
         core_map = {
             "SKY Sport 4K": "sky sport",
             "Sky Sport Bundesliga": "sky sport bundesliga",

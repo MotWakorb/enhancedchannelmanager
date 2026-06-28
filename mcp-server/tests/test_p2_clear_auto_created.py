@@ -8,6 +8,13 @@ Covers the empty-group_ids safety fix:
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from tools._guardrails import derive_token
+
+
+def _page(channels):
+    """A channels_list page envelope for enumeration in clear_auto_created."""
+    return {"results": channels, "next": None, "count": len(channels)}
+
 
 def _make_mock(return_value=None, side_effect=None):
     """Return an AsyncMock whose call_endpoint returns return_value (or raises)."""
@@ -86,15 +93,29 @@ class TestClearAutoCreatedAllGroupsFlag:
 
     @pytest.mark.asyncio
     async def test_all_groups_true_sends_request_and_reports_scope(self):
-        """all_groups=True triggers backend call and summary says 'all groups'."""
+        """all_groups=True with the correct confirm_token triggers the backend
+        clear and the summary says 'all groups'. (bd-onazy: clear is now a
+        two-call token-gated op; the first call enumerates + previews.)"""
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 42, "updated_count": 42})
+        auto_channels = [
+            {"id": 1, "name": "A", "auto_created": True, "channel_group_id": 5},
+            {"id": 2, "name": "B", "auto_created": True, "channel_group_id": 6},
+        ]
+
+        def _side(ep, **kw):
+            if ep.name == "channels_list":
+                return _page(auto_channels)
+            return {"deleted": 42, "updated_count": 42}
+
+        mock_client = _make_mock(side_effect=_side)
+        token = derive_token([1, 2])
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
-            result = await mcp.call_tool("clear_auto_created", {"all_groups": True})
+            result = await mcp.call_tool(
+                "clear_auto_created", {"all_groups": True, "confirm_token": token}
+            )
 
         text = result[0][0].text
-        mock_client.call_endpoint.assert_called_once()
         # Scope must say "all groups" (not "in 0 groups" or "in 1 groups")
         assert "all" in text.lower(), (
             f"Expected 'all groups' scope in result, got: {text!r}"
@@ -146,23 +167,38 @@ class TestClearAutoCreatedSpecificGroups:
 
     @pytest.mark.asyncio
     async def test_specific_group_ids_sends_them_and_reports_count(self):
-        """Specific group_ids are forwarded to the backend and count reported."""
+        """Specific group_ids are forwarded to the backend and count reported,
+        once the confirm_token (derived from the resolved auto-created channel
+        ids in those groups) is supplied (bd-onazy two-call gate)."""
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 7, "updated_count": 7})
+        # Auto-created channels in the targeted groups; the clear endpoint then
+        # returns the deleted count.
+        auto_channels = [
+            {"id": 100, "name": "A", "auto_created": True, "channel_group_id": 10},
+            {"id": 101, "name": "B", "auto_created": True, "channel_group_id": 20},
+        ]
+
+        body_seen = {}
+
+        def _side(ep, **kw):
+            if ep.name == "channels_list":
+                return _page(auto_channels)
+            body_seen.update(kw.get("body") or {})
+            return {"deleted": 7, "updated_count": 7}
+
+        mock_client = _make_mock(side_effect=_side)
+        token = derive_token([100, 101])
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "clear_auto_created",
-                {"group_ids": [10, 20, 30]},
+                {"group_ids": [10, 20, 30], "confirm_token": token},
             )
 
         text = result[0][0].text
-        mock_client.call_endpoint.assert_called_once()
-        # Verify group_ids were forwarded
-        call_kwargs = mock_client.call_endpoint.call_args
-        body = call_kwargs.kwargs.get("body") or (call_kwargs.args[1] if len(call_kwargs.args) > 1 else {})
-        assert body.get("group_ids") == [10, 20, 30], (
-            f"Expected group_ids=[10,20,30] forwarded to backend, got body={body!r}"
+        # Verify group_ids were forwarded to the clear endpoint.
+        assert body_seen.get("group_ids") == [10, 20, 30], (
+            f"Expected group_ids=[10,20,30] forwarded to backend, got body={body_seen!r}"
         )
         # Scope must say "3 groups" (not "all groups")
         assert "3" in text, (

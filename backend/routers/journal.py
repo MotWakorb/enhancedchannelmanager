@@ -29,11 +29,15 @@ async def get_journal_entries(
         None,
         description="Filter to a single batched operation's journal rows. Either an 8-char batch_id from bulk handlers (e.g. POST /api/auto-creation/rules/bulk-update) or an auto-creation run's execution_id (as a string) for per-merge audit rows written by the executor (bd-0emgo.5). Indexed lookup via idx_journal_batch_id.",
     ),
+    mutation_source: Optional[str] = Query(
+        None,
+        description="Filter by actor/origin of the mutation (enhancedchannelmanager-vp1rx / W3): 'ui' (operator via the web UI), 'mcp_ai' (AI agent via the static MCP key), 'scheduler' (a scheduled task), or 'auto_creation' (the auto-creation pipeline). Indexed lookup via idx_journal_mutation_source. Legacy/unknown rows have a NULL source and are excluded by any value filter.",
+    ),
 ):
     """Query journal entries with filtering and pagination."""
     logger.debug(
-        "[JOURNAL] GET /journal - page=%s category=%s action_type=%s search=%s batch_id=%s",
-        page, category, action_type, search, batch_id,
+        "[JOURNAL] GET /journal - page=%s category=%s action_type=%s search=%s batch_id=%s mutation_source=%s",
+        page, category, action_type, search, batch_id, mutation_source,
     )
     from datetime import datetime
 
@@ -64,6 +68,7 @@ async def get_journal_entries(
         search=search,
         user_initiated=user_initiated,
         batch_id=batch_id,
+        mutation_source=mutation_source,
     )
 
 

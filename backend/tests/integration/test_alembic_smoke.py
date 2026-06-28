@@ -1706,6 +1706,14 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_rules "
                     "ADD COLUMN match_scope_group_id INTEGER"
                 ))
+                # 0025 (enhancedchannelmanager-orzck / W1): manual-channel
+                # isolation flag on auto_creation_rules — create_all() can't add
+                # a column to an already-existing table, so add it by hand so the
+                # live schema genuinely matches head for the fast-path.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN allow_manual_channel_merge BOOLEAN NOT NULL DEFAULT 0"
+                ))
                 conn.execute(text(
                     "ALTER TABLE normalization_rules "
                     "ADD COLUMN require_delimiter BOOLEAN NOT NULL DEFAULT 0"
@@ -1728,6 +1736,17 @@ class TestSmartBootstrapFastPath:
                 conn.execute(text(
                     "ALTER TABLE cloud_storage_targets "
                     "ADD COLUMN insecure BOOLEAN NOT NULL DEFAULT 0"
+                ))
+                # 0027 (enhancedchannelmanager-vp1rx / W3): AI-mutation audit
+                # actor on the pre-0005 journal_entries table — create_all()
+                # can't add a column to an already-existing table, so add it by
+                # hand so the live schema genuinely matches head for the
+                # fast-path. (_schema_matches_head is column-only, so the
+                # accompanying idx_journal_mutation_source index is not required
+                # for the match.)
+                conn.execute(text(
+                    "ALTER TABLE journal_entries "
+                    "ADD COLUMN mutation_source VARCHAR(20)"
                 ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not

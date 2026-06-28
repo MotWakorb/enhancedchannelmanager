@@ -82,6 +82,9 @@ class CreateAutoCreationRuleRequest(BaseModel):
     # None = "Auto" (create_channel falls back to the action's target group;
     # merge_streams stays group-agnostic) — see models.AutoCreationRule.
     match_scope_group_id: Optional[int] = None
+    # Manual-channel isolation (enhancedchannelmanager-orzck / W1). Default False
+    # protects hand-built manual channels from being adopted as merge targets.
+    allow_manual_channel_merge: bool = False
 
 
 class UpdateAutoCreationRuleRequest(BaseModel):
@@ -113,6 +116,8 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     # absent" via ``model_fields_set`` rather than the ``is not None`` convention
     # used by the other optionals — otherwise a rule could never be reset to Auto.
     match_scope_group_id: Optional[int] = None
+    # enhancedchannelmanager-orzck (W1): None = leave unchanged.
+    allow_manual_channel_merge: Optional[bool] = None
 
 
 class BulkUpdateAutoCreationRulesRequest(UpdateAutoCreationRuleRequest):
@@ -237,6 +242,8 @@ def _apply_rule_scalar_updates(
     # through, which the ``is not None`` convention above could not express.
     if "match_scope_group_id" in request.model_fields_set:
         _set("match_scope_group_id", request.match_scope_group_id)
+    if getattr(request, "allow_manual_channel_merge", None) is not None:
+        _set("allow_manual_channel_merge", request.allow_manual_channel_merge)
 
     return diff
 
@@ -613,7 +620,8 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest, _adm
                 skip_struck_streams=request.skip_struck_streams,
                 orphan_action=request.orphan_action,
                 match_scope_target_group=request.match_scope_target_group,
-                match_scope_group_id=request.match_scope_group_id
+                match_scope_group_id=request.match_scope_group_id,
+                allow_manual_channel_merge=request.allow_manual_channel_merge,
             )
             session.add(rule)
             session.commit()
@@ -999,7 +1007,8 @@ async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnable
                 sort_regex=rule.sort_regex,
                 orphan_action=rule.orphan_action,
                 match_scope_target_group=rule.match_scope_target_group,
-                match_scope_group_id=rule.match_scope_group_id
+                match_scope_group_id=rule.match_scope_group_id,
+                allow_manual_channel_merge=rule.allow_manual_channel_merge,
             )
             session.add(new_rule)
             session.commit()
@@ -1725,7 +1734,8 @@ async def export_auto_creation_rules_yaml():
                     "probe_on_sort": rule.probe_on_sort or False,
                     "orphan_action": rule.orphan_action or "delete",
                     "match_scope_target_group": rule.match_scope_target_group or False,
-                    "match_scope_group_id": rule.match_scope_group_id
+                    "match_scope_group_id": rule.match_scope_group_id,
+                    "allow_manual_channel_merge": rule.allow_manual_channel_merge or False,
                 }
 
                 # Add group_name to actions that have group_id
@@ -1897,6 +1907,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         existing.orphan_action = rule_data.get("orphan_action", "delete")
                         existing.match_scope_target_group = rule_data.get("match_scope_target_group", True)
                         existing.match_scope_group_id = rule_data.get("match_scope_group_id")
+                        existing.allow_manual_channel_merge = rule_data.get("allow_manual_channel_merge", False)
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
@@ -1931,7 +1942,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         probe_on_sort=rule_data.get("probe_on_sort", False),
                         orphan_action=rule_data.get("orphan_action", "delete"),
                         match_scope_target_group=rule_data.get("match_scope_target_group", True),
-                        match_scope_group_id=rule_data.get("match_scope_group_id")
+                        match_scope_group_id=rule_data.get("match_scope_group_id"),
+                        allow_manual_channel_merge=rule_data.get("allow_manual_channel_merge", False),
                     )
                     session.add(rule)
                     logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)

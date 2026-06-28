@@ -37,6 +37,10 @@ def _wbay_channel(group_id=42, streams=None):
         "id": 1, "name": "ABC: WBAY Green Bay", "tvg_id": CHANNEL_TVG_ID,
         "channel_number": 2, "channel_group_id": group_id,
         "streams": streams if streams is not None else [],
+        # Auto-created merge target: the scored-fuzzy path must be allowed to
+        # adopt it (enhancedchannelmanager-orzck — manual channels are protected,
+        # auto channels are valid merge targets).
+        "auto_created": True,
     }
 
 
@@ -97,7 +101,8 @@ class TestScoredFuzzyResolution:
 class TestNoCallsignPolicy:
     def _no_callsign_channel(self):
         return {"id": 5, "name": "Travel Channel", "tvg_id": None,
-                "channel_number": 7, "channel_group_id": 42, "streams": []}
+                "channel_number": 7, "channel_group_id": 42, "streams": [],
+                "auto_created": True}
 
     def test_no_callsign_rejected_by_default(self):
         client, ex = _make_executor([self._no_callsign_channel()])
