@@ -21,23 +21,29 @@ class TestListTasks:
         assert "tasks" in data or isinstance(data, list)
 
     @pytest.mark.asyncio
-    async def test_list_tasks_includes_task_info(self, async_client):
-        """GET /api/tasks returns task information."""
-        mock_task = MagicMock()
-        mock_task.task_id = "test_task"
-        mock_task.task_name = "Test Task"
-        mock_task.description = "A test task"
-        mock_task.enabled = True
-        mock_task.get_schedule_info.return_value = {}
+    async def test_list_tasks_returns_task_with_required_fields(self, async_client):
+        """GET /api/tasks response has the expected envelope and any tasks have required fields.
 
-        with patch("task_registry.get_registry") as mock_registry:
-            mock_registry.return_value.list_tasks.return_value = [mock_task]
+        In the test environment the task engine is not started (startup event is not
+        triggered by the test client), so the task list from get_all_task_statuses() is
+        empty. We assert the envelope shape and validate that any tasks present have the
+        required task_id field. The registry-level assertion (stream_probe registered) is
+        a unit concern tested separately; this integration test validates the API contract.
 
-            response = await async_client.get("/api/tasks")
-            assert response.status_code == 200
-
-            tasks = response.json()
-            assert len(tasks) >= 0  # May have registered tasks
+        Mutation check: if the response envelope changed from {tasks: [...]} to a bare
+        list, or if task dict no longer included task_id, this test would fail.
+        """
+        response = await async_client.get("/api/tasks")
+        assert response.status_code == 200
+        data = response.json()
+        # Response must be wrapped in {"tasks": [...]}
+        assert isinstance(data, dict), "Expected dict response, not bare list"
+        assert "tasks" in data, f"Expected 'tasks' key in response, got: {list(data.keys())}"
+        tasks = data["tasks"]
+        assert isinstance(tasks, list)
+        # If tasks are present, each must have the required task_id field
+        for task in tasks:
+            assert "task_id" in task, f"Task missing task_id field: {task}"
 
 
 class TestGetTask:
@@ -67,14 +73,20 @@ class TestUpdateTask:
 
     @pytest.mark.asyncio
     async def test_update_task_enables(self, async_client):
-        """PATCH /api/tasks/{task_id} can enable a task."""
-        # Try to update a real task
+        """PATCH /api/tasks/{task_id} enables stream_probe and returns 200.
+
+        stream_probe is always registered, so the 404 branch is unreachable here.
+        Mutation check: if update_task_config were broken, the response would not
+        include the task_id and this test would fail.
+        """
         response = await async_client.patch(
             "/api/tasks/stream_probe",
             json={"enabled": True},
         )
-        # May succeed or return 404 depending on task registration
-        assert response.status_code in (200, 404)
+        assert response.status_code == 200
+        data = response.json()
+        assert "task_id" in data
+        assert data["task_id"] == "stream_probe"
 
     @pytest.mark.asyncio
     async def test_update_task_not_found(self, async_client):
@@ -91,11 +103,39 @@ class TestRunTask:
 
     @pytest.mark.asyncio
     async def test_run_task_triggers_execution(self, async_client):
-        """POST /api/tasks/{task_id}/run triggers task execution."""
-        # Try to run a real task
-        response = await async_client.post("/api/tasks/stream_probe/run")
-        # May return 200 (started), 404 (not found), or 409 (already running)
-        assert response.status_code in (200, 404, 409, 500)
+        """POST /api/tasks/{task_id}/run returns 200 with success field when engine runs the task.
+
+        Mocks the task engine so the outcome is deterministic — no actual probe happens.
+        Mutation check: if engine.run_task were removed or returned None (→ 404), this fails.
+        """
+        from task_scheduler import TaskResult
+        from datetime import datetime, timezone
+        mock_result = MagicMock(spec=TaskResult)
+        mock_result.to_dict.return_value = {
+            "success": True,
+            "message": "Task completed",
+            "started_at": None,
+            "completed_at": None,
+            "duration_seconds": None,
+            "total_items": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "skipped_count": 0,
+            "error": None,
+            "details": {},
+        }
+
+        from unittest.mock import AsyncMock
+        mock_engine = MagicMock()
+        mock_engine.run_task = AsyncMock(return_value=mock_result)
+
+        with patch("task_engine.get_engine", return_value=mock_engine):
+            response = await async_client.post("/api/tasks/stream_probe/run")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "success" in data
+        assert data["success"] is True
 
     @pytest.mark.asyncio
     async def test_run_task_not_found(self, async_client):
@@ -109,11 +149,22 @@ class TestCancelTask:
 
     @pytest.mark.asyncio
     async def test_cancel_task_stops_execution(self, async_client):
-        """POST /api/tasks/{task_id}/cancel stops running task."""
-        # Try to cancel a real task
-        response = await async_client.post("/api/tasks/stream_probe/cancel")
-        # May return 200 (cancelled), 404 (not found), or other status
-        assert response.status_code in (200, 404, 409, 500)
+        """POST /api/tasks/{task_id}/cancel returns 200 with status=cancelled.
+
+        Mocks the task engine to return a deterministic "cancelled" result.
+        Mutation check: if engine.cancel_task returned {status: not_found} the
+        router would raise 404, failing this assertion.
+        """
+        from unittest.mock import AsyncMock
+        mock_engine = MagicMock()
+        mock_engine.cancel_task = AsyncMock(return_value={"status": "cancelled", "task_id": "stream_probe"})
+
+        with patch("task_engine.get_engine", return_value=mock_engine):
+            response = await async_client.post("/api/tasks/stream_probe/cancel")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "cancelled"
 
     @pytest.mark.asyncio
     async def test_cancel_task_not_found(self, async_client):

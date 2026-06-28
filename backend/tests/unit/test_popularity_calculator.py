@@ -650,9 +650,13 @@ class TestTrendCalculation:
                 calc.calculate_all()
 
         score = test_session.query(ChannelPopularityScore).first()
-        # New channel with no previous score has 100% trend (or stable if prev=0)
-        # Actually for new channels with no previous data, trend_percent = 100 if score > 0
-        assert score.trend in ["up", "stable"]
+        # New channel with no previous score: trend_percent = 100 (score > 0 since we seeded
+        # 10 polls with bytes), so trend = "up" (threshold is 5%).
+        # Mutation guard: if trend calculation changed to skip new channels or return "stable"
+        # when prev_score is 0 and score > 0, this assertion fails.
+        assert score is not None
+        assert score.score > 0, "seeded 10 polls — score must be non-zero"
+        assert score.trend == "up"
 
 
 class TestGetRankings:

@@ -124,60 +124,75 @@ class TestAutoCreationEngineLoadData:
 
 
 class TestAutoCreationEngineLoadRules:
-    """Tests for rule loading methods."""
+    """Tests for rule loading methods — real in-memory session with seeded rows.
+
+    The original tests mocked the SQLAlchemy session with inert MagicMock chains
+    and only asserted call-presence. They passed even if _load_rules returned an
+    empty list or ignored the filter. These tests use the real ORM with seeded rows
+    to verify what is actually loaded and excluded.
+    """
 
     def setup_method(self):
         """Set up test fixtures."""
         self.client = MagicMock()
         self.engine = AutoCreationEngine(self.client)
 
-    @patch("auto_creation_engine.get_session")
-    def test_load_rules_all_enabled(self, mock_get_session):
-        """Load all enabled rules sorted by priority."""
-        mock_session = MagicMock()
-        mock_get_session.return_value = mock_session
-
-        mock_rule1 = MagicMock()
-        mock_rule1.id = 1
-        mock_rule1.priority = 0
-
-        mock_rule2 = MagicMock()
-        mock_rule2.id = 2
-        mock_rule2.priority = 1
-
-        mock_query = MagicMock()
-        mock_query.filter.return_value = mock_query
-        mock_query.order_by.return_value = mock_query
-        mock_query.all.return_value = [mock_rule1, mock_rule2]
-        mock_session.query.return_value = mock_query
-
-        rules = asyncio.get_event_loop().run_until_complete(
-            self.engine._load_rules()
+    def _make_rule(self, name: str, priority: int, enabled: bool = True):
+        """Create a minimal AutoCreationRule for seeding."""
+        from models import AutoCreationRule
+        import json
+        return AutoCreationRule(
+            name=name,
+            enabled=enabled,
+            priority=priority,
+            conditions=json.dumps([]),
+            actions=json.dumps([]),
         )
+
+    def test_load_rules_all_enabled(self, test_session):
+        """Loads only enabled rules, sorted by priority ascending.
+
+        Mutation guard: if the enabled=True filter were removed, rule3 (disabled) would
+        appear. If sorting were removed, order would not be guaranteed and rules[0].priority
+        might not be 0.
+        """
+        rule1 = self._make_rule("Rule A", priority=0, enabled=True)
+        rule2 = self._make_rule("Rule B", priority=1, enabled=True)
+        rule3 = self._make_rule("Rule Disabled", priority=-1, enabled=False)
+        test_session.add_all([rule1, rule2, rule3])
+        test_session.commit()
+
+        with patch("auto_creation_engine.get_session", return_value=test_session):
+            rules = asyncio.get_event_loop().run_until_complete(
+                self.engine._load_rules()
+            )
 
         assert len(rules) == 2
-        mock_session.close.assert_called_once()
+        # Should be sorted by priority ascending (lower = higher priority = first)
+        assert rules[0].name == "Rule A"
+        assert rules[1].name == "Rule B"
+        # Disabled rule must NOT appear
+        assert all(r.enabled for r in rules)
 
-    @patch("auto_creation_engine.get_session")
-    def test_load_rules_specific_ids(self, mock_get_session):
-        """Load specific rules by ID."""
-        mock_session = MagicMock()
-        mock_get_session.return_value = mock_session
+    def test_load_rules_specific_ids(self, test_session):
+        """Loads only the specified rule IDs, skipping others even if enabled.
 
-        mock_rule = MagicMock()
-        mock_rule.id = 1
+        Mutation guard: if the id.in_() filter were removed, both enabled rules
+        would be returned instead of just the requested one.
+        """
+        rule1 = self._make_rule("Rule A", priority=0, enabled=True)
+        rule2 = self._make_rule("Rule B", priority=1, enabled=True)
+        test_session.add_all([rule1, rule2])
+        test_session.commit()
 
-        mock_query = MagicMock()
-        mock_query.filter.return_value = mock_query
-        mock_query.order_by.return_value = mock_query
-        mock_query.all.return_value = [mock_rule]
-        mock_session.query.return_value = mock_query
-
-        rules = asyncio.get_event_loop().run_until_complete(
-            self.engine._load_rules(rule_ids=[1])
-        )
+        with patch("auto_creation_engine.get_session", return_value=test_session):
+            rules = asyncio.get_event_loop().run_until_complete(
+                self.engine._load_rules(rule_ids=[rule1.id])
+            )
 
         assert len(rules) == 1
+        assert rules[0].id == rule1.id
+        assert rules[0].name == "Rule A"
 
 
 class TestAutoCreationEngineFetchStreams:
@@ -1175,19 +1190,32 @@ class TestAutoCreationEngineExecutionTracking:
         self.client = MagicMock()
         self.engine = AutoCreationEngine(self.client)
 
-    @patch("auto_creation_engine.get_session")
-    def test_create_execution(self, mock_get_session):
-        """Create execution record."""
-        mock_session = MagicMock()
-        mock_get_session.return_value = mock_session
+    def test_create_execution(self, test_session):
+        """_create_execution writes a persisted row with correct mode, triggered_by, and status.
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._create_execution(mode="execute", triggered_by="manual")
-        )
+        Mutation guard: if the status were not set to 'running', or if mode/triggered_by
+        were not saved to the row, these assertions fail. The original mock-only version
+        passed even if the row fields were wrong.
+        """
+        from models import AutoCreationExecution
 
-        mock_session.add.assert_called_once()
-        mock_session.commit.assert_called_once()
-        mock_session.close.assert_called_once()
+        with patch("auto_creation_engine.get_session", return_value=test_session):
+            execution = asyncio.get_event_loop().run_until_complete(
+                self.engine._create_execution(mode="execute", triggered_by="manual")
+            )
+
+        assert execution is not None
+        assert execution.id is not None
+
+        # Verify the row is really in the DB with the right fields
+        row = test_session.query(AutoCreationExecution).filter(
+            AutoCreationExecution.id == execution.id
+        ).first()
+        assert row is not None
+        assert row.mode == "execute"
+        assert row.triggered_by == "manual"
+        assert row.status == "running"
+        assert row.started_at is not None
 
     @patch("auto_creation_engine.get_session")
     def test_save_execution(self, mock_get_session):
@@ -1204,14 +1232,25 @@ class TestAutoCreationEngineExecutionTracking:
         mock_session.merge.assert_called_once_with(mock_execution)
         mock_session.commit.assert_called_once()
 
-    @patch("auto_creation_engine.get_session")
-    def test_record_conflict(self, mock_get_session):
-        """Record conflict in database."""
-        mock_session = MagicMock()
-        mock_get_session.return_value = mock_session
+    def test_record_conflict(self, test_session):
+        """_record_conflict writes a persisted AutoCreationConflict row with correct field values.
 
-        mock_execution = MagicMock()
-        mock_execution.id = 1
+        Mutation guard: if conflict_type, stream_name, winning_rule_id, or losing_rule_ids were
+        not set correctly, these assertions fail. The original mock-only version passed as long
+        as session.add() and session.commit() were called, even with wrong field values.
+        """
+        from models import AutoCreationExecution, AutoCreationConflict
+        import json
+
+        # Seed a real execution row (foreign key constraint on conflict)
+        execution = AutoCreationExecution(
+            mode="execute",
+            triggered_by="manual",
+            started_at=__import__("datetime").datetime.utcnow(),
+            status="running",
+        )
+        test_session.add(execution)
+        test_session.commit()
 
         stream = StreamContext(
             stream_id=101,
@@ -1227,18 +1266,26 @@ class TestAutoCreationEngineExecutionTracking:
         losing_rule = MagicMock()
         losing_rule.id = 2
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._record_conflict(
-                execution=mock_execution,
-                stream=stream,
-                winning_rule=winning_rule,
-                losing_rules=[losing_rule],
-                conflict_type="duplicate_match"
+        with patch("auto_creation_engine.get_session", return_value=test_session):
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._record_conflict(
+                    execution=execution,
+                    stream=stream,
+                    winning_rule=winning_rule,
+                    losing_rules=[losing_rule],
+                    conflict_type="duplicate_match",
+                )
             )
-        )
 
-        mock_session.add.assert_called_once()
-        mock_session.commit.assert_called_once()
+        conflict = test_session.query(AutoCreationConflict).filter(
+            AutoCreationConflict.execution_id == execution.id
+        ).first()
+        assert conflict is not None
+        assert conflict.stream_id == 101
+        assert conflict.stream_name == "ESPN HD"
+        assert conflict.winning_rule_id == 1
+        assert conflict.conflict_type == "duplicate_match"
+        assert conflict.get_losing_rule_ids() == [2]
 
     @patch("auto_creation_engine.get_session")
     def test_update_rule_stats(self, mock_get_session):

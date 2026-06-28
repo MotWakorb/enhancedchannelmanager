@@ -74,9 +74,6 @@ async def validate_ffmpeg_config_endpoint(request: Request):
     logger.debug("[FFMPEG] POST /api/ffmpeg/validate")
     body = await request.json()
     result = ffmpeg_validate_config(body)
-    # Handle both dict (mock in tests) and ValidationResult (real) returns
-    if isinstance(result, dict):
-        return result
     return {
         "valid": result.valid,
         "errors": result.errors,
@@ -90,11 +87,6 @@ async def generate_ffmpeg_command_endpoint(request: Request):
     """Generate an annotated ffmpeg command from configuration."""
     logger.debug("[FFMPEG] POST /api/ffmpeg/generate-command")
     body = await request.json()
-    result = ffmpeg_generate_command(body)
-    # Handle both dict (mock in tests) and list (real) returns
-    if isinstance(result, dict):
-        return result
-    # Real return is a command list — annotate it
     from ffmpeg_builder.command_generator import annotate_command
     annotated = annotate_command(body)
     return {

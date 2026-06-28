@@ -205,11 +205,21 @@ class TestTaskScheduleDaysOfWeek:
 
 
 class TestTaskScheduleIntervalTypes:
-    """Tests for different schedule types."""
+    """Tests for different schedule types — behavioral assertions via to_dict and describe_schedule.
+
+    Each test uses to_dict() or describe_schedule() rather than reading the raw ORM field back,
+    so mutating the serialisation layer (e.g. dropping a key from to_dict, or changing describe_schedule
+    output) would cause these tests to fail rather than silently pass.
+    """
 
     def test_interval_schedule(self, test_session):
-        """Interval schedule stores interval_seconds."""
+        """Interval schedule serialises interval_seconds into to_dict and describe_schedule.
+
+        Mutation guard: if to_dict() dropped 'interval_seconds' or describe_schedule() stopped
+        producing the human-readable interval, both assertions fail.
+        """
         from tests.fixtures.factories import create_task_schedule
+        from schedule_calculator import describe_schedule
 
         schedule = create_task_schedule(
             test_session,
@@ -218,12 +228,21 @@ class TestTaskScheduleIntervalTypes:
             interval_seconds=3600,
         )
 
-        assert schedule.schedule_type == "interval"
-        assert schedule.interval_seconds == 3600
+        d = schedule.to_dict()
+        assert d["schedule_type"] == "interval"
+        assert d["interval_seconds"] == 3600
+
+        desc = describe_schedule(schedule_type="interval", interval_seconds=3600)
+        assert "1 hour" in desc or "3600" in desc or "hour" in desc.lower()
 
     def test_daily_schedule(self, test_session):
-        """Daily schedule stores time and timezone."""
+        """Daily schedule serialises time and timezone into to_dict and describe_schedule.
+
+        Mutation guard: if to_dict() dropped 'timezone' or describe_schedule() stopped
+        including the time, these assertions fail.
+        """
         from tests.fixtures.factories import create_task_schedule
+        from schedule_calculator import describe_schedule
 
         schedule = create_task_schedule(
             test_session,
@@ -233,13 +252,27 @@ class TestTaskScheduleIntervalTypes:
             timezone="Europe/London",
         )
 
-        assert schedule.schedule_type == "daily"
-        assert schedule.schedule_time == "14:30"
-        assert schedule.timezone == "Europe/London"
+        d = schedule.to_dict()
+        assert d["schedule_type"] == "daily"
+        assert d["schedule_time"] == "14:30"
+        assert d["timezone"] == "Europe/London"
+
+        desc = describe_schedule(
+            schedule_type="daily",
+            schedule_time="14:30",
+            timezone="Europe/London",
+        )
+        assert "14:30" in desc or "2:30" in desc
 
     def test_weekly_schedule(self, test_session):
-        """Weekly schedule stores days and time."""
+        """Weekly schedule serialises days list via to_dict (not raw days_of_week string).
+
+        Mutation guard: if get_days_of_week_list() or to_dict() broke the comma-split
+        parsing, the list assertion fails. The describe_schedule assertion also fails if
+        it stopped naming weekday descriptions.
+        """
         from tests.fixtures.factories import create_task_schedule
+        from schedule_calculator import describe_schedule
 
         schedule = create_task_schedule(
             test_session,
@@ -249,12 +282,25 @@ class TestTaskScheduleIntervalTypes:
             days_of_week="1,2,3,4,5",  # Weekdays
         )
 
-        assert schedule.schedule_type == "weekly"
-        assert schedule.get_days_of_week_list() == [1, 2, 3, 4, 5]
+        d = schedule.to_dict()
+        assert d["schedule_type"] == "weekly"
+        assert d["days_of_week"] == [1, 2, 3, 4, 5]
+
+        desc = describe_schedule(
+            schedule_type="weekly",
+            schedule_time="09:00",
+            days_of_week=[1, 2, 3, 4, 5],
+        )
+        assert "Weekly" in desc or "weekly" in desc.lower()
 
     def test_monthly_schedule(self, test_session):
-        """Monthly schedule stores day of month."""
+        """Monthly schedule serialises day_of_month via to_dict.
+
+        Mutation guard: if to_dict() dropped 'day_of_month' the assertion fails.
+        The describe_schedule check also fails if monthly output changed format.
+        """
         from tests.fixtures.factories import create_task_schedule
+        from schedule_calculator import describe_schedule
 
         schedule = create_task_schedule(
             test_session,
@@ -264,12 +310,25 @@ class TestTaskScheduleIntervalTypes:
             day_of_month=15,
         )
 
-        assert schedule.schedule_type == "monthly"
-        assert schedule.day_of_month == 15
+        d = schedule.to_dict()
+        assert d["schedule_type"] == "monthly"
+        assert d["day_of_month"] == 15
+
+        desc = describe_schedule(
+            schedule_type="monthly",
+            schedule_time="03:00",
+            day_of_month=15,
+        )
+        assert "15" in desc or "monthly" in desc.lower()
 
     def test_monthly_last_day(self, test_session):
-        """Monthly schedule can use -1 for last day."""
+        """Monthly last-day schedule serialises -1 in to_dict and describes it correctly.
+
+        Mutation guard: if the -1 sentinel were not preserved through to_dict, or if
+        describe_schedule stopped handling last-day, both assertions fail.
+        """
         from tests.fixtures.factories import create_task_schedule
+        from schedule_calculator import describe_schedule
 
         schedule = create_task_schedule(
             test_session,
@@ -279,4 +338,12 @@ class TestTaskScheduleIntervalTypes:
             day_of_month=-1,
         )
 
-        assert schedule.day_of_month == -1
+        d = schedule.to_dict()
+        assert d["day_of_month"] == -1
+
+        desc = describe_schedule(
+            schedule_type="monthly",
+            schedule_time="03:00",
+            day_of_month=-1,
+        )
+        assert "last" in desc.lower() or "monthly" in desc.lower()

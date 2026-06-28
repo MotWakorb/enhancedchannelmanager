@@ -67,7 +67,7 @@ class TestGetChannelProfiles:
 
     @pytest.mark.asyncio
     async def test_returns_profiles(self, async_client):
-        """Returns list of channel profiles."""
+        """Returns list of channel profiles forwarded verbatim from client."""
         mock_client = AsyncMock()
         mock_client.get_channel_profiles.return_value = [
             {"id": 1, "name": "Default"},
@@ -80,6 +80,9 @@ class TestGetChannelProfiles:
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
+        assert data[0] == {"id": 1, "name": "Default"}
+        assert data[1] == {"id": 2, "name": "Kids"}
+        mock_client.get_channel_profiles.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_client_error(self, async_client):
@@ -98,7 +101,7 @@ class TestCreateChannelProfile:
 
     @pytest.mark.asyncio
     async def test_creates_profile(self, async_client):
-        """Creates a new channel profile."""
+        """Creates a new channel profile, forwarding the client result verbatim."""
         mock_client = AsyncMock()
         mock_client.create_channel_profile.return_value = {
             "id": 3, "name": "New Profile",
@@ -111,7 +114,8 @@ class TestCreateChannelProfile:
             )
 
         assert response.status_code == 200
-        assert response.json()["name"] == "New Profile"
+        assert response.json() == {"id": 3, "name": "New Profile"}
+        mock_client.create_channel_profile.assert_called_once()
 
 
 class TestGetChannelProfile:
