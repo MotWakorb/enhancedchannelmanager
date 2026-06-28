@@ -4,7 +4,8 @@ Unit tests for FFMPEG builder endpoints.
 Tests: 19 FFMPEG endpoints covering capabilities, probe, validate,
        generate-command, configs CRUD, jobs CRUD, queue config,
        and profiles CRUD.
-Mocks: ffmpeg_builder modules (probe, validation, command_generator).
+Mocks: Only subprocess/binary boundaries (probe_source, _run_ffmpeg_query).
+       The ECM parsing and command-generation logic runs unpatched.
        Configs/jobs/queue-config are stubs (not backed by DB yet).
        Profiles use get_session() via conftest.
 """
@@ -29,24 +30,70 @@ def _create_profile(session, name="Test Profile", **overrides):
     return record
 
 
+# Canned ffmpeg output for subprocess-boundary mocking (shared with integration tests)
+_CANNED_ENCODERS = """\
+ V..... libx264             libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10
+ V..... h264_nvenc          NVIDIA NVENC H.264 encoder
+ A..... aac                 AAC (Advanced Audio Coding)
+"""
+_CANNED_DECODERS = """\
+ V..... h264                H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10
+ A..... aac                 AAC (Advanced Audio Coding)
+"""
+_CANNED_FORMATS = """\
+ DE mp4             MP4 (MPEG-4 Part 14)
+ DE mkv             Matroska
+"""
+_CANNED_FILTERS = " ... scale            V->V     Scale the input video\n"
+_CANNED_VERSION = "ffmpeg version 6.1 Copyright"
+
+
+def _canned_ffmpeg_output(args):
+    if args == ["-version"]:
+        return _CANNED_VERSION
+    if args == ["-encoders"]:
+        return _CANNED_ENCODERS
+    if args == ["-decoders"]:
+        return _CANNED_DECODERS
+    if args == ["-formats"]:
+        return _CANNED_FORMATS
+    if args == ["-filters"]:
+        return _CANNED_FILTERS
+    return ""
+
+
 class TestGetCapabilities:
-    """Tests for GET /api/ffmpeg/capabilities."""
+    """Tests for GET /api/ffmpeg/capabilities.
+
+    Mocks only the subprocess boundary. ECM's detect_capabilities() runs real.
+    Mutation check: removing h264_nvenc from canned encoders would make cuda
+    hwaccel absent — test_detects_cuda_from_nvenc_encoder would catch that.
+    """
 
     @pytest.mark.asyncio
-    async def test_returns_capabilities(self, async_client):
-        """Returns system FFmpeg capabilities."""
-        mock_caps = {
-            "codecs": {"h264": True},
-            "formats": ["mp4", "mkv"],
-            "hwaccel": [],
-        }
-
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=mock_caps):
+    async def test_returns_capabilities_200(self, async_client):
+        """Returns 200 with capabilities dict from ECM parsing."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
             response = await async_client.get("/api/ffmpeg/capabilities")
-
         assert response.status_code == 200
         data = response.json()
-        assert "codecs" in data
+        # ECM must parse libx264 from the canned encoder list
+        assert "libx264" in data["encoders"]
+        assert "mp4" in data["formats"]
+        assert "scale" in data["filters"]
+
+    @pytest.mark.asyncio
+    async def test_detects_cuda_from_nvenc_encoder(self, async_client):
+        """ECM infers cuda hwaccel from h264_nvenc in canned encoder list.
+
+        Mutation check: if _detect_hwaccels() were deleted or broken, this would fail.
+        """
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
+            response = await async_client.get("/api/ffmpeg/capabilities")
+        data = response.json()
+        cuda = next((h for h in data["hwaccels"] if h["api"] == "cuda"), None)
+        assert cuda is not None
+        assert cuda["available"] is True
 
 
 class TestProbeSource:
@@ -89,68 +136,70 @@ class TestProbeSource:
 
 
 class TestValidateConfig:
-    """Tests for POST /api/ffmpeg/validate."""
+    """Tests for POST /api/ffmpeg/validate.
+
+    Uses ECM's real ffmpeg_validate_config(). No mock of the function under test.
+    Mutation check: inverting validate_config to always return valid=False would
+    fail test_validates_complete_config; always returning valid=True would fail
+    test_returns_error_for_missing_input.
+    """
 
     @pytest.mark.asyncio
-    async def test_validates_config(self, async_client):
-        """Validates an FFMPEG configuration."""
-        mock_result = {
-            "valid": True,
-            "errors": [],
-            "warnings": [],
-            "command": "ffmpeg -i input.ts output.mp4",
+    async def test_validates_complete_config(self, async_client):
+        """ECM validates a complete config as valid=True."""
+        state = {
+            "input": {"type": "file", "path": "/media/input.mp4"},
+            "output": {"path": "/media/output.mp4", "format": "mp4"},
+            "videoCodec": {"codec": "libx264", "crf": 23},
+            "audioCodec": {"codec": "aac"},
         }
-
-        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=mock_result):
-            response = await async_client.post("/api/ffmpeg/validate", json={
-                "input": {"source": "http://example.com/stream"},
-                "output": {"format": "mp4"},
-            })
-
+        response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
         assert data["valid"] is True
+        assert data["errors"] == []
 
     @pytest.mark.asyncio
-    async def test_returns_errors(self, async_client):
-        """Returns validation errors."""
-        mock_result = {
-            "valid": False,
-            "errors": ["No input specified"],
-            "warnings": [],
-            "command": "",
-        }
+    async def test_returns_error_for_missing_input(self, async_client):
+        """ECM marks config invalid and returns error when input is absent.
 
-        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=mock_result):
-            response = await async_client.post("/api/ffmpeg/validate", json={})
-
+        Mutation check: if validate_config were replaced with a stub returning
+        valid=True, this assert would fail.
+        """
+        response = await async_client.post("/api/ffmpeg/validate", json={
+            "output": {"path": "/out.mp4", "format": "mp4"},
+        })
         assert response.status_code == 200
         data = response.json()
         assert data["valid"] is False
         assert len(data["errors"]) > 0
+        assert any("input" in e.lower() for e in data["errors"])
 
 
 class TestGenerateCommand:
-    """Tests for POST /api/ffmpeg/generate-command."""
+    """Tests for POST /api/ffmpeg/generate-command.
+
+    Uses ECM's real generate_command() / annotate_command(). No mock of the
+    function under test. Mutation check: removing -i flag generation would fail
+    test_generates_command_with_input_flag.
+    """
 
     @pytest.mark.asyncio
-    async def test_generates_command(self, async_client):
-        """Generates an annotated FFmpeg command."""
-        mock_result = {
-            "command": "ffmpeg -i input.ts -c:v copy output.mp4",
-            "annotations": [
-                {"flag": "-c:v copy", "explanation": "Copy video codec", "category": "video"},
-            ],
-        }
+    async def test_generates_command_with_input_flag(self, async_client):
+        """ECM generates a command that includes the -i flag with the input path.
 
-        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
-            response = await async_client.post("/api/ffmpeg/generate-command", json={
-                "input": {"source": "input.ts"},
-            })
-
+        Mutation check: removing the -i flag from generate_input_flags() breaks this.
+        """
+        response = await async_client.post("/api/ffmpeg/generate-command", json={
+            "input": {"type": "file", "path": "/media/input.ts"},
+            "output": {"path": "/media/output.mp4", "format": "mp4"},
+        })
         assert response.status_code == 200
         data = response.json()
         assert "command" in data
+        assert data["command"].startswith("ffmpeg")
+        assert "-i" in data["command"]
+        assert "/media/input.ts" in data["command"]
 
 
 class TestListConfigs:

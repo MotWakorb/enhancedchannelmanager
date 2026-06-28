@@ -83,17 +83,44 @@ class TestCalculateNextRunDaily:
         assert result > datetime.utcnow()
 
     def test_daily_past_time_schedules_tomorrow(self):
-        """Daily schedule for past time schedules tomorrow."""
-        # Use a time that's definitely in the past
-        past_hour = (datetime.utcnow().hour - 2) % 24
-        result = calculate_next_run(
-            schedule_type="daily",
-            schedule_time=f"{past_hour:02d}:00",
-            timezone="UTC",
-        )
+        """Daily schedule for past time schedules exactly one day after the past time.
+
+        Mutation guard: if _calculate_daily_next_run were changed to always return
+        today's time (removing the +1 day adjustment), this test fails because
+        result would be 2025-03-15 10:00 (in the past) instead of 2025-03-16 10:00.
+        """
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        import schedule_calculator as _sc
+
+        # Freeze "now" at 2025-03-15 12:00:00 UTC (noon) so 10:00 today is in the past.
+        frozen_now_naive = datetime(2025, 3, 15, 12, 0, 0)
+        frozen_now_aware = frozen_now_naive.replace(tzinfo=_ZoneInfo("UTC"))
+
+        real_datetime = datetime
+
+        class _FrozenDatetime(real_datetime):
+            @classmethod
+            def utcnow(cls):
+                return frozen_now_naive
+
+            @classmethod
+            def now(cls, tz=None):
+                if tz is not None:
+                    return frozen_now_aware.astimezone(tz)
+                return frozen_now_naive
+
+        with patch.object(_sc, "datetime", _FrozenDatetime):
+            result = calculate_next_run(
+                schedule_type="daily",
+                schedule_time="10:00",
+                timezone="UTC",
+            )
+
         assert result is not None
-        # Should be tomorrow
-        assert result.day != datetime.utcnow().day or result > datetime.utcnow()
+        # 10:00 UTC is in the past relative to noon, so next run = tomorrow 10:00
+        expected = datetime(2025, 3, 16, 10, 0, 0)
+        assert result == expected
 
     def test_daily_returns_none_without_time(self):
         """Returns None when schedule_time is missing."""
@@ -174,16 +201,41 @@ class TestCalculateNextRunMonthly:
     """Tests for monthly schedule calculations."""
 
     def test_monthly_day_15(self):
-        """Monthly on day 15."""
-        result = calculate_next_run(
-            schedule_type="monthly",
-            schedule_time="09:00",
-            timezone="UTC",
-            day_of_month=15,
-        )
+        """Monthly on day 15 — when today is the 10th, next run is the 15th this month.
+
+        Mutation guard: if _calculate_monthly_next_run skipped the +1 month adjustment
+        or returned a wrong day, this test fails because result would not equal March 15.
+        """
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        import schedule_calculator as _sc
+
+        # Freeze "now" at 2025-03-10 12:00:00 UTC so the 15th is still ahead this month.
+        frozen_naive = datetime(2025, 3, 10, 12, 0, 0)
+        frozen_aware = frozen_naive.replace(tzinfo=_ZoneInfo("UTC"))
+        real_datetime = datetime
+
+        class _FrozenDatetime(real_datetime):
+            @classmethod
+            def utcnow(cls):
+                return frozen_naive
+
+            @classmethod
+            def now(cls, tz=None):
+                if tz is not None:
+                    return frozen_aware.astimezone(tz)
+                return frozen_naive
+
+        with patch.object(_sc, "datetime", _FrozenDatetime):
+            result = calculate_next_run(
+                schedule_type="monthly",
+                schedule_time="09:00",
+                timezone="UTC",
+                day_of_month=15,
+            )
+
         assert result is not None
-        # Should be on day 15 or later
-        assert result.day == 15 or result > datetime.utcnow()
+        assert result == datetime(2025, 3, 15, 9, 0, 0)
 
     def test_monthly_last_day(self):
         """Monthly on last day (-1)."""
