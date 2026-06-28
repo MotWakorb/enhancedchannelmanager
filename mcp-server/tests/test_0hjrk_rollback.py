@@ -76,7 +76,14 @@ class TestRollbackRefusalSurfaced:
 
         text = result[0][0].text
         assert "cannot guarantee a rollback" in text.lower()
-        assert "rolled back" not in text.lower() or "refus" in text.lower()
+        # The tool surfaces the refusal as "Cannot roll back execution 9: ..."
+        # The old assertion 'not in ... or "refus" in' was always-True because
+        # the error path says "Cannot roll back" (no "rolled back" phrase).
+        # Assert the exact prefix so inversion/deletion of the success=False
+        # handling would fail this test.
+        assert text.startswith("Cannot roll back execution 9"), (
+            f"Expected refusal to start with 'Cannot roll back execution 9', got: {text!r}"
+        )
 
 
 class TestRollbackSuccessWording:
