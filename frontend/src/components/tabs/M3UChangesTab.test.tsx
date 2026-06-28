@@ -97,12 +97,26 @@ describe('M3UChangesTab', () => {
       renderWithProviders(<M3UChangesTab />);
 
       expect(screen.getByText('M3U Changes')).toBeInTheDocument();
+
+      // Let the mount-time fetch settle so the resulting state updates happen
+      // inside act() (otherwise React logs an act() warning for the
+      // un-awaited fetchData() that flips loading off after this test body).
+      await waitFor(() => {
+        expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
+      });
     });
 
     it('shows loading state initially', async () => {
       renderWithProviders(<M3UChangesTab />);
 
       expect(screen.getByText('Loading changes...')).toBeInTheDocument();
+
+      // Let the mount-time fetch settle so the resulting state updates happen
+      // inside act() (otherwise React logs an act() warning for the
+      // un-awaited fetchData() that flips loading off after this test body).
+      await waitFor(() => {
+        expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
+      });
     });
 
     it('fetches accounts, changes, and summary on mount', async () => {
