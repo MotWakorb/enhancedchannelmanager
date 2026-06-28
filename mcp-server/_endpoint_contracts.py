@@ -444,6 +444,13 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="epg_match",
         method="POST",
         path="/api/epg/match",
+        # "source_order" is DEPRECATED (v0.18.x): EPG source priority is now
+        # resolved server-side. The MCP tool no longer sends it, but the field
+        # stays in this contract for the deprecation window because the backend
+        # EPGMatchRequest still declares it (accepted-but-ignored) — and the
+        # contract test requires request_fields to be a subset of the backend
+        # schema's properties. Remove this entry together with the backend
+        # field in v0.19.0.
         request_fields=frozenset({"channel_ids", "epg_source_ids", "source_order"}),  # EPGMatchRequest
     ),
     "epg_link_channel": Endpoint(
