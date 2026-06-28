@@ -390,14 +390,29 @@ def register(mcp: FastMCP):
             return f"Error duplicating rule {rule_id}: {e}"
 
     @mcp.tool()
-    async def delete_auto_creation_rule(rule_id: int) -> str:
+    async def delete_auto_creation_rule(rule_id: int, confirm: bool = False) -> str:
         """Delete an auto-creation rule.
+
+        CONFIRM GATING (bd-onazy): this is a two-call operation. The first call
+        (``confirm=False``, the default) fetches the rule and returns a preview
+        naming it, deleting NOTHING. Re-invoke with ``confirm=True`` to actually
+        delete.
 
         Args:
             rule_id: The rule ID to delete
+            confirm: Set True on the second call to perform the deletion.
         """
         try:
             client = get_ecm_client()
+            if not confirm:
+                rule = await client.call_endpoint(
+                    ENDPOINTS["ac_get_rule"], path_args={"rule_id": rule_id}
+                )
+                name = rule.get("name", "?") if isinstance(rule, dict) else "?"
+                return (
+                    f"Auto-creation rule {rule_id} '{name}' will be deleted — "
+                    f"re-invoke with confirm=True to delete."
+                )
             await client.call_endpoint(ENDPOINTS["ac_delete_rule"], path_args={"rule_id": rule_id})
             return f"Rule {rule_id} deleted."
         except Exception as e:

@@ -209,11 +209,20 @@ class ECMClient:
         json_data: dict | None = None,
         timeout: float | None = None,
         params: dict | None = None,
+        headers: dict | None = None,
     ) -> dict | None:
-        """DELETE request to ECM API."""
+        """DELETE request to ECM API.
+
+        ``headers`` carries optional per-call request headers — e.g. the
+        ``X-ECM-Batch-Id`` correlation id the bulk-delete tool sends so the
+        backend tags every looped delete with one journal batch_id
+        (enhancedchannelmanager-vp1rx / W3).
+        """
         client = _get_client()
         params = {k: v for k, v in (params or {}).items() if v is not None}
         extra = {"params": params} if params else {}
+        if headers:
+            extra["headers"] = headers
         try:
             r = await client.request("DELETE", path, json=json_data, timeout=timeout, **extra)
             r.raise_for_status()
@@ -236,6 +245,7 @@ class ECMClient:
         body: dict | None = None,
         query: dict | None = None,
         timeout: float | None = None,
+        headers: dict | None = None,
     ) -> dict | list | None:
         """Call a backend endpoint declared in ``_endpoint_contracts.ENDPOINTS``.
 
@@ -316,6 +326,10 @@ class ECMClient:
         if method == "PUT":
             return await self.put(formatted_path, **write_kwargs)
         if method == "DELETE":
+            # Only DELETE forwards per-call headers today (the W3 batch-id
+            # correlation for bulk_delete_channels). Other verbs ignore it.
+            if headers:
+                write_kwargs["headers"] = headers
             return await self.delete(formatted_path, **write_kwargs)
         raise ContractError(
             f"call_endpoint({ep.name!r}): unsupported method {ep.method!r}"

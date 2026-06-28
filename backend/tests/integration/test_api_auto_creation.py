@@ -356,6 +356,7 @@ class TestAutoCreationYAMLAPI:
         mock_rule.orphan_action = "delete"
         mock_rule.match_scope_target_group = False
         mock_rule.match_scope_group_id = None
+        mock_rule.allow_manual_channel_merge = False
         mock_db_session.query.return_value.order_by.return_value.all.return_value = [mock_rule]
 
         response = test_client.get("/api/auto-creation/export/yaml")

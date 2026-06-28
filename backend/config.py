@@ -44,6 +44,17 @@ ALLOWED_URL_SCHEMES = {"http", "https"}
 DEFAULT_MAX_AUTO_CREATION_LOG_ENTRIES = 500
 DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN = 500
 
+# bd-p8fx9 (W4): batch-size caps for the destructive MCP bulk tools. Surfaced on
+# GET /api/settings so the MCP guardrails (mcp-server/tools/_guardrails.py) can
+# read them; conservative defaults mirror the mcp-server module defaults. SOFT
+# cap forces the confirm-token; HARD cap refuses outright. Raisable here for a
+# deliberate large migration.
+DEFAULT_MCP_BULK_DELETE_SOFT_CAP = 25
+DEFAULT_MCP_BULK_DELETE_HARD_CAP = 500
+DEFAULT_MCP_CLEAR_AUTO_CREATED_GROUP_SOFT_CAP = 10
+DEFAULT_MCP_BULK_MERGE_SOFT_CAP = 20
+DEFAULT_MCP_BULK_MERGE_HARD_CAP = 200
+
 
 def validate_url_scheme(url: str, field_name: str = "URL") -> None:
     """Validate that a URL uses an allowed scheme (http/https only).
@@ -287,6 +298,14 @@ class DispatcharrSettings(BaseModel):
     # bd-h2xnl / bd-exo4j: max channels a single run will create before
     # soft-aborting (status='capped'). <= 0 disables the cap.
     max_auto_created_channels_per_run: int = DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN
+    # bd-p8fx9 (W4): MCP destructive-bulk batch-size caps (read by the MCP
+    # guardrails over GET /api/settings). SOFT forces the confirm-token; HARD
+    # refuses outright. Raise deliberately for a large planned migration.
+    mcp_bulk_delete_soft_cap: int = DEFAULT_MCP_BULK_DELETE_SOFT_CAP
+    mcp_bulk_delete_hard_cap: int = DEFAULT_MCP_BULK_DELETE_HARD_CAP
+    mcp_clear_auto_created_group_soft_cap: int = DEFAULT_MCP_CLEAR_AUTO_CREATED_GROUP_SOFT_CAP
+    mcp_bulk_merge_soft_cap: int = DEFAULT_MCP_BULK_MERGE_SOFT_CAP
+    mcp_bulk_merge_hard_cap: int = DEFAULT_MCP_BULK_MERGE_HARD_CAP
     # bd-exo4j circuit breaker (THE breaker, persisted across restarts): when
     # the startup crash-sentinel abandons a run left 'running' by an OOM
     # SIGKILL, it sets this flag True. While True, run_auto_creation_after_refresh

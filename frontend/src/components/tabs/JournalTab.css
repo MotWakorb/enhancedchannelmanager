@@ -122,7 +122,7 @@
 
 .list-header {
   display: grid;
-  grid-template-columns: 140px 120px 110px 180px 1fr 40px;
+  grid-template-columns: 140px 120px 110px 180px 1fr 90px 40px;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   background-color: var(--input-bg);
@@ -132,7 +132,7 @@
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  min-width: 700px;
+  min-width: 800px;
   position: sticky;
   top: 0;
   z-index: var(--z-base);
@@ -149,14 +149,14 @@
 
 .entry-row {
   display: grid;
-  grid-template-columns: 140px 120px 110px 180px 1fr 40px;
+  grid-template-columns: 140px 120px 110px 180px 1fr 90px 40px;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   align-items: center;
   background-color: var(--bg-secondary);
   transition: background-color 0.15s;
   cursor: pointer;
-  min-width: 700px;
+  min-width: 800px;
 }
 
 .entry-row:hover {
@@ -258,6 +258,45 @@
 .action-other {
   background-color: var(--border-primary);
   color: var(--text-secondary);
+}
+
+/* Source column */
+.entry-source {
+  display: flex;
+  align-items: center;
+}
+
+.source-badge {
+  display: inline-flex;
+  padding: 0.2rem 0.45rem;
+  border-radius: var(--radius-md);
+  font-size: 0.7rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.source-ui {
+  background-color: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.source-mcp_ai {
+  background-color: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+}
+
+.source-scheduler {
+  background-color: rgba(251, 146, 60, 0.15);
+  color: #fb923c;
+}
+
+.source-auto_creation {
+  background-color: rgba(20, 184, 166, 0.15);
+  color: #2dd4bf;
+}
+
+.source-unknown {
+  color: var(--text-muted);
 }
 
 .entry-entity {

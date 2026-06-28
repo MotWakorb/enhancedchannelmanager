@@ -217,8 +217,8 @@ class TestActionExecutorInit:
         """Initialize executor with existing channels."""
         client = MagicMock()
         channels = [
-            {"id": 1, "name": "ESPN", "channel_number": 100},
-            {"id": 2, "name": "CNN", "channel_number": 200},
+            {"id": 1, "name": "ESPN", "channel_number": 100, "auto_created": True},
+            {"id": 2, "name": "CNN", "channel_number": 200, "auto_created": True},
         ]
         executor = ActionExecutor(client, existing_channels=channels)
 
@@ -249,9 +249,9 @@ class TestActionExecutorHelpers:
         """Set up test fixtures."""
         self.client = MagicMock()
         self.channels = [
-            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US", "channel_number": 100},
-            {"id": 2, "name": "ESPN2", "tvg_id": "ESPN2.US", "channel_number": 101},
-            {"id": 3, "name": "CNN", "tvg_id": "CNN.US", "channel_number": 200},
+            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US", "channel_number": 100, "auto_created": True},
+            {"id": 2, "name": "ESPN2", "tvg_id": "ESPN2.US", "channel_number": 101, "auto_created": True},
+            {"id": 3, "name": "CNN", "tvg_id": "CNN.US", "channel_number": 200, "auto_created": True},
         ]
         self.groups = [
             {"id": 1, "name": "Sports"},
@@ -283,7 +283,7 @@ class TestActionExecutorHelpers:
 
     def test_find_channel_by_name_created(self):
         """Find channel finds newly created channels."""
-        self.executor._created_channels["fox"] = {"id": 99, "name": "FOX"}
+        self.executor._created_channels["fox"] = {"id": 99, "name": "FOX", "auto_created": True}
         channel = self.executor._find_channel_by_name("FOX")
         assert channel["id"] == 99
 
@@ -371,7 +371,7 @@ class TestActionExecutorExecute:
         self.client.create_channel_group = AsyncMock()
 
         self.channels = [
-            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US", "channel_number": 100, "streams": [101]},
+            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US", "channel_number": 100, "streams": [101], "auto_created": True},
         ]
         self.groups = [
             {"id": 1, "name": "Sports"},
@@ -456,7 +456,7 @@ class TestActionExecutorCreateChannel:
         self.client.update_channel = AsyncMock()
 
         self.channels = [
-            {"id": 1, "name": "ESPN", "channel_number": 100, "streams": [101]},
+            {"id": 1, "name": "ESPN", "channel_number": 100, "streams": [101], "auto_created": True},
         ]
         self.groups = [{"id": 1, "name": "Sports"}]
         self.executor = ActionExecutor(
@@ -613,7 +613,7 @@ class TestCreateChannelNormalizationLookup:
         client.create_channel = AsyncMock()
 
         # Existing channel already stored under the normalized name.
-        existing = [{"id": 42, "name": "RTL", "streams": [], "channel_group_id": 5}]
+        existing = [{"id": 42, "name": "RTL", "streams": [], "channel_group_id": 5, "auto_created": True}]
         engine = self._make_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL"})
         executor = ActionExecutor(client, existing_channels=existing,
                                   normalization_engine=engine)
@@ -661,7 +661,7 @@ class TestCreateChannelNormalizationLookup:
         client.create_channel = AsyncMock()
 
         existing = [{"id": 7, "name": "107 | RTL ᴿᴬᵂ", "channel_number": 107,
-                     "streams": [], "channel_group_id": 5}]
+                     "streams": [], "channel_group_id": 5, "auto_created": True}]
         engine = self._make_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL",
                                      "107 | RTL ᴿᴬᵂ": "107 | RTL"})
         executor = ActionExecutor(client, existing_channels=existing,
@@ -802,8 +802,8 @@ class TestActionExecutorMergeStreams:
         self.client.update_channel = AsyncMock()
 
         self.channels = [
-            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US", "channel_number": 100, "streams": [101]},
-            {"id": 2, "name": "ESPN2", "tvg_id": "ESPN2.US", "channel_number": 101, "streams": []},
+            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US", "channel_number": 100, "streams": [101], "auto_created": True},
+            {"id": 2, "name": "ESPN2", "tvg_id": "ESPN2.US", "channel_number": 101, "streams": [], "auto_created": True},
         ]
         self.executor = ActionExecutor(
             self.client,
@@ -1034,7 +1034,7 @@ class TestMergeStreamsExactDefaultMatch:
         # Existing channel "SKY Sport 4K" — its core/normalized form is
         # "sky sport" ("4K" stripped as a quality suffix).
         existing = [{"id": 50, "name": "SKY Sport 4K", "streams": [],
-                     "channel_group_id": 9}]
+                     "channel_group_id": 9, "auto_created": True}]
         core_map = {
             "SKY Sport 4K": "sky sport",
             # Unrelated streams that share the "sky sport" leading prefix.
@@ -1119,7 +1119,7 @@ class TestActionExecutorPropertyActions:
         self.client.find_logo_by_url = AsyncMock(return_value=None)
 
         self.channels = [
-            {"id": 1, "name": "ESPN", "logo_url": None, "tvg_id": None},
+            {"id": 1, "name": "ESPN", "logo_url": None, "tvg_id": None, "auto_created": True},
         ]
         self.executor = ActionExecutor(
             self.client,
@@ -1354,6 +1354,7 @@ class TestSimulatedChannelStateAfterActions:
                 "stream_profile_id": None,
                 "channel_number": None,
                 "channel_group_id": 7,
+                "auto_created": True,
             },
         ]
         self.executor = ActionExecutor(
@@ -1503,7 +1504,7 @@ class TestActionExecutorDryRun:
         self.client.create_channel_group = AsyncMock()
 
         self.channels = [
-            {"id": 1, "name": "ESPN", "channel_number": 100, "streams": [101]},
+            {"id": 1, "name": "ESPN", "channel_number": 100, "streams": [101], "auto_created": True},
         ]
         self.executor = ActionExecutor(
             self.client,
@@ -2024,7 +2025,7 @@ class TestDeferredEPGAssignment:
         self.client.update_channel = AsyncMock()
 
         self.channels = [
-            {"id": 1, "name": "ESPN", "logo_url": None, "tvg_id": None},
+            {"id": 1, "name": "ESPN", "logo_url": None, "tvg_id": None, "auto_created": True},
         ]
         self.stream_ctx = StreamContext(
             stream_id=201,
@@ -2223,7 +2224,7 @@ class TestMatchScopeTargetGroup:
         # having already created one). Group 2 = ESPN-GROUP, empty.
         self.channels = [
             {"id": 1, "name": "ESPN", "channel_number": 100,
-             "channel_group_id": 1, "streams": [101]},
+             "channel_group_id": 1, "streams": [101], "auto_created": True},
         ]
         self.groups = [
             {"id": 1, "name": "SPORTS"},
@@ -2370,7 +2371,7 @@ class TestMatchScopeGroupId:
         # Existing ESPN lives in group 1 (SPORTS). Group 2 (ESPN-GROUP) is empty.
         self.channels = [
             {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US", "channel_number": 100,
-             "channel_group_id": 1, "streams": [101]},
+             "channel_group_id": 1, "streams": [101], "auto_created": True},
         ]
         self.groups = [
             {"id": 1, "name": "SPORTS"},
@@ -2552,9 +2553,9 @@ class TestMergeStreamsTargetChannelGroupFilter:
         # "Keep" lives in group 1; "Excluded" lives in group 567.
         self.channels = [
             {"id": 10, "name": "Keep", "channel_number": 100,
-             "channel_group_id": 1, "streams": [101]},
+             "channel_group_id": 1, "streams": [101], "auto_created": True},
             {"id": 20, "name": "Excluded", "channel_number": 200,
-             "channel_group_id": 567, "streams": [201]},
+             "channel_group_id": 567, "streams": [201], "auto_created": True},
         ]
         self.groups = [
             {"id": 1, "name": "ALLOWED"},
@@ -2844,7 +2845,7 @@ class TestMergeJournalEntry:
         self.client.update_channel = AsyncMock()
         self.channels = [
             {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US",
-             "channel_number": 100, "streams": [101]},
+             "channel_number": 100, "streams": [101], "auto_created": True},
         ]
         self.stream_ctx = StreamContext(
             stream_id=201,
@@ -3089,9 +3090,9 @@ class TestMergeCountLabels:
         # Two distinct channels; each will receive streams
         self.channels = [
             {"id": 10, "name": "ESPN", "tvg_id": "ESPN.US",
-             "channel_number": 100, "streams": []},
+             "channel_number": 100, "streams": [], "auto_created": True},
             {"id": 20, "name": "CNN", "tvg_id": "CNN.US",
-             "channel_number": 200, "streams": []},
+             "channel_number": 200, "streams": [], "auto_created": True},
         ]
 
     def _merge_stream_into(self, executor, channel_name, stream_id):
@@ -3229,9 +3230,9 @@ class TestChannelsTouchedDryRun:
         self.client.update_channel = AsyncMock()
         # Three distinct channels; streams lists start empty.
         self.channels = [
-            {"id": 10, "name": "ESPN", "tvg_id": "", "channel_number": 100, "streams": []},
-            {"id": 20, "name": "CNN", "tvg_id": "", "channel_number": 200, "streams": []},
-            {"id": 30, "name": "FOX", "tvg_id": "", "channel_number": 300, "streams": []},
+            {"id": 10, "name": "ESPN", "tvg_id": "", "channel_number": 100, "streams": [], "auto_created": True},
+            {"id": 20, "name": "CNN", "tvg_id": "", "channel_number": 200, "streams": [], "auto_created": True},
+            {"id": 30, "name": "FOX", "tvg_id": "", "channel_number": 300, "streams": [], "auto_created": True},
         ]
 
     def _create_channel_merge_dry_run(self, executor, channel_name, stream_id,
@@ -3407,3 +3408,252 @@ class TestChannelsTouchedDryRun:
         assert executor._merge_streams_added_by_channel[10] == {1001, 1002}
         # Chokepoint set (channels_touched accounting) is populated too:
         assert touched == {10}
+
+
+# ===========================================================================
+# enhancedchannelmanager-orzck (W1): Manual-channel isolation
+#
+# Auto-creation matched a stream to an existing channel purely by NAME, with
+# no auto_created filter. A rule with if_exists=merge (or a merge_streams
+# action) could silently adopt a hand-built MANUAL channel (auto_created=False)
+# as the merge/update/rename target when names collided — overwriting its
+# name/metadata/filters. The fix gates _find_channel_by_name with
+# block_manual=True so a protected manual channel yields "not found" and a new
+# auto channel is created instead, UNLESS the firing rule opts in with
+# allow_manual_channel_merge=True.
+#
+# CONVENTION (mirrors the ADR-010 snapshot precedent
+# auto_creation_engine.py:_capture_snapshot — ``not ch.get("auto_created",
+# False)``): a channel dict with a MISSING or falsy ``auto_created`` key is
+# treated as MANUAL (protected). Only an explicit truthy ``auto_created`` makes
+# a channel an auto-created merge candidate.
+# ===========================================================================
+
+
+def _make_manual_isolation_executor(extra_channels=None):
+    """Executor with a MANUAL 'ESPN' channel (id=99, auto_created=False)."""
+    client = MagicMock()
+    _next = {"id": 900}
+
+    async def _create_channel(data):
+        _next["id"] += 1
+        return {
+            "id": _next["id"],
+            "name": data["name"],
+            "channel_number": data.get("channel_number"),
+            "channel_group_id": data.get("channel_group_id"),
+            "streams": data.get("streams", []),
+        }
+
+    client.create_channel = AsyncMock(side_effect=_create_channel)
+    client.update_channel = AsyncMock(return_value={})
+    client.get_channel = AsyncMock(return_value={"id": 99, "streams": [501]})
+
+    channels = [
+        {"id": 99, "name": "ESPN", "channel_number": 100,
+         "channel_group_id": 1, "streams": [501], "auto_created": False},
+    ]
+    if extra_channels:
+        channels.extend(extra_channels)
+    groups = [{"id": 1, "name": "SPORTS"}, {"id": 2, "name": "ESPN-GROUP"}]
+    executor = ActionExecutor(client, existing_channels=channels, existing_groups=groups)
+    return client, executor
+
+
+class TestManualChannelBleedRegression:
+    """REPRODUCTION: create_channel if_exists=merge must not adopt a manual channel.
+
+    Pre-fix: the stream merges into the manual ESPN (id=99) — update/merge is
+    called against it (the user-reported bleed). Post-fix: the manual channel is
+    UNTOUCHED and a brand-new auto channel is created instead.
+    """
+
+    def test_merge_does_not_touch_manual_channel(self):
+        client, executor = _make_manual_isolation_executor()
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, exec_ctx, rule_target_group_id=1)
+        )
+
+        assert result.success is True
+        # POST-FIX: manual channel id=99 is byte-identical — never updated/merged.
+        for call in client.update_channel.call_args_list:
+            assert call[0][0] != 99, "manual channel 99 was updated (bleed)"
+        # add_stream_to_channel resolves streams via get_channel; assert the
+        # manual channel was not the merge target.
+        for call in client.get_channel.call_args_list:
+            assert call[0][0] != 99, "stream was merged into manual channel 99 (bleed)"
+        # Instead a NEW auto channel was created.
+        client.create_channel.assert_called_once()
+        created = client.create_channel.call_args[0][0]
+        assert created["name"] == "ESPN"
+
+
+class TestAutoCreatedFilter:
+    """Matrix: the manual-channel gate across every name-resolution path."""
+
+    # ---- create_channel if_exists=merge: gate blocks the manual channel ----
+
+    def test_exact_name_merge_skips_manual_channel(self):
+        client, executor = _make_manual_isolation_executor()
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "if_exists": "merge"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(), rule_target_group_id=1)
+        )
+        assert result.success is True
+        client.create_channel.assert_called_once()
+        for call in client.get_channel.call_args_list:
+            assert call[0][0] != 99
+
+    def test_number_prefix_merge_skips_manual_channel(self):
+        """Manual channel stored as '4000 | ESPN' (base-name map) is protected."""
+        client = MagicMock()
+        _next = {"id": 900}
+
+        async def _create_channel(data):
+            _next["id"] += 1
+            return {"id": _next["id"], "name": data["name"],
+                    "channel_group_id": data.get("channel_group_id"),
+                    "streams": data.get("streams", [])}
+
+        client.create_channel = AsyncMock(side_effect=_create_channel)
+        client.update_channel = AsyncMock(return_value={})
+        client.get_channel = AsyncMock(return_value={"id": 77, "streams": []})
+        channels = [{"id": 77, "name": "4000 | ESPN", "channel_group_id": 1,
+                     "streams": [], "auto_created": False}]
+        executor = ActionExecutor(client, existing_channels=channels,
+                                  existing_groups=[{"id": 1, "name": "SPORTS"}])
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "if_exists": "merge"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(), rule_target_group_id=1)
+        )
+        assert result.success is True
+        client.create_channel.assert_called_once()
+        for call in client.update_channel.call_args_list:
+            assert call[0][0] != 77
+
+    def test_merge_streams_name_exact_skips_manual_channel(self):
+        client, executor = _make_manual_isolation_executor()
+        action = {"type": "merge_streams", "target": "existing_channel",
+                  "find_channel_by": "name_exact", "find_channel_value": "ESPN"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+        # No auto channel exists → merge_streams (existing only) yields no match.
+        for call in client.get_channel.call_args_list:
+            assert call[0][0] != 99
+        assert result.skipped is True or result.success is False
+
+    def test_merge_streams_tvg_id_skips_manual_channel(self):
+        """tvg_id resolution path also rejects the manual channel."""
+        client = MagicMock()
+        client.create_channel = AsyncMock()
+        client.update_channel = AsyncMock(return_value={})
+        client.get_channel = AsyncMock(return_value={"id": 99, "streams": []})
+        channels = [{"id": 99, "name": "ESPN", "channel_group_id": 1,
+                     "streams": [], "tvg_id": "ESPN.us", "auto_created": False}]
+        executor = ActionExecutor(client, existing_channels=channels,
+                                  existing_groups=[{"id": 1, "name": "SPORTS"}])
+        action = {"type": "merge_streams", "target": "existing_channel",
+                  "find_channel_by": "tvg_id", "find_channel_value": "ESPN.us"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1,
+                                   tvg_id="ESPN.us")
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+        for call in client.get_channel.call_args_list:
+            assert call[0][0] != 99
+        assert result.skipped is True or result.success is False
+
+    # ---- merge PROCEEDS for auto_created=True ----
+
+    def test_merge_proceeds_for_auto_created_channel(self):
+        """An auto_created=True channel IS a valid merge target."""
+        client = MagicMock()
+        client.create_channel = AsyncMock()
+        client.update_channel = AsyncMock(return_value={})
+        client.get_channel = AsyncMock(return_value={"id": 42, "streams": [600]})
+        channels = [{"id": 42, "name": "ESPN", "channel_number": 100,
+                     "channel_group_id": 1, "streams": [600], "auto_created": True}]
+        executor = ActionExecutor(client, existing_channels=channels,
+                                  existing_groups=[{"id": 1, "name": "SPORTS"}])
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "if_exists": "merge"}
+        stream_ctx = StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(), rule_target_group_id=1)
+        )
+        assert result.success is True
+        # Merged into the auto channel; no new channel created.
+        client.create_channel.assert_not_called()
+        assert any(call[0][0] == 42 for call in client.update_channel.call_args_list)
+
+    # ---- opt-in: allow_manual_channel_merge=True DOES adopt the manual channel ----
+
+    def test_opt_in_adopts_manual_channel(self):
+        client, executor = _make_manual_isolation_executor()
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "if_exists": "merge"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             rule_target_group_id=1,
+                             allow_manual_channel_merge=True)
+        )
+        assert result.success is True
+        # With opt-in, the merge DOES target the manual channel id=99.
+        client.create_channel.assert_not_called()
+        assert any(call[0][0] == 99 for call in client.update_channel.call_args_list)
+
+    def test_opt_in_journals_adoption(self):
+        """Opt-in adoption of a manual channel writes a journal entry."""
+        client, executor = _make_manual_isolation_executor()
+        # execution_id is required for the executor to write journal entries.
+        executor._execution_id = 12345
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "if_exists": "merge"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             rule_target_group_id=1,
+                             allow_manual_channel_merge=True)
+        )
+        adoption_entries = [
+            e for e in executor._journal_buffer
+            if e.get("action_type") == "manual_channel_adopted"
+        ]
+        assert len(adoption_entries) == 1
+        assert adoption_entries[0]["entity_id"] == 99
+
+    # ---- gate parameter on the chokepoint itself ----
+
+    def test_find_channel_by_name_block_manual_default_blocks(self):
+        _client, executor = _make_manual_isolation_executor()
+        # Default block_manual=True → manual channel is "not found".
+        assert executor._find_channel_by_name("ESPN") is None
+
+    def test_find_channel_by_name_block_manual_false_returns(self):
+        _client, executor = _make_manual_isolation_executor()
+        cand = executor._find_channel_by_name("ESPN", block_manual=False)
+        assert cand is not None and cand["id"] == 99
+
+    def test_missing_auto_created_key_treated_as_manual(self):
+        """A channel dict with NO auto_created key is protected (manual)."""
+        client = MagicMock()
+        channels = [{"id": 55, "name": "ESPN", "channel_group_id": 1, "streams": []}]
+        executor = ActionExecutor(client, existing_channels=channels,
+                                  existing_groups=[{"id": 1, "name": "SPORTS"}])
+        assert executor._find_channel_by_name("ESPN") is None
+        assert executor._find_channel_by_name("ESPN", block_manual=False)["id"] == 55

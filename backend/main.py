@@ -12,6 +12,7 @@ import logging
 import time
 from collections import defaultdict
 from datetime import datetime
+from typing import Optional
 
 from dispatcharr_client import get_client
 from config import (
@@ -517,6 +518,71 @@ async def auth_middleware(request: Request, call_next):
                     )
 
     return await call_next(request)
+
+
+import journal as _journal
+from auth.dependencies import _is_mcp_service_token
+
+
+def _resolve_request_mutation_source(request: Request) -> Optional[str]:
+    """Resolve the actor/origin for a journaled mutation from the principal.
+
+    PRINCIPAL-BASED detection (enhancedchannelmanager-vp1rx / W3): the bearer
+    credential, not a client-supplied header, decides the actor — a client
+    cannot forge or forget it.
+
+    * Static MCP API key  → ``"mcp_ai"`` (the AI agent principal)
+    * A decodeable JWT     → ``"ui"``    (an operator via the web UI)
+    * Anything else        → ``None``    (unknown — leaves the row's
+      ``mutation_source`` NULL rather than mislabeling it)
+
+    Scheduler / auto-creation mutations never reach this middleware (no HTTP
+    request); those paths stamp ``mutation_source`` explicitly at their call
+    sites.
+    """
+    token = get_token_from_request(request)
+    if not token:
+        return None
+    if _is_mcp_service_token(token):
+        return _journal.MUTATION_SOURCE_MCP_AI
+    if decode_token_safe(token):
+        return _journal.MUTATION_SOURCE_UI
+    return None
+
+
+@app.middleware("http")
+async def actor_source_middleware(request: Request, call_next):
+    """Stamp the request-scoped mutation actor/origin for the journal (W3).
+
+    Resolves the actor from the auth principal once per request and stashes it
+    in the ``journal`` contextvar so every ``journal.log_entry`` call made while
+    handling this request is attributed correctly without each call site having
+    to thread the actor through. Only ``/api/*`` requests carry an actor; static
+    files and SPA routes do not mutate state.
+    """
+    source_token = None
+    batch_token = None
+    if request.url.path.startswith("/api/"):
+        try:
+            source_token = _journal.set_mutation_source(
+                _resolve_request_mutation_source(request)
+            )
+            # Optional bulk-operation correlation id. The MCP bulk_delete tool
+            # sends one X-ECM-Batch-Id for its whole loop so the N single-channel
+            # deletes share one journal batch_id. Truncate to the column width
+            # (String(50)) and ignore anything non-stringy/oversized.
+            raw_batch = request.headers.get("X-ECM-Batch-Id")
+            if raw_batch:
+                batch_token = _journal.set_request_batch_id(raw_batch[:50])
+        except Exception:  # never let attribution break the request
+            logger.warning("[JOURNAL] Failed to resolve request mutation source", exc_info=True)
+    try:
+        return await call_next(request)
+    finally:
+        if batch_token is not None:
+            _journal.reset_request_batch_id(batch_token)
+        if source_token is not None:
+            _journal.reset_mutation_source(source_token)
 
 
 # Include auth router

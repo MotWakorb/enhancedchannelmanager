@@ -285,8 +285,12 @@ class TestDeleteChannel:
 
         mock_client = _make_ecm_client_mock(call_endpoint=None)
 
+        # bd-onazy: delete_channel is now a two-call confirm-gated op — the
+        # actual deletion requires confirm=True.
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
-            result = await mcp.call_tool("delete_channel", {"channel_id": 42})
+            result = await mcp.call_tool(
+                "delete_channel", {"channel_id": 42, "confirm": True}
+            )
 
         text = result[0][0].text
         assert "deleted" in text.lower()
@@ -423,15 +427,26 @@ class TestUpdateChannelGroupId:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(call_endpoint={"id": 1, "name": "ESPN"})
+        # bd-onazy: a group-change first fetches the channel's state to decide
+        # whether to gate. An AUTO-created channel is frictionless, so the PATCH
+        # still goes out in the same call. The state GET returns auto_created=True
+        # then the PATCH returns the updated object.
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "id": 1, "name": "ESPN", "auto_created": True, "channel_group_id": 7,
+        })
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             await mcp.call_tool("update_channel", {"channel_id": 1, "group_id": 7})
 
         from _endpoint_contracts import ENDPOINTS
-        mock_client.call_endpoint.assert_awaited_once()
-        call = mock_client.call_endpoint.call_args
-        assert call.args[0] is ENDPOINTS["channels_update"]
+        # Locate the PATCH (mutation) call specifically — a state-fetch GET may
+        # precede it.
+        patch_calls = [
+            c for c in mock_client.call_endpoint.call_args_list
+            if c.args[0] is ENDPOINTS["channels_update"]
+        ]
+        assert len(patch_calls) == 1
+        call = patch_calls[0]
         assert call.kwargs["path_args"] == {"channel_id": 1}
         payload = call.kwargs["body"]
         assert payload == {"channel_group_id": 7}
