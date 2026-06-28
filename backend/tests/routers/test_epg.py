@@ -250,7 +250,7 @@ class TestTriggerEPGImport:
 
     @pytest.mark.asyncio
     async def test_triggers_import(self, async_client):
-        """Triggers EPG data import."""
+        """Triggers EPG data import and returns the forwarded result."""
         mock_client = AsyncMock()
         mock_client.trigger_epg_import.return_value = {"status": "importing"}
 
@@ -258,6 +258,8 @@ class TestTriggerEPGImport:
             response = await async_client.post("/api/epg/import")
 
         assert response.status_code == 200
+        assert response.json() == {"status": "importing"}
+        mock_client.trigger_epg_import.assert_called_once_with()
 
 
 class TestGetEPGData:
@@ -317,14 +319,16 @@ class TestGetEPGGrid:
 
     @pytest.mark.asyncio
     async def test_returns_grid(self, async_client):
-        """Returns EPG grid data."""
+        """Returns EPG grid data forwarded verbatim from the client."""
         mock_client = AsyncMock()
-        mock_client.get_epg_grid.return_value = {"channels": [], "programmes": []}
+        mock_client.get_epg_grid.return_value = {"channels": ["ch1"], "programmes": ["prog1"]}
 
         with patch("routers.epg.get_client", return_value=mock_client):
             response = await async_client.get("/api/epg/grid")
 
         assert response.status_code == 200
+        assert response.json() == {"channels": ["ch1"], "programmes": ["prog1"]}
+        mock_client.get_epg_grid.assert_called_once_with(start=None, end=None)
 
     @pytest.mark.asyncio
     async def test_handles_timeout(self, async_client):

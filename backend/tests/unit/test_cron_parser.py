@@ -20,6 +20,36 @@ class TestCroniterAvailability:
         # croniter should be installed in test environment
         assert is_croniter_available() is True
 
+    def test_validate_cron_expression_falls_back_without_croniter(self):
+        """validate_cron_expression returns (False, error) when croniter is absent.
+
+        Mutation guard: if the ImportError branch were removed (always uses croniter),
+        this test fails because the patched import would raise ImportError unhandled.
+        """
+        import sys
+        from unittest.mock import patch
+
+        # Simulate croniter not installed by making the import raise ImportError
+        with patch.dict(sys.modules, {"croniter": None}):
+            is_valid, error = validate_cron_expression("0 * * * *")
+
+        assert is_valid is False
+        assert "croniter" in error.lower()
+
+    def test_get_next_n_run_times_returns_empty_without_croniter(self):
+        """get_next_n_run_times returns [] when croniter is absent.
+
+        Mutation guard: if the ImportError fallback were removed, calling
+        get_next_n_run_times without croniter would raise ImportError instead of [].
+        """
+        import sys
+        from unittest.mock import patch
+
+        with patch.dict(sys.modules, {"croniter": None}):
+            result = get_next_n_run_times("0 * * * *", n=3)
+
+        assert result == []
+
 
 class TestValidateCronExpression:
     """Tests for validate_cron_expression()."""

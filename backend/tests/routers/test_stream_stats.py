@@ -428,14 +428,16 @@ class TestGetProbeResults:
 
     @pytest.mark.asyncio
     async def test_returns_results(self, async_client):
-        """Returns last probe results."""
+        """Returns last probe results forwarded verbatim from prober."""
         mock_prober = MagicMock()
-        mock_prober.get_probe_results.return_value = {"results": [], "summary": {}}
+        mock_prober.get_probe_results.return_value = {"results": [{"id": 1}], "summary": {"total": 1}}
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.get("/api/stream-stats/probe/results")
 
         assert response.status_code == 200
+        assert response.json() == {"results": [{"id": 1}], "summary": {"total": 1}}
+        mock_prober.get_probe_results.assert_called_once()
 
 
 class TestGetProbeHistory:
@@ -443,7 +445,7 @@ class TestGetProbeHistory:
 
     @pytest.mark.asyncio
     async def test_returns_history(self, async_client):
-        """Returns probe run history."""
+        """Returns probe run history forwarded verbatim from prober."""
         mock_prober = MagicMock()
         mock_prober.get_probe_history.return_value = [
             {"run_id": 1, "started_at": "2024-01-01T00:00:00Z"},
@@ -453,6 +455,8 @@ class TestGetProbeHistory:
             response = await async_client.get("/api/stream-stats/probe/history")
 
         assert response.status_code == 200
+        assert response.json() == [{"run_id": 1, "started_at": "2024-01-01T00:00:00Z"}]
+        mock_prober.get_probe_history.assert_called_once()
 
 
 class TestCancelProbe:

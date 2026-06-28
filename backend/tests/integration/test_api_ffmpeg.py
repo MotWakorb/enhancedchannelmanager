@@ -16,9 +16,57 @@ from unittest.mock import patch
 from tests.fixtures.ffmpeg_factories import (
     create_builder_state,
     create_ffmpeg_job,
-    create_capabilities,
-    create_validation_result,
 )
+
+
+# ---------------------------------------------------------------------------
+# Canned ffmpeg output for subprocess-boundary mocking.
+# These strings are representative slices of real ffmpeg -encoders / -decoders /
+# -formats / -filters / -version output. ECM's _parse_* functions are what we
+# are testing — the subprocess call is the true binary boundary.
+# ---------------------------------------------------------------------------
+
+_CANNED_ENCODERS = """\
+ V..... libx264             libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10
+ V..... libx265             libx265 H.265 / HEVC
+ V..... h264_nvenc          NVIDIA NVENC H.264 encoder
+ A..... aac                 AAC (Advanced Audio Coding)
+"""
+
+_CANNED_DECODERS = """\
+ V..... h264                H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10
+ V..... hevc                H.265 / HEVC
+ A..... aac                 AAC (Advanced Audio Coding)
+"""
+
+_CANNED_FORMATS = """\
+ DE mp4             MP4 (MPEG-4 Part 14)
+ DE mkv             Matroska
+ DE ts              MPEG-TS (MPEG-2 Transport Stream)
+"""
+
+_CANNED_FILTERS = """\
+ ... scale            V->V     Scale the input video size and/or convert
+ ... fps              V->V     Force constant framerate
+ ... volume           A->A     Change input volume
+"""
+
+_CANNED_VERSION = "ffmpeg version 6.1 Copyright (c) 2000-2023 the FFmpeg developers"
+
+
+def _canned_ffmpeg_output(args):
+    """Map ffmpeg query args to canned output for subprocess-boundary mocking."""
+    if args == ["-version"]:
+        return _CANNED_VERSION
+    if args == ["-encoders"]:
+        return _CANNED_ENCODERS
+    if args == ["-decoders"]:
+        return _CANNED_DECODERS
+    if args == ["-formats"]:
+        return _CANNED_FORMATS
+    if args == ["-filters"]:
+        return _CANNED_FILTERS
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -27,58 +75,60 @@ from tests.fixtures.ffmpeg_factories import (
 
 
 class TestCapabilitiesAPI:
-    """Tests for GET /api/ffmpeg/capabilities endpoint."""
+    """Tests for GET /api/ffmpeg/capabilities endpoint.
+
+    Mocks only the subprocess boundary (_run_ffmpeg_query) with canned ffmpeg
+    output. All parsing and structuring is done by ECM's real detect_capabilities()
+    — the tests assert ECM's computed result, not a fixture we inject.
+    """
 
     @pytest.mark.asyncio
     async def test_get_capabilities_returns_200(self, async_client):
         """GET /api/ffmpeg/capabilities returns 200."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_capabilities_has_version(self, async_client):
-        """GET /api/ffmpeg/capabilities response includes version string."""
-        caps = create_capabilities(version="6.1")
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
+        """ECM parses the version string from ffmpeg -version output."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
         assert "version" in data
-        assert data["version"] == "6.1"
+        # ECM returns the raw first line from ffmpeg -version; must contain "6.1"
+        assert "6.1" in data["version"]
 
     @pytest.mark.asyncio
     async def test_capabilities_has_encoders(self, async_client):
-        """GET /api/ffmpeg/capabilities response includes encoders list."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
+        """ECM parses encoder names from ffmpeg -encoders output."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
         assert "encoders" in data
         assert isinstance(data["encoders"], list)
-        assert len(data["encoders"]) > 0
+        # libx264 and libx265 appear in the canned output — ECM must parse them
         assert "libx264" in data["encoders"]
+        assert "libx265" in data["encoders"]
 
     @pytest.mark.asyncio
     async def test_capabilities_has_decoders(self, async_client):
-        """GET /api/ffmpeg/capabilities response includes decoders list."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
+        """ECM parses decoder names from ffmpeg -decoders output."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
         assert "decoders" in data
         assert isinstance(data["decoders"], list)
-        assert len(data["decoders"]) > 0
+        # h264 appears in the canned decoders output
         assert "h264" in data["decoders"]
 
     @pytest.mark.asyncio
     async def test_capabilities_has_formats(self, async_client):
-        """GET /api/ffmpeg/capabilities response includes formats list."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
+        """ECM parses container format names from ffmpeg -formats output."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -89,9 +139,8 @@ class TestCapabilitiesAPI:
 
     @pytest.mark.asyncio
     async def test_capabilities_has_filters(self, async_client):
-        """GET /api/ffmpeg/capabilities response includes filters list."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
+        """ECM parses filter names from ffmpeg -filters output."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -100,55 +149,44 @@ class TestCapabilitiesAPI:
         assert "scale" in data["filters"]
 
     @pytest.mark.asyncio
-    async def test_capabilities_has_hwaccels(self, async_client):
-        """GET /api/ffmpeg/capabilities response includes hwaccels list."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
+    async def test_capabilities_hwaccels_detected_from_encoders(self, async_client):
+        """ECM infers hwaccels from encoder names (nvenc → cuda)."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
         assert "hwaccels" in data
         assert isinstance(data["hwaccels"], list)
-        assert len(data["hwaccels"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_hwaccels_include_cuda_status(self, async_client):
-        """Hardware acceleration list includes CUDA availability status."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
-            response = await async_client.get("/api/ffmpeg/capabilities")
-        assert response.status_code == 200
-        data = response.json()
+        # h264_nvenc in canned encoders → ECM must emit a cuda hwaccel entry
         cuda = next((h for h in data["hwaccels"] if h["api"] == "cuda"), None)
-        assert cuda is not None
-        assert "available" in cuda
-        assert isinstance(cuda["available"], bool)
+        assert cuda is not None, "cuda hwaccel not detected from h264_nvenc encoder"
+        assert cuda["available"] is True
+        assert "h264_nvenc" in cuda["encoders"]
 
     @pytest.mark.asyncio
-    async def test_hwaccels_include_qsv_status(self, async_client):
-        """Hardware acceleration list includes QSV availability status."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
+    async def test_capabilities_hwaccel_entry_shape(self, async_client):
+        """Every hwaccel entry has required fields: api, available, encoders."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", side_effect=_canned_ffmpeg_output):
+            response = await async_client.get("/api/ffmpeg/capabilities")
+        data = response.json()
+        for entry in data["hwaccels"]:
+            assert "api" in entry
+            assert "available" in entry
+            assert isinstance(entry["available"], bool)
+            assert "encoders" in entry
+
+    @pytest.mark.asyncio
+    async def test_capabilities_empty_ffmpeg_output_returns_empty_lists(self, async_client):
+        """When ffmpeg binary is absent, ECM returns empty lists (not 500)."""
+        with patch("ffmpeg_builder.probe._run_ffmpeg_query", return_value=""):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
-        qsv = next((h for h in data["hwaccels"] if h["api"] == "qsv"), None)
-        assert qsv is not None
-        assert "available" in qsv
-        assert isinstance(qsv["available"], bool)
-
-    @pytest.mark.asyncio
-    async def test_hwaccels_include_vaapi_status(self, async_client):
-        """Hardware acceleration list includes VAAPI availability status."""
-        caps = create_capabilities()
-        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
-            response = await async_client.get("/api/ffmpeg/capabilities")
-        assert response.status_code == 200
-        data = response.json()
-        vaapi = next((h for h in data["hwaccels"] if h["api"] == "vaapi"), None)
-        assert vaapi is not None
-        assert "available" in vaapi
-        assert isinstance(vaapi["available"], bool)
+        assert data["encoders"] == []
+        assert data["decoders"] == []
+        # formats may include header artifacts from empty output — just assert it's a list
+        assert isinstance(data["formats"], list)
+        assert data["hwaccels"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -157,100 +195,84 @@ class TestCapabilitiesAPI:
 
 
 class TestValidationAPI:
-    """Tests for POST /api/ffmpeg/validate endpoint."""
+    """Tests for POST /api/ffmpeg/validate endpoint.
+
+    Uses ECM's real ffmpeg_validate_config() — no mocks of the function under
+    test. Assertions depend on ECM's validation logic. Mutation check: inverting
+    ffmpeg_validate_config to always return valid=True would fail the invalid
+    tests; always returning valid=False would fail the valid tests.
+    """
 
     @pytest.mark.asyncio
-    async def test_validate_valid_config_returns_200(self, async_client):
-        """POST /api/ffmpeg/validate with valid config returns 200."""
-        state = create_builder_state()
-        result = create_validation_result(valid=True)
-        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
-            response = await async_client.post("/api/ffmpeg/validate", json=state)
+    async def test_validate_valid_config_returns_200_and_valid_true(self, async_client):
+        """POST /api/ffmpeg/validate with a complete config returns valid=True."""
+        state = create_builder_state()  # has input, output, videoCodec, audioCodec
+        response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
         assert data["valid"] is True
+        assert data["errors"] == []
 
     @pytest.mark.asyncio
-    async def test_validate_returns_command_string(self, async_client):
-        """POST /api/ffmpeg/validate returns generated command string."""
-        state = create_builder_state()
-        result = create_validation_result(
-            valid=True,
-            command="ffmpeg -i input.mp4 -c:v libx264 -crf 23 output.mp4",
-        )
-        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
-            response = await async_client.post("/api/ffmpeg/validate", json=state)
-        assert response.status_code == 200
-        data = response.json()
-        assert "command" in data
-        assert "ffmpeg" in data["command"]
+    async def test_validate_missing_input_returns_valid_false_with_error(self, async_client):
+        """POST /api/ffmpeg/validate with missing input returns valid=False and input error.
 
-    @pytest.mark.asyncio
-    async def test_validate_invalid_config_returns_errors(self, async_client):
-        """POST /api/ffmpeg/validate with invalid config returns errors list."""
-        state = create_builder_state()
-        state["input"] = None  # Missing input makes it invalid
-        result = create_validation_result(
-            valid=False,
-            errors=["Input source is required"],
-            command="",
-        )
-        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
-            response = await async_client.post("/api/ffmpeg/validate", json=state)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["valid"] is False
-        assert "errors" in data
-        assert len(data["errors"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_validate_returns_warnings(self, async_client):
-        """POST /api/ffmpeg/validate returns warnings for questionable settings."""
-        state = create_builder_state()
-        result = create_validation_result(
-            valid=True,
-            warnings=["VP9 codec in MP4 container may cause compatibility issues"],
-        )
-        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
-            response = await async_client.post("/api/ffmpeg/validate", json=state)
-        assert response.status_code == 200
-        data = response.json()
-        assert "warnings" in data
-        assert len(data["warnings"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_validate_missing_input_returns_error(self, async_client):
-        """POST /api/ffmpeg/validate with no input source returns validation error."""
+        Mutation check: if ffmpeg_validate_config always returned valid=True this would fail
+        at ``assert data["valid"] is False``.
+        """
         state = create_builder_state()
         state["input"] = None
-        result = create_validation_result(
-            valid=False,
-            errors=["Input source is required"],
-            command="",
-        )
-        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
-            response = await async_client.post("/api/ffmpeg/validate", json=state)
+        response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
         assert data["valid"] is False
+        assert len(data["errors"]) > 0
         assert any("input" in e.lower() for e in data["errors"])
 
     @pytest.mark.asyncio
-    async def test_validate_missing_output_returns_error(self, async_client):
-        """POST /api/ffmpeg/validate with no output config returns validation error."""
+    async def test_validate_missing_output_returns_valid_false_with_error(self, async_client):
+        """POST /api/ffmpeg/validate with missing output returns valid=False and output error."""
         state = create_builder_state()
         state["output"] = None
-        result = create_validation_result(
-            valid=False,
-            errors=["Output path is required"],
-            command="",
-        )
-        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
-            response = await async_client.post("/api/ffmpeg/validate", json=state)
+        response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
         assert data["valid"] is False
         assert any("output" in e.lower() for e in data["errors"])
+
+    @pytest.mark.asyncio
+    async def test_validate_crf_out_of_range_returns_error(self, async_client):
+        """POST /api/ffmpeg/validate with CRF > 51 returns an error from ECM's validator."""
+        state = create_builder_state()
+        state["videoCodec"] = {"codec": "libx264", "crf": 99}
+        response = await async_client.post("/api/ffmpeg/validate", json=state)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is False
+        assert any("crf" in e.lower() for e in data["errors"])
+
+    @pytest.mark.asyncio
+    async def test_validate_incompatible_codec_container_returns_warning(self, async_client):
+        """libvpx-vp9 in mp4 container triggers a codec/container compatibility warning."""
+        state = create_builder_state()
+        state["videoCodec"] = {"codec": "libvpx-vp9"}
+        state["output"] = {"path": "/out.mp4", "format": "mp4"}
+        response = await async_client.post("/api/ffmpeg/validate", json=state)
+        assert response.status_code == 200
+        data = response.json()
+        # ECM warns about codec/container mismatch — must be in warnings
+        assert any("vp9" in w.lower() or "compatible" in w.lower() or "mismatch" in w.lower()
+                   for w in data["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_validate_response_always_includes_required_fields(self, async_client):
+        """Validate response always has valid, errors, warnings, and command keys."""
+        state = create_builder_state()
+        response = await async_client.post("/api/ffmpeg/validate", json=state)
+        assert response.status_code == 200
+        data = response.json()
+        for field in ("valid", "errors", "warnings", "command"):
+            assert field in data, f"Missing field '{field}' in validate response"
 
 
 # ---------------------------------------------------------------------------
@@ -259,130 +281,101 @@ class TestValidationAPI:
 
 
 class TestGenerateCommandAPI:
-    """Tests for POST /api/ffmpeg/generate-command endpoint."""
+    """Tests for POST /api/ffmpeg/generate-command endpoint.
+
+    Uses ECM's real generate_command() / annotate_command() — no mocks of the
+    function under test. Assertions depend on ECM's actual command-building logic.
+    Mutation check: removing -i flag generation from generate_input_flags would
+    fail test_generate_command_includes_input_flag; removing libx264 codec flag
+    generation would fail test_generate_command_includes_video_codec_flag.
+    """
 
     @pytest.mark.asyncio
     async def test_generate_command_returns_200(self, async_client):
-        """POST /api/ffmpeg/generate-command returns 200 with command string."""
+        """POST /api/ffmpeg/generate-command returns 200 with command and annotations."""
         state = create_builder_state()
-        mock_result = {
-            "command": "ffmpeg -i /media/input.mp4 -c:v libx264 -crf 23 -c:a aac -b:a 192k /media/output.mp4",
-            "annotations": [
-                {
-                    "flag": "-i",
-                    "value": "/media/input.mp4",
-                    "category": "input",
-                    "explanation": "Input file path",
-                },
-                {
-                    "flag": "-c:v",
-                    "value": "libx264",
-                    "category": "video",
-                    "explanation": "H.264 software encoder",
-                },
-            ],
-        }
-        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
-            response = await async_client.post("/api/ffmpeg/generate-command", json=state)
+        response = await async_client.post("/api/ffmpeg/generate-command", json=state)
         assert response.status_code == 200
         data = response.json()
         assert "command" in data
-        assert "ffmpeg" in data["command"]
+        assert "annotations" in data
 
     @pytest.mark.asyncio
-    async def test_generate_command_returns_annotations(self, async_client):
-        """POST /api/ffmpeg/generate-command returns annotated command segments."""
+    async def test_generate_command_starts_with_ffmpeg(self, async_client):
+        """ECM's generated command always starts with 'ffmpeg'."""
         state = create_builder_state()
-        mock_result = {
-            "command": "ffmpeg -i /media/input.mp4 -c:v libx264 -crf 23 /media/output.mp4",
-            "annotations": [
-                {
-                    "flag": "-i",
-                    "value": "/media/input.mp4",
-                    "category": "input",
-                    "explanation": "Input file path",
-                },
-                {
-                    "flag": "-c:v",
-                    "value": "libx264",
-                    "category": "video",
-                    "explanation": "H.264 software encoder",
-                },
-                {
-                    "flag": "-crf",
-                    "value": "23",
-                    "category": "video",
-                    "explanation": "Constant Rate Factor (quality level)",
-                },
-            ],
-        }
-        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
-            response = await async_client.post("/api/ffmpeg/generate-command", json=state)
+        response = await async_client.post("/api/ffmpeg/generate-command", json=state)
         assert response.status_code == 200
         data = response.json()
-        assert "annotations" in data
+        assert data["command"].startswith("ffmpeg"), (
+            f"Expected command to start with 'ffmpeg', got: {data['command']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_command_includes_input_flag(self, async_client):
+        """ECM's command generator emits -i with the input path.
+
+        Mutation check: removing ``-i`` from generate_input_flags() would fail here.
+        """
+        state = create_builder_state()  # input path defaults to /media/input.mp4
+        response = await async_client.post("/api/ffmpeg/generate-command", json=state)
+        assert response.status_code == 200
+        data = response.json()
+        assert "-i" in data["command"]
+        assert "/media/input.mp4" in data["command"]
+
+    @pytest.mark.asyncio
+    async def test_generate_command_includes_video_codec_flag(self, async_client):
+        """ECM emits -c:v with the specified codec.
+
+        Mutation check: removing -c:v generation from generate_video_codec_flags() would fail.
+        """
+        state = create_builder_state()  # videoCodec defaults to libx264
+        response = await async_client.post("/api/ffmpeg/generate-command", json=state)
+        assert response.status_code == 200
+        data = response.json()
+        assert "-c:v" in data["command"]
+        assert "libx264" in data["command"]
+
+    @pytest.mark.asyncio
+    async def test_generate_command_includes_crf_when_set(self, async_client):
+        """ECM emits -crf with the configured value when rate control is crf."""
+        from tests.fixtures.ffmpeg_factories import create_video_codec_settings
+        state = create_builder_state(
+            video_codec=create_video_codec_settings(codec="libx264", crf=28)
+        )
+        response = await async_client.post("/api/ffmpeg/generate-command", json=state)
+        assert response.status_code == 200
+        data = response.json()
+        assert "-crf" in data["command"]
+        assert "28" in data["command"]
+
+    @pytest.mark.asyncio
+    async def test_annotations_have_required_fields(self, async_client):
+        """Every annotation entry has flag, explanation, and category fields."""
+        state = create_builder_state()
+        response = await async_client.post("/api/ffmpeg/generate-command", json=state)
+        assert response.status_code == 200
+        data = response.json()
         assert isinstance(data["annotations"], list)
         assert len(data["annotations"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_annotations_have_categories(self, async_client):
-        """Each annotation includes a category field."""
-        state = create_builder_state()
-        mock_result = {
-            "command": "ffmpeg -i /media/input.mp4 -c:v libx264 /media/output.mp4",
-            "annotations": [
-                {
-                    "flag": "-i",
-                    "value": "/media/input.mp4",
-                    "category": "input",
-                    "explanation": "Input file path",
-                },
-                {
-                    "flag": "-c:v",
-                    "value": "libx264",
-                    "category": "video",
-                    "explanation": "H.264 software encoder",
-                },
-            ],
-        }
-        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
-            response = await async_client.post("/api/ffmpeg/generate-command", json=state)
-        assert response.status_code == 200
-        data = response.json()
         for annotation in data["annotations"]:
+            assert "flag" in annotation
+            assert "explanation" in annotation
             assert "category" in annotation
             assert isinstance(annotation["category"], str)
             assert len(annotation["category"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_annotations_have_explanations(self, async_client):
-        """Each annotation includes a non-empty explanation string."""
-        state = create_builder_state()
-        mock_result = {
-            "command": "ffmpeg -i /media/input.mp4 -c:v libx264 /media/output.mp4",
-            "annotations": [
-                {
-                    "flag": "-i",
-                    "value": "/media/input.mp4",
-                    "category": "input",
-                    "explanation": "Input file path",
-                },
-                {
-                    "flag": "-c:v",
-                    "value": "libx264",
-                    "category": "video",
-                    "explanation": "H.264 software encoder",
-                },
-            ],
-        }
-        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
-            response = await async_client.post("/api/ffmpeg/generate-command", json=state)
-        assert response.status_code == 200
-        data = response.json()
-        for annotation in data["annotations"]:
-            assert "explanation" in annotation
             assert isinstance(annotation["explanation"], str)
             assert len(annotation["explanation"].strip()) > 0
+
+    @pytest.mark.asyncio
+    async def test_generate_command_output_path_in_command(self, async_client):
+        """ECM includes the output path in the generated command."""
+        state = create_builder_state()  # output defaults to /media/output.mp4
+        response = await async_client.post("/api/ffmpeg/generate-command", json=state)
+        assert response.status_code == 200
+        data = response.json()
+        assert "/media/output.mp4" in data["command"]
 
 
 # ---------------------------------------------------------------------------

@@ -39,8 +39,16 @@ class TestUpdateSettings:
     """Tests for POST /api/settings endpoint."""
 
     @pytest.mark.asyncio
-    async def test_update_settings_validates_url(self, async_client):
-        """POST /api/settings validates URL format."""
+    async def test_update_settings_accepts_url_without_format_validation(self, async_client):
+        """POST /api/settings saves the URL as-is (no server-side URL format validation).
+
+        The settings endpoint does not validate URL format — it stores whatever the
+        operator provides. This test documents the current behavior: a syntactically
+        invalid URL string is accepted with 200. A future bead that adds URL validation
+        would need to change this assertion to 400 or 422.
+        Mutation check: if the router started validating URLs and returning 400/422,
+        this test would fail — signaling the behavior changed.
+        """
         response = await async_client.post(
             "/api/settings",
             json={
@@ -49,12 +57,15 @@ class TestUpdateSettings:
                 "password": "password",
             },
         )
-        # Should either reject or accept based on validation logic
-        assert response.status_code in (200, 400, 422)
+        assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_update_settings_requires_url(self, async_client):
-        """POST /api/settings requires URL field."""
+        """POST /api/settings requires the url field — missing it returns 422.
+
+        Mutation check: if SettingsRequest.url were made Optional, Pydantic would
+        accept the request and the status would change to 200, failing this test.
+        """
         response = await async_client.post(
             "/api/settings",
             json={
@@ -62,8 +73,8 @@ class TestUpdateSettings:
                 "password": "password",
             },
         )
-        # Missing required field should return validation error
-        assert response.status_code in (400, 422)
+        # SettingsRequest.url has no default — Pydantic rejects the missing field
+        assert response.status_code == 422
 
 
 class TestTestConnection:
@@ -71,23 +82,37 @@ class TestTestConnection:
 
     @pytest.mark.asyncio
     async def test_test_connection_with_valid_credentials(self, async_client):
-        """POST /api/settings/test tests connection with provided credentials."""
-        with patch("routers.settings.get_client") as mock_get_client:
-            mock_client = MagicMock()
-            mock_client.test_connection = MagicMock(return_value=True)
-            mock_get_client.return_value = mock_client
+        """POST /api/settings/test returns success=True when Dispatcharr token endpoint returns 200.
 
+        The test_connection router uses httpx.AsyncClient directly (not get_client).
+        Mock at the httpx boundary so ECM's parsing of the auth response is exercised.
+        Mutation check: if the router stopped checking response.status_code == 200,
+        success would not be True and this test would fail.
+        """
+        from unittest.mock import AsyncMock
+        import httpx
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=None)
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
             response = await async_client.post(
                 "/api/settings/test",
                 json={
-                    "url": "http://localhost:5656",
+                    "url": "http://dispatcharr.example.com:5656",
                     "username": "admin",
                     "password": "password",
                 },
             )
 
-            # Should return success/failure based on test
-            assert response.status_code in (200, 400, 500)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
 
     @pytest.mark.asyncio
     async def test_test_connection_requires_credentials(self, async_client):

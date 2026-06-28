@@ -265,39 +265,46 @@ class TestProtectedEndpoints:
 
     @pytest.mark.asyncio
     async def test_auth_login_is_public(self, async_client):
-        """POST /api/auth/login does not require authentication."""
+        """POST /api/auth/login is reachable without credentials and returns 401 for invalid creds.
+
+        This endpoint must NOT require prior authentication (it would be impossible to log in).
+        The nonexistent user "test" makes the result deterministic: always 401, not 403.
+        Mutation check: if the endpoint required prior auth and returned 403, this would fail.
+        """
         response = await async_client.post(
             "/api/auth/login",
             json={"username": "test", "password": "test"},
         )
-        # Should get 401 (invalid creds) not 403 (auth required)
-        assert response.status_code in (200, 401, 422)
+        # 401 = invalid credentials (user not found) — not 403 (auth required before login)
+        assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_settings_endpoint_requires_auth(self, async_client):
-        """GET /api/settings requires authentication when auth is enabled."""
-        # When auth is enabled, settings should require authentication
+    async def test_settings_endpoint_is_public_in_setup_mode(self, async_client):
+        """GET /api/settings returns 200 when auth is in setup mode (no users configured).
+
+        The settings endpoint uses RequireAdminIfEnabled which bypasses auth when
+        setup_complete=False (the test environment always starts in setup mode).
+        Making this test assert == 401 deterministically would require seeding a
+        fully-configured auth state and enabling require_auth — that is large scaffolding
+        not warranted here. This test instead asserts the known setup-mode behavior:
+        the endpoint is publicly accessible. A separate test (test_invalid_token_on_protected_endpoint_returns_401)
+        uses /api/auth/me which always validates tokens.
+        """
         response = await async_client.get("/api/settings")
-        # For now, this tests the expected behavior once auth is implemented
-        # The test will need to be updated based on auth configuration
-        assert response.status_code in (200, 401)
+        assert response.status_code == 200
 
-    @pytest.mark.asyncio
-    async def test_channels_endpoint_requires_auth(self, async_client):
-        """GET /api/channels requires authentication when auth is enabled."""
-        # Skip external service calls - channels endpoint requires dispatcharr
-        # The auth behavior is verified by other protected endpoints like settings
-        # This test documents expected behavior once fully integrated
-        # response = await async_client.get("/api/channels")
-        # assert response.status_code in (200, 401)
-        pass  # Skipped: channels endpoint requires external service
 
     @pytest.mark.asyncio
     async def test_invalid_token_on_protected_endpoint_returns_401(self, async_client):
-        """Protected endpoints with invalid token return 401."""
+        """Protected endpoints that always validate tokens return 401 for an invalid JWT.
+
+        /api/auth/me uses get_current_user directly (not RequireAuthIfEnabled) so it
+        always validates the token regardless of auth setup state — making the outcome
+        deterministic even in the test environment's setup mode.
+        Mutation check: if get_current_user stopped rejecting malformed JWTs this would fail.
+        """
         response = await async_client.get(
-            "/api/settings",
+            "/api/auth/me",
             cookies={"access_token": "invalid.token.here"},
         )
-        # When auth is enabled, invalid tokens should return 401
-        assert response.status_code in (200, 401)
+        assert response.status_code == 401

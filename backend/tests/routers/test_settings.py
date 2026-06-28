@@ -840,13 +840,72 @@ class TestResetStats:
     """Tests for POST /api/settings/reset-stats."""
 
     @pytest.mark.asyncio
-    async def test_resets_all_stats(self, async_client):
-        """Clears all stats tables."""
+    async def test_resets_all_stats(self, async_client, test_session):
+        """Clears all 7 stats tables and reports the deleted count.
+
+        Mutation guard: if any of the 7 db.query(...).delete() lines were removed, the
+        corresponding table would still contain rows after the request — the per-table
+        count assertion would fail, AND the total cleared count would be wrong.
+        """
+        from models import (
+            HiddenChannelGroup,
+            ChannelWatchStats,
+            ChannelBandwidth,
+            StreamStats,
+            ChannelPopularityScore,
+            SessionTelemetry,
+            UniqueClientConnection,
+        )
+        from datetime import datetime, date
+
+        # Seed one row per stats table so we can verify all 7 deletes actually fire.
+        test_session.add(HiddenChannelGroup(group_id=1, group_name="Group A"))
+        test_session.add(ChannelWatchStats(channel_id="ch-1", channel_name="ESPN", watch_count=5))
+        test_session.add(ChannelBandwidth(
+            channel_id="ch-1", channel_name="ESPN",
+            date=date.today(),
+        ))
+        test_session.add(StreamStats(stream_id=1, stream_name="ESPN HD"))
+        test_session.add(ChannelPopularityScore(
+            channel_id="ch-1", channel_name="ESPN",
+            score=75.0, rank=1, trend="stable", trend_percent=0.0,
+            calculated_at=datetime.utcnow(),
+        ))
+        test_session.add(UniqueClientConnection(
+            ip_address="10.0.0.1", channel_id="ch-1", channel_name="ESPN",
+            date=date.today(),
+            connected_at=datetime.utcnow(),
+        ))
+        test_session.add(SessionTelemetry(
+            session_id="sess-1", observed_at=1000000,
+            channel_id="ch-1", bytes_delta=0, buffer_event_count=0, poll_interval_ms=10000,
+        ))
+        test_session.commit()
+
         response = await async_client.post("/api/settings/reset-stats")
 
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
+
+        # All 7 tables must be empty after the reset.
+        assert test_session.query(HiddenChannelGroup).count() == 0
+        assert test_session.query(ChannelWatchStats).count() == 0
+        assert test_session.query(ChannelBandwidth).count() == 0
+        assert test_session.query(StreamStats).count() == 0
+        assert test_session.query(ChannelPopularityScore).count() == 0
+        assert test_session.query(UniqueClientConnection).count() == 0
+        assert test_session.query(SessionTelemetry).count() == 0
+
+        # Response details must account for all deleted rows.
+        assert data["details"]["hidden_groups"] == 1
+        assert data["details"]["watch_stats"] == 1
+        assert data["details"]["bandwidth_records"] == 1
+        assert data["details"]["stream_stats"] == 1
+        assert data["details"]["popularity_scores"] == 1
+        assert data["details"]["client_connections"] == 1
+        assert data["details"]["session_telemetry"] == 1
+        assert "Cleared 7 records" in data["message"]
 
 
 class TestMCPApiKeyGenerate:
