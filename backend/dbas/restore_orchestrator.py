@@ -142,6 +142,23 @@ class ApplyContext:
     is_dry_run: bool = False
     # Collected deferred settings (M3U auto-sync, EPG download) — applied LAST.
     deferred: list[dict] = field(default_factory=list)
+    # Durable per-create ledger flush. The orchestrator wires this to
+    # ``persist_ledger`` so an importer can flush the shared ledger to disk
+    # IMMEDIATELY after each ``record_created`` and BEFORE the next upstream
+    # create (the RollbackLedger durability contract — bead l1p4p). On a dry-run
+    # this is a no-op (no entity is created, nothing to persist). Defaults to a
+    # no-op so a test that builds an ApplyContext directly need not wire it.
+    persist_ledger: "Callable[[], None]" = field(default=lambda: None)
+
+    def flush_ledger(self) -> None:
+        """Durably persist the shared ledger (per-create flush; no-op on dry-run).
+
+        Importers call this right after :meth:`RollbackLedger.record_created` and
+        before issuing the next create, so a mid-category ECM crash leaves a
+        recoverable record of every entity created so far — not just those from
+        completed steps.
+        """
+        self.persist_ledger()
 
 
 class ImporterStepError(RuntimeError):
@@ -495,6 +512,18 @@ async def run_restore(
     if plan_is_dry_run := report.is_dry_run:
         logger.info("[DBAS-RESTORE] Dry-run: pre-flight passed; no apply performed.")
 
+    # Per-create durable flush: on a real apply, persist the shared ledger after
+    # each ``record_created`` (importers call ``ctx.flush_ledger()``); on a
+    # dry-run nothing is created, so the flush is a no-op that never touches the
+    # ledger path. This makes the worst-case crash window a single in-flight
+    # create rather than a whole category (RollbackLedger durability contract —
+    # bead l1p4p).
+    if report.is_dry_run:
+        per_create_persist: Callable[[], None] = lambda: None
+    else:
+        def per_create_persist() -> None:
+            persist_ledger(ledger, ledger_dir=ledger_dir)
+
     ctx = ApplyContext(
         plan=plan,
         client=client,
@@ -502,6 +531,7 @@ async def run_restore(
         ledger=ledger,
         remap=remap,
         is_dry_run=report.is_dry_run,
+        persist_ledger=per_create_persist,
     )
 
     # --- 2. Ordered apply (the hard Phase-2 sequence). ---
@@ -761,6 +791,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             report=ctx.report,
             ledger=ctx.ledger,
             is_dry_run=ctx.is_dry_run,
+            persist_ledger=ctx.flush_ledger,
         )
         return None
 
