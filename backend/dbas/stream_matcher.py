@@ -230,6 +230,12 @@ def match_stream(
     if not candidates:
         return (MatchTier.MISS, None)
 
+    # DERIVED TIER ORDER (bead 1zwmr, confirmed correct):
+    # T1 EXACT_URL > T2 EXACT_NAME_SAME_PROVIDER > T3 EXACT_NORMALIZED_NAME > T4 FUZZY >= 0.60
+    # Sub-spike 0i2vt.14 referenced this ordering but was NEVER committed as a doc or bead.
+    # This ordering is derived from the stream-is-URL-first identity principle (see module
+    # docstring "SOURCING NOTE") and locked by unit tests in tests/dbas/test_stream_matcher.py.
+
     # ---- Tier 1: EXACT URL (case-sensitive — a URL is case-significant). ----
     stream_url = stream.get("url")
     if isinstance(stream_url, str) and stream_url:
