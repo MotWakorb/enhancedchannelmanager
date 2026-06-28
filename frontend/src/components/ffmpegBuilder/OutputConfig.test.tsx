@@ -166,11 +166,13 @@ describe('OutputConfig', () => {
       expect(screen.getByText(/extension.*mismatch|does not match/i)).toBeInTheDocument();
     });
 
-    it('validates HLS output creates directory', () => {
+    it('shows HLS-specific segment controls when format is hls', () => {
       renderOutputConfig({ format: 'hls', path: '/output/stream.m3u8' });
 
-      // HLS outputs a directory of segments, so the component should note this
-      expect(screen.getAllByText(/directory|segment/i).length).toBeGreaterThanOrEqual(1);
+      // HLS mode reveals segment-duration and segment-filename controls
+      // (these are absent when format is 'ts' or 'dash')
+      expect(screen.getByLabelText(/segment duration/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/segment filename pattern/i)).toBeInTheDocument();
     });
   });
 
