@@ -267,6 +267,13 @@ class SettingsResponse(BaseModel):
     auto_creation_exclude_auto_sync_groups: bool
     # MCP integration
     mcp_api_key_configured: bool  # Whether an MCP API key has been generated
+    # bd-p8fx9 (W4): MCP destructive-bulk batch-size caps. Read by the MCP
+    # guardrails; surfaced read-only here so an operator/agent can inspect them.
+    mcp_bulk_delete_soft_cap: int
+    mcp_bulk_delete_hard_cap: int
+    mcp_clear_auto_created_group_soft_cap: int
+    mcp_bulk_merge_soft_cap: int
+    mcp_bulk_merge_hard_cap: int
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
     telemetry_client_errors_enabled: bool
     # Emby integration (bd-8wc6q, epic bd-2cenq). The API key itself is NOT
@@ -472,6 +479,12 @@ async def get_current_settings():
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
         mcp_api_key_configured=bool(settings.mcp_api_key),
+        # bd-p8fx9 (W4): MCP destructive-bulk batch caps (read-only surface).
+        mcp_bulk_delete_soft_cap=settings.mcp_bulk_delete_soft_cap,
+        mcp_bulk_delete_hard_cap=settings.mcp_bulk_delete_hard_cap,
+        mcp_clear_auto_created_group_soft_cap=settings.mcp_clear_auto_created_group_soft_cap,
+        mcp_bulk_merge_soft_cap=settings.mcp_bulk_merge_soft_cap,
+        mcp_bulk_merge_hard_cap=settings.mcp_bulk_merge_hard_cap,
         telemetry_client_errors_enabled=settings.telemetry_client_errors_enabled,
         # Emby integration (bd-8wc6q). Surface the toggle + base URL so the
         # operator sees what's configured; the API key itself is masked —

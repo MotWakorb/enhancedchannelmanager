@@ -960,7 +960,7 @@ class TestFindChannelByNameNormalizationFallback:
         # already-normalized name ("RTL"), and a new stream arrives with the
         # un-normalized form ("RTL ᴿᴬᵂ") that should be attached to it rather
         # than creating a duplicate.
-        channels = [{"id": 42, "name": "RTL"}]
+        channels = [{"id": 42, "name": "RTL", "auto_created": True}]
         executor = self._build_executor(
             channels,
             normalizer=lambda n: "RTL" if "RTL" in n else n,
@@ -980,7 +980,8 @@ class TestFindChannelByNameNormalizationFallback:
 
     def test_exact_match_still_wins(self):
         """Exact match is preferred over the normalization fallback path."""
-        channels = [{"id": 1, "name": "ESPN"}, {"id": 2, "name": "ESPN2"}]
+        channels = [{"id": 1, "name": "ESPN", "auto_created": True},
+                    {"id": 2, "name": "ESPN2", "auto_created": True}]
         executor = self._build_executor(
             channels,
             normalizer=lambda n: "ESPN" if "ESPN" in n else n,

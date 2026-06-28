@@ -1,6 +1,6 @@
 import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
-import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams } from '../../types';
+import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams, MutationSource } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
@@ -72,6 +72,22 @@ function formatCategory(category: JournalCategory): string {
   }
 }
 
+// Format mutation_source for display
+function formatMutationSource(source: MutationSource | null | undefined): string {
+  switch (source) {
+    case 'ui':
+      return 'UI';
+    case 'mcp_ai':
+      return 'AI';
+    case 'scheduler':
+      return 'Scheduler';
+    case 'auto_creation':
+      return 'Auto-creation';
+    default:
+      return '—';
+  }
+}
+
 export function JournalTab() {
   const notifications = useNotifications();
 
@@ -89,6 +105,7 @@ export function JournalTab() {
   // Filter state
   const [category, setCategory] = useState<JournalCategory | ''>('');
   const [actionType, setActionType] = useState<JournalActionType | ''>('');
+  const [mutationSource, setMutationSource] = useState<MutationSource | ''>('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
 
@@ -105,6 +122,7 @@ export function JournalTab() {
       };
       if (category) params.category = category;
       if (actionType) params.action_type = actionType;
+      if (mutationSource) params.mutation_source = mutationSource;
       if (search) params.search = search;
 
       const result = await api.getJournalEntries(params);
@@ -116,7 +134,7 @@ export function JournalTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, category, actionType, search, notifications]);
+  }, [page, pageSize, category, actionType, mutationSource, search, notifications]);
 
   // Load stats
   const loadStats = useCallback(async () => {
@@ -148,7 +166,7 @@ export function JournalTab() {
   // Reset page when filters or page size change
   useEffect(() => {
     setPage(1);
-  }, [category, actionType, pageSize]);
+  }, [category, actionType, mutationSource, pageSize]);
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
@@ -272,6 +290,18 @@ export function JournalTab() {
             { value: 'reorder', label: 'Reorder' },
           ]}
         />
+        <CustomSelect
+          value={mutationSource}
+          onChange={(val) => setMutationSource(val as MutationSource | '')}
+          className="filter-select"
+          options={[
+            { value: '', label: 'All Sources' },
+            { value: 'ui', label: 'UI' },
+            { value: 'mcp_ai', label: 'AI' },
+            { value: 'scheduler', label: 'Scheduler' },
+            { value: 'auto_creation', label: 'Auto-creation' },
+          ]}
+        />
       </div>
 
       {/* Entries List */}
@@ -290,6 +320,7 @@ export function JournalTab() {
               <span>Action</span>
               <span>Entity</span>
               <span>Description</span>
+              <span>Source</span>
               <span></span>
             </div>
             {entries.map((entry) => (
@@ -317,6 +348,11 @@ export function JournalTab() {
                   </span>
                   <span className="entry-description" title={entry.description}>
                     {entry.description}
+                  </span>
+                  <span className="entry-source">
+                    <span className={`source-badge source-${entry.mutation_source ?? 'unknown'}`}>
+                      {formatMutationSource(entry.mutation_source)}
+                    </span>
                   </span>
                   <span className="entry-expand">
                     {(entry.before_value || entry.after_value) && (

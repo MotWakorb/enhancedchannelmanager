@@ -1827,6 +1827,7 @@ export async function getJournalEntries(params?: JournalQueryParams): Promise<Jo
     date_to: params?.date_to,
     search: params?.search,
     user_initiated: params?.user_initiated,
+    mutation_source: params?.mutation_source,
   });
   return fetchJson(`${API_BASE}/journal${query}`);
 }

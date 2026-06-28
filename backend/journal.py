@@ -1,6 +1,7 @@
 """
 Journal service layer for logging and querying change entries.
 """
+import contextvars
 import json
 import logging
 from datetime import datetime, timedelta
@@ -14,6 +15,94 @@ from models import JournalEntry
 logger = logging.getLogger(__name__)
 
 
+# =========================================================================
+# Mutation-source (actor/origin) plumbing — enhancedchannelmanager-vp1rx / W3
+# =========================================================================
+# WHO/WHAT initiated a journaled mutation. Resolved ONCE per HTTP request by
+# the actor-source middleware (``main.py``) from the auth principal — a request
+# bearing the static MCP key is ``"mcp_ai"``, a JWT is ``"ui"`` — and stashed
+# in a contextvar so the ~40 ``journal.log_entry`` call sites pick it up
+# automatically without each one having to thread the actor through. (A missed
+# call site would silently mislabel an audit row, which is worse than no audit
+# at all — so the default has to flow implicitly, not depend on every author
+# remembering to pass it.) A contextvar (not thread-local) is used so the value
+# survives ``await`` boundaries in async handlers, mirroring the trace-id
+# contextvar in ``observability.py``.
+#
+# Internal, non-HTTP paths (the scheduler, the auto-creation pipeline) carry no
+# request context, so they stamp ``mutation_source`` EXPLICITLY at their call
+# sites instead of relying on the contextvar.
+MUTATION_SOURCE_UI = "ui"
+MUTATION_SOURCE_MCP_AI = "mcp_ai"
+MUTATION_SOURCE_SCHEDULER = "scheduler"
+MUTATION_SOURCE_AUTO_CREATION = "auto_creation"
+
+_mutation_source_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "ecm_mutation_source", default=None
+)
+
+# Request-scoped correlation id for a multi-call bulk operation. The MCP
+# ``bulk_delete_channels`` tool loops the single-channel DELETE endpoint, so the
+# only way N deletes share one ``batch_id`` is for the client to send a single
+# ``X-ECM-Batch-Id`` header for the whole loop, which the middleware stashes
+# here. ``log_entry`` then folds it in as the default ``batch_id`` so the N rows
+# are one correlatable batch via ``get_journal(batch_id=...)`` — reusing the
+# existing batch_id primitive rather than inventing a new correlation store.
+_batch_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "ecm_journal_batch_id", default=None
+)
+
+
+def get_request_batch_id() -> Optional[str]:
+    """Return the current request's correlation batch id, or ``None``."""
+    return _batch_id_var.get()
+
+
+def set_request_batch_id(batch_id: Optional[str]) -> contextvars.Token:
+    """Set the request-scoped correlation batch id. Returns a reset token."""
+    return _batch_id_var.set(batch_id)
+
+
+def reset_request_batch_id(token: contextvars.Token) -> None:
+    """Reset the request-scoped batch id using a token from :func:`set_request_batch_id`."""
+    _batch_id_var.reset(token)
+
+
+def _resolve_batch_id(explicit: Optional[str]) -> Optional[str]:
+    """Pick the batch_id to persist: an explicit value wins, else the request var."""
+    if explicit is not None:
+        return explicit
+    return _batch_id_var.get()
+
+
+def get_mutation_source() -> Optional[str]:
+    """Return the current request's actor/origin, or ``None`` outside a request."""
+    return _mutation_source_var.get()
+
+
+def set_mutation_source(source: Optional[str]) -> contextvars.Token:
+    """Set the actor/origin for the current context. Returns a reset token."""
+    return _mutation_source_var.set(source)
+
+
+def reset_mutation_source(token: contextvars.Token) -> None:
+    """Reset the actor/origin using a token from :func:`set_mutation_source`."""
+    _mutation_source_var.reset(token)
+
+
+def _resolve_mutation_source(explicit: Optional[str]) -> Optional[str]:
+    """Pick the actor/origin to persist on a journal row.
+
+    An ``explicit`` value (passed by an internal scheduler/auto-creation call
+    site, or a test) always wins. Otherwise fall back to the request-scoped
+    contextvar set by the middleware. ``None`` when neither is present — a
+    legacy/unknown actor, which reads back NULL.
+    """
+    if explicit is not None:
+        return explicit
+    return _mutation_source_var.get()
+
+
 def _build_journal_entry(
     category: str,
     action_type: str,
@@ -24,6 +113,7 @@ def _build_journal_entry(
     after_value: Optional[dict] = None,
     user_initiated: bool = True,
     batch_id: Optional[str] = None,
+    mutation_source: Optional[str] = None,
 ) -> JournalEntry:
     return JournalEntry(
         timestamp=datetime.utcnow(),
@@ -35,7 +125,8 @@ def _build_journal_entry(
         before_value=json.dumps(before_value) if before_value else None,
         after_value=json.dumps(after_value) if after_value else None,
         user_initiated=user_initiated,
-        batch_id=batch_id,
+        batch_id=_resolve_batch_id(batch_id),
+        mutation_source=_resolve_mutation_source(mutation_source),
     )
 
 
@@ -57,6 +148,7 @@ def log_entries(entries: list[dict[str, Any]]) -> bool:
                 after_value=entry.get("after_value"),
                 user_initiated=entry.get("user_initiated", True),
                 batch_id=entry.get("batch_id"),
+                mutation_source=entry.get("mutation_source"),
             )
             for entry in entries
         ]
@@ -83,6 +175,7 @@ def log_entry(
     after_value: Optional[dict] = None,
     user_initiated: bool = True,
     batch_id: Optional[str] = None,
+    mutation_source: Optional[str] = None,
 ) -> Optional[JournalEntry]:
     """
     Log a change entry to the journal.
@@ -97,6 +190,9 @@ def log_entry(
         after_value: New state as dict (optional)
         user_initiated: True if manual action, False if automatic
         batch_id: ID to group related changes (optional)
+        mutation_source: Actor/origin ("ui", "mcp_ai", "scheduler",
+            "auto_creation"). When omitted, falls back to the request-scoped
+            actor resolved by the middleware (``None`` outside a request).
 
     Returns:
         The created JournalEntry or None if failed
@@ -118,6 +214,7 @@ def log_entry(
             after_value=after_value,
             user_initiated=user_initiated,
             batch_id=batch_id,
+            mutation_source=mutation_source,
         )
         session.add(entry)
         session.commit()
@@ -139,6 +236,7 @@ def get_entries(
     search: Optional[str] = None,
     user_initiated: Optional[bool] = None,
     batch_id: Optional[str] = None,
+    mutation_source: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Query journal entries with filtering and pagination.
@@ -161,6 +259,8 @@ def get_entries(
         filters_applied.append(f"user_initiated={user_initiated}")
     if batch_id:
         filters_applied.append(f"batch_id={batch_id}")
+    if mutation_source:
+        filters_applied.append(f"mutation_source={mutation_source}")
 
     logger.debug(
         "[JOURNAL] Querying entries: page=%s page_size=%s filters=[%s]",
@@ -191,6 +291,11 @@ def get_entries(
             # Indexed filter on batch_id (idx_journal_batch_id, bd-dmu8w).
             # Surfaces the bulk-operation correlation primitive (bd-91mcq) via the API (bd-s4sph).
             query = query.filter(JournalEntry.batch_id == batch_id)
+        if mutation_source:
+            # Indexed filter on mutation_source (idx_journal_mutation_source,
+            # enhancedchannelmanager-vp1rx / W3). Forensic "show me everything
+            # the AI did" — e.g. ?mutation_source=mcp_ai.
+            query = query.filter(JournalEntry.mutation_source == mutation_source)
 
         # Get total count
         total_count = query.count()
