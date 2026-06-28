@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo } from 'react';
+import { useState, useRef, useEffect, useMemo, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
@@ -44,7 +44,10 @@ export const EditChannelModal = memo(function EditChannelModal({
   const epgSourceMap = new Map(epgSources.map((s) => [s.id, s.name]));
   // Source priority lookup (higher = more preferred), used to order search
   // results so the operator's preferred sources surface first.
-  const epgSourcePriority = new Map(epgSources.map((s) => [s.id, s.priority ?? 0]));
+  const epgSourcePriority = useMemo(
+    () => new Map(epgSources.map((s) => [s.id, s.priority ?? 0])),
+    [epgSources],
+  );
   // Sort EPG search results by source priority DESC. Array.sort is stable, so
   // entries from the same source keep their existing relevance order. This MUST
   // run before the result list is sliced for display, or higher-priority

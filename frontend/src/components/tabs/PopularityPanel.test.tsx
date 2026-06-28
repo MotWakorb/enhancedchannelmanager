@@ -120,6 +120,13 @@ describe('PopularityPanel', () => {
       render(<PopularityPanel />);
 
       expect(screen.getByText('Loading popularity data...')).toBeInTheDocument();
+
+      // Let the mount-time fetch settle so the resulting state updates happen
+      // inside act() (otherwise React logs an act() warning for the
+      // un-awaited fetchData() that flips loading off after this test body).
+      await waitFor(() => {
+        expect(screen.queryByText('Loading popularity data...')).not.toBeInTheDocument();
+      });
     });
 
     it('fetches data on mount', async () => {
@@ -389,6 +396,13 @@ describe('PopularityPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }));
 
       expect(screen.getByText('Calculating...')).toBeInTheDocument();
+
+      // Wait for the deferred calculation to settle so the trailing state
+      // update happens inside act() (otherwise React logs an act() warning
+      // for the un-awaited setTimeout-driven setCalculating(false)).
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Recalculate' })).toBeInTheDocument();
+      });
     });
 
     it('shows success notification after calculation', async () => {
