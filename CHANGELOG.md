@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Fixed
+- **Frontend test suite is now React `act()`-warning clean (bead bmtoc, build 0019).** Internal-only, no user-facing change: cleared ~88 `act()` async-state warnings across 8 test files (`BackupRestoreSection`, `PreviewStreamModal`, `M3UChangesTab`, `BackupRestoreModal`, `DbasRestoreModal`, `BandwidthPanel`, `EnhancedStatsPanel`, `WatchHistoryPanel`) by awaiting the trailing mount-effect state updates with `waitFor` (the same pattern as the earlier `PopularityPanel` fix). No production code touched, no assertions weakened, all 1665 tests still pass — the warnings no longer bury real signal in CI output. (bead bmtoc)
 - **Frontend dev-quality cleanup (beads 2gg44/v7oql/qpw9a, build 0018).** Internal-only, no user-facing behavior change: (1) `.dist_root` (a local frontend build-output dir) is now git-ignored and excluded from eslint, so a stray local build can no longer flood root-level `npm run lint` with errors from minified bundles; (2) removed the `act()` async-state warnings from `PopularityPanel.test.tsx` by awaiting the settling state updates (all tests still pass); (3) memoized the `epgSourcePriority` map in `EditChannelModal` for consistency with `BulkEPGAssignModal`. (beads 2gg44 / v7oql / qpw9a)
 
 ### Security

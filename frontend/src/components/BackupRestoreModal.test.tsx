@@ -51,21 +51,38 @@ describe('BackupRestoreModal', () => {
   });
 
   describe('upload step', () => {
-    it('renders dropzone', () => {
+    it('renders dropzone', async () => {
       render(<BackupRestoreModal onClose={mockClose} />);
       expect(screen.getByText(/drag & drop/i)).toBeInTheDocument();
       expect(screen.getByText('.yaml or .yml files')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle so the resulting state
+      // update (setDispatcharrUrl) happens inside act() — otherwise React logs
+      // an act() warning for the un-awaited promise resolution.
+      await waitFor(() => {
+        expect(api.getSettings).toHaveBeenCalled();
+      });
     });
 
-    it('renders cancel button', () => {
+    it('renders cancel button', async () => {
       render(<BackupRestoreModal onClose={mockClose} />);
       expect(screen.getByText('Cancel')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => {
+        expect(api.getSettings).toHaveBeenCalled();
+      });
     });
 
-    it('calls onClose when cancel clicked', () => {
+    it('calls onClose when cancel clicked', async () => {
       render(<BackupRestoreModal onClose={mockClose} />);
       fireEvent.click(screen.getByText('Cancel'));
       expect(mockClose).toHaveBeenCalled();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => {
+        expect(api.getSettings).toHaveBeenCalled();
+      });
     });
 
     it('shows error for non-yaml file', async () => {

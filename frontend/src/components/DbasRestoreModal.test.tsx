@@ -60,9 +60,16 @@ describe('DbasRestoreModal', () => {
     (api.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ url: 'http://disp:9191' });
   });
 
-  it('renders the upload dropzone first', () => {
+  it('renders the upload dropzone first', async () => {
     render(<DbasRestoreModal onClose={vi.fn()} />);
     expect(screen.getByText(/drag & drop a backup artifact/i)).toBeInTheDocument();
+
+    // Let the mount-time getSettings() fetch settle so the resulting state
+    // update (setDispatcharrUrl) happens inside act() — otherwise React logs
+    // an act() warning for the un-awaited promise resolution.
+    await waitFor(() => {
+      expect(api.getSettings).toHaveBeenCalled();
+    });
   });
 
   it('a plain .zip goes to configure with no passphrase field', async () => {
