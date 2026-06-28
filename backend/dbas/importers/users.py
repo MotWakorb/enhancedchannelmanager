@@ -64,6 +64,7 @@ by deleting them. This importer imports the contracts module READ-ONLY.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from dbas.restore_contracts import (
     EntityType,
@@ -137,29 +138,48 @@ def _sanitize(message: str) -> str:
     return (message or "").strip()
 
 
-def _build_create_payload(archive_user: dict) -> dict:
-    """Build the create_user payload from an archive user record.
+def _build_create_payload(archive_user: dict, write_fields: set[str]) -> dict:
+    """Build the create_user payload from an archive user record (ALLOWLIST).
 
-    Drops every secret/privilege/source-id key (``_DROPPED_KEYS``) and forces the
-    conservative non-privileged defaults. The result NEVER carries a password,
-    a hash, or an elevated privilege flag.
+    Keys are admitted only when they are BOTH (a) in the destination's parsed
+    User-create write-field set (``write_fields`` from ``/api/schema/``) AND
+    (b) not in ``_DROPPED_KEYS`` (secret/privilege/source-id material, dropped as
+    defense-in-depth even if the schema would accept them). An unknown archive
+    key the schema does not list is silently dropped rather than forwarded — an
+    allowlist intersected with the schema's write-fields, not a denylist of known
+    bad keys (bead l1p4p, follow-up 2). The privilege fields are then forced to
+    the conservative non-privileged defaults regardless of the archive.
+
+    The result NEVER carries a password, a hash, or an elevated privilege flag.
+
+    Args:
+        archive_user: One user record from the export archive.
+        write_fields: The destination's writable User-create field names.
+
+    Returns:
+        The create payload — schema-known, non-secret keys plus the forced
+        conservative privilege defaults.
     """
     payload = {
         k: v
         for k, v in archive_user.items()
-        if k not in _DROPPED_KEYS
+        if k in write_fields and k not in _DROPPED_KEYS
     }
     payload.update(_CONSERVATIVE_PRIVILEGE_DEFAULTS)
     return payload
 
 
-async def _assert_capability(client: DispatcharrClient) -> None:
+async def _assert_capability(client: DispatcharrClient) -> set[str]:
     """Fail CLOSED unless the destination User-create schema is safe.
 
     Reads the writable User-create fields from ``/api/schema/``. Raises
     :class:`UsersCapabilityError` if a forbidden pre-hashed-password write field
     is present, OR if no write fields could be parsed at all (cannot confirm
     safety). The message names the issue but carries no secret.
+
+    Returns:
+        The set of writable User-create field names — the allowlist
+        :func:`_build_create_payload` intersects the archive keys against.
     """
     try:
         write_fields = await client.get_user_schema_write_fields()
@@ -170,7 +190,8 @@ async def _assert_capability(client: DispatcharrClient) -> None:
             "(schema unavailable); failing the dispatcharr_users category closed."
         ) from exc
 
-    forbidden = sorted(_FORBIDDEN_SCHEMA_WRITE_FIELDS & set(write_fields))
+    write_fields = set(write_fields)
+    forbidden = sorted(_FORBIDDEN_SCHEMA_WRITE_FIELDS & write_fields)
     if forbidden:
         logger.error(
             "[DBAS-USERS] Capability check FAILED CLOSED: forbidden write field(s) %s "
@@ -193,6 +214,8 @@ async def _assert_capability(client: DispatcharrClient) -> None:
             "dispatcharr_users category closed (cannot confirm safety)."
         )
 
+    return write_fields
+
 
 def _operator_username(operator: dict) -> str | None:
     """Return the auth subject's username, or None if unknowable.
@@ -213,6 +236,7 @@ async def import_users(
     report: RestoreReport,
     ledger: RollbackLedger,
     is_dry_run: bool = False,
+    persist_ledger: Callable[[], None] | None = None,
 ) -> None:
     """Restore the ``dispatcharr_users`` category into the destination instance.
 
@@ -228,6 +252,12 @@ async def import_users(
             for compensating deletes.
         is_dry_run: When ``True``, no user is created — the importer only reports
             ``would_create`` / ``would_skip`` so the operator sees the plan.
+        persist_ledger: Optional durable-flush callback (wired by the
+            orchestrator to ``persist_ledger``). Called IMMEDIATELY after each
+            created user is recorded in the ledger and BEFORE the next create, so
+            a mid-category crash leaves a recoverable record of every user
+            created so far (RollbackLedger durability contract — bead l1p4p). On
+            a dry-run or when ``None`` it is not invoked.
 
     Raises:
         UsersCapabilityError: when the destination User schema is unsafe
@@ -243,8 +273,9 @@ async def import_users(
             _skip(cat, SkipReason.EXCLUDED_BY_OPERATOR, label, archive_user.get("id"), is_dry_run)
         return
 
-    # Policy 6 — capability check FAILS CLOSED before anything is created.
-    await _assert_capability(client)
+    # Policy 6 — capability check FAILS CLOSED before anything is created. It
+    # also returns the schema write-field allowlist the payload builder uses.
+    write_fields = await _assert_capability(client)
 
     # Policy 3 — identify the current operator by AUTH SUBJECT, not archive data.
     operator = await client.get_current_user()
@@ -291,8 +322,9 @@ async def import_users(
             cat.would_create += 1
             continue
 
-        # Policy 1 + 2 — payload omits password/hash; forces non-privileged.
-        payload = _build_create_payload(archive_user)
+        # Policy 1 + 2 — payload is an allowlist (schema write-fields ∩ archive),
+        # omits password/hash, forces non-privileged.
+        payload = _build_create_payload(archive_user, write_fields)
         try:
             created = await client.create_user(payload)
         except Exception as exc:
@@ -313,6 +345,12 @@ async def import_users(
         cat.created += 1
         if dest_id is not None:
             ledger.record_created(EntityType.USER, int(dest_id), label)
+            # Durability contract (bead l1p4p): flush the ledger to disk NOW,
+            # before the next create is issued, so a mid-category crash leaves a
+            # recoverable record of every user created so far — not only those
+            # from completed steps. No-op on dry-run / when unwired.
+            if persist_ledger is not None:
+                persist_ledger()
         # Policy 1 — flag force-reset (usernames only; no secret).
         report.notes.append(
             f"{CATEGORY_LABEL}: '{label}' restored with no usable password — "
@@ -358,7 +396,16 @@ def _failure_reason_for(exc: Exception) -> FailureReason:
 def _sanitize_failure(exc: Exception) -> str:
     """Produce a sanitized, operator-facing failure message with no secrets.
 
-    create_user never sends a password, so an upstream error body cannot echo
-    one back. We still keep the message short and scrubbed.
+    create_user never sends a password, so an upstream error body cannot echo a
+    password back. But a Dispatcharr error CAN echo other request-body material
+    (e.g. an Authorization header, a token, an api_key field) verbatim. Route the
+    message through the shared credential masker so any such echoed secret is
+    redacted before it reaches the operator-facing :class:`FailureDetail`
+    (bead l1p4p, follow-up 3 — defense in depth; not exploitable today).
     """
-    return _sanitize(str(exc)) or "Upstream rejected the user creation request."
+    # Lazy import: keep the dbas importer free of a cloud_storage dependency at
+    # module-import time (same pattern as tasks.dbas_backup). mask_secrets is the
+    # canonical credential masker (precompiled patterns; never raises).
+    from cloud_storage.upload_security import mask_secrets
+
+    return mask_secrets(_sanitize(str(exc))) or "Upstream rejected the user creation request."
