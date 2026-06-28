@@ -307,6 +307,33 @@ jobs:
       - name: Verify version touchpoints agree
         run: python scripts/check_version_consistency.py
 
+  # ─── Fake-test guard (bd-ulp7q.9) ────────────────────────────────────────
+  # Fails the PR if `assert True` (Python) or `expect(true).toBe(true)`
+  # (TypeScript) appear in any test file. Both patterns always pass and
+  # provide zero regression signal — they are the canonical fake-test
+  # anti-pattern from the ulp7q audit.
+  #
+  # No Python deps needed: the script uses only stdlib (pathlib, re, sys).
+  # No Node deps needed: it scans the source tree with pathlib, no build step.
+  #
+  # Convention doc: docs/style_guide.md § "Test validity / anti-patterns".
+  # Suppression: add `# fake-test-ok: <reason>` (Python) or
+  # `// fake-test-ok: <reason>` (TypeScript) on the same line.
+  fake-test-guard:
+    name: Fake-Test Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check for fake-test markers
+        run: python scripts/check_fake_tests.py
+
   # ─── Visual regression (Playwright — bd-lln2x) ─────────────────────────
   # Screenshots the Heatmap chart primitive in isolation and diffs against
   # the committed baseline PNG. Catches the bd-yteek → bd-wdpve class of

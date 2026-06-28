@@ -33,6 +33,7 @@ container names) in nature.
 - [CSS Conventions](#css-conventions)
 - [Frontend Lint Policy](#frontend-lint-policy)
 - [Test Conventions](#test-conventions)
+  - [Test validity / anti-patterns](#test-validity--anti-patterns)
 
 ---
 
@@ -578,3 +579,74 @@ should run and why — lives in
 - MSW mocks API responses in `src/test/mocks/`.
 - Test setup in `src/test/setup.ts` (mocks `matchMedia`, `ResizeObserver`,
   `IntersectionObserver` — do not duplicate these per-test).
+
+### Test validity / anti-patterns
+
+*Origin: bead `enhancedchannelmanager-ulp7q` (test-validity audit). The CI
+guard `scripts/check_fake_tests.py` flags the most obvious anti-patterns
+automatically; this rubric covers the broader class.*
+
+#### The "would it bite?" bar
+
+Before committing a test, delete or invert the code under test in your head.
+If the test would still pass, it is not a test — it is a green checkbox that
+gives false confidence and hides regressions.
+
+A test must **fail if the logic it claims to verify is removed or inverted**.
+
+#### Banned / red-flag patterns
+
+| Pattern | Why it's fake | Fix |
+|---|---|---|
+| `assert True` / `expect(true).toBe(true)` | Passes regardless of code. | Assert something the code produced. If you can't yet, use `pytest.skip` / `it.skip`. |
+| `assert response is not None` / `expect(response).toBeDefined()` | Any non-crash passes. | Assert `response.status_code`, `response.json()` fields, or the return value. |
+| `assert response.status_code == 200` when the endpoint body **is** the behavior | Status-only passes even if the body is empty or wrong. | Assert the body fields that encode the business rule. |
+| `assert status_code in (200, 400, 500)` | An always-true disjunction — every HTTP response satisfies this. | Assert the specific code the code path should return. |
+| `assert result is not None` / `expect(result).toBeDefined()` when an exact value is available | Passes even when result is corrupted. | Assert the value: `assert result.count == 3`. |
+| `assert len(items) >= 1` when the seeded count is known | Passes even if the list has 100 extra ghosts. | Assert `len(items) == N` where N is what you seeded. |
+| Asserting the mock you just set | e.g. `mock.return_value = X; assert mock() == X`. The assertion tests `unittest.mock`, not your code. | Assert the downstream effect (what the code **did** with the return value). |
+| `expect(x != 422 or "error" not in body).toBe(true)` | One branch is always-true. | Assert the actual expected outcome directly. |
+| `expect(container.querySelector('.some-class')).toBeTruthy()` when the class is static boilerplate | Passes even if the feature logic is deleted. | Query for text or state that only appears when the feature works. |
+| Bare-substring match against always-present copy | `assert "Error" in text` where "Error" appears in the page title too. | Assert the specific error message the code-under-test emits. |
+
+**Deferred tests must be `skip`, not tautologies.** When a test cannot be
+implemented yet, use `@pytest.mark.skip(reason="TODO(<bead-id>): …")` or
+`it.skip('…')`. A placeholder that always passes is worse than no test — it
+blocks the eventual real test from being added (the suite is already "green").
+
+#### Good pattern
+
+Mock only the **external boundary** (HTTP client, DB session, subprocess).
+Assert the code's **own logic** — the transformation it applied, the
+validation it enforced, the error it mapped, the exact value it computed.
+
+**Python example** — `test_resets_all_stats` in
+`backend/tests/routers/test_settings.py`: seeds one row per stats table,
+POSTs the reset endpoint, then asserts every table is empty **and** the
+response `details` dict names the exact deleted count per table. Removing
+any of the seven `db.query(...).delete()` calls fails a specific row-count
+assertion. Returning the wrong count in the response fails a specific
+`data["details"]["..."] == 1` assertion.
+
+**TypeScript example** — `EditChannelModal.priority.test.tsx`: builds 120
+EPG entries where the high-priority entry is intentionally last in input
+order (so it falls outside an unsorted `slice(0, 100)` window), then
+asserts `names[0] === 'ESPN ZZZ-PREFERRED'`. Removing the sort step fails
+the first-position assertion. Removing the slice logic fails the
+length assertion.
+
+Both tests are small, deterministic, and have zero always-true assertions.
+They are the template for new tests in this repo.
+
+#### CI guard
+
+`scripts/check_fake_tests.py` runs in CI (see `.github/workflows/test.yml`)
+and fails on the two most unambiguous fake-test markers:
+
+- `assert True` in `backend/tests/` and `mcp-server/tests/`
+- `expect(true).toBe(true)` in `frontend/src/**/*.test.{ts,tsx}`
+
+If a site is a genuine intentional tautology (e.g., a third-party assertion
+helper that wraps `true`), suppress it with an inline comment on the **same
+line**: `# fake-test-ok: <reason>` (Python) or `// fake-test-ok: <reason>`
+(TypeScript). The guard skips lines containing `fake-test-ok`.
