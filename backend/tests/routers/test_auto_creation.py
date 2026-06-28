@@ -506,6 +506,138 @@ class TestMatchScopeGroupIdPersistence:
         assert "match_scope_group_id" in response.text
 
 
+class TestAllowManualChannelMergePersistence:
+    """enhancedchannelmanager-orzck (W1): persist + round-trip the new flag.
+
+    The manual-channel isolation flag must survive create, be readable via GET,
+    default to False (protected) when omitted, be settable via PUT, and appear
+    in the YAML export so import/restore round-trips it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_defaults_flag_to_false(self, async_client):
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            create = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Protected Rule",
+                "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            })
+        assert create.status_code == 200, create.text
+        assert create.json()["allow_manual_channel_merge"] is False
+
+    @pytest.mark.asyncio
+    async def test_create_persists_opt_in_and_get_round_trips(self, async_client):
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            create = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Opt-in Rule",
+                "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
+                "actions": [{"type": "merge_streams", "target": "auto"}],
+                "allow_manual_channel_merge": True,
+            })
+        assert create.status_code == 200, create.text
+        rule_id = create.json()["id"]
+        assert create.json()["allow_manual_channel_merge"] is True
+
+        get = await async_client.get(f"/api/auto-creation/rules/{rule_id}")
+        assert get.status_code == 200
+        assert get.json()["allow_manual_channel_merge"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_sets_flag(self, async_client, test_session):
+        rule = _create_rule(test_session, name="ToOptIn")
+        assert rule.allow_manual_channel_merge is False
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"allow_manual_channel_merge": True},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["allow_manual_channel_merge"] is True
+
+    @pytest.mark.asyncio
+    async def test_export_includes_flag(self, async_client, test_session):
+        _create_rule(test_session, name="ExportFlag", allow_manual_channel_merge=True)
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = []
+        mock_client.get_m3u_accounts.return_value = []
+        with patch("routers.auto_creation.get_client", return_value=mock_client):
+            response = await async_client.get("/api/auto-creation/export/yaml")
+        assert response.status_code == 200
+        assert "allow_manual_channel_merge" in response.text
+
+
+class TestManualChannelIsolationRun:
+    """enhancedchannelmanager-orzck (W1): a real run must not overwrite a
+    hand-built MANUAL channel on a name collision.
+
+    Drives the executor against a rule persisted in the real test-session DB,
+    with a mocked Dispatcharr client. Proves the bleed fix end-to-end: a
+    create_channel if_exists=merge action that name-collides with an existing
+    MANUAL channel (auto_created=False) creates a NEW auto channel instead of
+    adopting (and mutating) the manual one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_does_not_overwrite_manual_channel(self, test_session):
+        from auto_creation_executor import ActionExecutor, ExecutionContext
+        from auto_creation_evaluator import StreamContext
+
+        # Persist a rule with the protective default (flag False) in real SQLite.
+        rule = _create_rule(
+            test_session,
+            name="MergeESPN",
+            actions=json.dumps([
+                {"type": "create_channel", "name_template": "{stream_name}",
+                 "if_exists": "merge"}
+            ]),
+        )
+        assert rule.allow_manual_channel_merge is False
+
+        created = {}
+
+        async def _create_channel(data):
+            created["data"] = data
+            return {"id": 4242, "name": data["name"],
+                    "channel_group_id": data.get("channel_group_id"),
+                    "streams": data.get("streams", [])}
+
+        client = MagicMock()
+        client.create_channel = AsyncMock(side_effect=_create_channel)
+        client.update_channel = AsyncMock(return_value={})
+        client.get_channel = AsyncMock(return_value={"id": 99, "streams": [501]})
+
+        # A hand-built MANUAL channel named "ESPN".
+        manual = {"id": 99, "name": "ESPN", "channel_number": 100,
+                  "channel_group_id": 1, "streams": [501], "auto_created": False}
+        executor = ActionExecutor(
+            client,
+            existing_channels=[manual],
+            existing_groups=[{"id": 1, "name": "SPORTS"}],
+        )
+
+        action = json.loads(rule.actions)[0]
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        result = await executor.execute(
+            action, stream_ctx, ExecutionContext(),
+            rule_target_group_id=1,
+            match_scope_target_group=bool(rule.match_scope_target_group),
+            allow_manual_channel_merge=bool(rule.allow_manual_channel_merge),
+        )
+
+        assert result.success is True
+        # The manual channel (id=99) is byte-identical: never updated/merged.
+        for call in client.update_channel.call_args_list:
+            assert call[0][0] != 99
+        for call in client.get_channel.call_args_list:
+            assert call[0][0] != 99
+        # A new auto channel was created instead.
+        client.create_channel.assert_called_once()
+        assert created["data"]["name"] == "ESPN"
+
+
 class TestBulkUpdateAutoCreationRules:
     """Tests for POST /api/auto-creation/rules/bulk-update."""
 

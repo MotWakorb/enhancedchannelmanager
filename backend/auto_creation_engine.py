@@ -1830,6 +1830,7 @@ class AutoCreationEngine:
                     normalization_group_ids=winning_rule.get_normalization_group_ids(),
                     match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False)),
                     rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None),
+                    allow_manual_channel_merge=bool(getattr(winning_rule, 'allow_manual_channel_merge', False)),
                     rule_id=winning_rule.id,
                 )
 

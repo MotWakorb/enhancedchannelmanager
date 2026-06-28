@@ -424,7 +424,7 @@ class TestAutoCreationMergeJournalRoundTrip:
         from journal import get_entries
 
         channel = {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US",
-                   "channel_number": 100, "streams": [101]}
+                   "channel_number": 100, "streams": [101], "auto_created": True}
 
         with patch("journal.get_session", return_value=test_session):
             result = self._run_live_merge(execution_id=555, stream_id=201,
@@ -452,9 +452,9 @@ class TestAutoCreationMergeJournalRoundTrip:
 
         # Two channels, two live merges in the same run (execution_id=777).
         ch_a = {"id": 10, "name": "ESPN", "tvg_id": "ESPN.US",
-                "channel_number": 100, "streams": [1001]}
+                "channel_number": 100, "streams": [1001], "auto_created": True}
         ch_b = {"id": 20, "name": "ESPN", "tvg_id": "ESPN.US",
-                "channel_number": 101, "streams": []}
+                "channel_number": 101, "streams": [], "auto_created": True}
 
         with patch("journal.get_session", return_value=test_session):
             self._run_live_merge(execution_id=777, stream_id=2001, channel=ch_a)

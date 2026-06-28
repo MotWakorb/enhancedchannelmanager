@@ -819,6 +819,7 @@ class TestPass3RenumberGating:
                                 normalization_group_ids=None,
                                 match_scope_target_group=False,
                                 rule_scope_group_id=None,
+                                allow_manual_channel_merge=False,
                                 rule_id=None):
             exec_ctx.current_channel_id = channel_id
             if created:
@@ -925,6 +926,7 @@ class TestPass3RenumberGating:
                                 normalization_group_ids=None,
                                 match_scope_target_group=False,
                                 rule_scope_group_id=None,
+                                allow_manual_channel_merge=False,
                                 rule_id=None):
             exec_ctx.current_channel_id = 501
             return self.ActionResult(
