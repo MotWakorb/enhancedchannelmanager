@@ -3,7 +3,7 @@
  *
  * These tests define the expected behavior of the hook BEFORE implementation.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import {
@@ -638,14 +638,39 @@ describe('useAutoCreationExecution', () => {
   });
 
   describe('autoRefresh option', () => {
-    it('supports auto-refresh of execution list', async () => {
-      const { result } = renderHook(() =>
+    it('re-fetches executions when the interval fires', async () => {
+      vi.useFakeTimers();
+
+      // Seed one execution so the first fetch returns data
+      const execution = createMockAutoCreationExecution({ status: 'completed', mode: 'execute' });
+      mockDataStore.autoCreationExecutions.push(execution);
+
+      const { result, unmount } = renderHook(() =>
         useAutoCreationExecution({ autoRefreshInterval: 1000 })
       );
 
-      // Should have the option available
-      expect(result.current.stopAutoRefresh).toBeDefined();
-      expect(result.current.startAutoRefresh).toBeDefined();
+      // Trigger initial fetch so we have a baseline
+      await act(async () => {
+        await result.current.fetchExecutions();
+      });
+
+      const countAfterFirstFetch = result.current.executions.length;
+
+      // Add a second execution so we can detect a re-fetch
+      const execution2 = createMockAutoCreationExecution({ status: 'running', mode: 'dry_run' });
+      mockDataStore.autoCreationExecutions.push(execution2);
+
+      // Advance past one interval tick — should trigger fetchExecutions internally
+      await act(async () => {
+        vi.advanceTimersByTime(1001);
+        // Let the microtask queue drain (the fetch inside the interval is async)
+        await Promise.resolve();
+      });
+
+      expect(result.current.executions.length).toBeGreaterThan(countAfterFirstFetch);
+
+      unmount();
+      vi.useRealTimers();
     });
   });
 });

@@ -348,21 +348,6 @@ describe('M3UChangesTab', () => {
   });
 });
 
-describe('M3UChangesTab helper functions', () => {
-  // The helper functions are tested through the component rendering
-  // in the main M3UChangesTab tests above. The component tests
-  // verify that:
-  // - formatChangeType() renders correct text ("Group Added", "Streams Added", etc.)
-  // - getChangeTypeClass() applies correct CSS classes (change-added, change-removed)
-  // - getChangeTypeIcon() renders correct Material icons
-  // - formatRelativeTime() renders human-readable times
-  //
-  // These are integration tests that verify the helper functions work
-  // correctly within the component context.
-
-  it('helper functions are tested via component integration', () => {
-    // This test documents that helper function testing is done
-    // through the component tests in the M3UChangesTab describe block
-    expect(true).toBe(true);
-  });
-});
+// M3UChangesTab helper functions (formatChangeType, getChangeTypeClass, getChangeTypeIcon,
+// formatRelativeTime) are verified through component integration tests above.
+// Removing the empty describe block to keep the suite clean.
