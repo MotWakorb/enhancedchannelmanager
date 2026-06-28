@@ -360,13 +360,6 @@ describe('EnhancedStatsPanel', () => {
   });
 });
 
-describe('EnhancedStatsPanel helper functions', () => {
-  // Helper functions are tested through component rendering
-  // The component tests verify that:
-  // - formatBytes() converts bytes to human readable (1GB = "1.0 GB")
-  // - formatWatchTime() converts seconds to duration ("1h 0m")
-
-  it('helper functions are tested via component integration', () => {
-    expect(true).toBe(true);
-  });
-});
+// EnhancedStatsPanel helper functions (formatBytes, formatWatchTime) are
+// verified through the component integration tests above — no standalone unit
+// describe needed. Removing the empty describe block to keep the suite clean.

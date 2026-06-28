@@ -241,7 +241,7 @@ describe('ECMIntegration', () => {
       const applyToSelect = screen.getByTestId('apply-to-select');
       await user.click(applyToSelect);
 
-      const groupOption = screen.getByText(/group/i);
+      const groupOption = screen.getByRole('option', { name: 'Group' });
       await user.click(groupOption);
 
       await waitFor(() => {

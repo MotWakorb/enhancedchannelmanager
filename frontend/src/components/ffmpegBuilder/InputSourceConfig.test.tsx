@@ -202,18 +202,19 @@ describe('InputSourceConfig', () => {
       expect(screen.getByLabelText(/output format/i)).toBeInTheDocument();
     });
 
-    it('disables unavailable HW options with reason', async () => {
+    it('renders all four HW acceleration options when dropdown is opened', async () => {
       const user = userEvent.setup();
-      // The capabilities mock has all HW available, but we test the UI pattern:
-      // unavailable options should be disabled and show a reason tooltip
+      // The component always renders all four HW options (none/cuda/qsv/vaapi)
+      // unconditionally — no runtime capability check or disabling logic exists.
       renderInputSource();
 
       await user.click(screen.getByLabelText(/hardware acceleration/i));
 
-      // All options should be present; the component should mark unavailable
-      // ones as disabled with an aria-disabled attribute and show a reason
-      const options = screen.getAllByRole('option');
-      expect(options.length).toBeGreaterThanOrEqual(4); // none, cuda, qsv, vaapi
+      // All four options must be present
+      expect(screen.getByRole('option', { name: 'None' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'CUDA' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'QSV' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'VAAPI' })).toBeInTheDocument();
     });
   });
 

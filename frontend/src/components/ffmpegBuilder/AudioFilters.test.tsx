@@ -144,11 +144,11 @@ describe('AudioFilters', () => {
       expect(slider).toHaveAttribute('max', '3');
     });
 
-    it('shows dB value label', () => {
+    it('shows dB value label for volume 1.5 (+3.5dB)', () => {
       renderAudioFilters([createFilter('volume', { volume: 1.5 })]);
 
-      // Should show the dB equivalent of the volume level
-      expect(screen.getByText(/dB/i)).toBeInTheDocument();
+      // volumeToDb(1.5) = 20 * log10(1.5) ≈ +3.5 dB — assert the exact computed label
+      expect(screen.getByText('+3.5dB')).toBeInTheDocument();
     });
   });
 

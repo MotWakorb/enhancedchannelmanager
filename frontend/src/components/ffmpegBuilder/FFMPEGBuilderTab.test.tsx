@@ -453,14 +453,28 @@ describe('FFMPEGBuilderTab', () => {
   // Error handling
   // -------------------------------------------------------------------------
   describe('error handling', () => {
-    it('shows validation warnings in preview', async () => {
+    it('shows validation warnings in preview when audio filter applied with copy codec', async () => {
+      const user = userEvent.setup();
       renderBuilderTab();
+
+      // Switch to advanced mode so audio filters are accessible
+      await user.click(screen.getByTestId('mode-toggle'));
+
+      // Add an audio filter — default audio codec is 'copy', so this triggers
+      // the "Audio filters cannot apply when audio codec is set to copy" warning
+      await user.click(screen.getByTestId('add-audio-filter'));
+      await user.click(screen.getByRole('option', { name: /volume/i }));
+
+      // At least one command-warning must appear
       await waitFor(() => {
-        const commandPreview = screen.getByTestId('command-preview');
-        expect(commandPreview).toBeInTheDocument();
+        const warnings = screen.getAllByTestId('command-warning');
+        expect(warnings.length).toBeGreaterThanOrEqual(1);
+        expect(warnings[0].textContent).toMatch(/audio filters.*copy|copy.*audio filters/i);
       });
-      const warningElements = screen.queryAllByTestId('command-warning');
-      expect(Array.isArray(warningElements)).toBe(true);
+
+      // Sanity check: removing the filter (by switching to copy audio mode
+      // via advanced codec change) clears the warning — but that's a separate
+      // concern; for this test, presence of the warning is sufficient proof.
     });
   });
 
