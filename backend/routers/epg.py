@@ -21,7 +21,7 @@ from alert_methods import send_alert
 from cache import get_cache
 from config import validate_url_scheme
 from dispatcharr_client import get_client, upstream_http_exception
-from epg_matching import batch_find_epg_matches
+from epg_matching import batch_find_epg_matches, build_source_priority_order
 import journal
 
 logger = logging.getLogger(__name__)
@@ -915,6 +915,9 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 class EPGMatchRequest(BaseModel):
     channel_ids: list[int] = []
     epg_source_ids: list[int] = []
+    # DEPRECATED (v0.18.x): EPG source priority is now resolved server-side from
+    # the EPG source records (single source of truth). Any value sent here is
+    # ignored and logs a deprecation warning. Scheduled for removal in v0.19.0.
     source_order: list[int] = []
 
 
@@ -945,13 +948,34 @@ async def match_channels_to_epg(request: EPGMatchRequest):
         len(request.channel_ids), len(request.epg_source_ids),
     )
 
+    if request.source_order:
+        logger.warning(
+            "[EPG-MATCH] Ignoring deprecated client-sent source_order "
+            "(%d entries); EPG source priority is resolved server-side. "
+            "This field is scheduled for removal in v0.19.0.",
+            len(request.source_order),
+        )
+
     client = get_client()
     cache = get_cache()
 
-    # Build cache key from sorted IDs
+    # Resolve EPG source priority server-side (single source of truth). Sorting
+    # by priority desc -> rank 0=best. Built before the cache check so the cache
+    # key reflects the current priority ordering (a reorder must bust the cache).
+    try:
+        epg_sources = await client.get_epg_sources()
+    except Exception as e:
+        logger.warning("[EPG-MATCH] Failed to fetch EPG sources for priority: %s", e)
+        epg_sources = []
+    source_order = build_source_priority_order(epg_sources)
+
+    # Build cache key from sorted IDs + the priority signature
     ch_key = ",".join(str(i) for i in sorted(request.channel_ids))
     src_key = ",".join(str(i) for i in sorted(request.epg_source_ids))
-    cache_key = f"epg_match:{hash(ch_key)}:{hash(src_key)}"
+    prio_key = ",".join(
+        f"{sid}:{rank}" for sid, rank in sorted(source_order.items())
+    )
+    cache_key = f"epg_match:{hash(ch_key)}:{hash(src_key)}:{hash(prio_key)}"
 
     cached = cache.get(cache_key)
     if cached is not None:
@@ -1003,7 +1027,7 @@ async def match_channels_to_epg(request: EPGMatchRequest):
             channels=channels,
             all_streams=streams,
             epg_data=epg_data,
-            source_order=request.source_order or None,
+            source_order=source_order or None,
         )
         match_elapsed = (time.time() - match_start) * 1000
 

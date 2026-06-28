@@ -1709,6 +1709,7 @@ export interface EPGMatchResponse {
 export async function matchChannelsToEPG(params: {
   channel_ids?: number[];
   epg_source_ids?: number[];
+  /** @deprecated EPG source priority is resolved server-side; no longer sent. Removed in v0.19.0. */
   source_order?: number[];
 }): Promise<EPGMatchResponse> {
   return fetchJson(`${API_BASE}/epg/match`, {
@@ -1716,7 +1717,6 @@ export async function matchChannelsToEPG(params: {
     body: JSON.stringify({
       channel_ids: params.channel_ids || [],
       epg_source_ids: params.epg_source_ids || [],
-      source_order: params.source_order || [],
     }),
   });
 }

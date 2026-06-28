@@ -1082,7 +1082,9 @@ interface EPGSearchCardProps {
 
 const MAX_SEARCH_RESULTS = 50;
 
-const EPGSearchCard = memo(function EPGSearchCard({
+// Exported for unit testing of the source-priority sort-before-slice behavior
+// (bead enhancedchannelmanager-s5vyz). Not used elsewhere in the app.
+export const EPGSearchCard = memo(function EPGSearchCard({
   channelName,
   normalizedName,
   detectedCountry,
@@ -1099,15 +1101,28 @@ const EPGSearchCard = memo(function EPGSearchCard({
     return matchesEPGEntrySearch(epgDataToMatchEntry(epg), searchWords);
   }, []);
 
+  // Source priority lookup (higher = more preferred) so the operator's
+  // preferred sources surface first in search results.
+  const sourcePriority = useMemo(
+    () => new Map(epgSources.map(s => [s.id, s.priority ?? 0])),
+    [epgSources],
+  );
+
   const searchResults = useMemo(() => {
     if (!searchTerm.trim()) return [];
     const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(w => w.length > 0);
     if (searchWords.length === 0) return [];
 
     const results = epgData.filter(epg => matchesSearch(epg, searchWords));
+    // Order by source priority DESC before slicing. Array.sort is stable, so
+    // same-source entries keep their relevance order. The sort MUST precede the
+    // slice — sorting after would truncate higher-priority entries out of view.
+    results.sort(
+      (a, b) => (sourcePriority.get(b.epg_source) ?? 0) - (sourcePriority.get(a.epg_source) ?? 0),
+    );
     // Limit results for performance
     return results.slice(0, MAX_SEARCH_RESULTS);
-  }, [epgData, searchTerm, matchesSearch]);
+  }, [epgData, searchTerm, matchesSearch, sourcePriority]);
 
   const hasMoreResults = useMemo(() => {
     if (!searchTerm.trim()) return false;
