@@ -572,6 +572,13 @@ class TestGetUserChannelBreakdown:
         assert "CNN" in text
         assert "emby" in text
         assert "1.0h" in text
+        # Verify the tool called the EMBY endpoint (stats_users_emby) with the
+        # emby user_id in path_args — not the dispatcharr endpoint.
+        # Mutation: swapping emby/dispatcharr endpoint selection must fail this.
+        call_kwargs = mock_client.call_endpoint.call_args.kwargs
+        assert call_kwargs.get("path_args", {}).get("emby_user_id") == "emby-guid-abc", (
+            f"Expected emby_user_id='emby-guid-abc' in path_args, got: {call_kwargs!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_invalid_source_returns_error(self):
@@ -941,6 +948,13 @@ class TestGetChannelBandwidth:
         text = result[0][0].text
         assert "ESPN" in text
         assert "100 connections" in text
+        # Verify sort_by was forwarded to the backend query — the tool must not
+        # silently drop it. Mutation: removing sort_by from the query dict must
+        # fail this assertion.
+        call_kwargs = mock_client.call_endpoint.call_args.kwargs
+        assert call_kwargs.get("query", {}).get("sort_by") == "connections", (
+            f"Expected sort_by='connections' in query, got: {call_kwargs!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_invalid_sort_by_returns_error(self):

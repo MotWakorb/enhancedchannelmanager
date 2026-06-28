@@ -79,12 +79,24 @@ class TestHealthEndpoint:
         assert response.json()["api_key_configured"] is False
 
     def test_health_no_auth_required(self, client):
-        """Health endpoint works without API key."""
+        """Health endpoint is publicly accessible; /mcp requires auth.
+
+        Pins the /health exemption from the auth middleware — a request with
+        no credentials must get 200 on /health but 401 on /mcp (or 503 when
+        the key is unconfigured). Mutation: removing the /health exemption in
+        the middleware must fail this test.
+        """
         with patch(
             "server.get_mcp_api_key_status", return_value=("secret-key", "ok")
-        ):
-            response = client.get("/health")
-        assert response.status_code == 200
+        ), patch("server.get_mcp_api_key", return_value="secret-key"):
+            health_response = client.get("/health")
+            mcp_response = client.get("/mcp")  # no credentials
+        assert health_response.status_code == 200
+        # /mcp without credentials must be rejected (401) — the exemption is
+        # for /health only.
+        assert mcp_response.status_code == 401, (
+            f"Expected /mcp to return 401 without credentials, got: {mcp_response.status_code}"
+        )
 
     def test_health_reports_status_ok_when_key_present(self, client):
         """/health reports api_key_status='ok' when a key is configured.
@@ -119,7 +131,7 @@ class TestHealthEndpoint:
 
     def test_health_reports_invalid_json(self, client):
         """/health reports api_key_status='invalid_json' when settings.json
-        exists but is corrupted."""
+        exists but is corrupted — and includes a setup_hint guiding the operator."""
         with patch(
             "server.get_mcp_api_key_status", return_value=("", "invalid_json")
         ):
@@ -128,11 +140,15 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "invalid_json"
+        # A setup_hint must be present for actionable operator guidance.
+        assert "setup_hint" in data, (
+            f"Expected 'setup_hint' in /health response for invalid_json, got: {data!r}"
+        )
 
     def test_health_reports_field_missing(self, client):
         """/health reports api_key_status='field_missing' when settings.json
         is valid JSON but does not include the mcp_api_key field (legacy file
-        from before the MCP feature shipped)."""
+        from before the MCP feature shipped) — and includes a setup_hint."""
         with patch(
             "server.get_mcp_api_key_status", return_value=("", "field_missing")
         ):
@@ -141,6 +157,10 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "field_missing"
+        # A setup_hint must be present so operators know to open ECM Settings.
+        assert "setup_hint" in data, (
+            f"Expected 'setup_hint' in /health response for field_missing, got: {data!r}"
+        )
 
     def test_health_reports_field_empty(self, client):
         """/health reports api_key_status='field_empty' when the field exists

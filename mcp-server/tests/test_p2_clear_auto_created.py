@@ -214,19 +214,42 @@ class TestClearAutoCreatedSpecificGroups:
 
     @pytest.mark.asyncio
     async def test_single_group_id_reported_correctly(self):
-        """A single group_id is forwarded and reported as '1 group'."""
+        """A single group_id drives the real clear path and reports '1 group'.
+
+        bd-onazy two-call gate: supply a valid confirm_token derived from the
+        resolved auto-created channel ids so the tool executes the clear (not
+        the preview). Mutation: changing the wording to '1 groups' (wrong
+        plural) or '0 groups' must fail this test.
+        """
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 3, "updated_count": 3})
+        # Three auto-created channels in group 5; ids used to derive the token.
+        auto_channels = [
+            {"id": 10, "name": "A", "auto_created": True, "channel_group_id": 5},
+            {"id": 11, "name": "B", "auto_created": True, "channel_group_id": 5},
+            {"id": 12, "name": "C", "auto_created": True, "channel_group_id": 5},
+        ]
+        body_seen = {}
+
+        def _side(ep, **kw):
+            if ep.name == "channels_list":
+                return _page(auto_channels)
+            body_seen.update(kw.get("body") or {})
+            return {"deleted": 3, "updated_count": 3}
+
+        mock_client = _make_mock(side_effect=_side)
+        token = derive_token([10, 11, 12])
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "clear_auto_created",
-                {"group_ids": [5]},
+                {"group_ids": [5], "confirm_token": token},
             )
 
         text = result[0][0].text
-        mock_client.call_endpoint.assert_called_once()
-        assert "3" in text
+        # The clear path must return the exact wording, not the preview.
+        assert "Cleared 3 auto-created channels in 1 group." == text, (
+            f"Expected exact clear wording, got: {text!r}"
+        )
         # Should NOT say "all groups"
         assert "all groups" not in text.lower(), (
             f"'all groups' should not appear for single-group call, got: {text!r}"
@@ -257,19 +280,38 @@ class TestClearAutoCreatedSpecificGroups:
         This is the core bug from bd-1wq7z.18: 'in 0 groups' was reported as
         'across all groups' due to empty-list truthiness. Verify the group count
         in the summary matches the actual group_ids length.
+
+        bd-onazy two-call gate: supply a valid confirm_token derived from the
+        resolved auto-created channel ids so the tool executes the clear (not
+        the preview). Mutation: if the wording became 'across all groups' or
+        'in 3 groups' instead of 'in 2 groups', this test must fail.
         """
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 5, "updated_count": 5})
+        # Two auto-created channels, one in each targeted group.
+        auto_channels = [
+            {"id": 100, "name": "X", "auto_created": True, "channel_group_id": 100},
+            {"id": 200, "name": "Y", "auto_created": True, "channel_group_id": 200},
+        ]
+
+        def _side(ep, **kw):
+            if ep.name == "channels_list":
+                return _page(auto_channels)
+            return {"deleted": 5, "updated_count": 5}
+
+        mock_client = _make_mock(side_effect=_side)
+        token = derive_token([100, 200])
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "clear_auto_created",
-                {"group_ids": [100, 200]},
+                {"group_ids": [100, 200], "confirm_token": token},
             )
 
         text = result[0][0].text
-        # Must mention 2 groups (the actual count), NOT "all groups"
-        assert "2" in text, f"Expected '2' in scope text, got: {text!r}"
+        # Must report the exact clear wording with 2 groups, not a preview.
+        assert "Cleared 5 auto-created channels in 2 groups." == text, (
+            f"Expected exact clear wording for 2-group call, got: {text!r}"
+        )
         assert "all groups" not in text.lower(), (
             f"'all groups' must not appear when specific groups were given, got: {text!r}"
         )

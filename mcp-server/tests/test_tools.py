@@ -78,7 +78,7 @@ class TestListChannels:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_channels", {})
 
-        assert "Error" in result[0][0].text
+        assert "Error listing channels" in result[0][0].text
         assert "Connection refused" in result[0][0].text
 
 
@@ -107,7 +107,7 @@ class TestGetChannel:
         text = result[0][0].text
         assert "ESPN" in text
         assert "100" in text
-        assert "3" in text  # 3 streams
+        assert "Streams: 3" in text  # labeled stream count — bare "3" is too weak
 
 
 class TestListM3UAccounts:
@@ -229,7 +229,7 @@ class TestGetStreamHealth:
 
         text = result[0][0].text
         assert "Health Summary" in text
-        assert "500" in text
+        assert "Total Streams: 500" in text  # labeled — bare "500" is too weak
 
     @pytest.mark.asyncio
     async def test_empty_health(self):
@@ -2001,6 +2001,54 @@ class TestMatchChannelsEpg:
         assert "CNN" in text
         assert "no candidate details available" in text
 
+    @pytest.mark.asyncio
+    async def test_source_order_omitted_from_request_body(self):
+        """source_order is DEPRECATED and must NOT appear in the call_endpoint body.
+
+        The tool accepts source_order for backward compat but must NOT forward it
+        to the backend (EPG source priority is server-side as of v0.17.x).
+        Mutation: if someone re-adds source_order to the request body dict, this
+        test must fail.
+        """
+        from tools.epg import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        response = {
+            "exact": [],
+            "multiple": [],
+            "none": [],
+            "summary": {
+                "total_channels": 0,
+                "exact_count": 0,
+                "multiple_count": 0,
+                "none_count": 0,
+                "match_time_ms": 5.0,
+            },
+        }
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.return_value = response
+
+        with patch("tools.epg.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "match_channels_epg",
+                {"channel_ids": [1, 2], "epg_source_ids": [10], "source_order": [2, 1]},
+            )
+
+        call_kwargs = mock_client.call_endpoint.call_args.kwargs
+        body = call_kwargs.get("body", {})
+        # source_order must NOT be forwarded — it is deprecated and ignored.
+        assert "source_order" not in body, (
+            f"source_order must be omitted from the request body, got body={body!r}"
+        )
+        # channel_ids and epg_source_ids MUST be present.
+        assert "channel_ids" in body, f"channel_ids missing from body={body!r}"
+        assert "epg_source_ids" in body, f"epg_source_ids missing from body={body!r}"
+        assert body["channel_ids"] == [1, 2]
+        assert body["epg_source_ids"] == [10]
+
 
 # --- TestLinkChannelEpg (znc76.2 / r5pu5) ---
 class TestLinkChannelEpg:
@@ -2189,8 +2237,12 @@ class TestRollbackAutoCreation:
             result = await mcp.call_tool("rollback_auto_creation", {"execution_id": 8})
 
         text = result[0][0].text
-        assert "10" in text
-        assert "2" in text
+        assert "10 channel(s) deleted" in text, (
+            f"Expected labeled deleted count, got: {text!r}"
+        )
+        assert "2 channel(s) restored" in text, (
+            f"Expected labeled restored count, got: {text!r}"
+        )
 
 
 # --- TestRunAutoCreation (A3) ---
@@ -3167,6 +3219,9 @@ class TestSetNormalizationGroupEnabled:
         text = result[0][0].text
         assert "Error" in text
         assert "999" in text
+        assert "not found" in text.lower(), (
+            f"Expected 'not found' from 404 error, got: {text!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_missing_name_in_response_falls_back_gracefully(self):
@@ -3198,19 +3253,35 @@ class TestSetNormalizationGroupEnabled:
         assert ep.path == "/api/normalization/groups/{group_id}"
         assert "enabled" in ep.request_fields
 
-    def test_list_normalization_rules_shows_id_and_enabled(self):
+    @pytest.mark.asyncio
+    async def test_list_normalization_rules_shows_id_and_enabled(self):
         """list_normalization_rules rendering includes id= and enabled/disabled per group.
 
         Verifies that operators can read the group_id they need to pass to
         set_normalization_group_enabled directly from the list output (bd-svixy scope §3).
+        Mutation: removing '(id={gid})' or 'enabled' from the rendering template
+        must fail this test.
         """
-        # The rendering is in tools/normalization.py list_normalization_rules.
-        # Lines render as: "  {name} (id={gid}) — {enabled}, {count} rules"
-        # Check that the format matches by inspecting the source directly.
-        import inspect
-        from tools import normalization
-        src = inspect.getsource(normalization)
-        assert "id={gid}" in src or "id=" in src, (
-            "list_normalization_rules must render the group id so the operator "
-            "knows which group_id to pass to set_normalization_group_enabled"
+        from tools.normalization import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "groups": [
+                {"id": 1, "name": "Cleanup Rules", "enabled": True, "rules": []},
+            ]
+        })
+
+        with patch("tools.normalization.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_normalization_rules", {})
+
+        text = result[0][0].text
+        assert "(id=1)" in text, (
+            f"list_normalization_rules must render group id so operator knows what "
+            f"to pass to set_normalization_group_enabled; got: {text!r}"
+        )
+        assert "enabled" in text, (
+            f"list_normalization_rules must show enabled status per group; got: {text!r}"
         )
