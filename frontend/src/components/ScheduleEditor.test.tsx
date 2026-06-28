@@ -49,9 +49,8 @@ describe('ScheduleEditor', () => {
   describe('rendering', () => {
     it('renders schedule name input', () => {
       render(<ScheduleEditor {...defaultProps} schedule={mockSchedule} />);
-      // Name input should exist (textbox role)
-      const inputs = screen.getAllByRole('textbox');
-      expect(inputs.length).toBeGreaterThan(0);
+      // The name input is pre-filled with the schedule's name
+      expect(screen.getByDisplayValue('Test Schedule')).toBeInTheDocument();
     });
 
     it('renders schedule type select', () => {
@@ -153,10 +152,9 @@ describe('ScheduleEditor', () => {
           parameterSchema={parameterSchema}
         />
       );
-      // Parameters section should render number inputs
-      const spinbuttons = screen.getAllByRole('spinbutton');
-      // At least the parameter inputs should exist
-      expect(spinbuttons.length).toBeGreaterThanOrEqual(2);
+      // Each schema parameter renders a numeric input with its default value
+      expect(screen.getByDisplayValue('10')).toBeInTheDocument(); // batch_size default
+      expect(screen.getByDisplayValue('30')).toBeInTheDocument(); // timeout default
     });
 
     it('uses default values when no parameters set', () => {
@@ -167,9 +165,9 @@ describe('ScheduleEditor', () => {
           parameterSchema={parameterSchema}
         />
       );
-      // Default values from schema should be applied
-      const inputs = screen.getAllByRole('spinbutton');
-      expect(inputs.length).toBeGreaterThan(0);
+      // When schedule.parameters is empty, schema defaults are applied
+      expect(screen.getByDisplayValue('10')).toBeInTheDocument(); // batch_size default
+      expect(screen.getByDisplayValue('30')).toBeInTheDocument(); // timeout default
     });
 
     it('uses defaultParameters when schedule has no parameters', () => {
@@ -249,9 +247,8 @@ describe('ScheduleEditor', () => {
   describe('new schedule mode', () => {
     it('renders with empty name when no schedule provided', () => {
       render(<ScheduleEditor {...defaultProps} />);
-      // Name input should exist and be empty
-      const inputs = screen.getAllByRole('textbox');
-      expect(inputs.length).toBeGreaterThan(0);
+      // Name input exists and is empty (no schedule to pre-fill it)
+      expect(screen.getByDisplayValue('')).toBeInTheDocument();
     });
 
     it('shows Add Schedule button for new schedule', () => {
@@ -262,9 +259,8 @@ describe('ScheduleEditor', () => {
 
     it('defaults to daily schedule type', () => {
       render(<ScheduleEditor {...defaultProps} />);
-      // Daily should be selected by default - time input should be present
-      const timeInput = screen.queryByDisplayValue(/\d{2}:\d{2}/);
-      expect(timeInput !== null).toBeTruthy();
+      // Daily is the default — the time input is pre-filled with '03:00'
+      expect(screen.getByDisplayValue('03:00')).toBeInTheDocument();
     });
 
     it('applies defaultParameters to new schedule', () => {

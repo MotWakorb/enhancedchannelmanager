@@ -303,7 +303,15 @@ describe('useChangeHistory', () => {
   });
 
   describe('isOperationPending', () => {
-    it('tracks pending operations', () => {
+    it('flips to true during undo and back to false when settled', async () => {
+      const { updateChannel } = await import('../services/api');
+
+      // Slow the API call so we can observe the in-flight state
+      let resolveUpdate!: () => void;
+      vi.mocked(updateChannel).mockImplementation(
+        () => new Promise((resolve) => { resolveUpdate = resolve as () => void; })
+      );
+
       const { result } = renderHook(() =>
         useChangeHistory({
           channels: mockChannels,
@@ -311,6 +319,32 @@ describe('useChangeHistory', () => {
           onError: mockOnError,
         })
       );
+
+      // Record a channel_name_update change so undo has something to reverse
+      act(() => {
+        result.current.recordChange({
+          type: 'channel_name_update',
+          description: 'Name change',
+          channelIds: [1],
+          before: [{ id: 1, channel_number: 100, name: 'Old', channel_group_id: 1, streams: [] }],
+          after: [{ id: 1, channel_number: 100, name: 'New', channel_group_id: 1, streams: [] }],
+        });
+      });
+
+      expect(result.current.isOperationPending).toBe(false);
+
+      // Start the undo without awaiting — observe in-flight state
+      act(() => {
+        result.current.undo();
+      });
+
+      expect(result.current.isOperationPending).toBe(true);
+
+      // Settle the API call and confirm pending clears
+      await act(async () => {
+        resolveUpdate();
+        await Promise.resolve();
+      });
 
       expect(result.current.isOperationPending).toBe(false);
     });
