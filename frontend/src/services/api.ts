@@ -3707,6 +3707,16 @@ export interface EntityCategoryReport {
   failure_details: RestoreFailureDetail[];
 }
 
+/**
+ * One logo that could not be matched/applied on restore (bead qhui4) — the
+ * per-logo drill-down behind the aggregate `logo_misses` count. `label` is the
+ * operator-facing logo name; never a path or secret.
+ */
+export interface LogoMissDetail {
+  source_export_id?: number | null;
+  label: string;
+}
+
 /** The one restore response schema — dry-run, apply, and summary. */
 export interface RestoreReport {
   contract_version: number;
@@ -3715,6 +3725,12 @@ export interface RestoreReport {
   categories: EntityCategoryReport[];
   /** Aggregate count of unresolved logo references — bead .19 surfaces a red banner when > 0. */
   logo_misses: number;
+  /**
+   * Per-logo detail (id + name) for each unresolved logo (bead qhui4). Additive
+   * to the aggregate count: the banner enumerates these as a drill-down list.
+   * May be absent on reports produced before this field existed.
+   */
+  logo_miss_details?: LogoMissDetail[];
   started_at?: string | null;
   completed_at?: string | null;
   notes: string[];

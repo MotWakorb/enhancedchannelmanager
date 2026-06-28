@@ -67,6 +67,11 @@ never writes/uploads anything:
    are ELF/PE/script is a disguised binary and is REJECTED — the extension and
    the declared content-type are NEVER trusted. Magic checks are byte
    comparisons / membership tests (no regex on dynamic input — Semgrep clean).
+   BMP is validated more strictly than a 2-byte prefix: it must carry the "BM"
+   signature AND a little-endian file-size dword (offset 2) that equals the
+   decoded byte length (LOW-1 hardening — a bare "BM…" blob is rejected). SVG is
+   NOT an allowed type: it is XML/script-bearing, has no raster magic number, and
+   does not match the allowlist, so it is rejected.
 
 ----------------------------------------------------------------------------
 BULK-DELETE PRE-STEP (destructive — opt-in, never silent, never in dry-run)
@@ -104,6 +109,7 @@ from dbas.restore_contracts import (
     FailureDetail,
     FailureReason,
     IdRemapTable,
+    LogoMissDetail,
     RestoreReport,
     RollbackLedger,
     SkipDetail,
@@ -121,14 +127,29 @@ MAX_LOGO_BYTES = 50 * 1024 * 1024
 # pair the decoded payload must start with at the given offset. These are plain
 # byte comparisons — NO regex on dynamic input (Semgrep-clean magic check).
 # WebP and (some) AVIF carry their tag at offset 8 inside a RIFF/ISO-BMFF box.
+#
+# BMP is NOT in this table: a 2-byte "BM" prefix is too weakly discriminating
+# (LOW-1 from the .15 security review — any non-image "BM…" blob would pass). It
+# is validated separately in :func:`_bmp_ok`, which also checks the BMP header's
+# little-endian file-size dword, so a real BMP (size dword == byte length) is
+# accepted while a "BM"-prefixed junk blob is rejected.
 _MAGIC_PREFIXES: tuple[tuple[bytes, int], ...] = (
     (b"\x89PNG\r\n\x1a\n", 0),   # PNG
     (b"\xff\xd8\xff", 0),         # JPEG (JFIF/EXIF)
     (b"GIF87a", 0),              # GIF87a
     (b"GIF89a", 0),              # GIF89a
-    (b"BM", 0),                  # BMP
     (b"WEBP", 8),               # WebP (RIFF....WEBP)
 )
+
+# The BMP header is: 2-byte "BM" signature + a 4-byte little-endian file-size
+# dword at offset 2 that equals the TOTAL file length. A genuine BMP writer fills
+# this in; a non-image blob that merely starts with "BM" almost never has a size
+# dword that matches its own length, so this is a far stronger discriminator than
+# the 2-byte prefix alone (LOW-1). 14 bytes is the smallest valid BMP file
+# header (BITMAPFILEHEADER), so anything shorter cannot be a BMP.
+_BMP_SIGNATURE = b"BM"
+_BMP_MIN_HEADER_LEN = 14
+_BMP_SIZE_DWORD_OFFSET = 2
 
 # The smallest leading slice we must inspect to decide every magic above. Kept
 # small so we never read more than necessary to classify.
@@ -297,17 +318,36 @@ def _decode_logo_bytes(archive_logo: dict) -> bytes:
         raise ValueError("undecodable logo content") from exc
 
 
+def _bmp_ok(data: bytes) -> bool:
+    """True if ``data`` is a plausible BMP: "BM" signature AND a little-endian
+    file-size dword (offset 2) that equals the total byte length (LOW-1).
+
+    The 2-byte "BM" prefix on its own is too weak — a non-image blob can start
+    with it. A genuine BMP also stores its total file size as a 4-byte
+    little-endian dword at offset 2, so we require that dword to match the actual
+    decoded length. Pure byte/int comparison — no regex on dynamic input.
+    """
+    if len(data) < _BMP_MIN_HEADER_LEN or data[:2] != _BMP_SIGNATURE:
+        return False
+    declared_size = int.from_bytes(
+        data[_BMP_SIZE_DWORD_OFFSET:_BMP_SIZE_DWORD_OFFSET + 4], "little"
+    )
+    return declared_size == len(data)
+
+
 def _magic_ok(data: bytes) -> bool:
     """True if the decoded bytes start with a known IMAGE magic number.
 
     Pure byte-prefix membership test (no regex). Rejects disguised binaries
     (ELF/PE/script) whose extension or declared content-type claims an image.
+    BMP is validated by :func:`_bmp_ok` (signature + size dword), not by the
+    prefix table, because a bare "BM" prefix is too weakly discriminating.
     """
     head = data[:_MAGIC_INSPECT_LEN]
     for prefix, offset in _MAGIC_PREFIXES:
         if head[offset:offset + len(prefix)] == prefix:
             return True
-    return False
+    return _bmp_ok(data)
 
 
 def _sanitize_failure(exc: Exception | str) -> str:
@@ -505,7 +545,12 @@ async def import_logos(
 
         # A valid miss feeds the logo-miss aggregate (D9 red banner) regardless of
         # dry-run vs. apply — it is a logo the destination did not already have.
+        # It also records a per-logo detail row (id + name) for the drill-down
+        # behind the aggregate count (bead qhui4) — additive to the D9 banner.
         report.logo_misses += 1
+        report.logo_miss_details.append(
+            LogoMissDetail(source_export_id=source_id, label=label)
+        )
         result.misses += 1
 
         if is_dry_run:

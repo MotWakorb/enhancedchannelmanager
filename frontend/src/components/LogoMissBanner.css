@@ -46,6 +46,23 @@
   line-height: 1.4;
 }
 
+.logo-miss-detail-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  list-style: disc;
+}
+
+.logo-miss-detail-row {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
 .logo-miss-link {
   display: inline-flex;
   align-items: center;

@@ -10,13 +10,14 @@
  * act on it.
  *
  * Contract: the merged {@link RestoreReport} carries the logo-miss signal as an
- * AGGREGATE COUNT only — `logo_misses: number` (see
- * docs/dbas_restore_contracts.md; the per-logo detail "lives in the logo beads'
- * own surface", not in the wire contract). There is no per-channel list in the
- * report, so the banner cannot enumerate per-channel rows. Instead it names the
- * count and links to the Dispatcharr **Channels** admin page, where the operator
- * fixes the affected channels one-off. The link is built with the same
- * `${dispatcharrUrl}/…` pattern the rest of the app uses (see ChannelsPane).
+ * AGGREGATE COUNT (`logo_misses: number`) AND — since bead qhui4 — an OPTIONAL
+ * per-logo detail list (`logo_miss_details: LogoMissDetail[]`, each id + name).
+ * The aggregate count gates the red banner (D9, unchanged); when the detail list
+ * is present and non-empty the banner ADDS a drill-down enumerating which logos
+ * are missing. The banner also names the count and links to the Dispatcharr
+ * **Channels** admin page, where the operator fixes the affected channels
+ * one-off. The link is built with the same `${dispatcharrUrl}/…` pattern the rest
+ * of the app uses (see ChannelsPane).
  *
  * Colorblind-safe (WCAG 1.4.1): the meaning is carried by an icon + the word
  * "missing" in the copy, not by red colour alone. `role="alert"` so assistive
@@ -61,6 +62,11 @@ export function LogoMissBanner({ report, dispatcharrUrl }: LogoMissBannerProps) 
   const base = dispatcharrUrl?.replace(/\/+$/, '');
   const channelsHref = base ? `${base}/channels` : null;
 
+  // Optional per-logo drill-down (bead qhui4). Additive to the aggregate count:
+  // present + non-empty => enumerate which logos are missing.
+  const details = report.logo_miss_details ?? [];
+  const hasDetails = details.length > 0;
+
   return (
     <div className="logo-miss-banner" data-testid="logo-miss-banner" role="alert">
       <span className="material-icons logo-miss-icon" data-testid="logo-miss-icon" aria-hidden="true">
@@ -71,6 +77,19 @@ export function LogoMissBanner({ report, dispatcharrUrl }: LogoMissBannerProps) 
         <span className="logo-miss-detail">
           These channels were restored without a logo. Open them in Dispatcharr to set a logo on each.
         </span>
+        {hasDetails && (
+          <ul className="logo-miss-detail-list" data-testid="logo-miss-detail-list">
+            {details.map((miss, index) => (
+              <li
+                className="logo-miss-detail-row"
+                data-testid="logo-miss-detail-row"
+                key={miss.source_export_id ?? `idx-${index}`}
+              >
+                {miss.label?.trim() || 'Unnamed logo'}
+              </li>
+            ))}
+          </ul>
+        )}
         {channelsHref && (
           <a
             className="logo-miss-link"
