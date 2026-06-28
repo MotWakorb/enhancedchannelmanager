@@ -178,7 +178,7 @@ class TestUpdateTask:
 
     @pytest.mark.asyncio
     async def test_updates_task(self, async_client):
-        """Updates task configuration."""
+        """Updates task configuration and returns the registry result verbatim."""
         mock_registry = MagicMock()
         mock_registry.update_task_config.return_value = {
             "task_id": "stream_probe", "enabled": False,
@@ -190,6 +190,10 @@ class TestUpdateTask:
             })
 
         assert response.status_code == 200
+        data = response.json()
+        assert data["task_id"] == "stream_probe"
+        assert data["enabled"] is False
+        mock_registry.update_task_config.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown(self, async_client):
@@ -243,7 +247,7 @@ class TestCancelTask:
 
     @pytest.mark.asyncio
     async def test_cancels_task(self, async_client):
-        """Cancels a running task."""
+        """Cancels a running task and returns the engine result verbatim."""
         mock_engine = MagicMock()
         mock_engine.cancel_task = AsyncMock(return_value={"status": "cancelled"})
 
@@ -251,6 +255,8 @@ class TestCancelTask:
             response = await async_client.post("/api/tasks/stream_probe/cancel")
 
         assert response.status_code == 200
+        assert response.json() == {"status": "cancelled"}
+        mock_engine.cancel_task.assert_called_once_with("stream_probe")
 
     @pytest.mark.asyncio
     async def test_returns_404_when_not_found(self, async_client):

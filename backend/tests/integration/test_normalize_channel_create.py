@@ -202,5 +202,11 @@ class TestBulkCommitWithNormalize:
                 "validateOnly": True,  # Just validate, don't execute
             },
         )
-        # Should not return 422 (validation error) for the normalize field
-        assert response.status_code != 422 or "normalize" not in str(response.json())
+        # The schema must accept the normalize field — a 422 here means schema rejection.
+        # The or-form of the prior assertion was always-True: this form fails if the
+        # endpoint returns 422 for any reason, which is the correct guard for schema acceptance.
+        # Mutation check: removing the normalize field from BulkCreateChannelOp would cause
+        # Pydantic to reject it with 422, failing this assertion.
+        assert response.status_code != 422, (
+            f"Schema rejected the normalize field — response: {response.json()}"
+        )

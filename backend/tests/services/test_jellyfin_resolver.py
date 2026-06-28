@@ -915,6 +915,7 @@ class TestMultiViewer:
                 ecm_channel_name="CNN",
             )
         assert len(users) == 3
+        assert len(users) == 3
         assert _get_counter_value("user_attribution_resolved_total", "jellyfin") == 3.0
 
 
