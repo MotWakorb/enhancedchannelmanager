@@ -137,19 +137,31 @@ def register(mcp: FastMCP):
     ) -> str:
         """Auto-match channels to EPG data based on channel names.
 
+        When several EPG sources offer an equally-good match for a channel,
+        the match ranking automatically prefers the source with the higher
+        configured priority (set by reordering sources in the EPG Manager).
+        No action is needed here to honor that preference.
+
         Args:
             channel_ids: Optional list of channel IDs to match (default: all channels)
             epg_source_ids: Optional list of EPG source IDs to search (default: all sources)
-            source_order: Optional list of EPG source IDs defining preferred match order
+            source_order: DEPRECATED and ignored — EPG source priority is now
+                resolved server-side from each source's configured priority.
+                Retained for backward compatibility; scheduled for removal in v0.19.0.
         """
+        if source_order:
+            logger.warning(
+                "[MCP] match_channels_epg: source_order is deprecated and "
+                "ignored; EPG source priority is resolved server-side."
+            )
         try:
             client = get_ecm_client()
             # EPGMatchRequest requires a body; all fields are optional (default []).
             # Omitting the body entirely → HTTP 422 "Field required, loc:['body']".
+            # source_order is intentionally NOT sent — priority is server-side now.
             body: dict = {
                 "channel_ids": channel_ids or [],
                 "epg_source_ids": epg_source_ids or [],
-                "source_order": source_order or [],
             }
             result = await client.call_endpoint(ENDPOINTS["epg_match"], body=body, timeout=300.0)
 

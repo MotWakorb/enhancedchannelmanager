@@ -1,8 +1,11 @@
 """Unit tests for epg_matching module."""
 
 from epg_matching import (
+    EPGMatchWithScore,
+    PRIORITY_TIEBREAK_BAND,
     batch_find_epg_matches,
     build_epg_lookup,
+    build_source_priority_order,
     detect_country_from_streams,
     extract_broadcast_call_sign,
     extract_league_prefix,
@@ -12,6 +15,7 @@ from epg_matching import (
     normalize_for_epg_match_with_league,
     parse_tvg_id,
     _compute_confidence,
+    _sort_matches,
 )
 
 
@@ -349,23 +353,165 @@ class TestBatchFindEpgMatches:
         assert results[1].channel_name == "CNN"
         assert results[1].best_match is not None
 
-    def test_source_ordering(self):
+    def test_source_ordering_prefers_higher_priority_on_tie(self):
+        """Two equally-good matches from different sources: priority decides.
+
+        Both EPG entries are identical ESPN/ESPN.us exact matches (same
+        confidence band), so only source priority can break the tie. The
+        preferred source (rank 0) must win.
+        """
         channels = [make_channel(1, "ESPN", [1])]
         streams = [make_stream(1, "US | ESPN")]
         epg_data = [
-            make_epg(100, "ESPN", "ESPN.us", {"id": 1, "name": "Source1"}),
-            make_epg(101, "ESPN", "ESPN.uk", {"id": 2, "name": "Source2"}),
+            make_epg(100, "ESPN", "ESPN.us", {"id": 2, "name": "Backup"}),
+            make_epg(101, "ESPN", "ESPN.us", {"id": 1, "name": "Primary"}),
         ]
-        source_order = {1: 0, 2: 1}
+        # Source 1 (Primary) is most preferred.
         results = batch_find_epg_matches(
-            channels, streams, epg_data, source_order=source_order,
+            channels, streams, epg_data, source_order={1: 0, 2: 1},
         )
-        assert len(results) == 1
         assert results[0].best_match is not None
+        assert results[0].best_match.epg_source["id"] == 1
+
+    def test_source_ordering_does_not_override_better_match(self):
+        """Priority must NOT beat a clearly-better lower-priority match.
+
+        The preferred source only offers a weak prefix match ("ESPN News"),
+        while the lower-priority source has an exact "ESPN" match. The exact
+        match is more than one confidence band better, so it wins despite the
+        other source being preferred.
+        """
+        channels = [make_channel(1, "ESPN", [1])]
+        streams = [make_stream(1, "US | ESPN")]
+        epg_data = [
+            make_epg(200, "ESPN", "ESPN.us", {"id": 2, "name": "Backup"}),
+            make_epg(201, "ESPN News", "ESPNNews.us", {"id": 1, "name": "Primary"}),
+        ]
+        results = batch_find_epg_matches(
+            channels, streams, epg_data, source_order={1: 0, 2: 1},
+        )
+        assert results[0].best_match is not None
+        # The exact match from the non-preferred source wins on quality.
+        assert results[0].best_match.epg_id == 200
+
+    def test_no_source_order_is_deterministic(self):
+        """With no priority, ties fall back to a deterministic key (epg_id)."""
+        channels = [make_channel(1, "ESPN", [1])]
+        streams = [make_stream(1, "US | ESPN")]
+        epg_data = [
+            make_epg(101, "ESPN", "ESPN.us", {"id": 2, "name": "B"}),
+            make_epg(100, "ESPN", "ESPN.us", {"id": 1, "name": "A"}),
+        ]
+        results = batch_find_epg_matches(channels, streams, epg_data)
+        assert results[0].best_match is not None
+        # Lower epg_id breaks the otherwise-total tie.
+        assert results[0].best_match.epg_id == 100
 
     def test_no_channels(self):
         results = batch_find_epg_matches([], [], [])
         assert results == []
+
+
+# ===================================================================
+# 9b. Source priority: banded tiebreaker (_sort_matches)
+# ===================================================================
+
+def _scored(epg_id, source_id, confidence, name="ESPN", match_type="exact"):
+    """Build an EPGMatchWithScore with an explicit confidence for sort tests."""
+    return EPGMatchWithScore(
+        epg_id=epg_id,
+        epg_name=name,
+        tvg_id="ESPN.us",
+        epg_source={"id": source_id, "name": f"Source{source_id}"},
+        confidence=confidence,
+        match_type=match_type,
+    )
+
+
+class TestSortMatchesPriority:
+    """Source priority is a banded tiebreaker in _sort_matches."""
+
+    def test_priority_breaks_exact_tie(self):
+        matches = [_scored(1, source_id=2, confidence=80),
+                   _scored(2, source_id=1, confidence=80)]
+        ordered = _sort_matches(matches, None, "espn", {1: 0, 2: 1})
+        assert ordered[0].epg_source["id"] == 1
+
+    def test_priority_wins_near_tie_within_band(self):
+        """Preferred source wins even with slightly lower confidence (same band)."""
+        # 82 and 84 share band floor(82/5)==floor(84/5)==16.
+        matches = [_scored(1, source_id=2, confidence=84),
+                   _scored(2, source_id=1, confidence=82)]
+        ordered = _sort_matches(matches, None, "espn", {1: 0, 2: 1})
+        assert ordered[0].epg_source["id"] == 1
+        assert ordered[0].confidence == 82
+
+    def test_priority_ignored_across_bands(self):
+        """A clearly-better match outside the band beats the preferred source."""
+        # 70 (band 14) vs 90 (band 18): different bands, higher wins.
+        matches = [_scored(1, source_id=2, confidence=90),
+                   _scored(2, source_id=1, confidence=70)]
+        ordered = _sort_matches(matches, None, "espn", {1: 0, 2: 1})
+        assert ordered[0].epg_source["id"] == 2
+        assert ordered[0].confidence == 90
+
+    def test_band_boundary_just_outside(self):
+        """Just over a band boundary, confidence wins over priority."""
+        # 84 (band 16) backup vs 85 (band 17) preferred-rank... flip the ranks:
+        # preferred source (rank 0) has 84, backup (rank 1) has 85 -> 85 is a
+        # higher band, so it wins even though its source is less preferred.
+        matches = [_scored(1, source_id=1, confidence=84),   # preferred, band 16
+                   _scored(2, source_id=2, confidence=85)]   # backup, band 17
+        ordered = _sort_matches(matches, None, "espn", {1: 0, 2: 1})
+        assert ordered[0].confidence == 85
+        assert ordered[0].epg_source["id"] == 2
+
+    def test_no_source_order_preserves_confidence_order(self):
+        matches = [_scored(1, source_id=2, confidence=80),
+                   _scored(2, source_id=1, confidence=85)]
+        ordered = _sort_matches(matches, None, "espn", None)
+        assert ordered[0].confidence == 85
+
+    def test_unranked_source_sorts_after_ranked_in_band(self):
+        """A source absent from the priority map sorts last within its band."""
+        matches = [_scored(1, source_id=99, confidence=80),   # unranked
+                   _scored(2, source_id=1, confidence=80)]     # rank 0
+        ordered = _sort_matches(matches, None, "espn", {1: 0})
+        assert ordered[0].epg_source["id"] == 1
+
+    def test_band_constant_is_five(self):
+        assert PRIORITY_TIEBREAK_BAND == 5
+
+
+class TestBuildSourcePriorityOrder:
+    """build_source_priority_order maps source_id -> rank (0 = best)."""
+
+    def test_higher_priority_gets_rank_zero(self):
+        sources = [
+            {"id": 5, "name": "low", "priority": 1},
+            {"id": 7, "name": "high", "priority": 10},
+        ]
+        order = build_source_priority_order(sources)
+        assert order == {7: 0, 5: 1}
+
+    def test_ties_broken_by_id_deterministically(self):
+        sources = [
+            {"id": 9, "name": "b", "priority": 10},
+            {"id": 7, "name": "a", "priority": 10},
+            {"id": 5, "name": "c", "priority": 1},
+        ]
+        order = build_source_priority_order(sources)
+        assert order == {7: 0, 9: 1, 5: 2}
+
+    def test_missing_priority_treated_as_zero(self):
+        sources = [{"id": 1, "name": "a"}, {"id": 2, "name": "b", "priority": 3}]
+        order = build_source_priority_order(sources)
+        assert order == {2: 0, 1: 1}
+
+    def test_skips_sources_without_id(self):
+        sources = [{"name": "noid", "priority": 5}, {"id": 2, "priority": 1}]
+        order = build_source_priority_order(sources)
+        assert order == {2: 0}
 
 
 # ===================================================================
