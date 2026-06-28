@@ -71,6 +71,13 @@ describe('BandwidthPanel', () => {
       render(<BandwidthPanel />);
 
       expect(screen.getByText('Loading bandwidth data...')).toBeInTheDocument();
+
+      // Let the mount-time fetch settle so the resulting state updates happen
+      // inside act() (otherwise React logs an act() warning for the
+      // un-awaited fetchData() that flips loading off after this test body).
+      await waitFor(() => {
+        expect(screen.queryByText('Loading bandwidth data...')).not.toBeInTheDocument();
+      });
     });
 
     it('fetches data on mount', async () => {
