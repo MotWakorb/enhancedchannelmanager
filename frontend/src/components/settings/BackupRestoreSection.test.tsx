@@ -65,48 +65,90 @@ describe('BackupRestoreSection', () => {
   });
 
   describe('when admin', () => {
-    it('renders all sections', () => {
+    it('renders all sections', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText('Export Configuration (YAML)')).toBeInTheDocument();
       expect(screen.getByText('Restore from YAML Export')).toBeInTheDocument();
       expect(screen.getByText('Create Full Backup')).toBeInTheDocument();
       expect(screen.getByText('Restore Full Backup')).toBeInTheDocument();
+
+      // Let the mount-time fetch settle (getExportSections + listSavedBackups) so
+      // the resulting state updates happen inside act() — otherwise React logs an
+      // act() warning for the un-awaited effects that run after the test body.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
 
-    it('renders page header', () => {
+    it('renders page header', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText('Backup & Restore')).toBeInTheDocument();
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
 
-    it('renders YAML export button', () => {
+    it('renders YAML export button', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText('Export YAML')).toBeInTheDocument();
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
 
-    it('renders full backup download button', () => {
+    it('renders full backup download button', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText('Download Full Backup')).toBeInTheDocument();
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
 
-    it('shows sensitive data warning on YAML export', () => {
+    it('shows sensitive data warning on YAML export', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText(/redacted in the export/i)).toBeInTheDocument();
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
 
-    it('shows sensitive data warning on full backup', () => {
+    it('shows sensitive data warning on full backup', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText(/contains sensitive data/i)).toBeInTheDocument();
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
 
-    it('renders file input for zip files', () => {
+    it('renders file input for zip files', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       const fileInput = document.querySelector('input[type="file"][accept=".zip"]');
       expect(fileInput).toBeInTheDocument();
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
 
-    it('shows warning about full restore replacing data', () => {
+    it('shows warning about full restore replacing data', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText(/replace all current settings/i)).toBeInTheDocument();
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
   });
 
@@ -170,19 +212,29 @@ describe('BackupRestoreSection', () => {
   });
 
   describe('YAML restore modal', () => {
-    it('opens restore modal on button click', () => {
+    it('opens restore modal on button click', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       fireEvent.click(screen.getByText('Restore from YAML...'));
 
       expect(screen.getByTestId('backup-restore-modal')).toBeInTheDocument();
+
+      // Let mount-time fetches settle (getExportSections + listSavedBackups).
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
 
-    it('closes restore modal', () => {
+    it('closes restore modal', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       fireEvent.click(screen.getByText('Restore from YAML...'));
       fireEvent.click(screen.getByText('Close Modal'));
 
       expect(screen.queryByTestId('backup-restore-modal')).not.toBeInTheDocument();
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
     });
   });
 
