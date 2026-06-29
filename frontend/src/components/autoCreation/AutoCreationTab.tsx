@@ -12,10 +12,13 @@ import type {
   RestoreSnapshotResponse,
   FailedChannel,
 } from '../../types/autoCreation';
+import type { CircuitBreakerState } from '../../services/autoCreationApi';
+import { useAuth } from '../../hooks/useAuth';
 import { useAutoCreationRules } from '../../hooks/useAutoCreationRules';
 import { useAutoCreationExecution } from '../../hooks/useAutoCreationExecution';
 import { RuleBuilder } from './RuleBuilder';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
+import { CircuitBreakerBanner } from './CircuitBreakerBanner';
 import * as autoCreationApi from '../../services/autoCreationApi';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getDateLocale } from '../../utils/formatting';
@@ -31,8 +34,16 @@ const getStatusBadgeClass = (status: string) => {
     enabled: 'badge-success', completed: 'badge-success',
     disabled: '', failed: 'badge-error',
     running: 'badge-info', rolled_back: 'badge-warning',
+    capped: 'badge-warning', abandoned: 'badge-error',
   };
   return `badge badge-sm badge-uppercase ${map[status] || ''}`;
+};
+
+/** Human-readable label for execution statuses that need one (others are fine as-is). */
+const EXECUTION_STATUS_LABEL: Partial<Record<string, string>> = {
+  rolled_back: 'Rolled Back',
+  capped: 'Capped',
+  abandoned: 'Abandoned',
 };
 
 /** Categorize a log action into a filter bucket. */
@@ -60,6 +71,9 @@ function getActionCategory(action: ActionLogEntry): string | null {
 }
 
 export function AutoCreationTab() {
+  const { user } = useAuth();
+  const isAdmin = Boolean(user?.is_admin);
+
   // State from hooks
   const {
     rules,
@@ -85,6 +99,9 @@ export function AutoCreationTab() {
     runPipeline: runPipelineApi,
     rollback,
   } = useAutoCreationExecution();
+
+  // Circuit-breaker state (bd-fqur1: abandoned/capped run surfacing)
+  const [circuitBreaker, setCircuitBreaker] = useState<CircuitBreakerState | null>(null);
 
   // Local state
   const [search, setSearch] = useState('');
@@ -132,11 +149,21 @@ export function AutoCreationTab() {
   // Responsive state
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
-  // Fetch rules and executions on mount
+  const fetchCircuitBreaker = useCallback(async () => {
+    try {
+      const state = await autoCreationApi.getCircuitBreakerState();
+      setCircuitBreaker(state);
+    } catch {
+      // Non-fatal — banner is informational only; don't surface a toast
+    }
+  }, []);
+
+  // Fetch rules, executions, and circuit-breaker state on mount
   useEffect(() => {
     fetchRules();
     fetchExecutions();
-  }, [fetchRules, fetchExecutions]);
+    fetchCircuitBreaker();
+  }, [fetchRules, fetchExecutions, fetchCircuitBreaker]);
 
   // Handle responsive layout
   useEffect(() => {
@@ -676,6 +703,15 @@ export function AutoCreationTab() {
         </div>
       </header>
 
+      {/* Circuit-breaker banner — shown when run-on-refresh auto-fire is suppressed */}
+      {circuitBreaker && (
+        <CircuitBreakerBanner
+          state={circuitBreaker}
+          isAdmin={isAdmin}
+          onReset={fetchCircuitBreaker}
+        />
+      )}
+
       {/* Statistics Summary */}
       <div className="auto-creation-stats">
         <div className="stat-item">
@@ -948,7 +984,7 @@ export function AutoCreationTab() {
                 <div key={execution.id} className="execution-item" data-testid="execution-item">
                   <div className="execution-info">
                     <span className={getStatusBadgeClass(execution.status)}>
-                      {execution.status === 'rolled_back' ? 'Rolled Back' : execution.status}
+                      {EXECUTION_STATUS_LABEL[execution.status] ?? execution.status}
                     </span>
                     <span className="execution-mode">
                       {execution.mode === 'dry_run' ? 'Dry Run' : 'Execute'}

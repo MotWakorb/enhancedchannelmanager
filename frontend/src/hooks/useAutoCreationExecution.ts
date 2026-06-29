@@ -135,7 +135,7 @@ export function useAutoCreationExecution(
     // Tunables — small and steady; backend status writes are cheap GETs.
     const POLL_INTERVAL_MS = 1000;
     const MAX_POLL_DURATION_MS = 30 * 60 * 1000; // 30 minutes safety cap
-    const TERMINAL: ExecutionStatus[] = ['completed', 'failed', 'rolled_back'];
+    const TERMINAL: ExecutionStatus[] = ['completed', 'failed', 'rolled_back', 'capped', 'abandoned'];
     const startedAt = Date.now();
 
     while (true) {

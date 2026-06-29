@@ -17,9 +17,14 @@ import {
 } from '../../test/mocks/server';
 import { AutoCreationTab } from './AutoCreationTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
+import { AuthProvider } from '../../hooks/useAuth';
 
 const renderWithProviders = (ui: React.JSX.Element) =>
-  render(<NotificationProvider>{ui}</NotificationProvider>);
+  render(
+    <AuthProvider>
+      <NotificationProvider>{ui}</NotificationProvider>
+    </AuthProvider>
+  );
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
