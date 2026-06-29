@@ -79,10 +79,15 @@ class TestNormalizeOnChannelCreateSetting:
         # including a password — because the settings endpoint correctly
         # rejects a URL/username change in password mode without one
         # ("password required when changing auth mode, URL or username").
+        # Use a non-loopback host: kgz3k now SSRF-validates a changed
+        # Dispatcharr URL on save, and ``localhost`` is a blocked loopback
+        # host. ``dispatcharr.example`` does not resolve, so the save is
+        # allowed (the runtime client re-validates before connecting) — which
+        # keeps this test focused on the normalize flag, not URL policy.
         response = await async_client.post(
             "/api/settings",
             json={
-                "url": "http://localhost:8090",
+                "url": "http://dispatcharr.example:8090",
                 "auth_method": "password",
                 "username": "admin",
                 "password": "test-password",
