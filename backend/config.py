@@ -479,6 +479,30 @@ class DispatcharrSettings(BaseModel):
 
         return v
 
+    @field_validator(
+        "max_auto_created_channels_per_run",
+        "max_auto_creation_log_entries",
+    )
+    @classmethod
+    def normalize_auto_creation_cap(cls, v: int) -> int:
+        """Normalize the GH #473 auto-creation safety-valve caps (skg35).
+
+        Both caps share the same ``<= 0`` disable sentinel, surfaced to
+        operators via the settings API/UI. Any value at or below zero means
+        "disabled" (no cap). A negative is just another way of saying disabled,
+        so we normalize it to ``0`` for a single canonical disabled value —
+        keeping the stored settings.json tidy and the GET response unambiguous.
+
+        Deliberately permissive on the upper bound: an operator running a large
+        deliberate expansion may raise the cap arbitrarily high, and the engine
+        already treats the cap as a soft-abort threshold (no allocation tied to
+        the value). No upper clamp here would only invite a footgun without a
+        real failure mode, so we leave positive values untouched.
+        """
+        if v < 0:
+            return 0
+        return v
+
     def is_configured(self) -> bool:
         if not self.url:
             return False

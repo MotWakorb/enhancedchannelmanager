@@ -1,20 +1,26 @@
 /**
- * Tests for the `custom_streams` Smart Sort criterion in the Settings UI
- * (bead ap1ud / GH #244).
+ * Tests for the Auto Creation "Runaway Safety Cap" control (skg35).
  *
- * The Smart Sort Priority list lives in SettingsTab.tsx (Channel Defaults page).
- * These tests verify that the dedicated `custom_streams` criterion:
- *   - renders as a draggable, toggleable row in the priority list,
- *   - reflects its saved enabled state (default disabled),
- *   - can be toggled on and persisted via saveSettings,
- *   - is auto-merged into the list (disabled) for existing installs whose
- *     saved settings predate the criterion (mergeSortCriteria behaviour).
+ * Surfaces ``max_auto_created_channels_per_run`` (the GH #473 runaway-creation
+ * OOM safety valve) and its sibling ``max_auto_creation_log_entries`` in the
+ * Settings > Auto Creation page so an operator can view + adjust them instead
+ * of hand-editing settings.json.
  *
- * Mirrors the harness in DeduplicationSettingsSection.test.tsx — the api module
- * is mocked and SettingsTab is rendered on the channel-defaults page.
+ * Contracts under test:
+ *   - The numeric inputs render on the Auto Creation page and populate from
+ *     the loaded settings.
+ *   - Helper text explains the idempotent-rerun behavior + the 0-disables
+ *     semantics (so the operator knows a capped run can simply be re-run).
+ *   - An admin can edit the cap and the new value is sent in the save payload.
+ *   - For a NON-admin the inputs are disabled (consistent with the backend
+ *     field-level admin gate, which 403s a non-admin who changes them).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+
+// Mutable auth identity so a single mocked module can serve both the admin and
+// non-admin cases (vi.mock factories are hoisted + evaluated once per file).
+let mockUser: { is_admin: boolean; username: string } = { is_admin: true, username: 'admin' };
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -27,6 +33,13 @@ vi.mock('../../services/api', () => ({
   getM3UAccounts: vi.fn(),
   getExportSections: vi.fn(),
   listSavedBackups: vi.fn(),
+  testEmbyConnection: vi.fn(),
+  testPlexConnection: vi.fn(),
+  testJellyfinConnection: vi.fn(),
+  getStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
+  getProbeHistory: vi.fn().mockResolvedValue([]),
+  getProbeProgress: vi.fn().mockResolvedValue(null),
+  getStreamGroups: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../../services/autoCreationApi', () => ({
@@ -47,10 +60,9 @@ vi.mock('../../contexts/NotificationContext', () => ({
 }));
 
 vi.mock('../../hooks/useAuth', () => ({
-  useAuth: () => ({ user: { is_admin: true, username: 'admin' } }),
+  useAuth: () => ({ user: mockUser }),
 }));
 
-// Stub sub-components that pull in DnD context or heavy deps.
 vi.mock('../settings/NormalizationEngineSection', () => ({
   NormalizationEngineSection: () => <div data-testid="stub-normalization" />,
 }));
@@ -87,9 +99,6 @@ vi.mock('../SettingsModal', () => ({
 vi.mock('../DeleteOrphanedGroupsModal', () => ({
   DeleteOrphanedGroupsModal: () => <div data-testid="stub-delete-orphaned" />,
 }));
-vi.mock('../ModalOverlay', () => ({
-  ModalOverlay: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
 vi.mock('../CustomSelect', () => ({
   CustomSelect: ({ value, onChange, options }: {
     value: string;
@@ -97,7 +106,7 @@ vi.mock('../CustomSelect', () => ({
     options: { value: string; label: string }[];
   }) => (
     <select value={value} onChange={(e) => onChange(e.target.value)}>
-      {options.map((o: { value: string; label: string }) => (
+      {options.map((o) => (
         <option key={o.value} value={o.value}>{o.label}</option>
       ))}
     </select>
@@ -162,7 +171,7 @@ const settingsBase = {
   probe_retry_count: 1,
   probe_retry_delay: 2,
   stream_fetch_page_limit: 200,
-  stream_sort_priority: ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams'] as api.SortCriterion[],
+  stream_sort_priority: ['resolution', 'bitrate', 'framerate'] as api.SortCriterion[],
   stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false } as api.SortEnabledMap,
   m3u_account_priorities: {},
   black_screen_detection_enabled: false,
@@ -201,22 +210,22 @@ const settingsBase = {
   jellyfin_base_url: '',
   jellyfin_api_key_configured: false,
   trusted_media_networks: [],
-  // nngkg: DBAS outbound-policy mode (default LAN-friendly).
   ssrf_outbound_mode: 'lan_friendly' as const,
 };
 
-function renderOnChannelDefaults() {
+function renderOnAutoCreation() {
   return render(
     <SettingsTab
       onSaved={vi.fn()}
-      initialSettingsPage="channel-defaults"
+      initialSettingsPage="auto-creation"
     />
   );
 }
 
-describe('Smart Sort custom_streams criterion (bead ap1ud / GH #244)', () => {
+describe('Auto Creation Runaway Safety Cap (skg35)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUser = { is_admin: true, username: 'admin' };
     vi.mocked(api.getSettings).mockResolvedValue(makeSettings());
     vi.mocked(api.saveSettings).mockResolvedValue({ status: 'ok', configured: true, server_changed: false });
     vi.mocked(api.getChannelProfiles).mockResolvedValue([]);
@@ -224,80 +233,47 @@ describe('Smart Sort custom_streams criterion (bead ap1ud / GH #244)', () => {
     vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
   });
 
-  it('renders the Custom Streams criterion row in the Smart Sort priority list', async () => {
-    renderOnChannelDefaults();
+  it('renders the channel-cap input populated from loaded settings', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ max_auto_created_channels_per_run: 750 }));
+    renderOnAutoCreation();
 
-    await waitFor(() => {
-      expect(screen.getByText('Custom Streams')).toBeInTheDocument();
-    });
+    const input = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
+    expect(input.value).toBe('750');
   });
 
-  it('shows the Custom Streams criterion as disabled by default (checkbox unchecked)', async () => {
-    renderOnChannelDefaults();
+  it('explains the idempotent-rerun + 0-disables semantics in helper text', async () => {
+    renderOnAutoCreation();
 
-    const checkbox = await findCustomStreamsCheckbox();
-    expect(checkbox.checked).toBe(false);
+    await screen.findByLabelText(/Max channels created per run/i);
+    // The idempotent-rerun hint is the operator's actual escape hatch — it must
+    // appear on the channel-cap field specifically (the one the capped-run
+    // message points them at).
+    expect(screen.getByText(/idempotent/i)).toBeInTheDocument();
+    // Both cap fields document the 0-disables sentinel, so there are two.
+    expect(screen.getAllByText(/Set to 0 to disable the cap/i)).toHaveLength(2);
   });
 
-  it('shows the Custom Streams criterion enabled when the saved setting enables it', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
-      stream_sort_enabled: {
-        resolution: true, bitrate: true, framerate: true, video_codec: false,
-        m3u_priority: false, audio_channels: false, custom_streams: true,
-      } as api.SortEnabledMap,
-    }));
-    renderOnChannelDefaults();
+  it('lets an admin raise the cap and sends the new value on save', async () => {
+    renderOnAutoCreation();
 
-    const checkbox = await findCustomStreamsCheckbox();
-    expect(checkbox.checked).toBe(true);
+    const input = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
+    expect(input.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: '5000' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings/i }));
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+    const payload = vi.mocked(api.saveSettings).mock.calls[0][0];
+    expect(payload.max_auto_created_channels_per_run).toBe(5000);
   });
 
-  it('toggles the Custom Streams criterion on when its checkbox is clicked', async () => {
-    renderOnChannelDefaults();
+  it('disables the cap inputs for a non-admin (backend gate would 403 a change)', async () => {
+    mockUser = { is_admin: false, username: 'viewer' };
+    renderOnAutoCreation();
 
-    const checkbox = await findCustomStreamsCheckbox();
-    expect(checkbox.checked).toBe(false);
-
-    fireEvent.click(checkbox);
-
-    await waitFor(() => {
-      expect(checkbox.checked).toBe(true);
-    });
-  });
-
-  it('auto-merges custom_streams (disabled) for existing installs whose saved settings predate it', async () => {
-    // Existing install: saved settings have no custom_streams in priority or enabled.
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
-      stream_sort_priority: ['resolution', 'bitrate', 'framerate'] as api.SortCriterion[],
-      stream_sort_enabled: {
-        resolution: true, bitrate: true, framerate: true,
-      } as unknown as api.SortEnabledMap,
-    }));
-    renderOnChannelDefaults();
-
-    // mergeSortCriteria appends the unknown criterion (disabled) so the row still appears.
-    const checkbox = await findCustomStreamsCheckbox();
-    expect(checkbox.checked).toBe(false);
+    const channelInput = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
+    const logInput = screen.getByLabelText(/Max execution-log entries per run/i) as HTMLInputElement;
+    expect(channelInput.disabled).toBe(true);
+    expect(logInput.disabled).toBe(true);
   });
 });
-
-/**
- * The Smart Sort priority list renders each criterion as a row whose checkbox
- * carries a title describing enable/disable. The Custom Streams row's checkbox
- * is the one immediately preceding the "Custom Streams" label text.
- */
-async function findCustomStreamsCheckbox(): Promise<HTMLInputElement> {
-  const label = await screen.findByText('Custom Streams');
-  // Row container is the criterion item div; find the checkbox within it.
-  const row = label.closest('div');
-  if (!row) throw new Error('Custom Streams row container not found');
-  // Walk up to the criterion item (the flex row holding the drag handle + checkbox).
-  let container: HTMLElement | null = row;
-  let checkbox: HTMLInputElement | null = null;
-  while (container && !checkbox) {
-    checkbox = container.querySelector('input[type="checkbox"]');
-    container = container.parentElement;
-  }
-  if (!checkbox) throw new Error('Custom Streams checkbox not found');
-  return checkbox;
-}

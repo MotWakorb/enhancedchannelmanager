@@ -320,7 +320,9 @@ class AutoCreationEngine:
                 f"Created-channel cap reached: created "
                 f"{results.get('channels_created', 0)} of ~{would} matched; "
                 f"{results.get('cap_would_create', 0)} stream(s) not processed. "
-                f"Review the rule or raise max_auto_created_channels_per_run."
+                f"Auto-creation is idempotent — run it again to continue from "
+                f"where it stopped (the already-created channels persist), or "
+                f"raise the cap in Settings > Auto Creation."
             )
         else:
             execution.status = "completed"
@@ -1849,8 +1851,9 @@ class AutoCreationEngine:
                         "description": (
                             f"Auto-creation capped at {results['channels_created']} "
                             f"channel(s); {remaining} more matched stream(s) were not "
-                            f"processed. Review the rule or raise the cap "
-                            f"(max_auto_created_channels_per_run={_channel_cap})."
+                            f"processed. Auto-creation is idempotent — run it again "
+                            f"to continue (created channels persist), or raise the "
+                            f"cap in Settings > Auto Creation (currently {_channel_cap})."
                         ),
                         "success": True,
                         "entity_id": None,
