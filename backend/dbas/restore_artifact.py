@@ -77,6 +77,12 @@ _SECTION_TO_ENTITY: dict[str, EntityType] = {
     "channel_groups": EntityType.CHANNEL_GROUP,
     "channel_profiles": EntityType.CHANNEL_PROFILE,
     "stream_profiles": EntityType.STREAM_PROFILE,
+    # 7i8rf — the producer now emits these categories, so the decoder maps them
+    # to the EntityTypes the WIRED apply importers consume (channels: 4vouz,
+    # dispatcharr_users: l1p4p). Without these two rows the producer's bytes
+    # decoded to nothing and restore was a silent no-op.
+    "channels": EntityType.CHANNEL,
+    "dispatcharr_users": EntityType.USER,
 }
 
 # Where in the parsed category YAML each section's entity list lives. The

@@ -54,13 +54,15 @@ def _make_target(session, **overrides) -> CloudStorageTarget:
 
 
 def _fake_artifact_factory(dest_dir: Path) -> BackupArtifact:
-    """A built artifact with the mkstemp-style name (pre-canonicalization), plus
-    a sidecar whose hash matches the bytes so verify_artifact_sha256 passes."""
+    """A built artifact with the CANONICAL timestamped name (the builder now owns
+    it directly — bead e0r3h; there is no post-build rename), plus a sidecar whose
+    hash matches the bytes so verify_artifact_sha256 passes."""
     import hashlib
+    from routers.backup import _get_backup_filename
 
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = dest_dir / "ecm-artifact-rand123.zip"
+    zip_path = dest_dir / _get_backup_filename()  # ecm-backup-<UTC ts>.zip
     data = b"PK\x03\x04realish-artifact-bytes"
     zip_path.write_bytes(data)
     sha = hashlib.sha256(data).hexdigest()
@@ -103,12 +105,14 @@ async def _run(dbas_backup, DbasBackupTask, backups_dir, config, adapters):
 
 
 # ---------------------------------------------------------------------------
-# Canonical artifact rename.
+# Canonical artifact name (builder-owned — bead e0r3h).
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_artifact_renamed_to_canonical_timestamped_name(_wire_db, _reset_metrics, tmp_path):
-    """The built ecm-artifact-<rand>.zip is renamed to the canonical
-    ecm-backup-<ts>.zip so it matches the retention allowlist + is sortable."""
+async def test_artifact_has_canonical_timestamped_name(_wire_db, _reset_metrics, tmp_path):
+    """The artifact carries the canonical ecm-backup-<ts>.zip name (produced by
+    the builder directly — bead e0r3h, no post-build rename) so it matches the
+    retention allowlist + is sortable. No ecm-artifact-<rand> temp name is ever
+    left behind."""
     from tasks import dbas_backup
     from tasks.dbas_backup import DbasBackupTask
 
@@ -119,9 +123,9 @@ async def test_artifact_renamed_to_canonical_timestamped_name(_wire_db, _reset_m
     assert result.success is True
     on_disk = list(backups.glob("ecm-backup-*.zip"))
     assert len(on_disk) == 1
-    # The mkstemp temp name must be gone.
+    # No mkstemp temp name is ever created/left behind by the builder.
     assert not list(backups.glob("ecm-artifact-*.zip"))
-    # The sidecar tracks the renamed zip.
+    # The sidecar tracks the canonical zip.
     sidecar = Path(str(on_disk[0]) + ".sha256")
     assert sidecar.exists()
     assert on_disk[0].name in sidecar.read_text()
