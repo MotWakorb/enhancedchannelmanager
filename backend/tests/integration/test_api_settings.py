@@ -39,15 +39,19 @@ class TestUpdateSettings:
     """Tests for POST /api/settings endpoint."""
 
     @pytest.mark.asyncio
-    async def test_update_settings_accepts_url_without_format_validation(self, async_client):
-        """POST /api/settings saves the URL as-is (no server-side URL format validation).
+    async def test_update_settings_rejects_malformed_dispatcharr_url(self, async_client):
+        """POST /api/settings now SSRF-validates a CHANGED Dispatcharr URL on save.
 
-        The settings endpoint does not validate URL format — it stores whatever the
-        operator provides. This test documents the current behavior: a syntactically
-        invalid URL string is accepted with 200. A future bead that adds URL validation
-        would need to change this assertion to 400 or 422.
-        Mutation check: if the router started validating URLs and returning 400/422,
-        this test would fail — signaling the behavior changed.
+        kgz3k: the settings endpoint historically stored whatever the operator
+        provided. It now routes a changed, non-empty outbound base URL through
+        ``_sanitize_base_url`` (scheme allowlist: http/https only) before the
+        mode-aware SSRF chokepoint. ``"not-a-valid-url"`` has no http(s) scheme,
+        so it is rejected with 400 — the behavior change the prior version of
+        this test explicitly anticipated ("a future bead that adds URL
+        validation would need to change this assertion to 400 or 422").
+
+        Mutation check: if the scheme allowlist were removed, the malformed URL
+        would be stored and this would return 200, failing the test.
         """
         response = await async_client.post(
             "/api/settings",
@@ -57,7 +61,8 @@ class TestUpdateSettings:
                 "password": "password",
             },
         )
-        assert response.status_code == 200
+        assert response.status_code == 400
+        assert "scheme" in response.json()["detail"].lower()
 
     @pytest.mark.asyncio
     async def test_update_settings_requires_url(self, async_client):

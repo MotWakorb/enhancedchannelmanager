@@ -1599,3 +1599,380 @@ class TestSecuritySettings:
 
         assert response.status_code == 400
         mock_save.assert_not_called()
+
+
+def _full_payload(mock):
+    """Build a POST /api/settings body that mirrors a ``_mock_settings`` mock.
+
+    Sending the stored values back means the field-level admin gate (kgz3k)
+    sees NO admin-field change — so a test can flip exactly one field and
+    assert only that field's behaviour. Maps the mock attributes the handler
+    reads back into the SettingsRequest field names.
+    """
+    return {
+        "url": mock.url,
+        "auth_method": mock.auth_method,
+        "username": mock.username,
+        "theme": mock.theme,
+        "date_format": mock.date_format,
+        "user_timezone": mock.user_timezone,
+        "timezone_preference": mock.timezone_preference,
+        "emby_enabled": mock.emby_enabled,
+        "emby_base_url": mock.emby_base_url,
+        "plex_enabled": mock.plex_enabled,
+        "plex_base_url": mock.plex_base_url,
+        "jellyfin_enabled": mock.jellyfin_enabled,
+        "jellyfin_base_url": mock.jellyfin_base_url,
+        "discord_webhook_url": mock.discord_webhook_url,
+        "telegram_bot_token": mock.telegram_bot_token,
+        "telegram_chat_id": mock.telegram_chat_id,
+        "smtp_host": mock.smtp_host,
+        "smtp_port": mock.smtp_port,
+        "smtp_user": mock.smtp_user,
+        "smtp_from_email": mock.smtp_from_email,
+        "smtp_from_name": mock.smtp_from_name,
+        "smtp_use_tls": mock.smtp_use_tls,
+        "smtp_use_ssl": mock.smtp_use_ssl,
+    }
+
+
+def _save_mocks():
+    """The standard patch set so a POST /api/settings reaches save without IO."""
+    return (
+        patch("routers.settings.save_settings"),
+        patch("routers.settings.clear_settings_cache"),
+        patch("routers.settings.reset_client"),
+        patch("routers.settings.get_prober", return_value=None),
+        patch("routers.settings.get_cache", return_value=MagicMock()),
+    )
+
+
+class TestSettingsAdminFieldGate:
+    """kgz3k (A): field-level admin gate on POST /api/settings.
+
+    A non-admin (auth enabled) — INCLUDING the MCP service principal — may
+    change only per-user preferences; any attempt to change an admin-only
+    field (outbound URLs, secrets, notification credentials, connection) is
+    rejected 403. An admin may change them. These tests use the real
+    ``non_admin_client`` / ``admin_client`` fixtures so the gate actually bites.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_admin_can_change_only_prefs(self, non_admin_client):
+        """Non-admin changing ONLY theme/date_format/timezone -> 200."""
+        current = _mock_settings(theme="dark", date_format="auto", user_timezone="UTC")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload.update({"theme": "light", "date_format": "iso", "user_timezone": "America/Chicago"})
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.theme == "light"
+        assert saved.date_format == "iso"
+        assert saved.user_timezone == "America/Chicago"
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_dispatcharr_url_rejected(self, non_admin_client):
+        """Non-admin changing the Dispatcharr URL (admin-only) -> 403, no save."""
+        current = _mock_settings(url="http://dispatcharr:8000")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["url"] = "http://evil.example.com:9999"
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_emby_base_url_rejected(self, non_admin_client):
+        """Non-admin changing an outbound media-server base URL -> 403."""
+        current = _mock_settings(emby_enabled=True, emby_base_url="http://emby.lan:8096")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_base_url"] = "http://169.254.169.254"
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_supplying_secret_rejected(self, non_admin_client):
+        """Non-admin supplying a non-empty integration secret -> 403."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_api_key"] = "stolen-or-injected-key"
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_discord_webhook_rejected(self, non_admin_client):
+        """Non-admin changing the Discord webhook (POST-SSRF sink) -> 403."""
+        current = _mock_settings(discord_webhook_url="https://discord.com/api/webhooks/1/abc")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["discord_webhook_url"] = "https://discord.com/api/webhooks/2/xyz"
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_change_admin_field(self, admin_client):
+        """Positive control: an admin (auth enabled) CAN change an admin field."""
+        current = _mock_settings(emby_enabled=True, emby_base_url="http://emby.lan:8096")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            # Change to another resolvable-or-unresolvable LAN host (allowed in
+            # lan_friendly + unresolvable-on-save is permitted).
+            payload["emby_base_url"] = "http://emby2.lan:8096"
+            response = await admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        mock_save.assert_called_once()
+
+
+class TestSettingsMcpKeyGate:
+    """kgz3k (A): the MCP service principal is treated as NON-admin for the
+    settings admin-field gate, even though it carries is_admin=True elsewhere.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mcp_principal_changing_admin_field_rejected(self, async_client):
+        """MCP-key-only caller changing an admin field -> 403, no save.
+
+        Exercises the real auth path: auth enabled at the dependency layer +
+        a static MCP key presented as the Bearer token. ``get_current_user``
+        returns the MCP service principal, and ``_resolve_settings_admin``
+        must classify it as non-admin for this endpoint.
+        """
+        from config import DispatcharrSettings
+
+        current = _mock_settings(url="http://dispatcharr:8000")
+        runtime_settings = DispatcharrSettings(
+            url="http://dispatcharr:8000", username="u", password="p",
+            mcp_api_key="mcp-secret-key",
+        )
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("auth.dependencies.get_settings", return_value=runtime_settings), \
+             patch("routers.settings.get_auth_settings") as auth_mock, \
+             s1 as mock_save, s2, s3, s4, s5:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            payload = _full_payload(current)
+            payload["url"] = "http://evil.example.com:9999"
+            response = await async_client.post(
+                "/api/settings",
+                json=payload,
+                headers={"Authorization": "Bearer mcp-secret-key"},
+            )
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+
+class TestSettingsSsrfOnSave:
+    """kgz3k (B): every CHANGED, non-empty outbound base URL is SSRF-validated
+    on save. Loopback/metadata/RFC1918-in-public-only -> 400; valid -> 200;
+    empty -> allowed (disables integration).
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("field,enable_field", [
+        ("emby_base_url", "emby_enabled"),
+        ("plex_base_url", "plex_enabled"),
+        ("jellyfin_base_url", "jellyfin_enabled"),
+        ("url", None),
+    ])
+    async def test_metadata_host_rejected_for_each_url_field(self, async_client, field, enable_field):
+        """Saving http://169.254.169.254 into any base URL field -> 400."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload[field] = "http://169.254.169.254"
+            if enable_field:
+                payload[enable_field] = True
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
+        assert "169.254" in response.json()["detail"] or "denied" in response.json()["detail"].lower()
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_loopback_host_rejected(self, async_client):
+        """Saving a loopback base URL -> 400."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = True
+            payload["emby_base_url"] = "http://127.0.0.1:8096"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rfc1918_allowed_in_lan_friendly(self, async_client):
+        """A private LAN base URL saves under lan_friendly (the default)."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="lan_friendly")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = True
+            payload["emby_base_url"] = "http://192.168.1.50:8096"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        # Path-stripped, scheme+netloc only.
+        assert saved.emby_base_url == "http://192.168.1.50:8096"
+
+    @pytest.mark.asyncio
+    async def test_rfc1918_rejected_in_public_only(self, async_client):
+        """The same private LAN base URL is rejected under public_only."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="public_only")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = True
+            payload["emby_base_url"] = "http://192.168.1.50:8096"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_http_scheme_rejected(self, async_client):
+        """A file:// base URL -> 400 (scheme allowlist)."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["plex_enabled"] = True
+            payload["plex_base_url"] = "file:///etc/passwd"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_base_url_allowed_disables_integration(self, async_client):
+        """Clearing a base URL (empty) is allowed — operator disabling it."""
+        current = _mock_settings(emby_enabled=True, emby_base_url="http://192.168.1.50:8096")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = False
+            payload["emby_base_url"] = ""
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.emby_base_url == ""
+
+    @pytest.mark.asyncio
+    async def test_runtime_caller_never_hits_blocked_host(self, async_client):
+        """After a rejected save, no outbound request is issued to the host.
+
+        Wraps the SSRF resolver so we can assert the blocked host is never
+        connected to: the save is rejected before any media-server client is
+        constructed, so the runtime poller keeps the OLD (unset) base URL and
+        never GETs the attacker host.
+        """
+        import respx
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with respx.mock(assert_all_called=False, assert_all_mocked=False) as respx_mock:
+            metadata_route = respx_mock.get("http://169.254.169.254/Sessions")
+            with patch("routers.settings.get_settings", return_value=current), \
+                 s1 as mock_save, s2, s3, s4, s5:
+                payload = _full_payload(current)
+                payload["emby_enabled"] = True
+                payload["emby_base_url"] = "http://169.254.169.254"
+                response = await async_client.post("/api/settings", json=payload)
+
+            assert response.status_code == 400
+            mock_save.assert_not_called()
+            # The metadata endpoint was NEVER called — the save was rejected
+            # before any media-server client could be constructed.
+            assert not metadata_route.called
+            assert len(respx_mock.calls) == 0
+
+
+class TestSettingsDiscordWebhookOnSave:
+    """kgz3k (C): discord_webhook_url is validated against the Discord host
+    allowlist on save (POST-SSRF sink). Path is preserved (NOT _sanitize_base_url).
+    """
+
+    @pytest.mark.asyncio
+    async def test_valid_discord_webhook_saves(self, async_client):
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        url = "https://discord.com/api/webhooks/123456/abcdefg"
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["discord_webhook_url"] = url
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        # Path is PRESERVED (webhooks need it).
+        assert saved.discord_webhook_url == url
+
+    @pytest.mark.asyncio
+    async def test_non_discord_host_rejected(self, async_client):
+        """A non-Discord webhook host -> 400 (POST-SSRF block)."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["discord_webhook_url"] = "https://evil.example.com/api/webhooks/1/x"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_discord_webhook_allowed(self, async_client):
+        """Clearing the webhook (empty) is allowed — disables Discord."""
+        current = _mock_settings(discord_webhook_url="https://discord.com/api/webhooks/1/old")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["discord_webhook_url"] = ""
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.discord_webhook_url == ""
