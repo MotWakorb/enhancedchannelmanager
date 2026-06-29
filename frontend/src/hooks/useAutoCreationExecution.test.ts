@@ -637,6 +637,62 @@ describe('useAutoCreationExecution', () => {
     });
   });
 
+  // bd-fqur1: capped and abandoned must be treated as terminal statuses so the
+  // poll in pollExecutionUntilTerminal never hangs on these new backend values.
+  describe('terminal status set (bd-fqur1)', () => {
+    async function verifyStatusIsTerminal(status: 'capped' | 'abandoned') {
+      server.use(
+        http.post('/api/auto-creation/run', () => {
+          const exec = createMockAutoCreationExecution({ status, channels_created: 0 });
+          mockDataStore.autoCreationExecutions.unshift(exec);
+          return HttpResponse.json(
+            { execution_id: exec.id, status: 'running', message: 'started' },
+            { status: 202 },
+          );
+        }),
+      );
+      const { result } = renderHook(() => useAutoCreationExecution());
+      let resolved: RunPipelineResponse | undefined;
+      await act(async () => {
+        resolved = await result.current.runPipeline();
+      });
+      expect(resolved).toBeDefined();
+      expect(resolved!.status).toBe(status);
+    }
+
+    it('treats "capped" as terminal so the poll resolves', async () => {
+      await verifyStatusIsTerminal('capped');
+    });
+
+    it('treats "abandoned" as terminal so the poll resolves', async () => {
+      await verifyStatusIsTerminal('abandoned');
+    });
+  });
+
+  describe('getExecutionsByStatus with capped and abandoned (bd-fqur1)', () => {
+    it('filters by capped', async () => {
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'capped' }),
+        createMockAutoCreationExecution({ status: 'completed' }),
+      );
+      const { result } = renderHook(() => useAutoCreationExecution());
+      await act(async () => { await result.current.fetchExecutions(); });
+      const capped = result.current.getExecutionsByStatus('capped');
+      expect(capped).toHaveLength(1);
+    });
+
+    it('filters by abandoned', async () => {
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'abandoned' }),
+        createMockAutoCreationExecution({ status: 'failed' }),
+      );
+      const { result } = renderHook(() => useAutoCreationExecution());
+      await act(async () => { await result.current.fetchExecutions(); });
+      const abandoned = result.current.getExecutionsByStatus('abandoned');
+      expect(abandoned).toHaveLength(1);
+    });
+  });
+
   describe('autoRefresh option', () => {
     it('re-fetches executions when the interval fires', async () => {
       vi.useFakeTimers();

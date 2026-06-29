@@ -281,6 +281,42 @@ export async function importAutoCreationRulesYAML(
 }
 
 // =============================================================================
+// Circuit breaker (bd-exo4j / GH #473)
+// =============================================================================
+
+/**
+ * State of the run-on-refresh circuit breaker.
+ *
+ * - disabled: true → auto-creation will NOT fire after M3U refresh.
+ * - reason: 'abandoned_run' → tripped automatically by startup crash-sentinel;
+ *   null → manually disabled by the user (or not disabled at all).
+ */
+export interface CircuitBreakerState {
+  disabled: boolean;
+  reason: 'abandoned_run' | null;
+}
+
+/**
+ * Get the current run-on-refresh circuit-breaker state.
+ */
+export async function getCircuitBreakerState(): Promise<CircuitBreakerState> {
+  return fetchJson<CircuitBreakerState>(`${API_BASE}/auto-creation/circuit-breaker`);
+}
+
+/**
+ * Reset (clear) the run-on-refresh circuit breaker. Admin-only.
+ *
+ * Re-enables the post-refresh auto-fire chain. Returns ``was_disabled`` so the
+ * caller can distinguish a no-op reset from an active one.
+ */
+export async function resetCircuitBreaker(): Promise<{ success: boolean; was_disabled: boolean; disabled: boolean }> {
+  return fetchJson<{ success: boolean; was_disabled: boolean; disabled: boolean }>(
+    `${API_BASE}/auto-creation/reset-circuit-breaker`,
+    { method: 'POST' },
+  );
+}
+
+// =============================================================================
 // Debug bundle (bd-cns7j: 202+poll, replaces the old single-shot GET that
 // timed out on large catalogs)
 // =============================================================================
