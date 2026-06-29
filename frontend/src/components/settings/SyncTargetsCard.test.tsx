@@ -176,6 +176,21 @@ describe('SyncTargetsCard', () => {
     });
   });
 
+  it('shows the insecure-TLS warning badge when a target has insecure=true (nngkg)', async () => {
+    await renderCard([{ ...TARGET, insecure: true }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+    const badge = screen.getByTestId('sync-target-insecure-7');
+    expect(badge).toBeInTheDocument();
+    // Plain-language copy — no "TLS"/"SSRF" jargon required to convey the risk.
+    expect(badge).toHaveTextContent(/certificate check off/i);
+  });
+
+  it('does NOT show the insecure badge for a secure target', async () => {
+    await renderCard([{ ...TARGET, insecure: false }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+    expect(screen.queryByTestId('sync-target-insecure-7')).not.toBeInTheDocument();
+  });
+
   it('a disabled target shows the kill-switch state', async () => {
     await renderCard([{ ...TARGET, enabled: false }]);
     await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());

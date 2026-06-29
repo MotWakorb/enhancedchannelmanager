@@ -224,6 +224,8 @@ const settingsBase = {
   jellyfin_api_key_configured: false,
   // bd-mlcla: trusted media/proxy networks (ranking hint only).
   trusted_media_networks: [],
+  // nngkg: DBAS outbound-policy mode (default LAN-friendly).
+  ssrf_outbound_mode: 'lan_friendly' as const,
 };
 
 function renderOnIntegrations() {

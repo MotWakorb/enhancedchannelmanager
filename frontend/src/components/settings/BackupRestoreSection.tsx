@@ -5,6 +5,7 @@ import { BackupRestoreModal } from '../BackupRestoreModal';
 import { DbasRestoreModal } from '../DbasRestoreModal';
 import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { SyncTargetsCard } from './SyncTargetsCard';
+import { BackupScheduleBanner } from './BackupScheduleBanner';
 import { getDateLocale } from '../../utils/formatting';
 import './BackupRestoreSection.css';
 
@@ -178,6 +179,11 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   return (
     <div className="backup-restore-section">
       <h2 className="settings-page-header">Backup & Restore</h2>
+
+      {/* One-time "Backups are not scheduled yet" setup nudge (bead ikv8z).
+          Scheduled DBAS backup ships OFF by default, so surface the unscheduled
+          state prominently to prevent an operator silently keeping zero backups. */}
+      <BackupScheduleBanner />
 
       {/* YAML Export (config only) */}
       <div className="backup-card">

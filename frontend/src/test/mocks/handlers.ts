@@ -406,6 +406,7 @@ export const mockDataStore: MockDataStore = {
     configured: true,
     url: 'http://dispatcharr.test',
     theme: 'dark',
+    ssrf_outbound_mode: 'lan_friendly',
     auto_rename_channel_number: false,
     show_stream_urls: true,
     hide_ungrouped_streams: true,
