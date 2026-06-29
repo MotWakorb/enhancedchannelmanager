@@ -357,6 +357,67 @@ def _check_rule_has_no_hope_of_matching(
     )]
 
 
+def _check_disabled_normalization_groups(
+    rule_id: int | None,
+    rule_name: str,
+    normalization_group_ids: list | None,
+    normalization_groups: list | None,
+) -> list[RuleFinding]:
+    """Flag rules referencing DISABLED or missing normalization groups.
+
+    enhancedchannelmanager-e8p1h: a rule can carry
+    ``normalization_group_ids`` that point at groups that are globally
+    disabled (or no longer exist). When that happens normalization
+    silently applies nothing — prefixes/suffixes are never stripped and
+    ``merge_streams target:auto`` matches almost nothing — with no
+    warning anywhere.
+
+    ``normalization_groups`` is optional external data shaped like the
+    ``GET /api/normalization/groups`` response (``[{id, name, enabled}]``).
+    When absent (e.g. the debug-bundle path, which has no group-enabled
+    state) this check is a no-op — we never invent findings from missing
+    data.
+    """
+    if not normalization_group_ids or normalization_groups is None:
+        return []
+
+    # id -> (name, enabled); ids absent from this map no longer exist.
+    state = {
+        g.get("id"): (g.get("name"), bool(g.get("enabled")))
+        for g in normalization_groups
+        if isinstance(g, dict)
+    }
+    disabled = []
+    for gid in normalization_group_ids:
+        if gid not in state:
+            disabled.append({"id": gid, "name": None, "missing": True})
+        elif not state[gid][1]:
+            disabled.append({"id": gid, "name": state[gid][0], "missing": False})
+
+    if not disabled:
+        return []
+
+    names = ", ".join(g["name"] or f"#{g['id']}" for g in disabled)
+    return [RuleFinding(
+        rule_id=rule_id,
+        rule_name=rule_name,
+        code="RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP",
+        severity="warning",
+        field="normalization_group_ids",
+        message=(
+            f"This rule references normalization group(s) that are "
+            f"disabled or missing ({names}). Normalization will apply NO "
+            f"changes — provider prefixes/suffixes are not stripped and "
+            f"merge_streams target:auto will match almost nothing."
+        ),
+        suggestion=(
+            "Enable the referenced group(s) in Settings > Normalization, "
+            "or update the rule to reference enabled groups."
+        ),
+        detail={"disabled_groups": disabled},
+    )]
+
+
 def _bubble_up_regex_advisories(
     rule_id: int | None, rule_name: str, conditions: list,
 ) -> list[RuleFinding]:
@@ -394,6 +455,7 @@ def analyze_rule(
     rule: dict,
     *,
     channel_groups_diagnostic: dict | None = None,
+    normalization_groups: list | None = None,
 ) -> list[RuleFinding]:
     """Run all advisory checks on one rule; return RuleFindings.
 
@@ -406,12 +468,20 @@ def analyze_rule(
         a top-level ``groups`` list of ``{id, name, channel_count}``.
         When present, enables the
         :data:`MERGE_STREAMS_NO_TARGET_CHANNELS` check.
+    :param normalization_groups: optional list shaped like the
+        ``GET /api/normalization/groups`` response
+        (``[{id, name, enabled}]``). When present, enables the
+        :data:`RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP` check
+        (enhancedchannelmanager-e8p1h).
     """
     rule_id = rule.get("id") if isinstance(rule, dict) else None
     rule_name = rule.get("name") or "" if isinstance(rule, dict) else ""
     conditions = rule.get("conditions") if isinstance(rule, dict) else None
     actions = rule.get("actions") if isinstance(rule, dict) else None
     target_group_id = rule.get("target_group_id") if isinstance(rule, dict) else None
+    normalization_group_ids = (
+        rule.get("normalization_group_ids") if isinstance(rule, dict) else None
+    )
     match_scope_target_group = bool(
         rule.get("match_scope_target_group", False) if isinstance(rule, dict) else False
     )
@@ -426,6 +496,9 @@ def analyze_rule(
     out.extend(_check_merge_scope_not_target_group(
         rule_id, rule_name, actions or [], match_scope_target_group,
     ))
+    out.extend(_check_disabled_normalization_groups(
+        rule_id, rule_name, normalization_group_ids, normalization_groups,
+    ))
     return out
 
 
@@ -433,6 +506,7 @@ def analyze_rules(
     rules: Iterable[dict],
     *,
     channel_groups_diagnostic: dict | None = None,
+    normalization_groups: list | None = None,
 ) -> dict:
     """Bulk-analyze rules; return the API response shape.
 
@@ -454,7 +528,9 @@ def analyze_rules(
     out_rules: list[dict] = []
     for rule in rules or []:
         findings = analyze_rule(
-            rule, channel_groups_diagnostic=channel_groups_diagnostic,
+            rule,
+            channel_groups_diagnostic=channel_groups_diagnostic,
+            normalization_groups=normalization_groups,
         )
         for f in findings:
             summary[f.severity] = summary.get(f.severity, 0) + 1

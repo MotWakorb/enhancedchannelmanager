@@ -353,6 +353,31 @@ export interface AutoCreationExecution {
    * dry-run executions, legacy runs, and runs where snapshot capture failed.
    */
   has_snapshot?: boolean;
+  /**
+   * Advisory, non-fatal run warnings (enhancedchannelmanager-e8p1h). Currently
+   * carries rules that reference DISABLED/missing normalization groups, which
+   * makes normalization silently apply nothing. Distinct from error_message —
+   * the run still completes. Always present (empty array when none).
+   */
+  warnings?: NormalizationWarning[];
+}
+
+/**
+ * A rule that references normalization groups that are disabled or missing, so
+ * normalization applied no changes (enhancedchannelmanager-e8p1h).
+ */
+export interface NormalizationWarning {
+  rule_id: number;
+  rule_name: string;
+  disabled_groups: DisabledNormalizationGroup[];
+}
+
+export interface DisabledNormalizationGroup {
+  id: number;
+  /** null when the group no longer exists (missing reference). */
+  name: string | null;
+  /** True when the referenced group id no longer exists. */
+  missing: boolean;
 }
 
 export interface CreatedEntity {

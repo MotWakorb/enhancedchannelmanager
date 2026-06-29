@@ -384,6 +384,18 @@ export function AutoCreationTab() {
           : `Pipeline ${status}`;
         if (succeeded) {
           notifications.success(msg, 'Auto-Creation');
+          // Surface disabled-normalization-group warnings so the operator
+          // notices that normalization silently applied nothing, even on an
+          // otherwise-clean run (enhancedchannelmanager-e8p1h).
+          if (response.warnings && response.warnings.length > 0) {
+            const ruleNames = response.warnings.map(w => w.rule_name).join(', ');
+            notifications.warning(
+              `Normalization applied no changes: ${ruleNames} ` +
+                `reference disabled normalization groups. Enable them under ` +
+                `Settings > Normalization, then re-run.`,
+              'Auto-Creation',
+            );
+          }
         } else {
           notifications.error(
             response.error_message || msg,
@@ -1366,6 +1378,43 @@ export function AutoCreationTab() {
                 <div className="detail-row error">
                   <span className="detail-label">Error:</span>
                   <span>{details.error_message}</span>
+                </div>
+              )}
+
+              {/* Disabled-normalization-group warning (enhancedchannelmanager-e8p1h).
+                  Surfaced prominently because these rules silently normalize
+                  nothing — the run looks clean but names never get cleaned up. */}
+              {details.warnings && details.warnings.length > 0 && (
+                <div className="norm-warning-banner" role="alert">
+                  <span className="material-icons norm-warning-icon">warning</span>
+                  <div className="norm-warning-content">
+                    <p className="norm-warning-title">
+                      Normalization applied no changes — disabled groups referenced
+                    </p>
+                    <p className="norm-warning-detail">
+                      The rule{details.warnings.length > 1 ? 's' : ''} below
+                      reference normalization groups that are disabled or no longer
+                      exist, so stream names were not normalized and
+                      merge-into-channel matching likely missed most streams.
+                      Enable the listed group(s) under Settings &gt; Normalization,
+                      then re-run.
+                    </p>
+                    <ul className="norm-warning-list">
+                      {details.warnings.map(w => (
+                        <li key={w.rule_id}>
+                          <strong>{w.rule_name}</strong>
+                          {' → '}
+                          {w.disabled_groups
+                            .map(g =>
+                              g.missing
+                                ? `#${g.id} (missing)`
+                                : (g.name ?? `#${g.id}`),
+                            )
+                            .join(', ')}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
               )}
 

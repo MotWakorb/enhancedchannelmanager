@@ -1088,3 +1088,52 @@
   color: var(--status-error, #ef4444);
   font-style: italic;
 }
+
+/* Disabled-normalization-group warning in the execution detail modal
+   (enhancedchannelmanager-e8p1h). Prominent because these runs silently
+   normalize nothing — the summary otherwise looks clean. */
+.norm-warning-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  margin: 14px 0;
+}
+
+.norm-warning-icon {
+  color: var(--status-warning, #f59e0b);
+  font-size: 20px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.norm-warning-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.norm-warning-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.norm-warning-detail {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.norm-warning-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
