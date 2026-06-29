@@ -230,6 +230,14 @@ class AutoCreationEngine:
                 "streams_matched": 0
             }
 
+        # Detect rules referencing DISABLED/missing normalization groups
+        # (enhancedchannelmanager-e8p1h). Additive: logs a WARNING and carries
+        # the warnings into the run summary so the operator sees that
+        # normalization silently applied nothing. Does NOT change behavior.
+        normalization_warnings = (
+            await self._detect_disabled_normalization_group_warnings(rules)
+        )
+
         # Fetch streams from M3U accounts
         streams = await self._fetch_streams(m3u_account_ids, rules)
         logger.info("[AUTO-CREATE-ENGINE] Fetched %s streams to evaluate against %s rules", len(streams), len(rules))
@@ -332,6 +340,9 @@ class AutoCreationEngine:
         execution.set_created_entities(results["created_entities"])
         execution.set_modified_entities(results["modified_entities"])
         execution.set_execution_log(results["execution_log"])
+        # Persist disabled-normalization-group warnings so the polled record and
+        # the executions UI can surface them (enhancedchannelmanager-e8p1h).
+        execution.set_warnings(normalization_warnings)
 
         if dry_run:
             execution.set_dry_run_results(results["dry_run_results"])
@@ -361,6 +372,7 @@ class AutoCreationEngine:
             "execution_id": execution.id,
             "mode": execution.mode,
             "duration_seconds": execution.duration_seconds,
+            "normalization_warnings": normalization_warnings,
             **results
         }
 
@@ -821,6 +833,76 @@ class AutoCreationEngine:
 
         finally:
             session.close()
+
+    async def _detect_disabled_normalization_group_warnings(
+        self, rules: list[AutoCreationRule]
+    ) -> list[dict]:
+        """Detect rules whose ``normalization_group_ids`` reference DISABLED or
+        missing normalization groups (enhancedchannelmanager-e8p1h).
+
+        When a rule selects normalization groups that are globally disabled (or
+        no longer exist), every ``[NORMALIZE]`` decision applies nothing — the
+        rule's prefixes/suffixes are never stripped and ``merge_streams
+        target:auto`` matches almost nothing — yet the run otherwise looks
+        clean. This surfaces the problem so the operator knows to enable the
+        groups. It is ADDITIVE detection only: it does NOT change what gets
+        normalized or merged.
+
+        Returns a list of warning dicts, one per affected rule::
+
+            {"rule_id": int, "rule_name": str,
+             "disabled_groups": [{"id": int, "name": str|None,
+                                  "missing": bool}]}
+        """
+        # Only rules that actually reference a normalization group can be
+        # affected — short-circuit otherwise so healthy configs do no DB work.
+        referenced_ids = set()
+        for r in rules:
+            referenced_ids.update(r.get_normalization_group_ids() or [])
+        if not referenced_ids:
+            return []
+
+        from models import NormalizationRuleGroup
+        session = get_session()
+        try:
+            groups = session.query(NormalizationRuleGroup).filter(
+                NormalizationRuleGroup.id.in_(referenced_ids)
+            ).all()
+            # id -> (name, enabled); ids absent from this map no longer exist.
+            group_state = {g.id: (g.name, bool(g.enabled)) for g in groups}
+        finally:
+            session.close()
+
+        warnings: list[dict] = []
+        for r in rules:
+            ids = r.get_normalization_group_ids() or []
+            problem_groups = []
+            for gid in ids:
+                if gid not in group_state:
+                    problem_groups.append({"id": gid, "name": None, "missing": True})
+                elif not group_state[gid][1]:  # exists but disabled
+                    problem_groups.append({
+                        "id": gid,
+                        "name": group_state[gid][0],
+                        "missing": False,
+                    })
+            if problem_groups:
+                names = ", ".join(
+                    g["name"] or f"#{g['id']}" for g in problem_groups
+                )
+                logger.warning(
+                    "[AUTO-CREATE-ENGINE] Rule id=%s name=%r references "
+                    "disabled/missing normalization group(s): %s — "
+                    "normalization will apply NO changes for this rule. "
+                    "Enable the group(s) in Settings > Normalization.",
+                    r.id, r.name, names,
+                )
+                warnings.append({
+                    "rule_id": r.id,
+                    "rule_name": r.name,
+                    "disabled_groups": problem_groups,
+                })
+        return warnings
 
     async def _fetch_streams(
         self,
