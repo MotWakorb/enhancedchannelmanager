@@ -10,11 +10,14 @@ import secrets
 import socket
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from urllib.parse import urlparse, urlunparse
 
 from auth import RequireAdminIfEnabled
+from auth.dependencies import get_current_user, is_mcp_service_principal
+from auth.settings import get_auth_settings
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
 from dispatcharr_client import get_client, reset_client
 from emby_client import EmbyClient, EmbyClientError
@@ -36,6 +39,248 @@ _DISCORD_WEBHOOK_RE = re.compile(
 )
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
+
+
+# ---------------------------------------------------------------------------
+# kgz3k — field-level admin gate for POST /api/settings.
+# ---------------------------------------------------------------------------
+# POST /api/settings is ONE blob that mixes admin-only configuration
+# (outbound base URLs, integration secrets, notification credentials,
+# Dispatcharr connection) with per-user display preferences (theme,
+# date_format, timezone). The whole endpoint historically had NO admin
+# dependency, so any authenticated caller — INCLUDING the static MCP API
+# key — could rewrite outbound base URLs + API keys, turning the runtime
+# media-server pollers into an SSRF + key-exfiltration primitive.
+#
+# We can't admin-gate the whole endpoint (that would break a non-admin
+# saving their own theme/timezone), and we can't split the endpoint without
+# a frontend rewrite. So the gate is FIELD-LEVEL: a non-admin (auth enabled)
+# may change ONLY non-admin-only fields; any attempt to CHANGE an admin-only
+# field is rejected 403. ``SettingsRequest`` field name -> ``DispatcharrSettings``
+# attribute name; only the attribute on the LEFT is compared against the
+# stored value, so a field whose value is unchanged never trips the gate
+# (lets a non-admin POST the full settings blob the UI already holds).
+_ADMIN_ONLY_SETTINGS_FIELDS: dict[str, str] = {
+    # Dispatcharr connection (outbound base URL + credentials).
+    "url": "url",
+    "auth_method": "auth_method",
+    "username": "username",
+    # Outbound media-server base URLs (the SSRF sinks — runtime pollers GET
+    # <base>/Sessions with the stored key every few seconds).
+    "emby_base_url": "emby_base_url",
+    "plex_base_url": "plex_base_url",
+    "jellyfin_base_url": "jellyfin_base_url",
+    # Outbound notification credentials.
+    "discord_webhook_url": "discord_webhook_url",
+    "telegram_bot_token": "telegram_bot_token",
+    "telegram_chat_id": "telegram_chat_id",
+    "smtp_host": "smtp_host",
+    "smtp_port": "smtp_port",
+    "smtp_user": "smtp_user",
+    "smtp_from_email": "smtp_from_email",
+    "smtp_from_name": "smtp_from_name",
+    "smtp_use_tls": "smtp_use_tls",
+    "smtp_use_ssl": "smtp_use_ssl",
+    # Integration enable toggles (flipping these arms/disarms outbound pollers).
+    "emby_enabled": "emby_enabled",
+    "plex_enabled": "plex_enabled",
+    "jellyfin_enabled": "jellyfin_enabled",
+}
+# Credential fields use preserve-on-omit (None/empty => keep stored value), so
+# a plain attribute compare can't see a "change". They are admin-only by
+# nature: any NON-EMPTY value supplied by a non-admin is a change attempt ->
+# 403. Checked separately from the dict above against the raw request value.
+# (Identifiers here are deliberately neutral — only the field *names* are ever
+# logged, never their values — so the clear-text-logging analyzer has no
+# credential-named token flowing into the log sink.)
+_ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
+    "password",
+    "dispatcharr_api_key",
+    "api_key",
+    "emby_api_key",
+    "plex_token",
+    "jellyfin_api_key",
+    "smtp_password",
+)
+
+
+async def _resolve_settings_admin(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> bool:
+    """Resolve whether the caller may write admin-only settings fields.
+
+    Mirrors ``auth.dependencies.resolve_is_admin_if_enabled`` (no rejection —
+    returns a bool the handler acts on) with ONE deliberate divergence: the
+    static MCP service principal is treated as NON-admin here. The MCP key is
+    an automation credential for channel/stream operations, not an operator
+    identity; it has no business rewriting outbound base URLs or secrets, and
+    the kgz3k threat model requires MCP-key-only callers be denied the
+    admin-field path even though the principal carries ``is_admin=True`` for
+    its other (channel-management) routes.
+
+    Returns ``True`` when the caller may write admin-only fields (auth disabled
+    / setup incomplete, or an authenticated human admin), ``False`` for an
+    authenticated non-admin OR the MCP service principal. A missing/invalid
+    token in auth-enabled mode still raises 401 via ``get_current_user``.
+    """
+    auth_settings = get_auth_settings()
+    # Auth disabled (setup mode) — single-operator install, treat as admin so
+    # behaviour is unchanged from before the gate existed.
+    if not auth_settings.require_auth or not auth_settings.setup_complete:
+        return True
+
+    user = await get_current_user(request, session)
+    # MCP service principal: explicitly NON-admin for settings writes (kgz3k).
+    if is_mcp_service_principal(user):
+        return False
+    return bool(user.is_admin)
+
+
+def _assert_admin_for_changed_fields(
+    request: "SettingsRequest",
+    current: DispatcharrSettings,
+    is_admin: bool,
+) -> None:
+    """Reject (403) a non-admin attempting to CHANGE any admin-only field.
+
+    No-op when ``is_admin`` is True. For a non-admin, compares each admin-only
+    field in the request against the stored value and raises 403 on the first
+    real change. Secret fields are change-attempts whenever a non-empty value
+    is supplied (preserve-on-omit makes an empty/omitted secret a no-op).
+    """
+    if is_admin:
+        return
+
+    changed: list[str] = []
+    for req_field, attr in _ADMIN_ONLY_SETTINGS_FIELDS.items():
+        new_value = getattr(request, req_field)
+        old_value = getattr(current, attr, None)
+        if new_value != old_value:
+            changed.append(req_field)
+    for protected_field in _ADMIN_ONLY_PROTECTED_FIELDS:
+        # A non-empty value in the body is always an attempted write; an
+        # empty/None value is preserve-on-omit and never a change.
+        if getattr(request, protected_field):
+            changed.append(protected_field)
+
+    if changed:
+        # ``changed`` holds field NAMES only — never any field VALUE — so this
+        # log line discloses which admin-only setting a non-admin tried to
+        # touch, not its (possibly credential) value.
+        logger.warning(
+            "[SETTINGS] Non-admin caller attempted to change admin-only "
+            "field(s): %s — rejected 403", ", ".join(sorted(set(changed)))
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Admin access required to change connection, integration, or "
+                "notification settings. Non-admin users may only update "
+                "personal preferences (theme, date format, timezone)."
+            ),
+        )
+
+
+def _validate_outbound_base_url_on_save(field_label: str, raw_url: str) -> str:
+    """Validate + normalize an outbound base URL at SAVE time (kgz3k SEC-1/2).
+
+    Until now ``_sanitize_base_url`` ran ONLY in the test-connection endpoints,
+    so a malicious base URL (``http://169.254.169.254/`` etc.) was stored
+    verbatim and the runtime media-server pollers happily GET'd it with the
+    stored key every few seconds — SSRF + key exfiltration. This closes that
+    by validating EVERY non-empty outbound base URL on save.
+
+    Two-stage validation, reusing the existing chokepoints (no new policy):
+
+    1. :func:`_sanitize_base_url` — scheme allowlist (http/https only) and
+       netloc-only reconstruction (strips any path/query/fragment an attacker
+       embedded). Raises 400 on a bad scheme / missing host.
+    2. ``security.ssrf.validate_outbound_url`` under the persisted
+       ``ssrf_outbound_mode`` — the CANONICAL, mode-aware host validator
+       (PR #560 nngkg). LAN-friendly allows RFC1918; public-only blocks it;
+       the always-on denylist (loopback / link-local / IMDS / ULA / CGNAT /
+       multicast) is rejected in BOTH modes. Routing through it here means the
+       save path respects the same outbound policy as the DBAS cloud adapters.
+
+    Empty input is the caller's responsibility to skip (empty = operator
+    disabling an integration; must remain allowed). Returns the sanitized URL
+    (scheme + netloc only) for storage.
+    """
+    from security.ssrf import SSRFError, get_ssrf_mode, validate_outbound_url
+
+    sanitized, err = _sanitize_base_url(raw_url)
+    if err is not None or sanitized is None:
+        logger.info(
+            "[SETTINGS] Rejected %s on save (scheme/host): %s", field_label, err
+        )
+        raise HTTPException(
+            status_code=400, detail=f"Invalid {field_label}: {err}"
+        )
+
+    try:
+        # Host validation under the active outbound mode. We persist the
+        # sanitized scheme+netloc URL (the runtime media-server client
+        # re-validates + connects-by-IP at request time); here we just refuse
+        # to STORE a base URL whose host the policy denies.
+        validate_outbound_url(sanitized, get_ssrf_mode())
+    except SSRFError as exc:
+        # The chokepoint fails CLOSED on DNS resolution failure (correct for
+        # the connect path). On the SAVE path that is too aggressive: a
+        # legitimate LAN media server that is simply offline right now would
+        # become un-saveable, and an unrelated pref edit could be blocked.
+        # So we ALLOW a save whose host could not be RESOLVED (the runtime
+        # client re-validates before it ever connects), but we REJECT a host
+        # that positively resolves to — or is a literal — denied address
+        # (loopback / link-local / IMDS / RFC1918-in-public-only / …). That
+        # keeps the SSRF block on the attack (point ECM at 169.254.169.254 /
+        # 127.0.0.1) while not breaking the offline-LAN-server save.
+        message = str(exc)
+        resolution_failure = (
+            "could not resolve host" in message.lower()
+            or "resolved to no usable address" in message.lower()
+        )
+        if resolution_failure:
+            logger.info(
+                "[SETTINGS] %s host did not resolve on save; allowing store "
+                "(runtime re-validates before connect): %s", field_label, exc
+            )
+            return sanitized
+        # Positively-denied host (or bad literal IP) — reject. Message is
+        # admin-safe and carries no secret; surface the policy reason inline.
+        logger.info(
+            "[SETTINGS] Rejected %s on save (SSRF policy): %s", field_label, exc
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_label}: {exc}",
+        )
+    return sanitized
+
+
+def _validate_discord_webhook_on_save(raw_url: str) -> None:
+    """Validate ``discord_webhook_url`` at save time against the Discord allowlist.
+
+    The Discord webhook is POSTed VERBATIM by the notification service (a
+    POST-SSRF, strictly worse than the GET sinks) and the URL's PATH is
+    significant — so we do NOT run ``_sanitize_base_url`` (it would strip the
+    path). Instead we require the canonical Discord webhook host+path shape via
+    the existing :data:`_DISCORD_WEBHOOK_RE` (also used by the test-discord
+    endpoint). Empty is allowed (disables the integration). Raises 400 on a
+    non-Discord host.
+    """
+    if not raw_url:
+        return
+    if not _DISCORD_WEBHOOK_RE.match(raw_url):
+        logger.info("[SETTINGS] Rejected discord_webhook_url on save (non-Discord host)")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid Discord webhook URL — must be an https webhook on "
+                "discord.com / discordapp.com (e.g. "
+                "https://discord.com/api/webhooks/...)."
+            ),
+        )
 
 
 class NormalizationTag(BaseModel):
@@ -526,10 +771,45 @@ async def get_current_settings():
 
 
 @router.post("")
-async def update_settings(request: SettingsRequest):
-    """Update Dispatcharr connection settings."""
+async def update_settings(
+    request: SettingsRequest,
+    is_settings_admin: bool = Depends(_resolve_settings_admin),
+):
+    """Update Dispatcharr connection settings.
+
+    kgz3k: this endpoint mixes admin-only configuration (outbound URLs,
+    secrets, notification credentials) with per-user preferences. A
+    field-level admin gate (``_assert_admin_for_changed_fields``) rejects a
+    non-admin — including the MCP service principal — who attempts to change
+    any admin-only field, while still letting a non-admin save personal prefs.
+    Every non-empty outbound base URL is SSRF-validated on save and the
+    Discord webhook is checked against the Discord host allowlist.
+    """
     logger.debug("[SETTINGS] POST /api/settings - URL: %s, username: %s", request.url, request.username)
     current_settings = get_settings()
+
+    # kgz3k field-level admin gate — reject a non-admin (or MCP key) trying to
+    # change any admin-only field BEFORE any validation or write side effect.
+    _assert_admin_for_changed_fields(request, current_settings, is_settings_admin)
+
+    # kgz3k SSRF-on-save — validate every CHANGED, NON-EMPTY outbound base URL
+    # through the canonical mode-aware chokepoint, and the Discord webhook
+    # against the Discord allowlist. Empty = operator disabling an integration
+    # (allowed). We validate only on CHANGE: an already-stored value was either
+    # validated on a prior save or predates this guard, and an unreachable-but-
+    # legitimate LAN host that is already configured must not be un-saveable on
+    # an unrelated pref edit. A change to a blocked host is the attack we stop.
+    # Sanitized URLs replace the raw request values so storage is normalized.
+    if request.url and request.url != current_settings.url:
+        request.url = _validate_outbound_base_url_on_save("Dispatcharr URL", request.url)
+    if request.emby_base_url and request.emby_base_url != current_settings.emby_base_url:
+        request.emby_base_url = _validate_outbound_base_url_on_save("Emby base URL", request.emby_base_url)
+    if request.plex_base_url and request.plex_base_url != current_settings.plex_base_url:
+        request.plex_base_url = _validate_outbound_base_url_on_save("Plex base URL", request.plex_base_url)
+    if request.jellyfin_base_url and request.jellyfin_base_url != current_settings.jellyfin_base_url:
+        request.jellyfin_base_url = _validate_outbound_base_url_on_save("Jellyfin base URL", request.jellyfin_base_url)
+    if request.discord_webhook_url != current_settings.discord_webhook_url:
+        _validate_discord_webhook_on_save(request.discord_webhook_url)
 
     # If password is not provided, keep the existing password (preserve-on-omit
     # lets the UI update non-auth fields without re-asking for the secret).
