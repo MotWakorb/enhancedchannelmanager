@@ -46,7 +46,8 @@ def _seed_journal_db(path):
 
 
 async def _build_real_artifact(tmp_path):
-    """Build a real artifact carrying two M3U accounts + one logo."""
+    """Build a real artifact carrying two M3U accounts + one logo + one channel
+    (with embedded streams) + one dispatcharr user — the full 7i8rf producer set."""
     config_dir = tmp_path
     journal = config_dir / "journal.db"
     _seed_journal_db(journal)
@@ -71,6 +72,25 @@ async def _build_real_artifact(tmp_path):
     client.get_channel_groups = AsyncMock(return_value=[])
     client.get_channel_profiles = AsyncMock(return_value=[])
     client.get_stream_profiles = AsyncMock(return_value=[])
+    # 7i8rf — channels (with embedded stream IDs) + the stream records to enrich
+    # them, and a dispatcharr user. The stream url (provider creds) must be
+    # dropped by the producer.
+    client.get_channels = AsyncMock(
+        return_value={
+            "count": 1, "next": None,
+            "results": [{"id": 5, "name": "CNN", "channel_number": 1, "streams": [11]}],
+        }
+    )
+    client.get_streams = AsyncMock(
+        return_value={
+            "count": 1, "next": None,
+            "results": [{"id": 11, "name": "CNN HD", "m3u_account": 1,
+                         "url": "http://prov/secret/cnn.ts"}],
+        }
+    )
+    client.get_users = AsyncMock(
+        return_value=[{"id": 7, "username": "alice", "is_superuser": False}]
+    )
 
     session = MagicMock()
     session.query.return_value.all.return_value = []
@@ -121,6 +141,18 @@ async def test_build_then_decode_then_dry_run(tmp_path):
     assert len(plan.category(EntityType.M3U_ACCOUNT).entities) == 2
     # ...and the one logo from the binary subtree.
     assert len(plan.category(EntityType.LOGO).entities) == 1
+    # ...and (7i8rf) the channel + dispatcharr user the producers now emit, which
+    # used to decode to EMPTY because no producer wrote those categories.
+    channel_cat = plan.category(EntityType.CHANNEL)
+    assert channel_cat is not None and len(channel_cat.entities) == 1
+    assert channel_cat.entities[0]["id"] == 5
+    # The channel embeds its stream by id + safe match fields, NEVER the url.
+    embedded = channel_cat.entities[0]["streams"]
+    assert [s["id"] for s in embedded] == [11]
+    assert "url" not in embedded[0]
+    user_cat = plan.category(EntityType.USER)
+    assert user_cat is not None and len(user_cat.entities) == 1
+    assert user_cat.entities[0]["username"] == "alice"
 
     report = await run_dry_run(plan=plan, client=_restore_client())
 
@@ -130,3 +162,42 @@ async def test_build_then_decode_then_dry_run(tmp_path):
     m3u = report.category(EntityType.M3U_ACCOUNT)
     # Both M3U accounts would be created against the empty destination.
     assert m3u.would_create == 2
+    # 7i8rf round-trip: channels + users are now non-empty all the way through to
+    # the dry-run report (they would be created against the empty destination).
+    assert report.category(EntityType.CHANNEL).would_create == 1
+    assert report.category(EntityType.USER).would_create == 1
+
+
+def test_producer_importer_category_parity():
+    """REGRESSION GUARD (7i8rf): every Dispatcharr-managed RESTORABLE_SECTIONS
+    key the restore decoder maps to an EntityType MUST be emitted by the producer,
+    and every importer-consumed Dispatcharr section MUST be both produced AND
+    decodable. This is the parity that, when broken, made restoring channels/users
+    a silent no-op against a real backup.
+    """
+    from routers.backup import RESTORABLE_SECTIONS
+    from dbas.restore_artifact import _SECTION_TO_ENTITY
+
+    produced_dispatcharr = {
+        k for k, v in RESTORABLE_SECTIONS.items() if v.get("dispatcharr")
+    }
+    decodable = set(_SECTION_TO_ENTITY)
+
+    # Every Dispatcharr section the decoder knows how to turn into a restore
+    # category must be produced by the builder (no decode target without a
+    # producer => silent no-op).
+    missing_producer = decodable - produced_dispatcharr
+    assert not missing_producer, (
+        "decoder maps sections with no producer: %s" % sorted(missing_producer)
+    )
+
+    # channels + dispatcharr_users are the 7i8rf round-trip categories — assert
+    # both ends explicitly so a future edit that drops either is caught.
+    for section, entity in (
+        ("channels", EntityType.CHANNEL),
+        ("dispatcharr_users", EntityType.USER),
+    ):
+        assert section in produced_dispatcharr, "producer dropped %s" % section
+        assert _SECTION_TO_ENTITY.get(section) is entity, (
+            "decoder mapping for %s changed" % section
+        )
