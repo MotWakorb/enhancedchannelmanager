@@ -380,14 +380,22 @@ async def analyze_auto_creation_rules():
     logger.debug("[AUTO-CREATE] POST /rules/analyze")
     try:
         from auto_creation_rule_analyzer import analyze_rules
-        from models import AutoCreationRule
+        from models import AutoCreationRule, NormalizationRuleGroup
         session = get_session()
         try:
             rules = session.query(AutoCreationRule).order_by(
                 AutoCreationRule.priority
             ).all()
             rule_dicts = [r.to_dict() for r in rules]
-            result = analyze_rules(rule_dicts)
+            # Group enabled-state so the analyzer can flag rules that reference
+            # DISABLED/missing normalization groups (enhancedchannelmanager-e8p1h).
+            norm_groups = [
+                g.to_dict()
+                for g in session.query(NormalizationRuleGroup).all()
+            ]
+            result = analyze_rules(
+                rule_dicts, normalization_groups=norm_groups,
+            )
             logger.info(
                 "[AUTO-CREATE] Analyzed %s rules: %s findings",
                 len(rule_dicts),
