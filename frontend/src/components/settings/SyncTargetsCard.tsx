@@ -308,6 +308,18 @@ export function SyncTargetsCard() {
                     >
                       {outcomeLabel(kind, target.last_outcome)}
                     </span>
+                    {target.insecure && (
+                      <span
+                        className="stc-badge stc-badge-insecure"
+                        data-testid={`sync-target-insecure-${target.id}`}
+                        title="Certificate checking is turned off for this target. Only safe on a trusted instance with a self-signed certificate."
+                      >
+                        <span className="material-icons" aria-hidden="true">
+                          gpp_maybe
+                        </span>
+                        Certificate check off
+                      </span>
+                    )}
                     <span className="stc-last-synced">
                       Last synced: {formatTimestamp(target.last_full_sync_at)}
                     </span>

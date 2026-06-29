@@ -107,6 +107,10 @@ def _mock_settings(**overrides):
         # bd-mlcla: soft IP-ranking trusted networks (ranking only, never a
         # gate). Empty default so existing tests ignore it.
         "trusted_media_networks": [],
+        # nngkg (bead 0i2vt.5 seam): DBAS outbound SSRF policy mode. Default
+        # LAN-friendly so existing tests ignore it; the security endpoint +
+        # preserve-on-save suites below exercise both modes.
+        "ssrf_outbound_mode": "lan_friendly",
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -1487,3 +1491,111 @@ class TestMCPStatusHostResolution:
         assert response.status_code == 200
         assert response.json()["reachable"] is True
         assert captured["url"] == "http://localhost:6101/health"
+
+
+class TestSecuritySettings:
+    """Tests for the DBAS outbound-policy mode (nngkg).
+
+    The ``ssrf_outbound_mode`` field is the persistence seam consumed by
+    ``security/ssrf.py``. The frontend "first-run wizard" + Settings > Security
+    section read/write it through:
+      * GET /api/settings  (exposes the current mode)
+      * PATCH /api/settings/security  (dedicated, preserve-everything write)
+    A full POST /api/settings must NOT silently reset the mode (latent bug:
+    SettingsRequest never accepted it, so it defaulted on every save).
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_exposes_ssrf_outbound_mode(self, async_client):
+        """GET surfaces the persisted outbound mode for the Settings UI."""
+        mock = _mock_settings(ssrf_outbound_mode="public_only")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["ssrf_outbound_mode"] == "public_only"
+
+    @pytest.mark.asyncio
+    async def test_get_defaults_lan_friendly(self, async_client):
+        """The default mode (LAN-friendly) is surfaced when unset."""
+        mock = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.json()["ssrf_outbound_mode"] == "lan_friendly"
+
+    @pytest.mark.asyncio
+    async def test_full_post_preserves_ssrf_outbound_mode(self, async_client):
+        """A partial POST /api/settings must NOT reset the outbound mode.
+
+        Reproduction: SettingsRequest doesn't accept ssrf_outbound_mode, so a
+        normal settings save would rebuild DispatcharrSettings(...) with the
+        field defaulting to "lan_friendly" — silently reverting an operator who
+        had chosen public-only.
+        """
+        current = _mock_settings(ssrf_outbound_mode="public_only")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["mode"] = new_settings.ssrf_outbound_mode
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "telemetry_client_errors_enabled": False,
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["mode"] == "public_only", (
+            "Partial POST reset ssrf_outbound_mode — operator choice not preserved"
+        )
+
+    @pytest.mark.asyncio
+    async def test_patch_security_updates_mode(self, async_client):
+        """PATCH /api/settings/security sets the mode and preserves everything else."""
+        current = _mock_settings(ssrf_outbound_mode="lan_friendly", mcp_api_key="keep-me")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["settings"] = new_settings
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"):
+            response = await async_client.patch(
+                "/api/settings/security",
+                json={"ssrf_outbound_mode": "public_only"},
+            )
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["ssrf_outbound_mode"] == "public_only"
+        # The same settings object is mutated + saved — other fields untouched.
+        assert captured["settings"].ssrf_outbound_mode == "public_only"
+        assert captured["settings"].mcp_api_key == "keep-me"
+
+    @pytest.mark.asyncio
+    async def test_patch_security_rejects_unknown_mode(self, async_client):
+        """An unrecognised mode is a 400 — the field is a closed enum."""
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings") as mock_save, \
+             patch("routers.settings.clear_settings_cache"):
+            response = await async_client.patch(
+                "/api/settings/security",
+                json={"ssrf_outbound_mode": "wide_open"},
+            )
+
+        assert response.status_code == 400
+        mock_save.assert_not_called()
