@@ -384,6 +384,193 @@ async def test_existing_non_operator_username_skipped_already_exists():
     assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
 
 
+# ---------------------------------------------------------------------------
+# l1p4p follow-up 1 (MEDIUM data-integrity): per-create ledger flush.
+# The RollbackLedger durability contract requires the ledger be flushed to disk
+# IMMEDIATELY after each created user is recorded and BEFORE the next create —
+# otherwise a mid-category crash orphans every created user with no recoverable
+# record. The importer accepts a persist_ledger callback (wired by the
+# orchestrator) and must invoke it after each record_created, before the next
+# upstream create.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ledger_flushed_to_disk_before_each_subsequent_create():
+    """The persist callback fires after each create, and the entry for user N is
+    durable BEFORE user N+1's create is issued."""
+    client = _client()
+    report = _report()
+    ledger = _ledger()
+
+    events = []  # ordered log of (kind, detail)
+
+    original_create = client.create_user.side_effect
+
+    async def _tracked_create(payload):
+        # At the moment we issue this create, snapshot how many entries are
+        # already durably flushed (proxied by the flush call count) and how many
+        # are in the in-memory ledger.
+        events.append(("create", payload.get("username"), flush_calls["n"], len(ledger.entries)))
+        return await original_create(payload)
+
+    client.create_user.side_effect = _tracked_create
+
+    flush_calls = {"n": 0}
+
+    def _persist():
+        # Each flush corresponds to a durable write of the current ledger state.
+        flush_calls["n"] += 1
+        events.append(("flush", len(ledger.entries)))
+
+    await import_users(
+        archive_users=[
+            {"id": 5, "username": "alice"},
+            {"id": 6, "username": "bob"},
+            {"id": 7, "username": "carol"},
+        ],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        persist_ledger=_persist,
+    )
+
+    # One flush per created user.
+    assert flush_calls["n"] == 3
+    # Before the 2nd and 3rd create is issued, the prior creation has already
+    # been flushed: the create event for bob/carol carries flush_count >= the
+    # number of prior creates.
+    create_events = [e for e in events if e[0] == "create"]
+    # alice: 0 prior flushes; bob: >=1 prior flush; carol: >=2 prior flushes.
+    assert create_events[0][2] == 0
+    assert create_events[1][2] >= 1
+    assert create_events[2][2] >= 2
+    # The ledger ends with all three entries recorded.
+    assert len(ledger.entries) == 3
+
+
+@pytest.mark.asyncio
+async def test_no_persist_callback_does_not_crash():
+    """The callback is optional — omitting it (e.g. a direct unit call) creates
+    users in-memory without error (durability is the orchestrator's concern)."""
+    client = _client()
+    report = _report()
+    ledger = _ledger()
+
+    await import_users(
+        archive_users=[{"id": 5, "username": "alice"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        # persist_ledger omitted
+    )
+    assert report.category(EntityType.USER).created == 1
+    assert len(ledger.entries) == 1
+
+
+# ---------------------------------------------------------------------------
+# l1p4p follow-up 2 (LOW): allowlist payload, intersected with schema fields.
+# Unknown archive keys the destination schema does not list as write-fields are
+# DROPPED, not forwarded. This is an allowlist (schema ∩ archive), not a denylist
+# of known-bad keys.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_payload_drops_keys_not_in_schema_write_fields():
+    """An archive key absent from the destination's User-create write-fields is
+    NOT forwarded — even though it is not a known secret/privilege key."""
+    client = _client(schema_fields={"username", "email"})
+    report = _report()
+    ledger = _ledger()
+
+    await import_users(
+        archive_users=[
+            {
+                "id": 5,
+                "username": "alice",
+                "email": "alice@example.com",
+                # Not in the schema write-field set -> must be dropped.
+                "some_future_field": "x",
+                "totally_unknown": {"nested": 1},
+            }
+        ],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+    )
+
+    payload = client.create_user.await_args.args[0]
+    assert payload["username"] == "alice"
+    assert payload["email"] == "alice@example.com"
+    assert "some_future_field" not in payload
+    assert "totally_unknown" not in payload
+
+
+@pytest.mark.asyncio
+async def test_payload_still_drops_secret_keys_present_in_schema():
+    """Defense-in-depth: even if the schema lists a secret/privilege key as
+    writable, the importer still drops it (the drop list overrides the
+    allowlist) and forces conservative privilege defaults."""
+    client = _client(
+        schema_fields={"username", "password", "is_superuser", "is_staff", "user_level"},
+    )
+    report = _report()
+    ledger = _ledger()
+
+    await import_users(
+        archive_users=[
+            {"id": 5, "username": "alice", "password": "hunter2", "is_superuser": True},
+        ],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+    )
+
+    payload = client.create_user.await_args.args[0]
+    assert "password" not in payload
+    assert payload["is_superuser"] is False
+
+
+# ---------------------------------------------------------------------------
+# l1p4p follow-up 3 (LOW): _sanitize_failure masks echoed secrets.
+# If Dispatcharr echoes request-body material (a token, an Authorization
+# header) back in an error, the operator-facing failure message must be masked.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failure_message_masks_echoed_secret():
+    """A create_user error whose text carries a secret-looking token is masked
+    in the operator-facing FailureDetail.message — no raw secret survives."""
+    secret = "AKIAIOSFODNN7EXAMPLE"  # AWS access-key shape masked by mask_secrets
+
+    async def _raise_with_secret(payload):
+        raise RuntimeError("upstream rejected; aws_secret_access_key=%s echoed" % secret)
+
+    client = _client(create_side_effect=_raise_with_secret)
+    report = _report()
+    ledger = _ledger()
+
+    await import_users(
+        archive_users=[{"id": 5, "username": "alice"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+    )
+
+    cat = report.category(EntityType.USER)
+    assert cat.failed == 1
+    message = cat.failure_details[0].message
+    assert secret not in message
+    assert "REDACTED" in message
+
+
 @pytest.mark.asyncio
 async def test_create_conflict_recorded_as_failure_conflict():
     """If create_user raises a CONFLICT-shaped upstream error (race: username

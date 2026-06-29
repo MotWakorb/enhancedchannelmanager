@@ -12,7 +12,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
-from cloud_storage import get_adapter
+from cloud_storage import SUPPORTED_PROVIDERS, get_adapter
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
 from cloud_storage.onedrive_adapter import _validate_tenant_id, _validate_drive_id
 from database import get_session
@@ -707,6 +707,28 @@ async def delete_cloud_target(target_id: int):
 # Cloud Storage Test Connection
 # ---------------------------------------------------------------------------
 
+
+def _deferred_provider_result(provider_type: str) -> Optional[dict]:
+    """Fail-closed test result for a DEFERRED (un-hardened) provider, else None.
+
+    OneDrive and Dropbox adapters are not yet routed through the SSRF chokepoint
+    (PO decision 2026-06-17; see ``cloud_storage.SUPPORTED_PROVIDERS``). The
+    config-UI "Test Connection" surface must not exercise a deferred adapter's
+    raw outbound call, so this returns a non-silent "not supported" result for
+    such a provider and ``None`` for a supported one (test proceeds normally).
+    SEC-4, bead enhancedchannelmanager-uomwu.
+    """
+    if provider_type in SUPPORTED_PROVIDERS:
+        return None
+    return {
+        "success": False,
+        "message": (
+            f"Provider '{provider_type}' is not supported in this release "
+            "(deferred to a v0.18.x follow-up)."
+        ),
+    }
+
+
 @router.post("/cloud-targets/{target_id}/test")
 async def test_cloud_target(target_id: int):
     """Test connection to a saved cloud storage target."""
@@ -719,6 +741,11 @@ async def test_cloud_target(target_id: int):
         creds = decrypt_credentials(target.credentials)
     finally:
         db.close()
+
+    deferred = _deferred_provider_result(provider_type)
+    if deferred is not None:
+        logger.info("[EXPORT] Test refused for deferred provider '%s'", provider_type)
+        return deferred
 
     try:
         adapter = get_adapter(provider_type, creds)
@@ -754,6 +781,11 @@ async def test_cloud_target(target_id: int):
 @router.post("/cloud-targets/test")
 async def test_cloud_target_inline(req: CloudTargetTestRequest):
     """Test connection with inline credentials (before saving)."""
+    deferred = _deferred_provider_result(req.provider_type)
+    if deferred is not None:
+        logger.info("[EXPORT] Inline test refused for deferred provider '%s'", req.provider_type)
+        return deferred
+
     try:
         adapter = get_adapter(req.provider_type, req.credentials)
         result = await adapter.test_connection()

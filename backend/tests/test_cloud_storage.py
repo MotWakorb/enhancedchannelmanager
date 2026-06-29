@@ -185,6 +185,105 @@ class TestOneDriveAdapter:
 
 
 # =============================================================================
+# GDrive adapter — token_uri SSRF chokepoint (SEC-1, bead ...-uomwu)
+# =============================================================================
+
+
+class TestGDriveTokenUriSSRF:
+    """The service-account ``token_uri`` is operator-supplied and is hit by
+    google-auth during the token exchange. It MUST be routed through the .5 SSRF
+    chokepoint in ``_validate_endpoint``, BEFORE any service/socket is built —
+    otherwise a malicious SA JSON with token_uri pointing at the cloud-metadata
+    endpoint triggers an unvalidated outbound request (SEC-1)."""
+
+    def _adapter(self, token_uri):
+        sa_info = {
+            "type": "service_account",
+            "client_email": "svc@example.iam.gserviceaccount.com",
+            "private_key": "-----BEGIN PRIVATE KEY-----\\nx\\n-----END PRIVATE KEY-----\\n",
+        }
+        if token_uri is not None:
+            sa_info["token_uri"] = token_uri
+        return get_adapter("gdrive", {
+            "service_account_json": json.dumps(sa_info),
+            "folder_id": "folder123",
+        })
+
+    def test_validate_endpoint_rejects_imds_token_uri(self):
+        """A token_uri pointing at the cloud-metadata IP (169.254.169.254) is
+        denied by the chokepoint before any service is built."""
+        from cloud_storage.upload_security import SSRFError
+
+        adapter = self._adapter("http://169.254.169.254/computeMetadata/v1/token")
+        with pytest.raises(SSRFError):
+            adapter._validate_endpoint()
+
+    def test_validate_endpoint_rejects_imds_token_uri_no_service_built(self):
+        """The SSRF refusal happens BEFORE _get_service — no Google client is
+        ever constructed for a malicious token_uri."""
+        from cloud_storage.upload_security import SSRFError
+
+        adapter = self._adapter("http://169.254.169.254/token")
+        with patch.object(adapter, "_get_service") as mock_get_service:
+            with pytest.raises(SSRFError):
+                adapter._validate_endpoint()
+        mock_get_service.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upload_refuses_malicious_token_uri(self):
+        """End-to-end: upload() surfaces a masked failure (never raises) and
+        never builds the service for a metadata-pointing token_uri."""
+        adapter = self._adapter("http://169.254.169.254/token")
+        with patch.object(adapter, "_get_service") as mock_get_service:
+            from pathlib import Path
+            result = await adapter.upload(Path("/nonexistent"), "exports/x.zip")
+        assert result.success is False
+        mock_get_service.assert_not_called()
+
+    def test_validate_endpoint_allows_default_google_token_uri(self):
+        """A normal SA JSON (well-known Google token_uri, or none) passes the
+        chokepoint — the legitimate path is not broken."""
+        # Explicit well-known token_uri.
+        self._adapter("https://oauth2.googleapis.com/token")._validate_endpoint()
+        # Omitted token_uri -> falls back to the well-known default.
+        self._adapter(None)._validate_endpoint()
+
+
+# =============================================================================
+# Deferred providers gated at the config-UI test surface (SEC-4, bead ...-uomwu)
+# =============================================================================
+
+
+class TestDeferredProviderGate:
+    """OneDrive/Dropbox adapters are DEFERRED (not routed through the SSRF
+    chokepoint). The config-UI Test-Connection surface must not exercise them."""
+
+    def test_supported_providers_excludes_deferred(self):
+        from cloud_storage import SUPPORTED_PROVIDERS
+
+        assert "s3" in SUPPORTED_PROVIDERS
+        assert "gdrive" in SUPPORTED_PROVIDERS
+        assert "webdav" in SUPPORTED_PROVIDERS
+        assert "dropbox" not in SUPPORTED_PROVIDERS
+        assert "onedrive" not in SUPPORTED_PROVIDERS
+
+    @pytest.mark.asyncio
+    async def test_inline_test_refuses_deferred_dropbox(self, async_client):
+        """A 'Test Connection' for a deferred provider returns a non-silent
+        'not supported' result without building/exercising the adapter."""
+        with patch("routers.export.get_adapter") as mock_get_adapter:
+            response = await async_client.post("/api/export/cloud-targets/test", json={
+                "provider_type": "dropbox",
+                "credentials": {"access_token": "tok"},
+            })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert "not supported" in body["message"].lower()
+        mock_get_adapter.assert_not_called()
+
+
+# =============================================================================
 # Credential encryption
 # =============================================================================
 

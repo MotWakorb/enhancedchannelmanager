@@ -2,15 +2,14 @@
  * Tests for LogoMissBanner — the restore-complete logo-miss RED banner
  * (bead 0i2vt.19, ADR-012 D9 "unmissable surfacing").
  *
- * Contract note: the merged `RestoreReport` (docs/dbas_restore_contracts.md)
- * carries the logo-miss signal as an AGGREGATE count only — `logo_misses: number`
- * — not a per-channel list. ADR-012 D9 mandates exactly that: "a WARN log + an
- * aggregate count + a prominent red banner". So the banner names the count and
- * links to the Dispatcharr Channels page where the operator fixes the logos
- * one-off; it does NOT (because it cannot) enumerate per-channel rows — there is
- * no per-channel data in the contract. The "detail view" the banner offers is
- * the Dispatcharr Channels admin page, reached via the same `${dispatcharrUrl}/…`
- * link pattern the rest of the app uses (ChannelsPane).
+ * Contract note: ADR-012 D9 mandates "a WARN log + an aggregate count + a
+ * prominent red banner". The aggregate `logo_misses: number` still gates the red
+ * banner. Bead qhui4 ADDED an optional per-logo detail list
+ * (`logo_miss_details: LogoMissDetail[]`, each id + name) — when present and
+ * non-empty the banner enumerates which logos are missing as a drill-down; when
+ * absent (legacy report) it falls back to the aggregate-only behaviour. The
+ * banner also links to the Dispatcharr Channels page (same `${dispatcharrUrl}/…`
+ * pattern the rest of the app uses, ChannelsPane) for the one-off fix.
  */
 import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -107,6 +106,59 @@ describe('LogoMissBanner — detail/fix link to the Dispatcharr Channels page', 
     expect(screen.getByTestId('logo-miss-banner')).toBeInTheDocument();
     expect(within(screen.getByTestId('logo-miss-banner')).getByText(/7 channels/i)).toBeInTheDocument();
     expect(screen.queryByTestId('logo-miss-detail-link')).not.toBeInTheDocument();
+  });
+});
+
+describe('LogoMissBanner — per-logo detail drill-down (bead qhui4)', () => {
+  it('lists each affected logo by name when logo_miss_details is present', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 2,
+          logo_miss_details: [
+            { source_export_id: 10, label: 'ESPN HD' },
+            { source_export_id: 11, label: 'Disney Channel' },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const list = screen.getByTestId('logo-miss-detail-list');
+    expect(within(list).getByText('ESPN HD')).toBeInTheDocument();
+    expect(within(list).getByText('Disney Channel')).toBeInTheDocument();
+    // One row per affected logo.
+    expect(within(list).getAllByTestId('logo-miss-detail-row')).toHaveLength(2);
+  });
+
+  it('does NOT render the detail list when logo_miss_details is absent (legacy report)', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 3 })} dispatcharrUrl={DISPATCHARR_URL} />);
+    // Banner still warns with the aggregate count + fix link.
+    expect(screen.getByTestId('logo-miss-banner')).toBeInTheDocument();
+    expect(screen.queryByTestId('logo-miss-detail-list')).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the detail list when logo_miss_details is empty', () => {
+    render(
+      <LogoMissBanner
+        report={report({ logo_misses: 1, logo_miss_details: [] })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    expect(screen.queryByTestId('logo-miss-detail-list')).not.toBeInTheDocument();
+  });
+
+  it('renders a fallback label for a logo with a blank name', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [{ source_export_id: 99, label: '' }],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const list = screen.getByTestId('logo-miss-detail-list');
+    expect(within(list).getByText(/unnamed logo/i)).toBeInTheDocument();
   });
 });
 

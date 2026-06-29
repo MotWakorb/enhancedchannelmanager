@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 # so a poisoned resolver pointing it at an internal address is refused.
 _GOOGLE_API_ENDPOINT = "https://www.googleapis.com/"
 
+# Google's well-known service-account token-exchange endpoint. Used as the
+# default when the service-account JSON omits ``token_uri`` so the SSRF
+# validation always has a concrete host to check (SEC-1, bead
+# enhancedchannelmanager-uomwu).
+_DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
 
 class GDriveAdapter(CloudStorageAdapter):
     """Adapter for Google Drive via service account.
@@ -53,12 +59,27 @@ class GDriveAdapter(CloudStorageAdapter):
         self.folder_id = credentials["folder_id"]
 
     def _validate_endpoint(self) -> None:
-        """Pre-resolve + denylist-validate the Google API host (.5 chokepoint).
+        """Pre-resolve + denylist-validate both Google API hosts (.5 chokepoint).
 
-        Raises :class:`SSRFError` if the host resolves to a denied address —
-        BEFORE the Drive service / any socket is built.
+        Two hosts must be validated BEFORE the Drive service / any socket is
+        built:
+
+        * ``_GOOGLE_API_ENDPOINT`` — the fixed Drive API host the SDK calls.
+        * ``token_uri`` — the OAuth token-exchange endpoint from the
+          operator-supplied service-account JSON. ``google-auth`` opens an
+          outbound request to THIS host during ``.execute()`` to mint the bearer
+          token, and it is NOT otherwise routed through the chokepoint. A
+          malicious service-account JSON with
+          ``token_uri=http://169.254.169.254/...`` would otherwise trigger an
+          unvalidated request to the cloud-metadata endpoint (SEC-1, bead
+          enhancedchannelmanager-uomwu). Validating it here fails closed before
+          the token exchange runs.
+
+        Raises :class:`SSRFError` if either host resolves to a denied address.
         """
         preresolve_endpoint(_GOOGLE_API_ENDPOINT)
+        token_uri = self.sa_info.get("token_uri") if isinstance(self.sa_info, dict) else None
+        preresolve_endpoint(token_uri or _DEFAULT_TOKEN_URI)
 
     def _get_service(self):
         from google.oauth2 import service_account as sa_module  # ssrf-ok: endpoint pre-validated (.5)
