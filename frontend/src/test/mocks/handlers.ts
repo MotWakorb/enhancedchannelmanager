@@ -335,7 +335,7 @@ interface MockAutoCreationExecution {
   started_at: string
   completed_at: string | null
   duration_seconds: number | null
-  status: 'running' | 'completed' | 'failed' | 'rolled_back'
+  status: 'running' | 'completed' | 'failed' | 'rolled_back' | 'capped' | 'abandoned'
   streams_evaluated: number
   streams_matched: number
   channels_created: number
@@ -389,6 +389,8 @@ interface MockDataStore {
   popularityScores: MockPopularityScore[]
   autoCreationRules: MockAutoCreationRule[]
   autoCreationExecutions: MockAutoCreationExecution[]
+  /** Circuit-breaker state (bd-fqur1). Default: not tripped. */
+  circuitBreaker: { disabled: boolean; reason: 'abandoned_run' | null }
   settings: object
 }
 
@@ -402,6 +404,7 @@ export const mockDataStore: MockDataStore = {
   popularityScores: [],
   autoCreationRules: [],
   autoCreationExecutions: [],
+  circuitBreaker: { disabled: false, reason: null },
   settings: {
     configured: true,
     url: 'http://dispatcharr.test',
@@ -452,6 +455,7 @@ export function resetMockDataStore(): void {
   mockDataStore.popularityScores = []
   mockDataStore.autoCreationRules = []
   mockDataStore.autoCreationExecutions = []
+  mockDataStore.circuitBreaker = { disabled: false, reason: null }
   resetIdCounter()
 }
 
@@ -460,6 +464,29 @@ export function resetMockDataStore(): void {
 // =============================================================================
 
 export const handlers = [
+  // -------------------------------------------------------------------------
+  // Auth (no-auth mode — tests run with require_auth=false so no user is needed)
+  // -------------------------------------------------------------------------
+
+  http.get(`${API_BASE}/auth/status`, () => {
+    return HttpResponse.json({
+      require_auth: false,
+      setup_complete: true,
+      dispatcharr_enabled: false,
+    })
+  }),
+
+  http.get(`${API_BASE}/auth/me`, () => {
+    // Return 401 — unauthenticated in no-auth mode tests
+    return HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })
+  }),
+
+  // ── Normalization (required by RuleBuilder, which is lazy-loaded in AutoCreationTab) ──
+
+  http.get(`${API_BASE}/normalization/rules`, () => {
+    return HttpResponse.json({ groups: [] })
+  }),
+
   // -------------------------------------------------------------------------
   // Health & Settings
   // -------------------------------------------------------------------------
@@ -1182,6 +1209,18 @@ export const handlers = [
       restored_channels: 10,
       failed_channels: [],
     })
+  }),
+
+  // ── Circuit breaker (bd-fqur1) ──
+
+  http.get(`${API_BASE}/auto-creation/circuit-breaker`, () => {
+    return HttpResponse.json(mockDataStore.circuitBreaker)
+  }),
+
+  http.post(`${API_BASE}/auto-creation/reset-circuit-breaker`, () => {
+    const was_disabled = mockDataStore.circuitBreaker.disabled
+    mockDataStore.circuitBreaker = { disabled: false, reason: null }
+    return HttpResponse.json({ success: true, was_disabled, disabled: false })
   }),
 
   http.get(`${API_BASE}/auto-creation/export/yaml`, () => {
