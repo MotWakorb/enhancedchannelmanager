@@ -353,6 +353,149 @@ class TestFreeDiskGuard:
             with pytest.raises(RuntimeError, match="Insufficient free disk"):
                 asyncio.get_event_loop().run_until_complete(build_backup_artifact())
 
-        # No partial artifacts left in the dest dir.
-        leftovers = list(config_dir.glob("ecm-artifact-*"))
+        # No partial artifacts left in the dest dir. The builder now owns the
+        # canonical ecm-backup-<ts>.zip name directly (bead e0r3h), so a failed
+        # build must leave no ecm-backup-* (and no legacy ecm-artifact-*) residue.
+        leftovers = (
+            list(config_dir.glob("ecm-backup-*.zip"))
+            + list(config_dir.glob("ecm-backup-*.zip.sha256"))
+            + list(config_dir.glob("ecm-artifact-*"))
+        )
         assert leftovers == [], "partial artifact left behind: %s" % leftovers
+
+
+# A stream URL embeds IPTV provider credentials; it must NEVER appear in the
+# artifact (7i8rf). Distinctive sentinel so a leak is unambiguous in a byte scan.
+SECRET_STREAM_URL = "http://prov/user/STREAM_SECRET_url_ZZZ666/cnn.ts"
+
+
+def _build_with_channels_and_users(tmp_path, *, dest_dir=None):
+    """Build a real artifact whose Dispatcharr client returns channels (with
+    embedded stream IDs), the matching stream records (carrying a SECRET URL the
+    producer must drop), and a dispatcharr user. Used to prove the 7i8rf
+    producer-side round-trip + the stream-URL redaction contract."""
+    config_dir = tmp_path
+    journal = config_dir / "journal.db"
+    _seed_journal_db(journal)
+    (config_dir / "settings.json").write_text("{}")
+
+    client = MagicMock()
+    client.get_m3u_accounts = AsyncMock(return_value=[])
+    client.get_epg_sources = AsyncMock(return_value=[])
+    client.get_channel_groups = AsyncMock(return_value=[])
+    client.get_channel_profiles = AsyncMock(return_value=[])
+    client.get_stream_profiles = AsyncMock(return_value=[])
+    # A Dispatcharr channel's ``streams`` field is a list of stream IDs.
+    client.get_channels = AsyncMock(
+        return_value={
+            "count": 1,
+            "next": None,
+            "results": [
+                {"id": 5, "name": "CNN", "channel_number": 1, "streams": [11, 12]},
+            ],
+        }
+    )
+    # The stream records the producer joins against — each carries a SECRET url
+    # (provider creds) that must be dropped, plus the safe match fields.
+    client.get_streams = AsyncMock(
+        return_value={
+            "count": 2,
+            "next": None,
+            "results": [
+                {"id": 11, "name": "CNN HD", "m3u_account": 1, "url": SECRET_STREAM_URL},
+                {"id": 12, "name": "CNN SD", "m3u_account": 1, "url": SECRET_STREAM_URL},
+            ],
+        }
+    )
+    client.get_users = AsyncMock(
+        return_value=[{"id": 7, "username": "alice", "is_superuser": False}]
+    )
+
+    session = MagicMock()
+    session.query.return_value.all.return_value = []
+    session.query.return_value.filter_by.return_value.all.return_value = []
+    session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
+    session.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
+
+    with patch.object(backup_mod, "CONFIG_DIR", config_dir), \
+         patch.object(backup_mod, "CONFIG_FILE", config_dir / "settings.json"), \
+         patch.object(backup_mod, "JOURNAL_DB_FILE", journal), \
+         patch.object(backup_mod, "get_engine", return_value=_mock_engine()), \
+         patch.object(backup_mod, "get_settings", return_value=_mock_settings_with_secrets()), \
+         patch.object(backup_mod, "get_session", return_value=session), \
+         patch.object(backup_mod, "get_client", return_value=client):
+        import asyncio
+        return asyncio.get_event_loop().run_until_complete(
+            build_backup_artifact(dest_dir=dest_dir)
+        )
+
+
+class TestChannelsUsersProducers:
+    """7i8rf — the builder must emit the channels + dispatcharr_users categories
+    the restore importers consume (was a no-op before this bead)."""
+
+    def test_restorable_sections_include_channels_and_users(self):
+        assert "channels" in backup_mod.RESTORABLE_SECTIONS
+        assert "dispatcharr_users" in backup_mod.RESTORABLE_SECTIONS
+        assert backup_mod.RESTORABLE_SECTIONS["channels"]["dispatcharr"] is True
+        assert backup_mod.RESTORABLE_SECTIONS["dispatcharr_users"]["dispatcharr"] is True
+
+    def test_channels_category_emitted_with_embedded_streams(self, tmp_path):
+        art = _build_with_channels_and_users(tmp_path)
+        with zipfile.ZipFile(art.zip_path) as zf:
+            parsed = yaml.safe_load(zf.read("categories/channels.yaml"))
+        rows = parsed["dispatcharr"]["channels"]
+        assert len(rows) == 1
+        ch = rows[0]
+        assert ch["id"] == 5
+        # Embedded streams are enriched to id + safe match fields, in order.
+        streams = ch["streams"]
+        assert [s["id"] for s in streams] == [11, 12]
+        assert streams[0]["name"] == "CNN HD"
+        assert streams[0]["m3u_account"] == 1
+
+    def test_users_category_emitted(self, tmp_path):
+        art = _build_with_channels_and_users(tmp_path)
+        with zipfile.ZipFile(art.zip_path) as zf:
+            parsed = yaml.safe_load(zf.read("categories/dispatcharr_users.yaml"))
+        rows = parsed["dispatcharr"]["dispatcharr_users"]
+        assert [u["username"] for u in rows] == ["alice"]
+
+    def test_embedded_stream_url_never_in_artifact(self, tmp_path):
+        """The stream URL (provider creds) must not appear in ANY byte of the
+        artifact — the producer drops it, never carries it."""
+        art = _build_with_channels_and_users(tmp_path)
+        raw = art.zip_path.read_bytes()
+        assert SECRET_STREAM_URL.encode("utf-8") not in raw
+        with zipfile.ZipFile(art.zip_path) as zf:
+            for name in zf.namelist():
+                assert SECRET_STREAM_URL.encode("utf-8") not in zf.read(name)
+
+    def test_embedded_stream_carries_no_url_key(self, tmp_path):
+        art = _build_with_channels_and_users(tmp_path)
+        with zipfile.ZipFile(art.zip_path) as zf:
+            parsed = yaml.safe_load(zf.read("categories/channels.yaml"))
+        for s in parsed["dispatcharr"]["channels"][0]["streams"]:
+            assert "url" not in s
+            assert "custom_url" not in s
+            assert "stream_hash" not in s
+
+
+class TestCanonicalArtifactName:
+    """e0r3h — the builder owns the canonical timestamped name directly."""
+
+    def test_zip_name_matches_retention_allowlist(self, tmp_path):
+        art = _patched_build(tmp_path)
+        assert backup_mod._BACKUP_ZIP_FILENAME_RE.fullmatch(art.zip_path.name), (
+            "builder zip name %r does not match retention allowlist" % art.zip_path.name
+        )
+
+    def test_no_legacy_artifact_name(self, tmp_path):
+        art = _patched_build(tmp_path)
+        assert not art.zip_path.name.startswith("ecm-artifact-")
+        assert art.zip_path.name.startswith("ecm-backup-")
+
+    def test_sidecar_name_tracks_canonical_zip(self, tmp_path):
+        art = _patched_build(tmp_path)
+        assert art.sidecar_path.name == art.zip_path.name + ".sha256"
+        assert art.zip_path.name in art.sidecar_path.read_text()

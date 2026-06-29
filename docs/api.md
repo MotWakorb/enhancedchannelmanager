@@ -939,18 +939,101 @@ Names are unique. Each table is capped at 10 000 entries.
 | `DELETE /api/export/publish-history` | Clear publish history |
 | `DELETE /api/export/publish-history/{id}` | Delete publish history entry |
 
-## Backup
+## Backup & Restore
+
+The Backup & Restore subsystem (v0.18.0, ADR-012) exposes two tiers of endpoints: the **DBAS artifact** path (new-format v0.18.0, full 12-category round-trip) and the **legacy ZIP/YAML** path (pre-v0.18.0, ECM-config-only). All endpoints require admin authentication unless noted.
+
+### DBAS artifact endpoints (v0.18.0+)
+
+These endpoints operate on the new-format `.zip` artifacts produced by the `dbas_backup` task. They cover the full 12-category Dispatcharr + ECM configuration.
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/backup/create` | Download backup zip of all configuration |
-| `POST /api/backup/restore` | Restore from uploaded backup zip |
-| `POST /api/backup/restore-initial` | Restore from backup during initial setup (no auth) |
-| `GET /api/backup/export-sections` | List available YAML export sections |
-| `POST /api/backup/export` | Export selected sections as YAML |
-| `POST /api/backup/import` | Import from YAML backup |
-| `GET /api/backup/saved` | List saved YAML backup files |
-| `DELETE /api/backup/saved/{filename}` | Delete a saved YAML backup file |
+| `POST /api/backup/restore-dbas` | Upload and restore a DBAS artifact (streaming, max 2 GiB). Validates integrity, schema version, and decompression-bomb checks before any mutation. Runs a **dry-run by default** (`confirm_apply=false`); pass `confirm_apply=true` to apply. Returns a `RestoreReport` with per-category `created/updated/skipped/failed` counts and `outcome` (tri-state: `success`, `partial_failed_rolled_back`, `failed_rollback_incomplete`). |
+| `POST /api/backup/restore-dbas-saved` | Restore a saved DBAS artifact by filename (artifact must be in `/config/backups/`). Same dry-run/apply semantics as `/restore-dbas`. The saved file is not deleted. |
+| `GET /api/backup/saved` | List saved DBAS backup artifacts under `/config/backups/`. Returns filename, size, and creation time. |
+| `GET /api/backup/saved/{filename}` | Download a saved backup artifact (streamed). |
+| `DELETE /api/backup/saved/{filename}` | Delete a saved backup artifact. |
+
+#### Key restore parameters (`POST /api/backup/restore-dbas`)
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `file` | multipart file | required | The `.zip` backup artifact (plain or encrypted). |
+| `confirm_apply` | bool | `false` | Set `true` to apply mutations. `false` (default) runs a counts-only dry-run; no changes are made. |
+| `passphrase` | string | — | Required when the artifact is encrypted (detected from the file header). **Never logged or echoed.** |
+| `selected_categories` | string (JSON array) | all categories | Comma-separated or JSON list of category keys to restore (e.g. `["m3u_accounts","channels"]`). Omit to restore all. |
+
+#### RestoreReport response shape
+
+```json
+{
+  "is_dry_run": true,
+  "outcome": null,
+  "categories": [
+    {
+      "entity_type": "m3u_account",
+      "created": 0, "updated": 0, "skipped": 0, "failed": 0,
+      "would_create": 3, "would_update": 0, "would_skip": 1,
+      "skip_details": [
+        { "reason": "already_exists_identical", "label": "My Provider", "source_export_id": 42 }
+      ],
+      "failure_details": []
+    }
+  ],
+  "logo_misses": 0,
+  "started_at": "2026-06-28T12:00:00Z",
+  "completed_at": "2026-06-28T12:00:05Z",
+  "notes": ["apply not confirmed — produced a counts-only dry-run; no mutation performed."]
+}
+```
+
+- `is_dry_run: true` → `would_*` counts are populated; `created/updated/skipped/failed` are zero.
+- `is_dry_run: false` → `created/updated/skipped/failed` counts are populated.
+- `outcome` is `null` on a dry-run (a plan has no realized outcome). On an apply: `success`, `partial_failed_rolled_back`, or `failed_rollback_incomplete`.
+- `logo_misses` is an aggregate count of logos that could not be matched or applied.
+
+#### Error responses
+
+| Status | Detail | When |
+|-|-|-|
+| 400 | `"Unsupported backup version"` | Artifact `schema_version` is newer than this ECM build supports. |
+| 400 | `"Backup integrity check failed"` | A member's SHA-256 does not match the manifest. |
+| 400 | `"Backup archive rejected"` | Decompression-bomb check failed (too many entries, too high a ratio, or excessive uncompressed size). |
+| 400 | `"Not a valid ECM backup artifact"` | The artifact is missing `manifest.json`. |
+| 400 | `"Could not decrypt artifact: wrong passphrase or corrupted artifact"` | Passphrase is wrong, or the encrypted artifact is corrupted. The same message is returned for both cases (no oracle). |
+
+### Legacy ZIP/YAML endpoints (pre-v0.18.0 compatibility)
+
+These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` only, no full Dispatcharr configuration round-trip). They remain available for compatibility and are used by the legacy restore-on-first-run wizard.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/backup/create` | Download a legacy ZIP backup (settings + journal.db + logos). |
+| `POST /api/backup/restore` | Restore from an uploaded legacy ZIP backup. |
+| `POST /api/backup/restore-initial` | Restore from a legacy backup during first-run setup (no auth required). |
+| `GET /api/backup/export-sections` | List available YAML export sections. |
+| `POST /api/backup/export` | Export selected sections as a YAML file. |
+| `POST /api/backup/import` | Import from a YAML backup file. |
+| `POST /api/backup/validate` | Validate a YAML export file and return section item counts. |
+| `POST /api/backup/restore-yaml` | Restore from a YAML export (selective-section restore). |
+| `POST /api/backup/save` | Save a legacy ZIP backup to `/config/backups/`. |
+| `POST /api/backup/restore-saved` | Restore from a saved legacy ZIP backup by filename. |
+
+### Cloud destination endpoints
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/cloud-targets` | List configured cloud storage targets (credentials masked). |
+| `POST /api/cloud-targets` | Create a cloud storage target. |
+| `GET /api/cloud-targets/{id}` | Get a cloud storage target. |
+| `PUT /api/cloud-targets/{id}` | Update a cloud storage target. |
+| `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. |
+| `POST /api/cloud-targets/{id}/test` | Test connectivity to a cloud storage target. |
+
+**Supported provider types in v0.18.0:** `s3` (AWS S3, MinIO, Backblaze B2), `gdrive` (Google Drive), `webdav`. Adapters for `onedrive` and `dropbox` exist in the codebase but are deferred — a configured target of a deferred provider type produces a per-target failure on each backup run.
+
+See the [user guide](user_guide/backup-restore/configure-cloud-destinations.md) for per-provider credential fields.
 
 ## Authentication
 
