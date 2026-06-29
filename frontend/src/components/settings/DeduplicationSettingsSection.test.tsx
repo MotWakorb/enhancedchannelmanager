@@ -147,6 +147,8 @@ const settingsBase = {
   auto_creation_excluded_terms: [],
   auto_creation_excluded_groups: [],
   auto_creation_exclude_auto_sync_groups: false,
+  max_auto_created_channels_per_run: 500,
+  max_auto_creation_log_entries: 500,
   stream_probe_timeout: 30,
   stream_probe_schedule_time: '03:00',
   bitrate_sample_duration: 10,

@@ -84,6 +84,11 @@ def _mock_settings(**overrides):
         "auto_creation_excluded_terms": [],
         "auto_creation_excluded_groups": [],
         "auto_creation_exclude_auto_sync_groups": False,
+        # GH #473 safety-valve caps (skg35). Explicit ints (not MagicMock
+        # auto-attrs) so the admin-field gate compares real values and existing
+        # admin-field tests don't trip on an incidental "change".
+        "max_auto_created_channels_per_run": 500,
+        "max_auto_creation_log_entries": 500,
         "mcp_api_key": "",
         # Internal one-time-heal marker (GH #484); real bool so the POST handler,
         # which preserves it into the rebuilt settings model, gets a valid value.
@@ -152,6 +157,24 @@ class TestGetSettings:
 
         assert response.status_code == 200
         assert response.json()["date_format"] == "dmy"
+
+    @pytest.mark.asyncio
+    async def test_exposes_auto_creation_caps(self, async_client):
+        """skg35: GET surfaces both GH #473 safety-valve caps so the UI can
+        show + edit them (previously settings.json-only, undiscoverable)."""
+        mock = _mock_settings(
+            max_auto_created_channels_per_run=750,
+            max_auto_creation_log_entries=300,
+        )
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["max_auto_created_channels_per_run"] == 750
+        assert data["max_auto_creation_log_entries"] == 300
 
 
 class TestUpdateSettings:
@@ -1633,6 +1656,10 @@ def _full_payload(mock):
         "smtp_from_name": mock.smtp_from_name,
         "smtp_use_tls": mock.smtp_use_tls,
         "smtp_use_ssl": mock.smtp_use_ssl,
+        # skg35: echo the stored caps so the admin-field gate sees NO change
+        # unless a test deliberately flips them.
+        "max_auto_created_channels_per_run": mock.max_auto_created_channels_per_run,
+        "max_auto_creation_log_entries": mock.max_auto_creation_log_entries,
     }
 
 
@@ -1731,6 +1758,68 @@ class TestSettingsAdminFieldGate:
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_non_admin_changing_channel_cap_rejected(self, non_admin_client):
+        """skg35: non-admin raising the auto-creation channel cap -> 403, no save.
+
+        The cap is the GH #473 runaway-creation OOM safety valve; lowering or
+        disabling it is an admin-only action, so it joins the admin-only field
+        partition. A non-admin supplying a different value is rejected.
+        """
+        current = _mock_settings(max_auto_created_channels_per_run=500)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["max_auto_created_channels_per_run"] = 5000
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_disabling_channel_cap_rejected(self, non_admin_client):
+        """skg35: non-admin DISABLING the cap (0) is the dangerous case -> 403."""
+        current = _mock_settings(max_auto_created_channels_per_run=500)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["max_auto_created_channels_per_run"] = 0
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_log_entries_cap_rejected(self, non_admin_client):
+        """skg35: the sibling log-entries cap is admin-only too -> 403."""
+        current = _mock_settings(max_auto_creation_log_entries=500)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["max_auto_creation_log_entries"] = 2000
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_change_channel_cap_and_persists(self, admin_client):
+        """skg35: an admin CAN raise the cap and the new value reaches save."""
+        current = _mock_settings(max_auto_created_channels_per_run=500)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["max_auto_created_channels_per_run"] = 5000
+            response = await admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.max_auto_created_channels_per_run == 5000
+
+    @pytest.mark.asyncio
     async def test_admin_can_change_admin_field(self, admin_client):
         """Positive control: an admin (auth enabled) CAN change an admin field."""
         current = _mock_settings(emby_enabled=True, emby_base_url="http://emby.lan:8096")
@@ -1777,6 +1866,40 @@ class TestSettingsMcpKeyGate:
             auth_mock.return_value.setup_complete = True
             payload = _full_payload(current)
             payload["url"] = "http://evil.example.com:9999"
+            response = await async_client.post(
+                "/api/settings",
+                json=payload,
+                headers={"Authorization": "Bearer mcp-secret-key"},
+            )
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mcp_principal_changing_channel_cap_rejected(self, async_client):
+        """skg35: MCP-key-only caller cannot disable/raise the auto-creation cap.
+
+        The MCP key is a channel-management automation credential, not an
+        operator identity. Letting it disable the GH #473 OOM safety valve would
+        re-arm the runaway-creation crash, so it must be classified non-admin
+        for this field (same posture as the connection/secret fields).
+        """
+        from config import DispatcharrSettings
+
+        current = _mock_settings(max_auto_created_channels_per_run=500)
+        runtime_settings = DispatcharrSettings(
+            url="http://dispatcharr:8000", username="u", password="p",
+            mcp_api_key="mcp-secret-key",
+        )
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("auth.dependencies.get_settings", return_value=runtime_settings), \
+             patch("routers.settings.get_auth_settings") as auth_mock, \
+             s1 as mock_save, s2, s3, s4, s5:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            payload = _full_payload(current)
+            payload["max_auto_created_channels_per_run"] = 0
             response = await async_client.post(
                 "/api/settings",
                 json=payload,

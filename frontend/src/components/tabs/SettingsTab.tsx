@@ -473,6 +473,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [availableStreamGroups, setAvailableStreamGroups] = useState<string[]>([]);
   const [selectedExcludeGroup, setSelectedExcludeGroup] = useState('');
   const [autoCreationExcludeAutoSyncGroups, setAutoCreationExcludeAutoSyncGroups] = useState(false);
+  // GH #473 auto-creation OOM safety-valve caps (skg35). Admin-only on save;
+  // 0 disables. Default 500 matches the backend.
+  const [maxAutoCreatedChannelsPerRun, setMaxAutoCreatedChannelsPerRun] = useState(500);
+  const [maxAutoCreationLogEntries, setMaxAutoCreationLogEntries] = useState(500);
 
   // M3U Digest settings
   const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
@@ -836,6 +840,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setAutoCreationExcludedTerms(settings.auto_creation_excluded_terms ?? []);
       setAutoCreationExcludedGroups(settings.auto_creation_excluded_groups ?? []);
       setAutoCreationExcludeAutoSyncGroups(settings.auto_creation_exclude_auto_sync_groups ?? false);
+      setMaxAutoCreatedChannelsPerRun(settings.max_auto_created_channels_per_run ?? 500);
+      setMaxAutoCreationLogEntries(settings.max_auto_creation_log_entries ?? 500);
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
@@ -1291,6 +1297,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         auto_creation_excluded_terms: autoCreationExcludedTerms,
         auto_creation_excluded_groups: autoCreationExcludedGroups,
         auto_creation_exclude_auto_sync_groups: autoCreationExcludeAutoSyncGroups,
+        // skg35: GH #473 safety-valve caps. Always echoed (loaded from the
+        // stored value) so a non-admin save sends the unchanged value and the
+        // backend field-level admin gate does NOT trip; only an admin who edits
+        // the disabled-for-non-admins input sends a real change.
+        max_auto_created_channels_per_run: maxAutoCreatedChannelsPerRun,
+        max_auto_creation_log_entries: maxAutoCreationLogEntries,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_timeout: streamProbeTimeout,
@@ -3114,6 +3126,52 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               When enabled, streams belonging to Dispatcharr channel groups that have Auto Channel Sync
               enabled will be excluded from the auto-creation pipeline.
             </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Runaway Safety Cap (GH #473 OOM safety valve) */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">shield</span>
+          <h3>Runaway Safety Cap</h3>
+        </div>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label htmlFor="maxAutoCreatedChannelsPerRun">Max channels created per run</label>
+            <input
+              type="number"
+              id="maxAutoCreatedChannelsPerRun"
+              value={maxAutoCreatedChannelsPerRun}
+              onChange={(e) => setMaxAutoCreatedChannelsPerRun(parseInt(e.target.value, 10) || 0)}
+              min={0}
+              disabled={!user?.is_admin}
+            />
+            <p className="field-hint">
+              The per-run runaway safety cap. If a single auto-creation run would create
+              more than this many channels it stops early (status &quot;capped&quot;), leaving the
+              channels it already created in place. Default 500. Set to 0 to disable the cap.
+              Auto-creation is idempotent — running it again continues from where a capped run
+              stopped, so you can leave the cap in place and re-run rather than raising it.
+              {!user?.is_admin && ' Only an administrator can change this safety setting.'}
+            </p>
+          </div>
+          <div className="form-group-vertical">
+            <label htmlFor="maxAutoCreationLogEntries">Max execution-log entries per run</label>
+            <input
+              type="number"
+              id="maxAutoCreationLogEntries"
+              value={maxAutoCreationLogEntries}
+              onChange={(e) => setMaxAutoCreationLogEntries(parseInt(e.target.value, 10) || 0)}
+              min={0}
+              disabled={!user?.is_admin}
+            />
+            <p className="field-hint">
+              Caps how many per-stream trace entries each non-dry-run keeps in memory (the
+              dominant memory consumer on a runaway run). Dry-runs always keep the full trace.
+              Default 500. Set to 0 to disable the cap.
+              {!user?.is_admin && ' Only an administrator can change this safety setting.'}
+            </p>
           </div>
         </div>
       </div>
