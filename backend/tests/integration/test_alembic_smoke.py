@@ -1722,6 +1722,15 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_executions "
                     "ADD COLUMN channels_touched INTEGER NOT NULL DEFAULT 0"
                 ))
+                # 0028 (enhancedchannelmanager-e8p1h): advisory run warnings
+                # (e.g. disabled normalization groups) on the pre-0005
+                # auto_creation_executions table — create_all() can't add a
+                # column to an already-existing table, so add it by hand so the
+                # live schema genuinely matches head for the fast-path.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_executions "
+                    "ADD COLUMN warnings TEXT"
+                ))
                 # 0023 (bd-0i2vt.4): credential-freshness + insecure flag on the
                 # pre-0005 cloud_storage_targets table — create_all() can't add
                 # columns to an existing table, so add them by hand here too.

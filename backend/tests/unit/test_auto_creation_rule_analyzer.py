@@ -538,3 +538,80 @@ class TestRuleFinding:
         assert d["field"] == "conditions[2]"
         assert d["suggestion"] == "s"
         assert d["detail"] == {"foo": "bar"}
+
+
+# =========================================================================
+# RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP — a rule selects normalization
+# groups that are globally DISABLED (or missing), so normalization silently
+# applies nothing (enhancedchannelmanager-e8p1h).
+# =========================================================================
+class TestDisabledNormalizationGroupFinding:
+    def test_disabled_group_flagged(self):
+        rule = {
+            "id": 1,
+            "name": "Movie Channels",
+            "conditions": [],
+            "actions": [],
+            "normalization_group_ids": [1, 2],
+        }
+        norm_groups = [
+            {"id": 1, "name": "Quality Tags", "enabled": True},
+            {"id": 2, "name": "Country Prefixes", "enabled": False},
+        ]
+        findings = analyze_rule(rule, normalization_groups=norm_groups)
+        codes = [f.code for f in findings]
+        assert "RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP" in codes
+        f = next(f for f in findings if f.code == "RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP")
+        assert f.severity == "warning"
+        # Names only the disabled group, not the enabled one.
+        assert [g["id"] for g in f.detail["disabled_groups"]] == [2]
+
+    def test_all_groups_enabled_not_flagged(self):
+        rule = {
+            "id": 1, "name": "Movie Channels",
+            "conditions": [], "actions": [],
+            "normalization_group_ids": [1, 2],
+        }
+        norm_groups = [
+            {"id": 1, "name": "Quality Tags", "enabled": True},
+            {"id": 2, "name": "Country Prefixes", "enabled": True},
+        ]
+        codes = [f.code for f in analyze_rule(rule, normalization_groups=norm_groups)]
+        assert "RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP" not in codes
+
+    def test_no_normalization_groups_data_no_finding(self):
+        """Without the optional group-state data, the check is a no-op —
+        we never invent findings from missing data (bundle path)."""
+        rule = {
+            "id": 1, "name": "Movie Channels",
+            "conditions": [], "actions": [],
+            "normalization_group_ids": [2],
+        }
+        codes = [f.code for f in analyze_rule(rule)]
+        assert "RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP" not in codes
+
+    def test_missing_group_flagged(self):
+        rule = {
+            "id": 1, "name": "Dangling",
+            "conditions": [], "actions": [],
+            "normalization_group_ids": [99],
+        }
+        norm_groups = [{"id": 1, "name": "Quality Tags", "enabled": True}]
+        findings = [
+            f for f in analyze_rule(rule, normalization_groups=norm_groups)
+            if f.code == "RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP"
+        ]
+        assert len(findings) == 1
+        assert findings[0].detail["disabled_groups"][0]["id"] == 99
+
+    def test_analyze_rules_threads_normalization_groups(self):
+        rules = [{
+            "id": 1, "name": "Movie Channels",
+            "conditions": [], "actions": [],
+            "normalization_group_ids": [2],
+        }]
+        norm_groups = [{"id": 2, "name": "Country Prefixes", "enabled": False}]
+        result = analyze_rules(rules, normalization_groups=norm_groups)
+        codes = [f["code"] for f in result["rules"][0]["findings"]]
+        assert "RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP" in codes
+        assert result["summary"]["warning"] >= 1

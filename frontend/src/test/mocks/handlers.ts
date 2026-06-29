@@ -186,6 +186,7 @@ export function createMockAutoCreationExecution(overrides: Partial<MockAutoCreat
     rolled_back_by: overrides.rolled_back_by ?? undefined,
     error: overrides.error ?? undefined,
     has_snapshot: overrides.has_snapshot ?? false,
+    warnings: overrides.warnings ?? undefined,
   }
 }
 
@@ -352,6 +353,12 @@ interface MockAutoCreationExecution {
   error?: string
   /** ADR-010 §D6 — true when a pre-run AutoCreationSnapshot row exists. */
   has_snapshot?: boolean
+  /** enhancedchannelmanager-e8p1h — disabled-normalization-group warnings. */
+  warnings?: {
+    rule_id: number
+    rule_name: string
+    disabled_groups: { id: number; name: string | null; missing: boolean }[]
+  }[]
 }
 
 export function createMockPopularityScore(overrides: Partial<MockPopularityScore> = {}): MockPopularityScore {

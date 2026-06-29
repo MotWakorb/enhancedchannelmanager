@@ -439,6 +439,62 @@ describe('AutoCreationTab', () => {
       });
     });
 
+    it('surfaces disabled-normalization-group warnings in execution details', async () => {
+      // enhancedchannelmanager-e8p1h: a run that referenced a disabled
+      // normalization group must show a prominent, actionable warning so the
+      // operator knows normalization silently applied nothing.
+      const user = userEvent.setup();
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({
+          streams_matched: 25,
+          channels_created: 0,
+          warnings: [
+            {
+              rule_id: 7,
+              rule_name: 'Movie Channels',
+              disabled_groups: [
+                { id: 2, name: 'Country Prefixes', missing: false },
+              ],
+            },
+          ],
+        }),
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/normalization applied no changes/i)).toBeInTheDocument();
+        // Names the offending rule and disabled group, and tells them to enable it.
+        expect(screen.getByText('Movie Channels')).toBeInTheDocument();
+        expect(screen.getByText(/country prefixes/i)).toBeInTheDocument();
+        expect(screen.getByText(/settings.*normalization/i)).toBeInTheDocument();
+      });
+    });
+
+    it('does not show the normalization warning when there are no warnings', async () => {
+      const user = userEvent.setup();
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ streams_matched: 25, channels_created: 10 }),
+      );
+
+      renderWithProviders(<AutoCreationTab />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/streams matched/i)).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/normalization applied no changes/i)).toBeNull();
+    });
+
     it('allows rolling back an execution', async () => {
       const user = userEvent.setup();
       mockDataStore.autoCreationExecutions.push(

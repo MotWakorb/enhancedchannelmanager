@@ -2152,6 +2152,13 @@ class AutoCreationExecution(Base):
     # Captures condition evaluations and action results for each matched stream
     execution_log = Column(Text, nullable=True)
 
+    # Non-fatal run warnings surfaced in the run summary / executions UI
+    # (enhancedchannelmanager-e8p1h). JSON array of warning dicts, e.g. a rule
+    # that references DISABLED/missing normalization groups (so normalization
+    # silently applies nothing). Distinct from error_message — the run still
+    # completes; these are advisory config problems the operator should fix.
+    warnings = Column(Text, nullable=True)
+
     # Rollback tracking
     rolled_back_at = Column(DateTime, nullable=True)
     rolled_back_by = Column(String(100), nullable=True)  # username or "system"
@@ -2242,6 +2249,19 @@ class AutoCreationExecution(Base):
         """Set execution_log from list."""
         self.execution_log = json.dumps(log) if log else None
 
+    def get_warnings(self) -> list:
+        """Parse warnings JSON into list (empty list when none)."""
+        if not self.warnings:
+            return []
+        try:
+            return json.loads(self.warnings)
+        except (ValueError, TypeError):
+            return []
+
+    def set_warnings(self, warnings: list) -> None:
+        """Set warnings from list."""
+        self.warnings = json.dumps(warnings) if warnings else None
+
     def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
         """Convert to dictionary for API responses."""
         result = {
@@ -2267,6 +2287,9 @@ class AutoCreationExecution(Base):
             "rolled_back_at": self.rolled_back_at.isoformat() + "Z" if self.rolled_back_at else None,
             "rolled_back_by": self.rolled_back_by,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            # Advisory, non-fatal run warnings (e.g. disabled normalization
+            # groups). Always present so the UI can render unconditionally.
+            "warnings": self.get_warnings(),
         }
         if include_entities:
             result["created_entities"] = self.get_created_entities()
