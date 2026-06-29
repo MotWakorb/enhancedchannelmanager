@@ -1071,6 +1071,9 @@ export interface SettingsResponse {
   auto_creation_excluded_terms: string[];
   auto_creation_excluded_groups: string[];
   auto_creation_exclude_auto_sync_groups: boolean;
+  // GH #473 auto-creation OOM safety-valve caps (skg35). <= 0 disables.
+  max_auto_created_channels_per_run: number;
+  max_auto_creation_log_entries: number;
   // MCP integration
   mcp_api_key_configured: boolean;
   // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
@@ -1221,6 +1224,10 @@ export async function saveSettings(settings: {
   auto_creation_excluded_terms?: string[];
   auto_creation_excluded_groups?: string[];
   auto_creation_exclude_auto_sync_groups?: boolean;
+  // GH #473 auto-creation OOM safety-valve caps (skg35). Admin-only on the
+  // backend; <= 0 disables the cap. Optional so a partial save preserves them.
+  max_auto_created_channels_per_run?: number;
+  max_auto_creation_log_entries?: number;
   // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
   telemetry_client_errors_enabled?: boolean;
   // Dedup settings (BD-B / BD-K, ADR-008 §D2). Float 0.60-1.00; server clamps to floor.

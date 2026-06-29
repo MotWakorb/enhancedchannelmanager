@@ -85,6 +85,13 @@ _ADMIN_ONLY_SETTINGS_FIELDS: dict[str, str] = {
     "emby_enabled": "emby_enabled",
     "plex_enabled": "plex_enabled",
     "jellyfin_enabled": "jellyfin_enabled",
+    # GH #473 auto-creation OOM safety-valve caps (skg35). Install-wide safety
+    # knobs, NOT per-user prefs: lowering/disabling the channel cap re-opens the
+    # runaway-creation OOM blast radius (186 -> 2400+ channels, container
+    # crash), so changing them is an admin action. A non-admin / MCP key
+    # supplying a different value is rejected 403.
+    "max_auto_created_channels_per_run": "max_auto_created_channels_per_run",
+    "max_auto_creation_log_entries": "max_auto_creation_log_entries",
 }
 # Credential fields use preserve-on-omit (None/empty => keep stored value), so
 # a plain attribute compare can't see a "change". They are admin-only by
@@ -387,6 +394,14 @@ class SettingsRequest(BaseModel):
     auto_creation_excluded_terms: list[str] = []
     auto_creation_excluded_groups: list[str] = []
     auto_creation_exclude_auto_sync_groups: bool = False
+    # GH #473 auto-creation OOM safety-valve caps (skg35). Admin-only — these
+    # are install-wide safety/config knobs, not per-user prefs, so they live in
+    # _ADMIN_ONLY_SETTINGS_FIELDS below. Defaults match config.DispatcharrSettings
+    # so an older frontend bundle that omits them persists the stored value
+    # rather than resetting it. <= 0 disables the cap (config validator
+    # normalizes a negative to 0).
+    max_auto_created_channels_per_run: int = 500
+    max_auto_creation_log_entries: int = 500
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
     # Default ON; honored by both the backend /api/client-errors endpoint
     # and the frontend clientErrorReporter.
@@ -510,6 +525,10 @@ class SettingsResponse(BaseModel):
     auto_creation_excluded_terms: list[str]
     auto_creation_excluded_groups: list[str]
     auto_creation_exclude_auto_sync_groups: bool
+    # GH #473 auto-creation OOM safety-valve caps (skg35). Editable via the
+    # Settings > Auto Creation UI (admin-gated on write). <= 0 disables.
+    max_auto_created_channels_per_run: int
+    max_auto_creation_log_entries: int
     # MCP integration
     mcp_api_key_configured: bool  # Whether an MCP API key has been generated
     # bd-p8fx9 (W4): MCP destructive-bulk batch-size caps. Read by the MCP
@@ -741,6 +760,10 @@ async def get_current_settings():
         auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
+        # GH #473 auto-creation safety-valve caps (skg35) — surfaced so the
+        # operator can view + (as admin) adjust them from the Auto Creation UI.
+        max_auto_created_channels_per_run=settings.max_auto_created_channels_per_run,
+        max_auto_creation_log_entries=settings.max_auto_creation_log_entries,
         mcp_api_key_configured=bool(settings.mcp_api_key),
         # bd-p8fx9 (W4): MCP destructive-bulk batch caps (read-only surface).
         mcp_bulk_delete_soft_cap=settings.mcp_bulk_delete_soft_cap,
@@ -1002,6 +1025,12 @@ async def update_settings(
         auto_creation_excluded_terms=request.auto_creation_excluded_terms,
         auto_creation_excluded_groups=request.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=request.auto_creation_exclude_auto_sync_groups,
+        # GH #473 safety-valve caps (skg35). Threaded from the request so an
+        # admin can adjust them; the config validator normalizes a negative to
+        # the 0 = disabled sentinel. Admin-gated on write (see
+        # _ADMIN_ONLY_SETTINGS_FIELDS) so a non-admin / MCP key cannot change them.
+        max_auto_created_channels_per_run=request.max_auto_created_channels_per_run,
+        max_auto_creation_log_entries=request.max_auto_creation_log_entries,
         # MCP API key is preserved from current settings — see comment above
         # where mcp_api_key is captured (bd-vj8n9).
         mcp_api_key=mcp_api_key,
