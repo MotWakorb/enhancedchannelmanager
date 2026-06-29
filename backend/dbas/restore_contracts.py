@@ -193,6 +193,25 @@ class FailureDetail(BaseModel):
     source_export_id: int | None = Field(default=None)
 
 
+class LogoMissDetail(BaseModel):
+    """One logo that could not be matched/applied on restore (bead ``…-qhui4``).
+
+    The per-logo drill-down behind the aggregate :attr:`RestoreReport.logo_misses`
+    count (ADR-012 D9). The aggregate count + red banner stay as-is; this list
+    ADDS the affected-logo identities so the restore-complete UX can enumerate
+    *which* logos are missing, not just *how many*.
+
+    ``label`` is the operator-facing logo display name — never a path, byte
+    payload, or secret (same hygiene as :class:`SkipDetail` / :class:`FailureDetail`).
+    """
+
+    source_export_id: int | None = Field(
+        default=None,
+        description="The logo's id in the export archive, when known.",
+    )
+    label: str = Field(description="Operator-facing logo name — never a path or secret.")
+
+
 class EntityCategoryReport(BaseModel):
     """Per-entity-category counts for ONE category.
 
@@ -267,6 +286,16 @@ class RestoreReport(BaseModel):
     logo_misses: int = Field(
         default=0,
         description="Aggregate count of unresolved logo references (.15 / .19 consume this).",
+    )
+
+    # Per-logo drill-down behind the aggregate count (bead …-qhui4). ADDITIVE: the
+    # aggregate count + red banner are unchanged; this list lets the UX enumerate
+    # WHICH logos are missing. Populated by the logos importer (.15) on each miss;
+    # ``len(logo_miss_details)`` tracks :attr:`logo_misses`. Empty on a clean
+    # restore — a renderer keys off the aggregate count for the banner gate.
+    logo_miss_details: list[LogoMissDetail] = Field(
+        default_factory=list,
+        description="Per-logo detail (id + name) for each unresolved logo (…-qhui4).",
     )
 
     started_at: datetime | None = Field(default=None)

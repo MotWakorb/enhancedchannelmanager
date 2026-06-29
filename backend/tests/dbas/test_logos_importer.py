@@ -44,10 +44,15 @@ from dbas.restore_contracts import (
     EntityType,
     FailureReason,
     IdRemapTable,
+    LogoMissDetail,
     RestoreReport,
     RollbackLedger,
     SkipReason,
 )
+
+# Reference the symbol so linters don't flag the import as unused; the model is
+# exercised via report.logo_miss_details entries (Pydantic instances).
+assert LogoMissDetail is not None
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +70,17 @@ _WEBP = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 8
 _ELF = b"\x7fELF" + b"\x00" * 16          # Linux executable
 _PE = b"MZ\x90\x00" + b"\x00" * 16        # Windows executable
 _SHELL = b"#!/bin/sh\nrm -rf /\n"          # shell script
+_SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+
+
+def _bmp(extra: bytes = b"\x00" * 20) -> bytes:
+    """A spec-correct BMP: 'BM' + a 4-byte little-endian file-size dword that
+    equals the total byte length (LOW-1: the size dword is validated, so the
+    declared size must match the real length for the magic check to pass).
+    """
+    body = b"BM" + b"\x00\x00\x00\x00" + extra  # placeholder size dword
+    total = len(body)
+    return b"BM" + total.to_bytes(4, "little") + extra
 
 
 def _b64(raw: bytes) -> str:
@@ -228,6 +244,55 @@ async def test_miss_increments_logo_misses_aggregate():
         client=client, selected=True, report=report, ledger=ledger, remap=remap,
     )
     assert report.logo_misses == 1
+
+
+@pytest.mark.asyncio
+async def test_miss_records_per_channel_detail():
+    """qhui4: a miss ALSO records a per-logo detail (id + name) alongside the
+    aggregate count, so the banner can drill down into the affected logos.
+    """
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=42, name="ESPN HD")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    assert report.logo_misses == 1
+    assert len(report.logo_miss_details) == 1
+    detail = report.logo_miss_details[0]
+    assert detail.source_export_id == 42
+    assert detail.label == "ESPN HD"
+
+
+@pytest.mark.asyncio
+async def test_miss_detail_count_matches_aggregate_for_multiple():
+    """The per-logo detail list stays consistent with the aggregate count."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[
+            _logo(src_id=1, name="A"),
+            _logo(src_id=2, name="B"),
+            _logo(src_id=3, name="C"),
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    assert report.logo_misses == 3
+    assert len(report.logo_miss_details) == 3
+    assert [d.label for d in report.logo_miss_details] == ["A", "B", "C"]
+
+
+@pytest.mark.asyncio
+async def test_matched_logo_does_not_record_miss_detail():
+    """A tier-matched logo is NOT a miss — no detail row, no aggregate bump."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[{"id": 801, "name": "ESPN"}])
+    await import_logos(
+        archive_logos=[_logo(src_id=7, name="ESPN")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    assert report.logo_misses == 0
+    assert report.logo_miss_details == []
 
 
 # ===========================================================================
@@ -500,7 +565,8 @@ async def test_attack_mime_spoof_shell_script_rejected():
 async def test_valid_image_types_accepted():
     """PNG / JPEG / GIF / WebP magic bytes are all accepted and uploaded."""
     for raw, ct in [(_PNG, "image/png"), (_JPEG, "image/jpeg"),
-                    (_GIF, "image/gif"), (_WEBP, "image/webp")]:
+                    (_GIF, "image/gif"), (_WEBP, "image/webp"),
+                    (_bmp(), "image/bmp")]:
         report, ledger, remap = _ctx()
         client = _client(dest_logos=[])
         await import_logos(
@@ -510,6 +576,92 @@ async def test_valid_image_types_accepted():
         )
         client.upload_logo_file.assert_awaited_once()
         assert report.category(EntityType.LOGO).created == 1
+
+
+@pytest.mark.asyncio
+async def test_valid_bmp_with_correct_size_dword_accepted():
+    """A spec-correct BMP (LE size dword == byte length) is accepted (LOW-1)."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=1, name="Bmp", filename="ok.bmp",
+                             content=_bmp(), content_type="image/bmp")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    client.upload_logo_file.assert_awaited_once()
+    assert report.category(EntityType.LOGO).created == 1
+
+
+@pytest.mark.asyncio
+async def test_attack_bmp_magic_only_two_bytes_rejected():
+    """LOW-1: a non-image blob that merely starts with 'BM' (no valid BMP size
+    dword) is REJECTED. The 2-byte 'BM' prefix alone is too weak a signal — a
+    real BMP also carries a little-endian file-size dword at offset 2 that must
+    match the actual byte length.
+    """
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    # 'BM' followed by an arbitrary non-BMP payload whose offset-2 dword does
+    # NOT equal the total length.
+    spoof = b"BM" + b"this is not really a bitmap, just BM-prefixed junk"
+    logo = _logo(src_id=1, name="Spoof", filename="evil.bmp",
+                 content=spoof, content_type="image/bmp")
+    await import_logos(
+        archive_logos=[logo], client=client, selected=True,
+        report=report, ledger=ledger, remap=remap,
+    )
+    _assert_rejected(report, client, source_id=1)
+
+
+@pytest.mark.asyncio
+async def test_attack_svg_rejected():
+    """INFO-3: an SVG (XML, script-executable in a browser) is NOT an allowed
+    raster image type — its magic does not match the allowlist, so it is
+    rejected even though it is a legitimate image format elsewhere. Locks the
+    behaviour that the importer never accepts script-bearing SVG.
+    """
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    logo = _logo(src_id=1, name="Svg", filename="evil.svg",
+                 content=_SVG, content_type="image/svg+xml")
+    await import_logos(
+        archive_logos=[logo], client=client, selected=True,
+        report=report, ledger=ledger, remap=remap,
+    )
+    _assert_rejected(report, client, source_id=1)
+
+
+@pytest.mark.asyncio
+async def test_attack_path_traversal_windows_drive_letter_rejected():
+    """INFO-3: a Windows drive-letter absolute path (C:\\Windows\\...) is
+    rejected by the basename guard before any decode/upload. Locks the
+    drive-letter branch of _safe_basename against regression.
+    """
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    logo = _logo(src_id=1, name="Drive",
+                 filename="C:\\Windows\\System32\\evil.png")
+    await import_logos(
+        archive_logos=[logo], client=client, selected=True,
+        report=report, ledger=ledger, remap=remap,
+    )
+    _assert_rejected(report, client, source_id=1)
+
+
+@pytest.mark.asyncio
+async def test_attack_path_traversal_drive_letter_relative_rejected():
+    """INFO-3: a drive-relative path (C:evil.png — no separator, but a drive
+    letter prefix) is also rejected. This is the case the bare embedded-
+    separator rule would MISS, so the explicit drive-letter rule must catch it.
+    """
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    logo = _logo(src_id=1, name="DriveRel", filename="C:evil.png")
+    await import_logos(
+        archive_logos=[logo], client=client, selected=True,
+        report=report, ledger=ledger, remap=remap,
+    )
+    _assert_rejected(report, client, source_id=1)
 
 
 @pytest.mark.asyncio

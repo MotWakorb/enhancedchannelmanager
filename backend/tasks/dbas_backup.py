@@ -77,7 +77,6 @@ import journal
 import observability
 from dbas import retention
 from routers.backup import (
-    _get_backup_filename,
     build_backup_artifact,
     verify_artifact_sha256,
 )
@@ -248,15 +247,11 @@ class DbasBackupTask(TaskScheduler):
                 acknowledge_unrecoverable=self.acknowledge_unrecoverable,
             )
 
-            # Give the artifact its CANONICAL, timestamped, allowlist-matching
-            # name (ecm-backup-<ts>.zip) so it is discoverable, sortable by the
-            # filename timestamp, and prunable by the retention policy. The
-            # builder writes a mkstemp temp name (ecm-artifact-<rand>.zip) which
-            # has no timestamp and does not match _BACKUP_ZIP_FILENAME_RE; the
-            # retention canonical-sort + allowlist both require the timestamped
-            # shape (bead 0i2vt.9).
-            artifact = self._canonicalize_artifact_name(artifact)
-
+            # The artifact already carries its CANONICAL, timestamped,
+            # allowlist-matching name (ecm-backup-<ts>.zip): the builder owns it
+            # directly (bead e0r3h) — there is no post-build rename. The retention
+            # canonical-sort + _BACKUP_ZIP_FILENAME_RE allowlist both match the
+            # builder-produced shape.
             filename = artifact.zip_path.name
             logger.info(
                 "[DBAS_BACKUP] Built artifact %s "
@@ -664,50 +659,6 @@ class DbasBackupTask(TaskScheduler):
                 )
             )
         return None
-
-    @staticmethod
-    def _canonicalize_artifact_name(artifact):
-        """Rename the built artifact (and its .sha256 sidecar) to the canonical
-        timestamped name ``ecm-backup-<UTC ts>.zip`` so it matches the retention
-        allowlist and is sortable by the filename timestamp.
-
-        The sidecar's first line is ``<sha>  <zip-name>``; it is rewritten so the
-        named file inside the sidecar tracks the renamed ZIP. On any failure the
-        original artifact is left untouched and returned (the backup still
-        succeeds — only retention discoverability is affected).
-        """
-        from routers.backup import BackupArtifact
-
-        try:
-            dest_dir = artifact.zip_path.parent
-            new_name = _get_backup_filename()  # ecm-backup-<UTC ts>.zip
-            new_zip = dest_dir / new_name
-            # Extremely unlikely collision (same-second run); fall back to the
-            # original name rather than clobber an existing artifact.
-            if new_zip.exists():
-                return artifact
-            new_sidecar = Path(str(new_zip) + ".sha256")
-            artifact.zip_path.rename(new_zip)
-            try:
-                artifact.sidecar_path.rename(new_sidecar)
-                new_sidecar.write_text(
-                    "%s  %s\n" % (artifact.sha256, new_zip.name), encoding="utf-8"
-                )
-            except OSError:
-                new_sidecar = artifact.sidecar_path  # keep whatever exists
-            return BackupArtifact(
-                zip_path=new_zip,
-                sidecar_path=new_sidecar,
-                schema_version=artifact.schema_version,
-                sha256=artifact.sha256,
-                file_count=artifact.file_count,
-            )
-        except OSError as e:
-            logger.warning(
-                "[DBAS_BACKUP] Could not canonicalize artifact name "
-                "(retention discoverability reduced): %s", e,
-            )
-            return artifact
 
     @staticmethod
     def _remote_paths(upload_path: str, artifact) -> tuple[str, str]:
