@@ -307,8 +307,13 @@ export interface BulkUpdateRulesResponse {
 
 /**
  * Status of a pipeline execution.
+ *
+ * Terminal statuses: completed, failed, rolled_back, capped, abandoned.
+ * - capped: the pipeline hit the per-run created-channel cap and stopped early.
+ * - abandoned: the pipeline was abandoned (e.g. OOM crash); trips the
+ *   run-on-refresh circuit breaker until an operator resets it.
  */
-export type ExecutionStatus = 'running' | 'completed' | 'failed' | 'rolled_back';
+export type ExecutionStatus = 'running' | 'completed' | 'failed' | 'rolled_back' | 'capped' | 'abandoned';
 
 /**
  * How a pipeline was triggered.

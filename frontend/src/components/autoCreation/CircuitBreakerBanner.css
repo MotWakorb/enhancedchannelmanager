@@ -1,0 +1,97 @@
+/* CircuitBreakerBanner — run-on-refresh circuit breaker status banner */
+
+.circuit-breaker-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid;
+  margin-bottom: 1rem;
+}
+
+/* abandoned_run variant — amber/warning */
+.circuit-breaker-banner--abandoned {
+  background: var(--warning-bg, rgba(245, 158, 11, 0.1));
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.circuit-breaker-banner--abandoned .circuit-breaker-icon {
+  color: var(--status-warning, #f59e0b);
+}
+
+/* manual-disable variant — muted/info */
+.circuit-breaker-banner--manual {
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.2);
+}
+
+.circuit-breaker-banner--manual .circuit-breaker-icon {
+  color: #6366f1;
+}
+
+.circuit-breaker-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.circuit-breaker-text {
+  flex: 1;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.circuit-breaker-reset-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8125rem;
+}
+
+.circuit-breaker-reset-btn .material-icons {
+  font-size: 16px;
+}
+
+/* Confirmation overlay — inline (not full-screen modal) */
+.circuit-breaker-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal, 1000);
+}
+
+.circuit-breaker-confirm-dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.circuit-breaker-confirm-dialog h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.circuit-breaker-confirm-dialog p {
+  margin: 0 0 1.25rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.circuit-breaker-confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
