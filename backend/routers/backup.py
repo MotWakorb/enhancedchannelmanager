@@ -142,6 +142,18 @@ _REDACT_KEYS = frozenset(
     }
 )
 
+# Stream-record keys that are credential-class for an EMBEDDED channel stream and
+# must NEVER be carried in the channels producer (7i8rf). A Dispatcharr/IPTV
+# stream URL embeds provider credentials in its path/query
+# (``.../<user>/<pass>/<id>``); ``stream_hash`` / ``custom_url`` are equivalent
+# leak vectors. The channels producer embeds each stream as ID + the SAFE match
+# fields the restore matcher uses (name + m3u_account) ONLY — see
+# ``_safe_embedded_stream``. ``url`` is intentionally NOT added to the global
+# ``_REDACT_KEYS`` denylist because the M3U/EPG/settings categories legitimately
+# carry an operator-typed instance ``url`` that the restore needs; URL handling
+# for streams is therefore scoped to the producer that emits them.
+_STREAM_CREDENTIAL_FIELDS = frozenset({"url", "custom_url", "stream_hash"})
+
 
 def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
     """Recursively replace any value whose key (case-insensitive) is in the
@@ -705,9 +717,22 @@ async def build_backup_artifact(
     categories = await _gather_redacted_categories(include_credentials=include_credentials)
     logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree()
 
-    fd, tmp_zip_name = tempfile.mkstemp(prefix="ecm-artifact-", suffix=".zip", dir=str(dest_dir))
-    os.close(fd)
-    zip_path = Path(tmp_zip_name)
+    # e0r3h — the producer owns the CANONICAL timestamped name
+    # ``ecm-backup-<UTC ts>.zip`` (no post-build rename in the task layer). This is
+    # the name retention's ``_BACKUP_ZIP_FILENAME_RE`` allowlist + filename
+    # timestamp-sort require. ``_get_backup_filename`` is the single source of that
+    # shape. On the rare same-second collision (two runs in the same UTC second)
+    # we suffix a short uniquifier so we never clobber an existing artifact; the
+    # base name still matches the retention regex's ``\d{6}`` second field is the
+    # canonical case, and the collision fallback degrades retention discoverability
+    # of the SECOND file only (same trade-off the old rename made).
+    zip_path = dest_dir / _get_backup_filename()
+    if zip_path.exists():
+        fd, tmp_zip_name = tempfile.mkstemp(
+            prefix="ecm-backup-", suffix=".zip", dir=str(dest_dir)
+        )
+        os.close(fd)
+        zip_path = Path(tmp_zip_name)
     sidecar_path = Path(str(zip_path) + ".sha256")
     scrubbed_db_path: Optional[Path] = None
     file_hashes: dict[str, str] = {}
@@ -1754,6 +1779,107 @@ def _gather_db_tables() -> dict:
         session.close()
 
 
+# Channel-list pagination cap for the channels producer. Dispatcharr's channel
+# list is paginated; the producer walks every page so the backup carries the FULL
+# channel set (a partial channel export would silently lose channels on restore).
+_CHANNELS_PAGE_SIZE = 1000
+_CHANNELS_MAX_PAGES = 1000  # hard stop so a misbehaving upstream cannot loop forever
+
+
+def _safe_embedded_stream(stream: dict) -> dict:
+    """Reduce a Dispatcharr stream record to the SAFE fields a channel embeds.
+
+    The DBAS round-trip restore (``dbas/importers/channels.py``) matches each
+    embedded stream against the destination's streams using the 4-tier matcher
+    (``dbas/stream_matcher.py``): name + provider (``m3u_account``) on Tiers 2-4.
+    Tier 1 (exact URL) is deliberately UNavailable here — a stream URL embeds
+    provider credentials (``_STREAM_CREDENTIAL_FIELDS``) and is NEVER carried in
+    the artifact (7i8rf redaction contract). We emit ONLY the stream id (for the
+    operator-facing label / ordering) and the credential-free match fields. The
+    non-bypassable deep redactor still runs over the result as defense in depth.
+    """
+    out: dict = {}
+    sid = stream.get("id")
+    if sid is not None:
+        out["id"] = sid
+    name = stream.get("name")
+    if name is not None:
+        out["name"] = name
+    # ``m3u_account`` is an integer FK (the provider id), not a credential — it is
+    # the matcher's "same provider" signal (Tier 2). Carried for match fidelity.
+    if "m3u_account" in stream:
+        out["m3u_account"] = stream.get("m3u_account")
+    return out
+
+
+async def _gather_channels_with_streams(client) -> list[dict]:
+    """Fetch every channel with its embedded streams reduced to SAFE fields.
+
+    A Dispatcharr channel's ``streams`` field is a list of stream IDs. For the
+    round-trip restore matcher to do better than a blind custom-stream synthesis,
+    each embedded stream is enriched to ``{id, name, m3u_account}`` (NEVER the
+    URL — see :func:`_safe_embedded_stream`) by joining against the stream records
+    fetched once for the whole export. A channel whose streams cannot be enriched
+    still carries its ordered ``[{id}, ...]`` so ordering and count survive.
+    """
+    # 1) Walk all channel pages.
+    channels: list[dict] = []
+    page = 1
+    while page <= _CHANNELS_MAX_PAGES:
+        resp = await client.get_channels(page=page, page_size=_CHANNELS_PAGE_SIZE)
+        if isinstance(resp, dict):
+            results = resp.get("results", []) or []
+            channels.extend(r for r in results if isinstance(r, dict))
+            if not resp.get("next"):
+                break
+        elif isinstance(resp, list):
+            channels.extend(r for r in resp if isinstance(r, dict))
+            break
+        else:
+            break
+        page += 1
+
+    if not channels:
+        return []
+
+    # 2) Build a stream-id -> safe-record index from the full stream list (one
+    #    paginated walk; the matcher only needs name + provider).
+    stream_index: dict = {}
+    spage = 1
+    while spage <= _CHANNELS_MAX_PAGES:
+        sresp = await client.get_streams(page=spage, page_size=_CHANNELS_PAGE_SIZE)
+        if isinstance(sresp, dict):
+            sresults = sresp.get("results", []) or []
+        elif isinstance(sresp, list):
+            sresults = sresp
+        else:
+            sresults = []
+        for s in sresults:
+            if isinstance(s, dict) and s.get("id") is not None:
+                stream_index[s["id"]] = _safe_embedded_stream(s)
+        if not (isinstance(sresp, dict) and sresp.get("next")):
+            break
+        spage += 1
+
+    # 3) Replace each channel's stream-id list with the enriched safe records,
+    #    preserving order. An id absent from the index degrades to {"id": id}.
+    enriched: list[dict] = []
+    for ch in channels:
+        out = dict(ch)
+        raw_streams = ch.get("streams")
+        if isinstance(raw_streams, list):
+            embedded = []
+            for sid in raw_streams:
+                if isinstance(sid, dict):
+                    # Already an object (some endpoints embed); reduce to safe.
+                    embedded.append(_safe_embedded_stream(sid))
+                else:
+                    embedded.append(stream_index.get(sid, {"id": sid}))
+            out["streams"] = embedded
+        enriched.append(out)
+    return enriched
+
+
 async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
     """Fetch full Dispatcharr data for selected sections.
 
@@ -1786,6 +1912,17 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
         if "stream_profiles" in needed:
             profiles = await client.get_stream_profiles()
             result["stream_profiles"] = profiles or []
+        if "channels" in needed:
+            # Channels carry embedded streams reduced to credential-free match
+            # fields (7i8rf). This is the producer the restore channels importer
+            # (dbas/importers/channels.py) consumes.
+            result["channels"] = await _gather_channels_with_streams(client)
+        if "dispatcharr_users" in needed:
+            # Dispatcharr user accounts (Django auth). A GET never returns a
+            # password/hash (see dbas/importers/users.py policy 1); the deep
+            # redactor scrubs any credential-class field as a backstop.
+            users = await client.get_users()
+            result["dispatcharr_users"] = users or []
 
         return result
     except Exception as e:
@@ -1806,9 +1943,18 @@ async def build_yaml_export(
     passphrase-encrypted migration path; it is only ever True from
     :func:`build_backup_artifact`. The user-facing ``/export`` endpoint never
     sets it (always redacts).
+
+    The default set (``sections=None``) excludes ``artifact_only`` categories
+    (channels / dispatcharr_users — 7i8rf): those are restorable only via the
+    DBAS artifact path, not the legacy YAML export/restore, so the user-facing
+    full YAML export keeps its pre-7i8rf shape. The artifact builder
+    (:func:`_gather_redacted_categories`) requests each category by its EXPLICIT
+    key, so it still emits the artifact_only producers.
     """
-    all_keys = set(RESTORABLE_SECTIONS.keys())
-    selected = sections if sections else all_keys
+    legacy_keys = {
+        k for k, v in RESTORABLE_SECTIONS.items() if not v.get("artifact_only")
+    }
+    selected = sections if sections else legacy_keys
 
     export_data: dict = {
         "ecm_export": {
@@ -1837,10 +1983,16 @@ async def build_yaml_export(
 
 @router.get("/export-sections")
 async def get_export_sections(_admin=RequireAdminIfEnabled):
-    """Return available section keys and labels for selective export."""
+    """Return available section keys and labels for selective export.
+
+    ``artifact_only`` categories (channels / dispatcharr_users — 7i8rf) are
+    omitted: they are restorable only through the DBAS artifact path, not the
+    legacy per-section YAML restore this list drives.
+    """
     return [
         {"key": key, "label": info["label"]}
         for key, info in RESTORABLE_SECTIONS.items()
+        if not info.get("artifact_only")
     ]
 
 
@@ -1896,6 +2048,26 @@ RESTORABLE_SECTIONS = {
     "channel_groups": {"label": "Channel Groups", "dispatcharr": True},
     "channel_profiles": {"label": "Channel Profiles", "dispatcharr": True},
     "stream_profiles": {"label": "Stream Profiles", "dispatcharr": True},
+    # 7i8rf — the v0.18.0 round-trip producers. The restore importers
+    # (dbas/importers/channels.py + users.py) existed but the builder did not
+    # emit these categories, so restoring channels/users was a no-op against a
+    # real backup. ``channels`` carries embedded streams reduced to
+    # credential-free match fields (id + name + m3u_account, NEVER the URL).
+    # ``dispatcharr_users`` is the Dispatcharr (Django) user category — distinct
+    # from ECM's own users; a GET never returns a password/hash.
+    #
+    # ``artifact_only`` (7i8rf): these categories are PRODUCED into the DBAS
+    # artifact (consumed by the Phase-2 restore importers via
+    # decode_artifact_to_plan -> orchestrator) but are NOT restorable through the
+    # LEGACY per-section YAML restore endpoint (/restore-yaml), which has no
+    # channel/user restorer. They are therefore hidden from the legacy
+    # export-sections / validate UI so an operator cannot select a section the
+    # legacy path cannot apply. The artifact builder still emits them (the gather
+    # pipeline iterates every RESTORABLE_SECTIONS key).
+    "channels": {"label": "Channels", "dispatcharr": True, "artifact_only": True},
+    "dispatcharr_users": {
+        "label": "Dispatcharr Users", "dispatcharr": True, "artifact_only": True,
+    },
 }
 
 
@@ -1950,6 +2122,10 @@ async def validate_yaml_export(file: UploadFile = File(...), _admin=RequireAdmin
     export_meta = data.get("ecm_export", {})
     sections = []
     for key, info in RESTORABLE_SECTIONS.items():
+        # artifact_only categories (channels / dispatcharr_users — 7i8rf) are not
+        # restorable via the legacy YAML path this validate drives; hide them.
+        if info.get("artifact_only"):
+            continue
         count = _count_section_items(data, key)
         sections.append({
             "key": key,
@@ -1997,6 +2173,20 @@ async def restore_from_yaml(
     invalid = [s for s in selected_sections if s not in RESTORABLE_SECTIONS]
     if invalid:
         raise HTTPException(status_code=400, detail="Unknown sections: %s" % ", ".join(invalid))
+
+    # artifact_only categories (channels / dispatcharr_users — 7i8rf) have no
+    # legacy per-section restorer; they are restorable only via the DBAS artifact
+    # path. Reject them here rather than letting _restore_section raise.
+    artifact_only = [
+        s for s in selected_sections
+        if RESTORABLE_SECTIONS[s].get("artifact_only")
+    ]
+    if artifact_only:
+        raise HTTPException(
+            status_code=400,
+            detail="Sections not restorable via YAML (use a DBAS backup): %s"
+            % ", ".join(artifact_only),
+        )
 
     content = await file.read()
     data = _parse_yaml_export(content)
