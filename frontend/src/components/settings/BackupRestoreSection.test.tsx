@@ -22,6 +22,13 @@ vi.mock('../../services/api', () => ({
   deleteSavedBackup: vi.fn(),
 }));
 
+// Mock the one-time backup-schedule setup banner (bead ikv8z) — it has its own
+// test suite and makes its own getTaskSchedules call, which this suite's api
+// mock doesn't stub.
+vi.mock('./BackupScheduleBanner', () => ({
+  BackupScheduleBanner: () => null,
+}));
+
 // Mock BackupRestoreModal to avoid complex rendering
 vi.mock('../BackupRestoreModal', () => ({
   BackupRestoreModal: ({ onClose }: { onClose: () => void }) => (

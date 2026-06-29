@@ -199,6 +199,8 @@ const settingsBase = {
   jellyfin_base_url: '',
   jellyfin_api_key_configured: false,
   trusted_media_networks: [],
+  // nngkg: DBAS outbound-policy mode (default LAN-friendly).
+  ssrf_outbound_mode: 'lan_friendly' as const,
 };
 
 function renderOnChannelDefaults() {

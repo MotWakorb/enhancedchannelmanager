@@ -295,6 +295,24 @@ class SettingsResponse(BaseModel):
     jellyfin_api_key_configured: bool
     # bd-mlcla: trusted media/proxy networks (ranking hint only).
     trusted_media_networks: list[str]
+    # nngkg / bead 0i2vt.5: DBAS outbound-policy mode ("lan_friendly" |
+    # "public_only"). The single wizard knob the first-run modal + Settings >
+    # Security section read/write; consumed by security/ssrf.py. The always-on
+    # denylist is enforced unconditionally regardless of this value.
+    ssrf_outbound_mode: str
+
+
+class SecuritySettingsRequest(BaseModel):
+    """Dedicated payload for the DBAS outbound-policy mode (nngkg).
+
+    A focused PATCH so the Settings > Security section (and the first-run
+    wizard) can persist the operator's LAN-vs-public choice WITHOUT a full
+    settings round-trip — mirroring the dedicated mcp-api-key endpoints. The
+    only field is the closed-enum mode; the always-on denylist is never
+    operator-togglable (threat model §B6).
+    """
+
+    ssrf_outbound_mode: str
 
 
 class EmbyTestConnectionRequest(BaseModel):
@@ -502,6 +520,8 @@ async def get_current_settings():
         jellyfin_api_key_configured=bool(settings.jellyfin_api_key),
         # bd-mlcla: trusted media/proxy networks (ranking hint only).
         trusted_media_networks=settings.trusted_media_networks,
+        # nngkg: DBAS outbound-policy mode (LAN-friendly default).
+        ssrf_outbound_mode=settings.ssrf_outbound_mode,
     )
 
 
@@ -747,6 +767,12 @@ async def update_settings(request: SettingsRequest):
         # the next UI settings-save.
         stream_provider_cache_ttl=current_settings.stream_provider_cache_ttl,
         user_username_cache_ttl=current_settings.user_username_cache_ttl,
+        # nngkg: DBAS outbound-policy mode is written ONLY through the dedicated
+        # PATCH /api/settings/security endpoint (like mcp_api_key), never by the
+        # general settings form. It MUST be preserved from current settings here
+        # — rebuilding the model would otherwise reset an operator's public-only
+        # choice back to the lan_friendly default on the next UI settings-save.
+        ssrf_outbound_mode=current_settings.ssrf_outbound_mode,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -1625,6 +1651,38 @@ async def revoke_mcp_api_key():
     clear_settings_cache()
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}
+
+
+@router.patch("/security")
+async def update_security_settings(
+    request: SecuritySettingsRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Set the DBAS outbound-policy mode (LAN-friendly vs public-only).
+
+    nngkg / bead 0i2vt.5. A focused, admin-gated write so the first-run wizard
+    and the Settings > Security section persist the operator's choice without a
+    full settings round-trip (mirrors the dedicated mcp-api-key endpoints). The
+    mode is a closed enum; the always-on denylist enforced in
+    ``security/ssrf.py`` is never operator-togglable (threat model §B6).
+    """
+    from security.ssrf import SSRFMode
+
+    try:
+        mode = SSRFMode(request.ssrf_outbound_mode)
+    except ValueError:
+        valid = ", ".join(m.value for m in SSRFMode)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid ssrf_outbound_mode {request.ssrf_outbound_mode!r} (expected one of: {valid})",
+        )
+
+    settings = get_settings()
+    settings.ssrf_outbound_mode = mode.value
+    save_settings(settings)
+    clear_settings_cache()
+    logger.info("[SETTINGS] Outbound-policy mode set to %s", mode.value)
+    return {"ssrf_outbound_mode": mode.value}
 
 
 @router.get("/mcp-status")

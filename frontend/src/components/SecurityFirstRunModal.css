@@ -1,0 +1,56 @@
+/**
+ * SecurityFirstRunModal styles (bead nngkg).
+ *
+ * Reuses the shared modal chrome (.modal-container / .modal-header /
+ * .modal-body / .modal-footer from the global modal styles); this file only
+ * styles the radio-option list inside the dialog. Selected meaning is carried
+ * by the radio + a border accent, not by colour alone.
+ */
+
+.security-first-run-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.security-first-run-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background-color: var(--input-bg);
+  cursor: pointer;
+}
+
+.security-first-run-option.is-selected {
+  border-color: var(--accent-primary);
+  box-shadow: inset 0 0 0 1px var(--accent-primary);
+}
+
+.security-first-run-option input[type='radio'] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+  accent-color: var(--accent-primary);
+}
+
+.security-first-run-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.security-first-run-option-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.security-first-run-option-detail {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
