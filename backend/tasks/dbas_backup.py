@@ -67,6 +67,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from cloud_storage import SUPPORTED_PROVIDERS
 from config import CONFIG_DIR
 from services.notification_service import create_notification_internal
 from task_registry import register_task
@@ -87,8 +88,9 @@ BACKUPS_DIR = CONFIG_DIR / "backups"
 # Provider types whose upload path is wired in v0.18.0 (bead 0i2vt.8). Dropbox
 # and OneDrive are DEFERRED to a v0.18.x follow-up (PO decision 2026-06-17) —
 # a configured target of a deferred provider is treated as a non-silent
-# per-target failure rather than silently skipped.
-_SUPPORTED_UPLOAD_PROVIDERS = ("s3", "gdrive", "webdav")
+# per-target failure rather than silently skipped. Single source of truth lives
+# in cloud_storage (also gates the config-UI test surface — SEC-4).
+_SUPPORTED_UPLOAD_PROVIDERS = SUPPORTED_PROVIDERS
 
 
 def _bump_metric(result: str) -> None:
