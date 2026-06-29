@@ -186,6 +186,84 @@ async def async_client(test_session, test_engine):
 
 
 @pytest.fixture
+def non_admin_client(async_client, test_session):
+    """An authenticated NON-admin client (auth enabled, require_auth + setup).
+
+    Closes the kgz3k test gap: there was no non-admin fixture, so the
+    field-level admin gate on POST /api/settings could only be exercised
+    against an admin/auth-disabled caller — a vacuous test. This fixture
+    forces auth-ENABLED at the settings router's admin-resolver and binds the
+    resolver's ``get_current_user`` to a real, non-admin ``User`` so the
+    gate's 403 path actually bites.
+
+    ``routers.settings._resolve_settings_admin`` reads ``get_auth_settings``
+    and ``get_current_user`` as module-level names in ``routers.settings``, so
+    we patch them there (a direct call, not a FastAPI sub-dependency, so
+    ``dependency_overrides`` would NOT apply). Yields the ``AsyncClient``.
+    """
+    from unittest.mock import AsyncMock, patch
+    from models import User
+
+    non_admin = User(
+        id=4242,
+        username="regular-user",
+        is_admin=False,
+        is_active=True,
+        auth_provider="local",
+    )
+
+    auth_patch = patch("routers.settings.get_auth_settings")
+    user_patch = patch(
+        "routers.settings.get_current_user",
+        new=AsyncMock(return_value=non_admin),
+    )
+    auth_mock = auth_patch.start()
+    user_patch.start()
+    auth_mock.return_value.require_auth = True
+    auth_mock.return_value.setup_complete = True
+    try:
+        yield async_client
+    finally:
+        auth_patch.stop()
+        user_patch.stop()
+
+
+@pytest.fixture
+def admin_client(async_client, test_session):
+    """An authenticated ADMIN client (auth enabled), companion to
+    :func:`non_admin_client`.
+
+    Proves the field-level admin gate ALLOWS an admin to change admin-only
+    fields when auth is enabled — the positive control for the 403 tests.
+    """
+    from unittest.mock import AsyncMock, patch
+    from models import User
+
+    admin = User(
+        id=4243,
+        username="admin-user",
+        is_admin=True,
+        is_active=True,
+        auth_provider="local",
+    )
+
+    auth_patch = patch("routers.settings.get_auth_settings")
+    user_patch = patch(
+        "routers.settings.get_current_user",
+        new=AsyncMock(return_value=admin),
+    )
+    auth_mock = auth_patch.start()
+    user_patch.start()
+    auth_mock.return_value.require_auth = True
+    auth_mock.return_value.setup_complete = True
+    try:
+        yield async_client
+    finally:
+        auth_patch.stop()
+        user_patch.stop()
+
+
+@pytest.fixture
 def sample_journal_entry(test_session):
     """Create a sample journal entry for testing."""
     from datetime import datetime
