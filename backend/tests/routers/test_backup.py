@@ -474,7 +474,9 @@ class TestExportYaml:
         mock_settings.model_dump.return_value = {"url": "http://test:9191", "username": "admin", "password": "secret"}
 
         mock_client = AsyncMock()
-        mock_client.get_channels.return_value = [{"id": 1}]
+        mock_client.get_channels.return_value = {"count": 1, "next": None, "results": [{"id": 1, "streams": []}]}
+        mock_client.get_streams.return_value = {"count": 0, "next": None, "results": []}
+        mock_client.get_users.return_value = [{"id": 1, "username": "admin"}]
         mock_client.get_channel_groups.return_value = [{"id": 1, "name": "News"}]
         mock_client.get_m3u_accounts.return_value = [{"id": 1, "name": "Provider", "url": "http://m3u"}]
         mock_client.get_epg_sources.return_value = [{"id": 1, "name": "EPG1", "url": "http://epg"}]
@@ -619,6 +621,8 @@ class TestExportSections:
         response = await async_client.get("/api/backup/export-sections")
         assert response.status_code == 200
         sections = response.json()
+        # artifact_only categories (channels / dispatcharr_users) are excluded
+        # from the legacy export-sections list (7i8rf), so the count stays 13.
         assert len(sections) == 13
         keys = {s["key"] for s in sections}
         assert "settings" in keys
@@ -665,6 +669,8 @@ class TestSelectiveExport:
         data = yaml.safe_load(response.text)
         assert "settings" in data
         assert "database" in data
+        # The legacy /export default excludes artifact_only categories (channels /
+        # dispatcharr_users — 7i8rf), so the section count stays 13.
         assert len(data["ecm_export"]["sections_included"]) == 13
 
     @pytest.mark.asyncio
@@ -1052,6 +1058,8 @@ class TestValidateYaml:
         data = response.json()
         assert data["valid"] is True
         assert data["version"] == "0.16.0"
+        # artifact_only categories (channels / dispatcharr_users) are hidden from
+        # the legacy validate list (7i8rf), so the count stays 13.
         assert len(data["sections"]) == 13
 
         # Check a few sections
