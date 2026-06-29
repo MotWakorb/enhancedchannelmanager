@@ -1099,6 +1099,34 @@ export interface SettingsResponse {
   // bare IPs). Used ONLY to RANK media-server attribution candidates,
   // never to gate. Default empty.
   trusted_media_networks: string[];
+  // nngkg / bead 0i2vt.5: DBAS outbound-destination policy mode. Read by the
+  // first-run wizard + Settings > Security section. The always-on denylist is
+  // enforced unconditionally in the backend regardless of this value.
+  ssrf_outbound_mode: OutboundPolicyMode;
+}
+
+/**
+ * DBAS outbound-destination policy mode (nngkg).
+ *
+ * `lan_friendly` (DEFAULT) lets ECM reach private/home-network addresses, so
+ * backups can go to a NAS on your own network. `public_only` blocks those and
+ * allows only public internet destinations. (Plain-language copy lives in the
+ * UI; these are the wire values consumed by the backend SSRF chokepoint.)
+ */
+export type OutboundPolicyMode = 'lan_friendly' | 'public_only';
+
+/**
+ * Persist the outbound-policy mode (nngkg). Dedicated endpoint so the
+ * Settings > Security section and the first-run wizard can save the operator's
+ * choice without a full settings round-trip. Returns the saved mode.
+ */
+export async function saveSecurityMode(
+  mode: OutboundPolicyMode,
+): Promise<{ ssrf_outbound_mode: OutboundPolicyMode }> {
+  return fetchJson(`${API_BASE}/settings/security`, {
+    method: 'PATCH',
+    body: JSON.stringify({ ssrf_outbound_mode: mode }),
+  });
 }
 
 // Stream preview mode for browser playback

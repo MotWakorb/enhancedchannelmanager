@@ -23,6 +23,7 @@ import { setDateFormatLocale } from './utils/formatting';
 import { computeAutoRename } from './utils/channelRename';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
+import { SecurityFirstRunModal } from './components/SecurityFirstRunModal';
 import { NotificationCenter } from './components/NotificationCenter';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -2591,6 +2592,11 @@ function App() {
         onDownloadM3U={() => downloadM3U(vlcModalStreamUrl, vlcModalStreamName)}
         streamName={vlcModalStreamName || 'Stream'}
       />
+
+      {/* First-run backup-destination choice (bead nngkg). Self-gates on a
+          localStorage flag; only mounted once ECM is configured (health set)
+          so it never overlaps the initial setup flow. */}
+      {health && <SecurityFirstRunModal />}
     </div>
     </NotificationProvider>
   );

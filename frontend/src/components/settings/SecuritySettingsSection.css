@@ -1,0 +1,63 @@
+/**
+ * SecuritySettingsSection styles (bead nngkg).
+ *
+ * Reuses the shared `.backup-card` chrome (BackupRestoreSection.css) for the
+ * card frame; this file only styles the radio-option list. Selected-state
+ * meaning is carried by the radio + a border accent, not by colour alone.
+ */
+
+.security-settings-no-access {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  color: var(--text-secondary);
+}
+
+.security-mode-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.security-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background-color: var(--input-bg);
+  cursor: pointer;
+}
+
+.security-mode-option.is-selected {
+  border-color: var(--accent-primary);
+  box-shadow: inset 0 0 0 1px var(--accent-primary);
+}
+
+.security-mode-option input[type='radio'] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+  accent-color: var(--accent-primary);
+}
+
+.security-mode-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.security-mode-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.security-mode-detail {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
