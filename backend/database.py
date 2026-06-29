@@ -276,6 +276,118 @@ def _wal_checkpoint_truncate(engine) -> None:
         )
 
 
+# --- Mid-run periodic PASSIVE checkpoint (bd-xjlxj / GH #473) --------------
+# DECISION (code-verified, see bead xjlxj): the bead's primary approach
+# assumed the ~10s stats poller (BandwidthTracker) holds a pinned read
+# transaction across the poll interval, starving the passive auto-checkpoint.
+# Reading the poll path disproves that premise — every session in
+# ``bandwidth_tracker._collect_stats`` / ``_process_channel_snapshot`` / the
+# ``_update_*`` helpers is opened with ``get_session()``, used SYNCHRONOUSLY
+# (no ``await`` between open and ``close()``), and closed in a ``finally``.
+# The ``asyncio.sleep(poll_interval)`` happens in ``_poll_loop`` with NO
+# session held. There is no long read txn to shorten.
+#
+# The real residual WAL-growth vector on a busy install is FREQUENT
+# OVERLAPPING short readers (poll every 10s + HTTP requests + scheduled
+# tasks): a PASSIVE auto-checkpoint backs off whenever any reader is mid-WAL-
+# frame, so during sustained activity the WAL can drift up toward
+# ``journal_size_limit`` and the boot-only TRUNCATE is the only full reset.
+#
+# This is the bead's documented FALLBACK: a count-based periodic PASSIVE
+# checkpoint that gives the checkpointer extra, deliberate attempts to reclaim
+# mid-run. PASSIVE — NEVER TRUNCATE — is deliberate: TRUNCATE takes an
+# exclusive WAL lock and contends with concurrent readers ('database is
+# locked' / write stalls). PASSIVE never blocks readers or writers; it
+# reclaims what it can and reports what it couldn't via ``(busy, log,
+# checkpointed)``.
+#
+# Default cadence: every 30 poll cycles. At the default 10s poll interval that
+# is ~5 minutes — frequent enough to bound WAL growth between the boot
+# truncate windows, infrequent enough to add negligible overhead (one PASSIVE
+# checkpoint per 5 min is cheap and contention-free).
+WAL_PASSIVE_CHECKPOINT_EVERY_N_POLLS = 30
+
+
+def _wal_checkpoint_passive(engine) -> None:
+    """Run ``PRAGMA wal_checkpoint(PASSIVE)`` against the journal DB.
+
+    PASSIVE (not TRUNCATE) deliberately: it never takes the exclusive WAL
+    lock, so it cannot stall concurrent readers/writers — it merges whatever
+    WAL frames it can into the main file and leaves the rest. This is the
+    hot-path-safe complement to the boot-time ``_wal_checkpoint_truncate``:
+    called periodically mid-run it gives the checkpointer extra attempts to
+    reclaim WAL pages that a transient reader prevented the automatic
+    per-commit PASSIVE checkpoint from reclaiming.
+
+    The PRAGMA returns ``(busy, log, checkpointed)``:
+
+    * ``busy``  — 1 if a reader/writer prevented a full checkpoint (expected
+      occasionally on a busy install; PASSIVE simply backs off, harmless).
+    * ``log``   — total frames in the WAL.
+    * ``checkpointed`` — frames merged into the main DB this call.
+
+    Logged at INFO so operators have visible evidence the periodic checkpoint
+    fires and can correlate WAL size against ``busy``/``checkpointed``.
+    Failure (lock, disk full, read-only fs) is non-fatal: log a WARN and
+    continue — the per-commit auto-checkpoint and the boot truncate remain.
+    """
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)")).fetchone()
+            conn.commit()
+        busy = row[0] if row else 0
+        log_frames = row[1] if row else 0
+        checkpointed = row[2] if row else 0
+        logger.info(
+            "[DATABASE] Periodic WAL checkpoint (PASSIVE): busy=%s log=%s checkpointed=%s",
+            busy,
+            log_frames,
+            checkpointed,
+        )
+    except Exception as e:
+        logger.warning(
+            "[DATABASE] Periodic WAL checkpoint (PASSIVE) failed (non-fatal): %s", e
+        )
+
+
+def maybe_periodic_wal_checkpoint(
+    poll_count: int,
+    every_n_polls: int = WAL_PASSIVE_CHECKPOINT_EVERY_N_POLLS,
+    engine=None,
+) -> bool:
+    """Fire a PASSIVE WAL checkpoint on a count-based trigger.
+
+    Called from the BandwidthTracker poll loop (the natural ~10s heartbeat).
+    Returns ``True`` when a checkpoint was attempted this call, ``False``
+    otherwise — the return value is what the unit test asserts against (the
+    trigger is count-based, NOT file-size-based, so the test is deterministic
+    and not flaky on WAL byte counts).
+
+    The trigger fires when ``poll_count`` is a positive multiple of
+    ``every_n_polls``. ``poll_count`` is the tracker's monotonically-
+    increasing cycle counter; ``poll_count == 0`` never fires (the boot
+    truncate already ran).
+
+    ``every_n_polls <= 0`` disables the periodic checkpoint entirely (returns
+    ``False`` without touching the DB) — an operator escape hatch.
+
+    The engine is resolved lazily from the module-level ``_engine`` when not
+    supplied; if the DB is not yet initialized this is a no-op (the tracker
+    can outlive a DB reset during shutdown).
+    """
+    if every_n_polls <= 0:
+        return False
+    if poll_count <= 0 or poll_count % every_n_polls != 0:
+        return False
+
+    eng = engine if engine is not None else _engine
+    if eng is None:
+        return False
+
+    _wal_checkpoint_passive(eng)
+    return True
+
+
 def _integrity_check(engine) -> None:
     """Run ``PRAGMA quick_check`` against the journal DB and loud-fail on damage.
 
