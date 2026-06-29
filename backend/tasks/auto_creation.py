@@ -356,8 +356,9 @@ class AutoCreationTask(TaskScheduler):
                     title="Auto-Creation: Capped",
                     message=(
                         f"Auto-creation capped at {created} of ~{would} would-create "
-                        f"channels — review the rule or raise the cap "
-                        f"(max_auto_created_channels_per_run)."
+                        f"channels. It is idempotent — run auto-creation again to "
+                        f"continue (created channels persist), or raise the cap in "
+                        f"Settings > Auto Creation."
                     ),
                     source="auto_creation",
                     source_id="capped",
