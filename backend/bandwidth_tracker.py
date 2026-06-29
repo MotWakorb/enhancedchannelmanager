@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import distinct, func
 from sqlalchemy.exc import IntegrityError, OperationalError
 
-from database import get_session
+from database import get_session, maybe_periodic_wal_checkpoint
 from models import (
     BandwidthDaily,
     ChannelBandwidth,
@@ -2095,6 +2095,15 @@ class BandwidthTracker:
                 # ``/api/m3u/accounts/`` payload every poll.
                 await self._maybe_refresh_m3u_accounts()
                 await self._collect_stats()
+                # Mid-run WAL-growth backstop (bd-xjlxj / GH #473). The poll
+                # loop is the natural ~10s heartbeat, so we piggy-back a
+                # count-based PASSIVE checkpoint here rather than owning a
+                # second background-task lifecycle. PASSIVE never blocks
+                # readers/writers (NEVER TRUNCATE on the hot path); the helper
+                # logs (busy, log, checkpointed) and is non-fatal on error.
+                # ``_poll_count`` is bumped first-thing inside _collect_stats,
+                # so it advances even on polls that bail early (WS-suppress).
+                maybe_periodic_wal_checkpoint(self._poll_count)
             except asyncio.CancelledError:
                 break
             except Exception as e:
