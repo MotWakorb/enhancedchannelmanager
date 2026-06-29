@@ -413,6 +413,77 @@ async def test_ledger_persisted_during_rollback(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 9b. Per-create durable flush (bead l1p4p): an importer can flush the shared
+# ledger to disk WITHIN a step (after each record_created, before the next
+# create) via ctx.flush_ledger(), so a mid-category crash leaves a recoverable
+# record — not only after a whole step completes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_per_create_flush_persists_first_entry_before_second_create(tmp_path):
+    import json as _json
+    from dbas.restore_orchestrator import _ledger_path
+
+    seen_on_disk = []  # ledger entry count observed on disk at each create point
+
+    async def _two_create_step(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.USER)
+        for dest_id, name in ((201, "alice"), (202, "bob")):
+            # Record what is ALREADY durable before issuing this create.
+            path = _ledger_path(ctx.ledger.restore_id, tmp_path)
+            if path.exists():
+                seen_on_disk.append(len(_json.loads(path.read_text())["entries"]))
+            else:
+                seen_on_disk.append(0)
+            cat.created += 1
+            ctx.ledger.record_created(EntityType.USER, dest_id, name)
+            ctx.flush_ledger()  # durable per-create flush
+        return None
+
+    ledger = _ledger("rid-percreate")
+    await run_restore(
+        plan=_plan(_cat(EntityType.USER, [{"id": 1, "username": "alice"}])),
+        client=_client(),
+        steps=[ImporterStep(EntityType.USER, _two_create_step)],
+        report=_report(),
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    # Before alice's create: 0 entries durable. Before bob's create: alice (1)
+    # is ALREADY flushed — the durability contract.
+    assert seen_on_disk == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_per_create_flush_is_noop_on_dry_run(tmp_path):
+    from dbas.restore_orchestrator import _ledger_path
+
+    async def _flushing_step(ctx: ApplyContext):
+        # On a dry-run nothing is created; flush must be a no-op that never
+        # writes the ledger path.
+        ctx.flush_ledger()
+        ctx.report.category(EntityType.USER).would_create += 1
+        return None
+
+    report = RestoreReport(is_dry_run=True)
+    ledger = _ledger("rid-dryrun")
+    await run_restore(
+        plan=_plan(_cat(EntityType.USER, [{"id": 1, "username": "alice"}])),
+        client=_client(),
+        steps=[ImporterStep(EntityType.USER, _flushing_step)],
+        report=report,
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=False,
+        ledger_dir=tmp_path,
+    )
+    assert not _ledger_path("rid-dryrun", tmp_path).exists()
+
+
+# ---------------------------------------------------------------------------
 # 6b. EPG_SOURCE + STREAM_PROFILE compensators (enhancedchannelmanager-v1uz9)
 #
 # Before v1uz9 the rollback dispatch had NO compensator for epg_source or

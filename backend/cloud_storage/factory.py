@@ -11,6 +11,15 @@ from cloud_storage.types import CloudStorageAdapter
 
 logger = logging.getLogger(__name__)
 
+# Providers whose adapters are HARDENED — routed through the SSRF chokepoint
+# (bead 0i2vt.8) and validated at the API boundary. OneDrive and Dropbox are
+# DEFERRED to a v0.18.x follow-up (PO decision 2026-06-17): their adapters still
+# make raw, un-validated outbound calls (see tests/test_ssrf_chokepoint_guard.py
+# baseline), so the config-UI test/upload surfaces must NOT exercise them
+# (SEC-4, bead enhancedchannelmanager-uomwu). This is the single source of truth
+# for "which providers are wired this release"; tasks.dbas_backup imports it.
+SUPPORTED_PROVIDERS = ("s3", "gdrive", "webdav")
+
 
 def get_adapter(provider_type: str, credentials: dict) -> CloudStorageAdapter:
     """Factory function to create the appropriate cloud storage adapter.
