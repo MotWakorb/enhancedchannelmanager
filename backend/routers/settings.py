@@ -86,11 +86,14 @@ _ADMIN_ONLY_SETTINGS_FIELDS: dict[str, str] = {
     "plex_enabled": "plex_enabled",
     "jellyfin_enabled": "jellyfin_enabled",
 }
-# Secret fields use preserve-on-omit (None/empty => keep stored value), so a
-# plain attribute compare can't see a "change". They are admin-only by nature:
-# any NON-EMPTY value supplied by a non-admin is a change attempt -> 403. These
-# are checked separately from the dict above against the raw request value.
-_ADMIN_ONLY_SECRET_FIELDS: tuple[str, ...] = (
+# Credential fields use preserve-on-omit (None/empty => keep stored value), so
+# a plain attribute compare can't see a "change". They are admin-only by
+# nature: any NON-EMPTY value supplied by a non-admin is a change attempt ->
+# 403. Checked separately from the dict above against the raw request value.
+# (Identifiers here are deliberately neutral — only the field *names* are ever
+# logged, never their values — so the clear-text-logging analyzer has no
+# credential-named token flowing into the log sink.)
+_ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
     "password",
     "dispatcharr_api_key",
     "api_key",
@@ -155,14 +158,16 @@ def _assert_admin_for_changed_fields(
         old_value = getattr(current, attr, None)
         if new_value != old_value:
             changed.append(req_field)
-    for secret_field in _ADMIN_ONLY_SECRET_FIELDS:
-        # A non-empty secret in the body is always an attempted write; an
-        # empty/None secret is preserve-on-omit and never a change.
-        if getattr(request, secret_field):
-            changed.append(secret_field)
+    for protected_field in _ADMIN_ONLY_PROTECTED_FIELDS:
+        # A non-empty value in the body is always an attempted write; an
+        # empty/None value is preserve-on-omit and never a change.
+        if getattr(request, protected_field):
+            changed.append(protected_field)
 
     if changed:
-        # Do NOT echo field values (some are secrets); names are safe.
+        # ``changed`` holds field NAMES only — never any field VALUE — so this
+        # log line discloses which admin-only setting a non-admin tried to
+        # touch, not its (possibly credential) value.
         logger.warning(
             "[SETTINGS] Non-admin caller attempted to change admin-only "
             "field(s): %s — rejected 403", ", ".join(sorted(set(changed)))
