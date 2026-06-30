@@ -609,14 +609,26 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                 if event == "end" and elem.tag == "channel":
                     channel_id = elem.get("id", "")
                     if channel_id == tvg_id:
+                        # Prefer <gnid> (modern XMLTV Gracenote station id); fall back
+                        # to <lcn> for legacy EPGs. Iterate children once so document
+                        # order doesn't matter — gnid always wins over lcn.
+                        gnid = None
                         lcn = None
                         for child in elem:
-                            if child.tag == "lcn":
-                                lcn = child.text
-                                break
-                        if lcn:
-                            logger.info("[EPG-LCN] Found LCN %s for %s in %s", lcn, tvg_id, source_name)
-                            return {"tvg_id": tvg_id, "lcn": lcn, "source": source_name}
+                            if child.tag == "gnid" and gnid is None:
+                                text = (child.text or "").strip()
+                                if text:
+                                    gnid = text
+                            elif child.tag == "lcn" and lcn is None:
+                                text = (child.text or "").strip()
+                                if text:
+                                    lcn = text
+                        gracenote_id = gnid or lcn
+                        if gracenote_id:
+                            logger.info("[EPG-LCN] Found gracenote id %s for %s in %s", gracenote_id, tvg_id, source_name)
+                            # Response key keeps the legacy name "lcn"; the value is the
+                            # gracenote station id (from <gnid>, or <lcn> fallback).
+                            return {"tvg_id": tvg_id, "lcn": gracenote_id, "source": source_name}
                     if root is not None:
                         root.clear()
                 if event == "end" and elem.tag == "programme":
@@ -783,13 +795,25 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                 if event == "end" and elem.tag == "channel":
                     channel_id = elem.get("id", "")
                     if channel_id in tvg_ids and channel_id not in found:
+                        # Prefer <gnid> (modern XMLTV Gracenote station id); fall back
+                        # to <lcn> for legacy EPGs. Iterate children once so document
+                        # order doesn't matter — gnid always wins over lcn.
+                        gnid = None
                         lcn = None
                         for child in elem:
-                            if child.tag == "lcn":
-                                lcn = child.text
-                                break
-                        if lcn:
-                            found[channel_id] = {"lcn": lcn, "source": source_name}
+                            if child.tag == "gnid" and gnid is None:
+                                text = (child.text or "").strip()
+                                if text:
+                                    gnid = text
+                            elif child.tag == "lcn" and lcn is None:
+                                text = (child.text or "").strip()
+                                if text:
+                                    lcn = text
+                        gracenote_id = gnid or lcn
+                        if gracenote_id:
+                            # Response key keeps the legacy name "lcn"; the value is the
+                            # gracenote station id (from <gnid>, or <lcn> fallback).
+                            found[channel_id] = {"lcn": gracenote_id, "source": source_name}
                     if root is not None:
                         root.clear()
                 if event == "end" and elem.tag == "programme":
