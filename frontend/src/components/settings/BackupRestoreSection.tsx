@@ -5,6 +5,7 @@ import { BackupRestoreModal } from '../BackupRestoreModal';
 import { DbasRestoreModal } from '../DbasRestoreModal';
 import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { SyncTargetsCard } from './SyncTargetsCard';
+import { CloudTargetsCard } from './CloudTargetsCard';
 import { BackupScheduleBanner } from './BackupScheduleBanner';
 import { getDateLocale } from '../../utils/formatting';
 import './BackupRestoreSection.css';
@@ -359,6 +360,11 @@ export function BackupRestoreSection({ isAdmin }: Props) {
 
       {/* Cross-Instance Sync — epic i39wu / nnl9s */}
       <SyncTargetsCard />
+
+      {/* Cloud upload destinations for DBAS backup — relocated from the removed Export tab (vrrxv / 1w428) */}
+      <div className="backup-card">
+        <CloudTargetsCard />
+      </div>
 
       {/* DBAS artifact restore (.zip, incl. encrypted) — bead 7euap */}
       <div className="backup-card">

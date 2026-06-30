@@ -817,30 +817,6 @@ To reconstruct one batch:
 
 **Normalization interaction:** `normalization_group_ids` is an accepted scalar field, so bulk-update can reassign normalization groups across many rules in one call. The list is stored as-is (deduplicated and sorted) — IDs are **not** verified against `NormalizationRuleGroup` at write time, matching the behavior of `PUT /api/auto-creation/rules/{id}`. See [`docs/normalization.md`](normalization.md) for the full normalization model and how groups feed the auto-creation pipeline.
 
-## FFMPEG Builder
-
-| Endpoint | Description |
-|-|-|
-| `GET /api/ffmpeg/capabilities` | Detect system FFmpeg capabilities (codecs, formats, filters, hardware) |
-| `POST /api/ffmpeg/probe` | Probe a media source for stream info (codec, resolution, bitrate) |
-| `GET /api/ffmpeg/configs` | List all saved configurations |
-| `POST /api/ffmpeg/configs` | Create new configuration |
-| `GET /api/ffmpeg/configs/{id}` | Get specific configuration |
-| `PUT /api/ffmpeg/configs/{id}` | Update configuration |
-| `DELETE /api/ffmpeg/configs/{id}` | Delete configuration |
-| `POST /api/ffmpeg/validate` | Validate builder state, return errors/warnings |
-| `POST /api/ffmpeg/generate-command` | Generate annotated FFmpeg command from builder state |
-| `GET /api/ffmpeg/jobs` | List all transcoding jobs |
-| `POST /api/ffmpeg/jobs` | Create and queue new transcoding job |
-| `GET /api/ffmpeg/jobs/{id}` | Get job status and progress |
-| `POST /api/ffmpeg/jobs/{id}/cancel` | Cancel running job |
-| `DELETE /api/ffmpeg/jobs/{id}` | Delete job record |
-| `GET /api/ffmpeg/queue-config` | Get job queue configuration |
-| `PUT /api/ffmpeg/queue-config` | Update queue settings (max concurrent, retries) |
-| `GET /api/ffmpeg/profiles` | List saved user profiles |
-| `POST /api/ffmpeg/profiles` | Save builder state as a profile |
-| `DELETE /api/ffmpeg/profiles/{id}` | Delete saved profile |
-
 ## Cache
 
 | Endpoint | Description |
@@ -910,34 +886,6 @@ Named key → value tables used by the dummy EPG template engine's `{key|lookup:
 | `DELETE /api/lookup-tables/{id}` | Delete a table (cascades to any source still referencing it by ID — the preview path skips missing IDs silently) |
 
 Names are unique. Each table is capped at 10 000 entries.
-
-## Export
-
-| Endpoint | Description |
-|-|-|
-| `GET /api/export/profiles` | List export profiles |
-| `POST /api/export/profiles` | Create export profile |
-| `PATCH /api/export/profiles/{id}` | Update export profile |
-| `DELETE /api/export/profiles/{id}` | Delete export profile |
-| `POST /api/export/profiles/{id}/generate` | Generate export files |
-| `GET /api/export/profiles/{id}/preview` | Preview export output |
-| `GET /api/export/profiles/{id}/download/m3u` | Download exported M3U |
-| `GET /api/export/profiles/{id}/download/xmltv` | Download exported XMLTV |
-| `GET /api/export/cloud-targets` | List cloud storage targets |
-| `POST /api/export/cloud-targets` | Create cloud storage target |
-| `PATCH /api/export/cloud-targets/{id}` | Update cloud storage target |
-| `DELETE /api/export/cloud-targets/{id}` | Delete cloud storage target |
-| `POST /api/export/cloud-targets/test` | Test cloud storage credentials |
-| `POST /api/export/cloud-targets/{id}/test` | Test a specific cloud target |
-| `GET /api/export/publish-configs` | List publish configurations |
-| `POST /api/export/publish-configs` | Create publish configuration |
-| `PATCH /api/export/publish-configs/{id}` | Update publish configuration |
-| `DELETE /api/export/publish-configs/{id}` | Delete publish configuration |
-| `POST /api/export/publish-configs/{id}/publish` | Publish to cloud target |
-| `POST /api/export/publish-configs/{id}/dry-run` | Dry-run publish |
-| `GET /api/export/publish-history` | Get publish history |
-| `DELETE /api/export/publish-history` | Clear publish history |
-| `DELETE /api/export/publish-history/{id}` | Delete publish history entry |
 
 ## Backup & Restore
 
@@ -1027,7 +975,7 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 | `GET /api/cloud-targets` | List configured cloud storage targets (credentials masked). |
 | `POST /api/cloud-targets` | Create a cloud storage target. |
 | `GET /api/cloud-targets/{id}` | Get a cloud storage target. |
-| `PUT /api/cloud-targets/{id}` | Update a cloud storage target. |
+| `PATCH /api/cloud-targets/{id}` | Update a cloud storage target. |
 | `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. |
 | `POST /api/cloud-targets/{id}/test` | Test connectivity to a cloud storage target. |
 

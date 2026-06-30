@@ -24,7 +24,6 @@ graph TB
             M3UManager["M3U Manager"]
             EPGManager["EPG Manager"]
             AutoCreation["Auto Creation"]
-            FFMPEGBuilder["FFMPEG Builder"]
             Settings["Settings"]
             Guide & Journal & Stats
             LogoManager["Logo Manager"]
@@ -71,7 +70,7 @@ graph TB
             AuthProviders["Providers (Dispatcharr)"]
         end
 
-        subgraph Routers["21 Domain Routers (/api/*)"]
+        subgraph Routers["20 Domain Routers (/api/*)"]
             direction LR
             R_channels["/channels"]
             R_groups["/channel-groups"]
@@ -90,7 +89,6 @@ graph TB
             R_profiles["/profiles"]
             R_journal["/journal"]
             R_auto["/auto-creation"]
-            R_ffmpeg["/ffmpeg"]
             R_health["/health"]
             R_m3udigest["/m3u-digest"]
             R_dedup["/channel-merges (dedup)"]
@@ -429,7 +427,7 @@ graph LR
     Client -.reads.-> Settings
 ```
 
-**Tool modules (15 domains):** `channels`, `channel_groups`, `streams`, `m3u`, `epg`, `auto_creation`, `export`, `ffmpeg`, `tasks`, `stats`, `system`, `notifications`, `profiles`, `normalization`, `dedup`.
+**Tool modules (13 domains):** `channels`, `channel_groups`, `streams`, `m3u`, `epg`, `auto_creation`, `tasks`, `stats`, `system`, `notifications`, `profiles`, `normalization`, `dedup`.
 
 **Resources (read-only):** `ecm://stats/overview`, `ecm://channels/summary`, `ecm://tasks/status`.
 

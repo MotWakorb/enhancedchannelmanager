@@ -16,7 +16,6 @@ from tasks.popularity_calculation import PopularityCalculationTask
 from tasks.auto_creation import AutoCreationTask
 from tasks.dummy_epg_refresh import DummyEPGRefreshTask
 from tasks.black_screen_scan import BlackScreenScanTask
-from tasks.export_publish import ExportPublishTask
 from tasks.yaml_backup import YamlBackupTask
 from tasks.dbas_backup import DbasBackupTask
 from tasks.dbas_restore import DbasRestoreTask
@@ -35,7 +34,6 @@ __all__ = [
     "AutoCreationTask",
     "DummyEPGRefreshTask",
     "BlackScreenScanTask",
-    "ExportPublishTask",
     "YamlBackupTask",
     "DbasBackupTask",
     "DbasRestoreTask",

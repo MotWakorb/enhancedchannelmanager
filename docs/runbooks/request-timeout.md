@@ -20,7 +20,7 @@ All values are environment variables, overridable at container runtime.
 
 | Variable | Default | Meaning |
 |-|-|-|
-| `ECM_REQUEST_TIMEOUT_SECONDS` | `30` | Per-request budget. Requests exceeding this return 504 Gateway Timeout. Applies to `/api/*` except streaming/ffmpeg/tasks/backup. |
+| `ECM_REQUEST_TIMEOUT_SECONDS` | `30` | Per-request budget. Requests exceeding this return 504 Gateway Timeout. Applies to `/api/*` except streaming/tasks/backup. |
 | `ECM_LIMIT_CONCURRENCY` | `100` | Max simultaneous in-flight requests per uvicorn worker. When exceeded, uvicorn returns 503. |
 | `ECM_TIMEOUT_KEEP_ALIVE` | `30` | Seconds to hold an idle keep-alive connection open. |
 | `ECM_CPU_POOL_WORKERS` | `min(32, 2 * cpu_count)` | Size of the thread pool used by `run_cpu_bound`. |

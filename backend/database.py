@@ -835,7 +835,7 @@ def init_db() -> None:
 
         # Import models to register them with Base
         from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable, PendingMerge, PendingMergeJournal  # noqa: F401
-        from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory  # noqa: F401
+        from export_models import CloudStorageTarget  # noqa: F401
 
         # Apply Alembic migrations first so schema tracking is authoritative
         # (see ``docs/database_migrations.md``). For legacy installs we stamp

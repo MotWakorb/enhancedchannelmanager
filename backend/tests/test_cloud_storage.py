@@ -271,8 +271,8 @@ class TestDeferredProviderGate:
     async def test_inline_test_refuses_deferred_dropbox(self, async_client):
         """A 'Test Connection' for a deferred provider returns a non-silent
         'not supported' result without building/exercising the adapter."""
-        with patch("routers.export.get_adapter") as mock_get_adapter:
-            response = await async_client.post("/api/export/cloud-targets/test", json={
+        with patch("routers.cloud_targets.get_adapter") as mock_get_adapter:
+            response = await async_client.post("/api/cloud-targets/test", json={
                 "provider_type": "dropbox",
                 "credentials": {"access_token": "tok"},
             })
@@ -543,15 +543,15 @@ class TestKeyIntegrity:
 class TestCloudTargetCRUD:
     @pytest.mark.asyncio
     async def test_list_empty(self, async_client):
-        response = await async_client.get("/api/export/cloud-targets")
+        response = await async_client.get("/api/cloud-targets")
         assert response.status_code == 200
         assert response.json() == []
 
     @pytest.mark.asyncio
-    @patch("routers.export.journal")
+    @patch("routers.cloud_targets.journal")
     async def test_create_target(self, mock_journal, async_client):
-        with patch("routers.export.encrypt_credentials", return_value="encrypted_blob"):
-            response = await async_client.post("/api/export/cloud-targets", json={
+        with patch("routers.cloud_targets.encrypt_credentials", return_value="encrypted_blob"):
+            response = await async_client.post("/api/cloud-targets", json={
                 "name": "My S3",
                 "provider_type": "s3",
                 "credentials": {"bucket_name": "test", "access_key_id": "AK", "secret_access_key": "SK"},
@@ -565,47 +565,47 @@ class TestCloudTargetCRUD:
         assert "AK" not in json.dumps(data["credentials"])
 
     @pytest.mark.asyncio
-    @patch("routers.export.journal")
+    @patch("routers.cloud_targets.journal")
     async def test_create_duplicate_name_returns_409(self, mock_journal, async_client):
-        with patch("routers.export.encrypt_credentials", return_value="enc"):
-            await async_client.post("/api/export/cloud-targets", json={
+        with patch("routers.cloud_targets.encrypt_credentials", return_value="enc"):
+            await async_client.post("/api/cloud-targets", json={
                 "name": "Dup", "provider_type": "s3", "credentials": {"bucket_name": "b", "access_key_id": "a", "secret_access_key": "s"},
             })
-            response = await async_client.post("/api/export/cloud-targets", json={
+            response = await async_client.post("/api/cloud-targets", json={
                 "name": "Dup", "provider_type": "s3", "credentials": {"bucket_name": "b", "access_key_id": "a", "secret_access_key": "s"},
             })
         assert response.status_code == 409
 
     @pytest.mark.asyncio
-    @patch("routers.export.journal")
+    @patch("routers.cloud_targets.journal")
     async def test_delete_target(self, mock_journal, async_client):
-        with patch("routers.export.encrypt_credentials", return_value="enc"):
-            create_resp = await async_client.post("/api/export/cloud-targets", json={
+        with patch("routers.cloud_targets.encrypt_credentials", return_value="enc"):
+            create_resp = await async_client.post("/api/cloud-targets", json={
                 "name": "Delete Me", "provider_type": "s3",
                 "credentials": {"bucket_name": "b", "access_key_id": "a", "secret_access_key": "s"},
             })
         target_id = create_resp.json()["id"]
-        response = await async_client.delete(f"/api/export/cloud-targets/{target_id}")
+        response = await async_client.delete(f"/api/cloud-targets/{target_id}")
         assert response.status_code == 204
 
     @pytest.mark.asyncio
     async def test_delete_not_found(self, async_client):
-        response = await async_client.delete("/api/export/cloud-targets/9999")
+        response = await async_client.delete("/api/cloud-targets/9999")
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    @patch("routers.export.journal")
+    @patch("routers.cloud_targets.journal")
     async def test_update_target(self, mock_journal, async_client):
-        with patch("routers.export.encrypt_credentials", return_value="enc"):
-            create_resp = await async_client.post("/api/export/cloud-targets", json={
+        with patch("routers.cloud_targets.encrypt_credentials", return_value="enc"):
+            create_resp = await async_client.post("/api/cloud-targets", json={
                 "name": "Original", "provider_type": "s3",
                 "credentials": {"bucket_name": "b", "access_key_id": "a", "secret_access_key": "s"},
             })
         target_id = create_resp.json()["id"]
 
-        with patch("routers.export.encrypt_credentials", return_value="enc2"):
-            with patch("routers.export.decrypt_credentials", return_value={"bucket_name": "new-bucket"}):
-                response = await async_client.patch(f"/api/export/cloud-targets/{target_id}", json={
+        with patch("routers.cloud_targets.encrypt_credentials", return_value="enc2"):
+            with patch("routers.cloud_targets.decrypt_credentials", return_value={"bucket_name": "new-bucket"}):
+                response = await async_client.patch(f"/api/cloud-targets/{target_id}", json={
                     "name": "Updated",
                 })
         assert response.status_code == 200
@@ -614,13 +614,13 @@ class TestCloudTargetCRUD:
 
 class TestCloudTargetTestConnection:
     @pytest.mark.asyncio
-    @patch("routers.export.get_adapter")
-    @patch("routers.export.decrypt_credentials", return_value={"bucket_name": "b"})
-    @patch("routers.export.journal")
+    @patch("routers.cloud_targets.get_adapter")
+    @patch("routers.cloud_targets.decrypt_credentials", return_value={"bucket_name": "b"})
+    @patch("routers.cloud_targets.journal")
     async def test_saved_target(self, mock_journal, mock_decrypt, mock_get_adapter, async_client):
         # Create a target first
-        with patch("routers.export.encrypt_credentials", return_value="enc"):
-            create_resp = await async_client.post("/api/export/cloud-targets", json={
+        with patch("routers.cloud_targets.encrypt_credentials", return_value="enc"):
+            create_resp = await async_client.post("/api/cloud-targets", json={
                 "name": "Test Target", "provider_type": "s3",
                 "credentials": {"bucket_name": "b", "access_key_id": "a", "secret_access_key": "s"},
             })
@@ -632,7 +632,7 @@ class TestCloudTargetTestConnection:
         )
         mock_get_adapter.return_value = mock_adapter
 
-        response = await async_client.post(f"/api/export/cloud-targets/{target_id}/test")
+        response = await async_client.post(f"/api/cloud-targets/{target_id}/test")
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
@@ -640,11 +640,11 @@ class TestCloudTargetTestConnection:
 
     @pytest.mark.asyncio
     async def test_saved_target_not_found(self, async_client):
-        response = await async_client.post("/api/export/cloud-targets/9999/test")
+        response = await async_client.post("/api/cloud-targets/9999/test")
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    @patch("routers.export.get_adapter")
+    @patch("routers.cloud_targets.get_adapter")
     async def test_inline_credentials(self, mock_get_adapter, async_client):
         mock_adapter = AsyncMock()
         mock_adapter.test_connection.return_value = ConnectionTestResult(
@@ -652,7 +652,7 @@ class TestCloudTargetTestConnection:
         )
         mock_get_adapter.return_value = mock_adapter
 
-        response = await async_client.post("/api/export/cloud-targets/test", json={
+        response = await async_client.post("/api/cloud-targets/test", json={
             "provider_type": "s3",
             "credentials": {"bucket_name": "b", "access_key_id": "a", "secret_access_key": "s"},
         })
@@ -660,7 +660,7 @@ class TestCloudTargetTestConnection:
         assert response.json()["success"] is True
 
     @pytest.mark.asyncio
-    @patch("routers.export.get_adapter")
+    @patch("routers.cloud_targets.get_adapter")
     async def test_connection_failure(self, mock_get_adapter, async_client):
         mock_adapter = AsyncMock()
         mock_adapter.test_connection.return_value = ConnectionTestResult(
@@ -668,7 +668,7 @@ class TestCloudTargetTestConnection:
         )
         mock_get_adapter.return_value = mock_adapter
 
-        response = await async_client.post("/api/export/cloud-targets/test", json={
+        response = await async_client.post("/api/cloud-targets/test", json={
             "provider_type": "s3",
             "credentials": {"bucket_name": "b", "access_key_id": "a", "secret_access_key": "s"},
         })
@@ -676,7 +676,7 @@ class TestCloudTargetTestConnection:
         assert response.json()["success"] is False
 
     @pytest.mark.asyncio
-    @patch("routers.export.get_adapter")
+    @patch("routers.cloud_targets.get_adapter")
     async def test_inline_adapter_exception_sanitizes_message(
         self, mock_get_adapter, async_client
     ):
@@ -688,7 +688,7 @@ class TestCloudTargetTestConnection:
         secret = "AccessKey=AKIASECRET123 Bucket=internal://prod/db.sqlite"
         mock_get_adapter.side_effect = RuntimeError(secret)
 
-        response = await async_client.post("/api/export/cloud-targets/test", json={
+        response = await async_client.post("/api/cloud-targets/test", json={
             "provider_type": "s3",
             "credentials": {
                 "bucket_name": "b",
@@ -705,7 +705,7 @@ class TestCloudTargetTestConnection:
         assert "internal://" not in body["message"]
 
     @pytest.mark.asyncio
-    @patch("routers.export.get_adapter")
+    @patch("routers.cloud_targets.get_adapter")
     async def test_inline_import_error_sanitizes_path(
         self, mock_get_adapter, async_client
     ):
@@ -718,7 +718,7 @@ class TestCloudTargetTestConnection:
         err.name = "fakedep"
         mock_get_adapter.side_effect = err
 
-        response = await async_client.post("/api/export/cloud-targets/test", json={
+        response = await async_client.post("/api/cloud-targets/test", json={
             "provider_type": "s3",
             "credentials": {
                 "bucket_name": "b",
@@ -733,18 +733,18 @@ class TestCloudTargetTestConnection:
         assert "/opt/secret" not in body["message"]
 
     @pytest.mark.asyncio
-    @patch("routers.export.get_adapter")
-    @patch("routers.export.decrypt_credentials", return_value={"bucket_name": "b"})
-    @patch("routers.export.journal")
+    @patch("routers.cloud_targets.get_adapter")
+    @patch("routers.cloud_targets.decrypt_credentials", return_value={"bucket_name": "b"})
+    @patch("routers.cloud_targets.journal")
     async def test_saved_adapter_exception_sanitizes_message(
         self, mock_journal, mock_decrypt, mock_get_adapter, async_client
     ):
         """CodeQL py/stack-trace-exposure (#1351): saved cloud target test
         MUST sanitize adapter exception messages (same contract as inline).
         """
-        with patch("routers.export.encrypt_credentials", return_value="enc"):
+        with patch("routers.cloud_targets.encrypt_credentials", return_value="enc"):
             create_resp = await async_client.post(
-                "/api/export/cloud-targets",
+                "/api/cloud-targets",
                 json={
                     "name": "Sanitize Target",
                     "provider_type": "s3",
@@ -761,7 +761,7 @@ class TestCloudTargetTestConnection:
         mock_get_adapter.side_effect = RuntimeError(secret)
 
         response = await async_client.post(
-            f"/api/export/cloud-targets/{target_id}/test"
+            f"/api/cloud-targets/{target_id}/test"
         )
         assert response.status_code == 200
         body = response.json()
@@ -778,20 +778,20 @@ class TestCloudTargetTestConnection:
 
 class TestCredentialMasking:
     def test_masks_long_values(self):
-        from routers.export import _mask_credentials
+        from routers.cloud_targets import _mask_credentials
         creds = {"access_key_id": "AKIAIOSFODNN7EXAMPLE", "short": "abc"}
         masked = _mask_credentials(creds)
         assert masked["access_key_id"] == "***MPLE"
         assert masked["short"] == "***"
 
     def test_masks_nested_dicts(self):
-        from routers.export import _mask_credentials
+        from routers.cloud_targets import _mask_credentials
         creds = {"nested": {"secret": "verylongsecretvalue"}}
         masked = _mask_credentials(creds)
         assert masked["nested"]["secret"] == "***alue"
 
     def test_preserves_non_string_values(self):
-        from routers.export import _mask_credentials
+        from routers.cloud_targets import _mask_credentials
         creds = {"port": 443, "enabled": True}
         masked = _mask_credentials(creds)
         assert masked["port"] == 443
@@ -909,7 +909,7 @@ class TestOneDriveCloudTargetApiValidation:
 
     @pytest.mark.asyncio
     async def test_create_rejects_bad_tenant_id(self, async_client):
-        response = await async_client.post("/api/export/cloud-targets", json={
+        response = await async_client.post("/api/cloud-targets", json={
             "name": "BadTenant",
             "provider_type": "onedrive",
             "credentials": {
@@ -923,7 +923,7 @@ class TestOneDriveCloudTargetApiValidation:
 
     @pytest.mark.asyncio
     async def test_create_rejects_bad_drive_id(self, async_client):
-        response = await async_client.post("/api/export/cloud-targets", json={
+        response = await async_client.post("/api/cloud-targets", json={
             "name": "BadDrive",
             "provider_type": "onedrive",
             "credentials": {
@@ -936,10 +936,10 @@ class TestOneDriveCloudTargetApiValidation:
         assert "drive_id" in response.text
 
     @pytest.mark.asyncio
-    @patch("routers.export.journal")
+    @patch("routers.cloud_targets.journal")
     async def test_create_accepts_valid_onedrive_credentials(self, mock_journal, async_client):
-        with patch("routers.export.encrypt_credentials", return_value="enc"):
-            response = await async_client.post("/api/export/cloud-targets", json={
+        with patch("routers.cloud_targets.encrypt_credentials", return_value="enc"):
+            response = await async_client.post("/api/cloud-targets", json={
                 "name": "GoodOneDrive",
                 "provider_type": "onedrive",
                 "credentials": {
@@ -952,7 +952,7 @@ class TestOneDriveCloudTargetApiValidation:
 
     @pytest.mark.asyncio
     async def test_test_inline_rejects_bad_tenant_id(self, async_client):
-        response = await async_client.post("/api/export/cloud-targets/test", json={
+        response = await async_client.post("/api/cloud-targets/test", json={
             "provider_type": "onedrive",
             "credentials": {
                 "client_id": "c", "client_secret": "s",

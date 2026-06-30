@@ -153,7 +153,6 @@ frontend/src/
 ├── components/                # ~60+ components
 │   ├── tabs/                  # Tab-content components
 │   ├── autoCreation/          # Domain subfolder
-│   ├── ffmpegBuilder/
 │   ├── settings/
 │   └── *.tsx + *.css + *.test.tsx
 ├── contexts/                  # React Context providers

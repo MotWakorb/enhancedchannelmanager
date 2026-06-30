@@ -20,7 +20,6 @@ describe('parseHash', () => {
     expect(_parseHash('#auto-creation')).toEqual({ tab: 'auto-creation', settingsPage: null });
     expect(_parseHash('#journal')).toEqual({ tab: 'journal', settingsPage: null });
     expect(_parseHash('#stats')).toEqual({ tab: 'stats', settingsPage: null });
-    expect(_parseHash('#ffmpeg-builder')).toEqual({ tab: 'ffmpeg-builder', settingsPage: null });
     expect(_parseHash('#settings')).toEqual({ tab: 'settings', settingsPage: null });
   });
 

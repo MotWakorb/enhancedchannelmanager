@@ -2,7 +2,7 @@
 
 A SyncTarget is a remote Dispatcharr-B instance ECM can push config to
 (epic i39wu, bead vigbu). This router mirrors the CloudStorageTarget CRUD in
-``routers/export.py`` exactly:
+``routers/cloud_targets.py`` exactly:
 
 * credentials are Fernet-encrypted at rest via ``cloud_storage.crypto`` and are
   NEVER returned decrypted — every response masks them (last-4 only);
@@ -138,8 +138,8 @@ class SyncTargetResponse(BaseModel):
 def _mask_credentials(creds: dict) -> dict:
     """Mask sensitive credential values, showing only last 4 chars.
 
-    Mirrors ``routers/export.py._mask_credentials`` — kept local so the sync
-    router has no import dependency on the export router module.
+    Mirrors ``routers/cloud_targets.py._mask_credentials`` — kept local so the
+    sync router has no import dependency on the cloud-target router module.
     """
     masked: dict = {}
     for key, value in creds.items():
