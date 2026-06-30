@@ -52,6 +52,13 @@ vi.mock('../contexts/NotificationContext', () => ({
   }),
 }));
 
+// The modal uses BackupDestinationPromptContext to fire the backup-destination
+// choice when a dbas_backup schedule is enabled/created (bead s5a3o). Stub it so
+// these retention-field tests render without a provider.
+vi.mock('../contexts/BackupDestinationPromptContext', () => ({
+  useBackupDestinationPrompt: () => ({ promptBackupDestination: vi.fn() }),
+}));
+
 // autoCreationApi is imported but only called when the task references
 // auto_creation_rules in its parameter schema — our mock returns empty,
 // so loaders.has('auto_creation_rules') is false. Still stub to be safe.
