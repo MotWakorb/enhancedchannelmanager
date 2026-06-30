@@ -940,3 +940,24 @@
   border-left: 2px solid var(--warning);
   padding-left: 0.625rem;
 }
+
+/* Configure step — operator picks EPG sources before matching runs */
+.bulk-epg-configure {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.bulk-epg-configure-intro {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.bulk-epg-configure-sources {
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}

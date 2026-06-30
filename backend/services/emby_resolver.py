@@ -278,7 +278,7 @@ async def resolve_emby_users(
     # bd-mlcla: ``ip_is_server`` records whether the source IP matched the
     # Emby server (the soft rank hint + Tier-3 gate) — replaces the old
     # ``ip_mismatch`` reject log so the forensic trail shows rank-not-gate.
-    logger.info(
+    logger.debug(
         "[EMBY-RESOLVER] resolver_call ip=%s ip_is_server=%s ecm_channel=%r "
         "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
         "sessions_with_now_playing=%d (bd-dok7u, bd-mlcla)",
@@ -286,7 +286,7 @@ async def resolve_emby_users(
         ecm_stream_name, len(sessions), sessions_with_now_playing,
     )
     for session in sessions:
-        logger.info(
+        logger.debug(
             "[EMBY-RESOLVER] session_inspect user=%s session_id=%s "
             "has_now_playing=%s item_name=%r channel_name=%r "
             "channel_number=%r last_activity=%s",
