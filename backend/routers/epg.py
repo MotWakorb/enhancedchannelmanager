@@ -1045,14 +1045,27 @@ async def match_channels_to_epg(request: EPGMatchRequest):
             len(channels), len(streams), len(epg_data), fetch_elapsed,
         )
 
-        # Run matching
+        # Run matching through ECM's ONE shared NormalizationEngine (bd-xxzxe)
+        # so EPG matching strips channel-number noise (and timezone, in matching
+        # mode) consistently with the rest of the app. Tag-group lookups are
+        # cached on the engine + a module-level cache, so extract_core_name only
+        # warms once per batch, not per EPG entry.
         match_start = time.time()
-        results = batch_find_epg_matches(
-            channels=channels,
-            all_streams=streams,
-            epg_data=epg_data,
-            source_order=source_order or None,
-        )
+        from database import get_session
+        from normalization_engine import NormalizationEngine
+
+        db = get_session()
+        try:
+            engine = NormalizationEngine(db)
+            results = batch_find_epg_matches(
+                channels=channels,
+                all_streams=streams,
+                epg_data=epg_data,
+                source_order=source_order or None,
+                engine=engine,
+            )
+        finally:
+            db.close()
         match_elapsed = (time.time() - match_start) * 1000
 
         # Serialize results into pre-categorized buckets

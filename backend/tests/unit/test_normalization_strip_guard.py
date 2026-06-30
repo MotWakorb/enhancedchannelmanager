@@ -478,3 +478,75 @@ class TestRequireDelimiterDefaultFalseRegression:
         """'US: ESPN' -> 'ESPN' (strong delimiter also strips)."""
         result = engine.normalize("US: ESPN", group_ids=[country_setup.id]).normalized
         assert result == "ESPN"
+
+
+# ---------------------------------------------------------------------------
+# bd-xxzxe: extract_core_name now strips channel-number noise UNCONDITIONALLY
+# (leading channel numbers + trailing "(NNN)") so the shared engine ignores
+# channel-number noise for both merge core-name matching and EPG matching.
+# ---------------------------------------------------------------------------
+
+class TestExtractCoreNameNumberStrip:
+    def test_number_space_letter_prefix_stripped(self, engine):
+        """The headline bug: '201 ESPN' -> 'ESPN' (number + space + letter)."""
+        assert engine.extract_core_name("201 ESPN") == "ESPN"
+
+    def test_decimal_number_space_letter_stripped(self, engine):
+        """'2.2 KATU' -> 'KATU' (decimal LCN + space + letter)."""
+        assert engine.extract_core_name("2.2 KATU") == "KATU"
+
+    def test_trailing_parenthesized_number_stripped(self, engine):
+        """'ESPN (201)' -> 'ESPN' (trailing channel-number tag)."""
+        assert engine.extract_core_name("ESPN (201)") == "ESPN"
+
+    def test_delimited_number_prefix_stripped(self, engine):
+        """'107 | Discovery' -> 'Discovery' (delimited prefix)."""
+        assert engine.extract_core_name("107 | Discovery") == "Discovery"
+
+    # --- preservation guards: brand digits / trailing counts are NOT noise ---
+
+    def test_leading_brand_digit_preserved(self, engine):
+        """'3ABN' keeps its brand digit (no space after the digit)."""
+        assert engine.extract_core_name("3ABN") == "3ABN"
+
+    def test_trailing_number_word_preserved(self, engine):
+        """'Fox 5' keeps the trailing number (part of the name, not a prefix)."""
+        assert engine.extract_core_name("Fox 5") == "Fox 5"
+
+    def test_generic_collapse_guard_still_holds(self, engine, test_session):
+        """The bd-0emgo.2 generic-collapse guard is untouched.
+
+        'NFL Network' must NOT collapse to 'Network' even with 'NFL' as a
+        country-like prefix tag.
+        """
+        country = create_tag_group(test_session, name="Country Tags")
+        create_tag(test_session, group_id=country.id, value="NFL")
+        assert engine.extract_core_name("NFL Network") == "NFL Network"
+
+
+# ---------------------------------------------------------------------------
+# bd-xxzxe: timezone stripping is OPT-IN via for_matching=True. The default
+# keeps East/West DISTINCT — this is the regression guard that prevents
+# auto-creation from cross-merging regional feeds.
+# ---------------------------------------------------------------------------
+
+class TestExtractCoreNameMatchingMode:
+    @pytest.fixture
+    def timezone_setup(self, test_session):
+        tz = create_tag_group(test_session, name="Timezone Tags")
+        for tag in ["EAST", "WEST"]:
+            create_tag(test_session, group_id=tz.id, value=tag)
+        return tz
+
+    def test_default_keeps_east_west_distinct(self, engine, timezone_setup):
+        """DEFAULT (merge) mode: East/West stay distinct -> no cross-merge."""
+        east = engine.extract_core_name("ESPN East")
+        west = engine.extract_core_name("ESPN West")
+        assert east == "ESPN East"
+        assert west == "ESPN West"
+        assert east != west
+
+    def test_for_matching_strips_timezone(self, engine, timezone_setup):
+        """MATCHING mode: timezone stripped so both collapse to 'ESPN'."""
+        assert engine.extract_core_name("ESPN East", for_matching=True) == "ESPN"
+        assert engine.extract_core_name("ESPN West", for_matching=True) == "ESPN"
