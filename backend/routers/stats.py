@@ -1024,11 +1024,84 @@ async def get_channel_stats_detail(channel_id: int):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _system_event_client_ip(event: dict) -> Optional[str]:
+    """Extract the client IP for a system event.
+
+    Dispatcharr surfaces the connecting client's IP in different places
+    depending on the event type: some events carry a top-level ``ip_address``,
+    most nest it under ``details`` as ``client_ip`` (login/connect/disconnect).
+    Probe the known locations in priority order; return ``None`` when no IP is
+    present (e.g. a settings-change event).
+    """
+    if not isinstance(event, dict):
+        return None
+    ip = event.get("ip_address")
+    if ip:
+        return ip
+    details = event.get("details")
+    if isinstance(details, dict):
+        return details.get("client_ip") or details.get("ip_address")
+    return None
+
+
+def _enrich_system_events_with_usernames(result: dict, db: Session) -> None:
+    """Annotate each system event with the ECM-resolved streaming username.
+
+    Dispatcharr's ``/api/core/system-events/`` carries the client IP but never
+    the username ECM attributes to that client. Join each event's IP against
+    ``UniqueClientConnection.username`` so the Recent Events feed can show *who*
+    connected/disconnected (enhancedchannelmanager-2sfpt #2).
+
+    Resolves the whole batch in ONE query — the most-recent (by ``connected_at``)
+    non-null username per distinct IP — never N+1. ``username`` stays ``None``
+    when no connection row attributes the IP; the frontend falls back to the IP
+    for display (PO decision). Also lifts the nested ``client_ip`` to a stable
+    top-level ``ip_address`` so the feed renders the IP uniformly.
+
+    Mutates ``result["events"]`` in place. Best-effort: any failure here must
+    not fail the feed, so the caller wraps this in its own guard.
+    """
+    events = result.get("events") if isinstance(result, dict) else None
+    if not events:
+        return
+
+    ips = {ip for ev in events if (ip := _system_event_client_ip(ev))}
+    ip_to_username: dict[str, str] = {}
+    if ips:
+        rows = (
+            db.query(
+                UniqueClientConnection.ip_address,
+                UniqueClientConnection.username,
+            )
+            .filter(
+                UniqueClientConnection.ip_address.in_(ips),
+                UniqueClientConnection.username.isnot(None),
+            )
+            .order_by(UniqueClientConnection.connected_at.desc())
+            .all()
+        )
+        for ip, username in rows:
+            # First row per IP wins — the query is ordered most-recent-first.
+            if ip not in ip_to_username:
+                ip_to_username[ip] = username
+
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        ip = _system_event_client_ip(ev)
+        # Surface a stable top-level ip_address; Dispatcharr nests it under
+        # ``details`` for most streaming/login event types.
+        if ip and not ev.get("ip_address"):
+            ev["ip_address"] = ip
+        ev["username"] = ip_to_username.get(ip) if ip else None
+
+
 @router.get("/activity")
 async def get_system_events(
     limit: int = 100,
     offset: int = 0,
     event_type: Optional[str] = None,
+    db: Session = Depends(get_session),
 ):
     """Get recent system events (channel start/stop, buffering, client connections).
 
@@ -1046,6 +1119,12 @@ async def get_system_events(
             offset=offset,
             event_type=event_type,
         )
+        # Enrich events with the streaming username for each client IP (#2).
+        # Best-effort: a lookup failure must not break the feed.
+        try:
+            _enrich_system_events_with_usernames(result, db)
+        except Exception as enrich_err:
+            logger.warning("[STATS] Failed to enrich system events with usernames: %s", enrich_err)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[STATS] get_system_events completed in %.1fms", elapsed_ms)
         return result
@@ -1116,11 +1195,18 @@ async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
 
 
 @router.get("/unique-viewers")
-async def get_unique_viewers_summary(days: int = 7):
-    """Get unique viewer statistics for the specified period."""
-    logger.debug("[STATS] GET /api/stats/unique-viewers - days=%s", days)
+async def get_unique_viewers_summary(days: int = 7, group_by: str = "ip"):
+    """Get unique viewer statistics for the specified period.
+
+    ``group_by`` controls how the Top Viewers list is bucketed:
+    ``"ip"`` (default) groups by client IP; ``"user"`` groups by
+    ``COALESCE(username, ip_address)`` so resolved viewers collapse across
+    their IPs and unresolved viewers fall back to their IP. Any value other
+    than ``"user"`` is treated as ``"ip"``.
+    """
+    logger.debug("[STATS] GET /api/stats/unique-viewers - days=%s group_by=%s", days, group_by)
     try:
-        return BandwidthTracker.get_unique_viewers_summary(days=days)
+        return BandwidthTracker.get_unique_viewers_summary(days=days, group_by=group_by)
     except Exception as e:
         logger.exception("[STATS] Failed to get unique viewers summary")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -1138,11 +1224,18 @@ async def get_channel_bandwidth_stats(days: int = 7, limit: int = 20, sort_by: s
 
 
 @router.get("/unique-viewers-by-channel")
-async def get_unique_viewers_by_channel(days: int = 7, limit: int = 20):
-    """Get unique viewer counts per channel."""
-    logger.debug("[STATS] GET /api/stats/unique-viewers-by-channel - days=%s limit=%s", days, limit)
+async def get_unique_viewers_by_channel(days: int = 7, limit: int = 20, group_by: str = "ip"):
+    """Get unique viewer counts per channel.
+
+    ``group_by`` controls the distinct-viewer key: ``"ip"`` (default) counts
+    distinct client IPs; ``"user"`` counts ``distinct(COALESCE(username,
+    ip_address))`` so resolved viewers count once across their IPs and
+    unresolved viewers fall back to their IP. Any value other than ``"user"``
+    is treated as ``"ip"``.
+    """
+    logger.debug("[STATS] GET /api/stats/unique-viewers-by-channel - days=%s limit=%s group_by=%s", days, limit, group_by)
     try:
-        return BandwidthTracker.get_unique_viewers_by_channel(days=days, limit=limit)
+        return BandwidthTracker.get_unique_viewers_by_channel(days=days, limit=limit, group_by=group_by)
     except Exception as e:
         logger.exception("[STATS] Failed to get unique viewers by channel")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -2275,28 +2368,51 @@ def _build_provider_envelope(data, *, from_ms, to_ms, **meta_extras):
 
 
 def _distinct_provider_poll_subquery(db: Session, from_ms: int, to_ms: int):
-    """DISTINCT (provider_id, channel_id, observed_at) collapse subquery.
+    """One row per (provider, channel, poll-tick) tuple carrying the poll
+    interval and the channel's *summed* bytes for that tick.
 
-    Returns one row per (provider, channel, poll-tick) tuple with the poll
-    interval and bytes. Collapses multi-client overcount in per-provider
-    aggregations the same way ``_distinct_poll_subquery`` does for
-    per-user aggregations (skqln.5).
+    Two-stage collapse (bd-oj02b corrects the prior single-stage MAX):
 
-    ``MAX(poll_interval_ms)`` / ``MAX(bytes_delta)`` are defensive: in the
-    rare case where two clients report different values for the same
-    (provider, channel, observed_at), take the larger one — never
-    overcount, but don't undercount either. Under normal operation all
-    concurrent clients report the same values from the same upstream poll.
+    Stage 1 — dedupe *multi-client-per-session* overcount. Group by
+    ``(provider_id, channel_id, observed_at, session_id)`` and take
+    ``MAX`` of ``bytes_delta`` / ``poll_interval_ms``. This collapses the
+    rare case where the SAME session is reported twice within one poll
+    tick (two clients echoing one upstream poll) to a single row, exactly
+    as ``_distinct_poll_subquery`` does for the per-user path — but it
+    keeps genuinely-distinct sessions (different ``session_id``) as
+    separate rows.
 
-    NOTE: SQLite's ``GROUP BY`` treats ``NULL`` values as a single group,
-    so rows with ``provider_id = NULL`` aggregate into one "Unknown" bucket
-    correctly with no special handling.
+    Stage 2 — collapse to one row per ``(provider_id, channel_id,
+    observed_at)``. ``SUM(bytes_delta)`` across the distinct sessions of
+    that channel-tick (the writer splits a channel's per-poll bytes
+    equally across its active client IPs — bandwidth_tracker.py L4303 —
+    so summing the per-session parts reconstructs the channel's true
+    throughput), but ``MAX(poll_interval_ms)`` keeps **one** interval per
+    channel-tick. All sessions on a channel poll over the same wall-clock
+    window, so the interval must NOT be summed across them — summing it
+    would inflate the bitrate denominator and report the *average*
+    per-session bitrate instead of the *aggregate* (the bd-oj02b bug:
+    five concurrent 7/4/7/4/20 Mbps sessions on one channel read 20 Mbps
+    under the old MAX-bytes collapse, and would read ~8 Mbps if the
+    interval were also summed — the correct aggregate is 42 Mbps).
+
+    Output columns are unchanged from the prior single-stage form
+    (``provider_id``, ``channel_id``, ``observed_at``, ``poll_interval_ms``,
+    ``bytes_delta``) so both consumers stay source-compatible: the
+    watch-time endpoint reads ``poll_interval_ms`` (still MAX-per-tick —
+    identical behaviour) and the bitrate endpoint reads both columns.
+
+    NOTE: SQLite's ``GROUP BY`` treats ``NULL`` as a single group, so rows
+    with ``provider_id = NULL`` aggregate into one "Unknown" bucket. The
+    synthetic local-tuner sentinel (bd-oj02b, negative id) groups as its
+    own series with no special handling here.
     """
-    return (
+    per_session = (
         db.query(
             SessionTelemetry.provider_id.label("provider_id"),
             SessionTelemetry.channel_id.label("channel_id"),
             SessionTelemetry.observed_at.label("observed_at"),
+            SessionTelemetry.session_id.label("session_id"),
             func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
             func.max(SessionTelemetry.bytes_delta).label("bytes_delta"),
         )
@@ -2306,6 +2422,22 @@ def _distinct_provider_poll_subquery(db: Session, from_ms: int, to_ms: int):
             SessionTelemetry.provider_id,
             SessionTelemetry.channel_id,
             SessionTelemetry.observed_at,
+            SessionTelemetry.session_id,
+        )
+        .subquery()
+    )
+    return (
+        db.query(
+            per_session.c.provider_id.label("provider_id"),
+            per_session.c.channel_id.label("channel_id"),
+            per_session.c.observed_at.label("observed_at"),
+            func.max(per_session.c.poll_interval_ms).label("poll_interval_ms"),
+            func.sum(per_session.c.bytes_delta).label("bytes_delta"),
+        )
+        .group_by(
+            per_session.c.provider_id,
+            per_session.c.channel_id,
+            per_session.c.observed_at,
         )
         .subquery()
     )

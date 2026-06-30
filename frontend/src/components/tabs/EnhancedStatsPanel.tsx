@@ -62,15 +62,19 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'viewers' | 'bandwidth'>('viewers');
   const [bandwidthSortBy, setBandwidthSortBy] = useState<'bytes' | 'connections' | 'watch_time'>('bytes');
+  // Shared by-user / by-IP toggle for Top Viewers (#3) and Channels by Unique
+  // Viewers (#4). 'user' buckets by COALESCE(username, ip) so resolved viewers
+  // collapse across IPs and unresolved viewers fall back to their IP.
+  const [viewerGroupBy, setViewerGroupBy] = useState<'ip' | 'user'>('ip');
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const [viewersData, bandwidthData, channelViewersData] = await Promise.all([
-        api.getUniqueViewersSummary(7),
+        api.getUniqueViewersSummary(7, viewerGroupBy),
         api.getChannelBandwidthStats(7, 20, bandwidthSortBy),
-        api.getUniqueViewersByChannel(7, 20),
+        api.getUniqueViewersByChannel(7, 20, viewerGroupBy),
       ]);
       setUniqueViewers(viewersData);
       setChannelBandwidth(bandwidthData);
@@ -80,7 +84,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
     } finally {
       setLoading(false);
     }
-  }, [bandwidthSortBy]);
+  }, [bandwidthSortBy, viewerGroupBy]);
 
   useEffect(() => {
     fetchData();
@@ -182,15 +186,35 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
             </div>
           )}
 
+          {/* By-user / by-IP toggle — shared by Top Viewers (#3) and Channels
+              by Unique Viewers (#4). */}
+          <div className="sort-controls viewer-group-toggle">
+            <span className="sort-label">Group by:</span>
+            <button
+              className={`sort-btn ${viewerGroupBy === 'ip' ? 'active' : ''}`}
+              onClick={() => setViewerGroupBy('ip')}
+            >
+              IP
+            </button>
+            <button
+              className={`sort-btn ${viewerGroupBy === 'user' ? 'active' : ''}`}
+              onClick={() => setViewerGroupBy('user')}
+            >
+              User
+            </button>
+          </div>
+
           {/* Top Viewers */}
           {uniqueViewers.top_viewers.length > 0 && (
             <div className="top-viewers-section">
-              <div className="subsection-title">Top Viewers by Connections</div>
+              <div className="subsection-title">
+                Top Viewers by Connections{viewerGroupBy === 'user' ? ' (by user)' : ' (by IP)'}
+              </div>
               <div className="viewers-list">
                 {uniqueViewers.top_viewers.map((viewer, index) => (
-                  <div key={viewer.ip_address} className="viewer-item">
+                  <div key={viewer.username ?? viewer.ip_address} className="viewer-item">
                     <span className="viewer-rank">#{index + 1}</span>
-                    <span className="viewer-ip">{viewer.ip_address}</span>
+                    <span className="viewer-ip">{viewer.username ?? viewer.ip_address}</span>
                     <span className="viewer-stats">
                       {viewer.connection_count} connections, {formatWatchTime(viewer.total_watch_seconds)}
                     </span>
@@ -203,7 +227,9 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
           {/* Channels by Unique Viewers */}
           {channelViewers.length > 0 && (
             <div className="channel-viewers-section">
-              <div className="subsection-title">Channels by Unique Viewers</div>
+              <div className="subsection-title">
+                Channels by Unique Viewers{viewerGroupBy === 'user' ? ' (by user)' : ' (by IP)'}
+              </div>
               <div className="channel-list">
                 {channelViewers.map((channel, index) => (
                   <div key={channel.channel_id} className="channel-item">

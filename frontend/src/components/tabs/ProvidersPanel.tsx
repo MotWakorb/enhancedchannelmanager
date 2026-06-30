@@ -111,6 +111,15 @@ const UNKNOWN_LABEL = 'Unknown';
 const UNKNOWN_TOOLTIP =
   'Provider attribution was not recorded for these observations (pre-cutover or unattributable).';
 
+// bd-oj02b: synthetic provider id the backend tags onto non-M3U / local-tuner
+// sources (HDHomeRun, direct tuner, custom streams) — streams Dispatcharr
+// serves with no m3u_account. Mirrors LOCAL_TUNER_PROVIDER_ID in
+// backend/bandwidth_tracker.py. Negative so it never collides with a real
+// (positive) M3U account id, and distinct from the NULL "Unknown" bucket
+// (genuine attribution failures stay NULL).
+const LOCAL_TUNER_PROVIDER_ID = -1;
+const LOCAL_TUNER_LABEL = 'HD HomeRun';
+
 /** Sentinel key used to address the NULL ("Unknown") provider in series maps. */
 const UNKNOWN_KEY = '__unknown__';
 
@@ -145,6 +154,8 @@ function providerLabel(
   nameMap?: ReadonlyMap<number, string>,
 ): string {
   if (id === null) return UNKNOWN_LABEL;
+  // bd-oj02b: non-M3U / local-tuner sentinel — never in the M3U nameMap.
+  if (id === LOCAL_TUNER_PROVIDER_ID) return LOCAL_TUNER_LABEL;
   const name = nameMap?.get(id);
   return name ?? `Provider ${id}`;
 }

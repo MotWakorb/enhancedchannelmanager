@@ -190,11 +190,17 @@
 }
 
 /* Bandwidth Section */
-.enhanced-stats-panel .bandwidth-section .sort-controls {
+.enhanced-stats-panel .bandwidth-section .sort-controls,
+.enhanced-stats-panel .viewer-group-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+/* By-user / by-IP toggle sits between the chart and the viewer/channel lists. */
+.enhanced-stats-panel .viewer-group-toggle {
+  margin-top: 4px;
 }
 
 .enhanced-stats-panel .sort-label {

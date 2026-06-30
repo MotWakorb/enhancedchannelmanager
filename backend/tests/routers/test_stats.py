@@ -685,6 +685,64 @@ class TestSystemEvents:
         call_args = mock_client.get_system_events.call_args
         assert call_args[1]["limit"] == 1000
 
+    @pytest.mark.asyncio
+    async def test_enriches_events_with_username(self, async_client, test_session):
+        """Each event's client IP is resolved to a streaming username (#2).
+
+        The IP nested under ``details.client_ip`` is also lifted to a stable
+        top-level ``ip_address``.
+        """
+        from datetime import datetime, date
+        from models import UniqueClientConnection
+
+        test_session.add(UniqueClientConnection(
+            ip_address="10.0.0.5", channel_id="ch-1", channel_name="ESPN",
+            user_id=7, username="alice", date=date(2026, 6, 30),
+            connected_at=datetime(2026, 6, 30, 12, 0, 0), watch_seconds=60,
+        ))
+        test_session.commit()
+
+        mock_client = AsyncMock()
+        mock_client.get_system_events.return_value = {
+            "events": [
+                {"id": 1, "event_type": "client_connect", "channel_name": "ESPN",
+                 "details": {"client_ip": "10.0.0.5"}},
+            ],
+            "count": 1, "total": 1,
+        }
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/activity")
+
+        assert response.status_code == 200
+        event = response.json()["events"][0]
+        assert event["username"] == "alice"
+        assert event["ip_address"] == "10.0.0.5"
+
+    @pytest.mark.asyncio
+    async def test_event_username_falls_back_to_ip_when_unresolved(self, async_client, test_session):
+        """An event whose IP has no connection row gets ``username: None`` (#2).
+
+        The frontend renders the IP as the fallback; the backend keeps username
+        honestly null.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_system_events.return_value = {
+            "events": [
+                {"id": 2, "event_type": "client_disconnect",
+                 "details": {"client_ip": "203.0.113.9"}},
+            ],
+            "count": 1, "total": 1,
+        }
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/activity")
+
+        assert response.status_code == 200
+        event = response.json()["events"][0]
+        assert event["username"] is None
+        assert event["ip_address"] == "203.0.113.9"
+
 
 class TestStopChannel:
     """Tests for POST /api/stats/channels/{channel_id}/stop."""
@@ -771,6 +829,26 @@ class TestUniqueViewers:
         assert response.status_code == 200
         assert response.json() == {"total_unique": 42}
 
+    @pytest.mark.asyncio
+    async def test_defaults_group_by_ip(self, async_client):
+        """Without ?group_by, the tracker is called with group_by='ip' (#3)."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_summary", return_value={}) as mock:
+            response = await async_client.get("/api/stats/unique-viewers")
+
+        assert response.status_code == 200
+        mock.assert_called_once_with(days=7, group_by="ip")
+
+    @pytest.mark.asyncio
+    async def test_forwards_group_by_user(self, async_client):
+        """?group_by=user is forwarded to the tracker (#3)."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_summary", return_value={}) as mock:
+            response = await async_client.get(
+                "/api/stats/unique-viewers", params={"days": 30, "group_by": "user"}
+            )
+
+        assert response.status_code == 200
+        mock.assert_called_once_with(days=30, group_by="user")
+
 
 class TestChannelBandwidth:
     """Tests for GET /api/stats/channel-bandwidth."""
@@ -800,6 +878,27 @@ class TestUniqueViewersByChannel:
 
         assert response.status_code == 200
         assert response.json() == [{"channel_id": "abc", "unique_viewers": 7}]
+
+    @pytest.mark.asyncio
+    async def test_defaults_group_by_ip(self, async_client):
+        """Without ?group_by, the tracker is called with group_by='ip' (#4)."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_by_channel", return_value=[]) as mock:
+            response = await async_client.get("/api/stats/unique-viewers-by-channel")
+
+        assert response.status_code == 200
+        mock.assert_called_once_with(days=7, limit=20, group_by="ip")
+
+    @pytest.mark.asyncio
+    async def test_forwards_group_by_user(self, async_client):
+        """?group_by=user is forwarded to the tracker (#4)."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_by_channel", return_value=[]) as mock:
+            response = await async_client.get(
+                "/api/stats/unique-viewers-by-channel",
+                params={"days": 14, "limit": 5, "group_by": "user"},
+            )
+
+        assert response.status_code == 200
+        mock.assert_called_once_with(days=14, limit=5, group_by="user")
 
 
 class TestWatchHistory:
