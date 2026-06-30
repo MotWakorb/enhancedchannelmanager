@@ -713,21 +713,34 @@ class TestProvidersBitrate:
         assert rows[0]["bitrate_bps"] == 8000
 
     @pytest.mark.asyncio
-    async def test_bitrate_multi_client_collapse(self, async_client, test_session):
-        """Two clients on same (channel, poll-tick): bytes_delta is summed once,
-        poll_interval_ms counted once. Bitrate must not be skewed by the
-        multi-client overcount.
+    async def test_bitrate_distinct_sessions_sum_same_session_dedupes(
+        self, async_client, test_session
+    ):
+        """bd-oj02b: genuinely-distinct concurrent sessions on the SAME
+        channel/poll-tick must SUM their bytes (the writer splits a
+        channel's per-poll bytes equally across active client IPs, so the
+        parts reconstruct the channel's true throughput) while the poll
+        interval is counted ONCE per channel-tick. A duplicate report of
+        the SAME session within the tick still dedupes.
 
-        Setup: 2 clients on ch-a at observed_at=T0 reporting bytes=10000 each,
-        plus 1 client on ch-b at T0 reporting bytes=5000. All same poll.
-        Expected: 10000 + 5000 = 15000 bytes / 10s = 12000 bps.
-        (NOT 25000 bytes / 30s, which would happen with multi-counting.)
+        Setup, all at observed_at=T0:
+          ch-a: sess-alice 10000 bytes, sess-bob 10000 bytes (distinct →
+                sum to 20000), plus a DUPLICATE of sess-alice (same
+                session_id, 10000 bytes → dedupes, no double-count).
+          ch-b: sess-c 5000 bytes (one session).
+
+        Expected bytes = (10000 + 10000) + 5000 = 25000.
+        Expected interval = ch-a one tick (10s) + ch-b one tick (10s) = 20s.
+        bitrate = 25000 * 8 * 1000 / 20000 = 10000 bps.
+
+        Pre-bd-oj02b this collapsed ch-a's two distinct sessions with MAX
+        (10000) and read 6000 bps — the SUM bug.
         """
         _add_user(test_session, user_id=10, username="alice")
         _add_user(test_session, user_id=20, username="bob")
         bucket_a = BASE.replace(minute=0, second=0, microsecond=0)
         observed_at = _ms(bucket_a + timedelta(minutes=5))
-        # 2 sessions on ch-a, same observed_at — must collapse to one
+        # ch-a: two DISTINCT sessions — must sum.
         _add_telemetry(
             test_session, user_id=10, provider_id=1, channel_id="ch-a",
             observed_at_ms=observed_at, bytes_delta=10_000, poll_interval_ms=10_000,
@@ -738,11 +751,18 @@ class TestProvidersBitrate:
             observed_at_ms=observed_at, bytes_delta=10_000, poll_interval_ms=10_000,
             session_id="sess-bob",
         )
-        # 1 session on ch-b same observed_at
+        # ch-a: a DUPLICATE report of sess-alice in the same tick — must
+        # dedupe (multi-client-per-session overcount guard).
+        _add_telemetry(
+            test_session, user_id=10, provider_id=1, channel_id="ch-a",
+            observed_at_ms=observed_at, bytes_delta=10_000, poll_interval_ms=10_000,
+            session_id="sess-alice",
+        )
+        # ch-b: one session.
         _add_telemetry(
             test_session, user_id=10, provider_id=1, channel_id="ch-b",
             observed_at_ms=observed_at, bytes_delta=5_000, poll_interval_ms=10_000,
-            session_id="sess-alice-b",
+            session_id="sess-c",
         )
         test_session.commit()
 
@@ -752,15 +772,78 @@ class TestProvidersBitrate:
         bucket_a_iso = bucket_a.isoformat().replace("+00:00", "Z")
         rows = [r for r in body["data"] if r["provider_id"] == 1 and r["time_bucket"] == bucket_a_iso]
         assert len(rows) == 1
-        # bytes: ch-a (10000 from collapsed, both clients agree) + ch-b (5000)
-        #      = 15000 bytes
-        # interval: ch-a one tick (10s) + ch-b one tick (10s) = 20s
-        # bitrate = 15000 * 8 / 20 = 6000 bps
-        assert rows[0]["bitrate_bps"] == 6000, (
-            "Bitrate multi-client overcount: a (channel, observed_at) tuple "
-            "with N concurrent clients must contribute ONE bytes_delta and "
-            "ONE poll interval, not N. Check the DISTINCT-by-(provider, "
-            "channel, observed_at) subquery in stats.py."
+        assert rows[0]["bitrate_bps"] == 10000, (
+            "bd-oj02b: distinct concurrent sessions on one channel/poll must "
+            "SUM their bytes (not collapse via MAX) while the poll interval "
+            "counts once per channel-tick; a duplicate of the same session_id "
+            "must still dedupe. Check the two-stage "
+            "_distinct_provider_poll_subquery in stats.py."
+        )
+
+    @pytest.mark.asyncio
+    async def test_bitrate_five_concurrent_sessions_sum_plus_hdhomerun(
+        self, async_client, test_session
+    ):
+        """bd-oj02b headline scenario. Five genuinely-distinct concurrent
+        sessions on ONE channel of one provider at 7/4/7/4/20 Mbps must
+        read 42 Mbps for that provider (the SUM), NOT 20 Mbps (the old
+        MAX collapse) and NOT ~8.4 Mbps (which a naive add-session_id +
+        sum-both-columns fix would yield by also summing the intervals).
+
+        A separate HDHomeRun/local-tuner session at 2 Mbps (synthetic
+        provider id) must surface as its own provider line at ~2 Mbps.
+
+        Bitrate math at a 10s poll: bytes = bitrate_bps * 10 / 8.
+        """
+        _add_user(test_session, user_id=10, username="alice")
+        bucket_a = BASE.replace(minute=0, second=0, microsecond=0)
+        observed_at = _ms(bucket_a + timedelta(minutes=5))
+        interval_ms = 10_000
+
+        def _bytes_for_mbps(mbps: float) -> int:
+            # bytes over the 10s window = mbps * 1e6 bits/s * 10s / 8
+            return int(mbps * 1_000_000 * (interval_ms / 1000) / 8)
+
+        # Provider 1, ONE channel, FIVE distinct concurrent sessions.
+        for idx, mbps in enumerate((7, 4, 7, 4, 20)):
+            _add_telemetry(
+                test_session, user_id=10, provider_id=1, channel_id="ch-busy",
+                observed_at_ms=observed_at,
+                bytes_delta=_bytes_for_mbps(mbps), poll_interval_ms=interval_ms,
+                session_id=f"sess-{idx}",
+            )
+        # HDHomeRun / local-tuner line (synthetic provider id = -1) at 2 Mbps.
+        _add_telemetry(
+            test_session, user_id=10, provider_id=-1, channel_id="ch-hdhr",
+            observed_at_ms=observed_at,
+            bytes_delta=_bytes_for_mbps(2), poll_interval_ms=interval_ms,
+            session_id="sess-hdhr",
+        )
+        test_session.commit()
+
+        response = await async_client.get("/api/stats/providers/bitrate")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        bucket_a_iso = bucket_a.isoformat().replace("+00:00", "Z")
+
+        prov1 = [
+            r for r in body["data"]
+            if r["provider_id"] == 1 and r["time_bucket"] == bucket_a_iso
+        ]
+        assert len(prov1) == 1
+        # 42 Mbps == 42_000_000 bps (integer-truncated formula is exact here).
+        assert prov1[0]["bitrate_bps"] == 42_000_000, (
+            f"Expected provider 1 aggregate 42 Mbps, got "
+            f"{prov1[0]['bitrate_bps']} bps"
+        )
+
+        hdhr = [
+            r for r in body["data"]
+            if r["provider_id"] == -1 and r["time_bucket"] == bucket_a_iso
+        ]
+        assert len(hdhr) == 1, "HDHomeRun (provider_id=-1) must be its own line"
+        assert hdhr[0]["bitrate_bps"] == 2_000_000, (
+            f"Expected HDHomeRun line 2 Mbps, got {hdhr[0]['bitrate_bps']} bps"
         )
 
     @pytest.mark.asyncio

@@ -556,6 +556,10 @@ export interface SystemEvent {
   channel_name?: string;
   client_id?: string;
   ip_address?: string;
+  // ECM-resolved streaming username for this event's client IP, joined from
+  // UniqueClientConnection server-side (enhancedchannelmanager-2sfpt #2). Null
+  // when no connection attributes the IP — the UI falls back to ip_address.
+  username?: string | null;
   message?: string;
   details?: Record<string, unknown>;
   timestamp: string;
@@ -1122,7 +1126,13 @@ export interface PreviewStreamModalProps {
 
 // Top viewer entry in unique viewers summary
 export interface TopViewer {
+  // In by-IP mode this is the client IP. In by-user mode it carries the group
+  // identity = COALESCE(username, ip_address): the username when resolved, else
+  // the IP fallback (enhancedchannelmanager-2sfpt #3).
   ip_address: string;
+  // Resolved username, or null when grouping by IP / when the viewer fell back
+  // to their IP. UI renders ``username ?? ip_address``.
+  username?: string | null;
   connection_count: number;
   total_watch_seconds: number;
 }

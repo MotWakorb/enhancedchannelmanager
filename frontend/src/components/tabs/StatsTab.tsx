@@ -237,8 +237,11 @@ export function StatsTab() {
   const [topWatchedSortBy, setTopWatchedSortBy] = useState<TopWatchedSortBy>('views');
   const topWatchedSortByRef = useRef<TopWatchedSortBy>(topWatchedSortBy);
 
-  // Build lookup maps for channel names by UUID and stream profiles by ID
-  const channelNameMap = useRef<Map<string, { name: string; number: number | null }>>(new Map());
+  // Build lookup maps for channel names by UUID and stream profiles by ID.
+  // The channel map also carries logo_id so the Active Channels rows can render
+  // the channel logo (#1); the URL is resolved via channelLogoMap (logo_id -> url).
+  const channelNameMap = useRef<Map<string, { name: string; number: number | null; logo_id: number | null }>>(new Map());
+  const channelLogoMap = useRef<Map<number, string>>(new Map());
   const streamProfileMap = useRef<Map<string, string>>(new Map());
 
   // Historical data for charts (per channel)
@@ -250,7 +253,7 @@ export function StatsTab() {
     const startTime = Date.now();
 
     try {
-      const map = new Map<string, { name: string; number: number | null }>();
+      const map = new Map<string, { name: string; number: number | null; logo_id: number | null }>();
       let page = 1;
       let hasMore = true;
       const pageSize = 500;
@@ -259,7 +262,7 @@ export function StatsTab() {
         const result = await api.getChannels({ page, pageSize });
         for (const ch of result.results || []) {
           if (ch.uuid) {
-            map.set(ch.uuid, { name: ch.name, number: ch.channel_number });
+            map.set(ch.uuid, { name: ch.name, number: ch.channel_number, logo_id: ch.logo_id });
           }
         }
         hasMore = result.next !== null;
@@ -274,6 +277,26 @@ export function StatsTab() {
     } catch (err) {
       const elapsed = Date.now() - startTime;
       logger.error(`Stats Tab: Failed to load channels for name lookup after ${elapsed}ms`, err);
+    }
+  }, []);
+
+  // Load all logos for Active Channels logo rendering (#1). Channels carry a
+  // logo_id; the displayable URL lives on the logo record (cache_url/url). Built
+  // once on mount alongside the channel map — auto-refresh reuses both.
+  const loadAllLogos = useCallback(async () => {
+    try {
+      const logos = await api.getAllLogos();
+      const map = new Map<number, string>();
+      for (const logo of logos) {
+        const url = logo.cache_url || logo.url;
+        if (logo.id != null && url) {
+          map.set(logo.id, url);
+        }
+      }
+      channelLogoMap.current = map;
+      logger.debug(`Stats Tab: Loaded ${map.size} logo URLs for lookup`);
+    } catch (err) {
+      logger.error('Stats Tab: Failed to load logos for lookup', err);
     }
   }, []);
 
@@ -472,6 +495,7 @@ export function StatsTab() {
         logger.debug('Stats Tab: Loading lookup data (channels, profiles, M3U accounts)');
         await Promise.all([
           loadAllChannels(),
+          loadAllLogos(),
           loadStreamProfiles(),
           loadM3UAccounts(),
         ]);
@@ -491,7 +515,7 @@ export function StatsTab() {
       }
     };
     loadLookups();
-  }, [loadAllChannels, loadStreamProfiles, loadM3UAccounts, fetchData]);
+  }, [loadAllChannels, loadAllLogos, loadStreamProfiles, loadM3UAccounts, fetchData]);
 
   // Auto-refresh timer (pauses when tab/window is not visible)
   useEffect(() => {
@@ -860,6 +884,12 @@ export function StatsTab() {
               const channelNum = lookupData?.number || channel.channel_number;
               const displayNumber = channelNum ? `Ch ${channelNum}` : null;
 
+              // #1: resolve the channel logo URL via logo_id -> channelLogoMap.
+              // Null when the channel has no logo or it isn't in the map yet —
+              // the row renders without a logo (no broken-image icon).
+              const logoId = lookupData?.logo_id ?? null;
+              const logoUrl = logoId != null ? (channelLogoMap.current.get(logoId) ?? null) : null;
+
               // M3U source info
               const m3uSource = channel.m3u_profile_name || null;
 
@@ -914,6 +944,16 @@ export function StatsTab() {
               <div key={channel.channel_id} className="channel-card">
                 <div className="channel-card-header">
                   <div className="channel-info">
+                    {logoUrl && (
+                      <img
+                        src={logoUrl}
+                        alt=""
+                        className="channel-logo-mini"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    )}
                     {displayNumber && (
                       <span className="channel-number" title={`ID: ${channelIdStr}`}>
                         {displayNumber}
@@ -1457,7 +1497,10 @@ export function StatsTab() {
                     <span className="event-message">
                       {event.channel_name && `[${event.channel_name}] `}
                       {event.message || event.event_type}
-                      {event.ip_address && ` - ${event.ip_address}`}
+                      {/* #2: show the connecting/disconnecting username
+                          (resolved server-side). Fall back to the client IP
+                          when no username attributes the connection. */}
+                      {(event.username || event.ip_address) && ` - ${event.username || event.ip_address}`}
                     </span>
                   </div>
                 );

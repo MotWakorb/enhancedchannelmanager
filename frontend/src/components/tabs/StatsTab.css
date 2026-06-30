@@ -203,6 +203,15 @@
   min-width: 0;
 }
 
+/* #1: small channel logo beside the channel number in Active Channels rows. */
+.channel-card .channel-logo-mini {
+  width: 1.75rem;
+  height: 1.75rem;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+}
+
 .channel-card .channel-number {
   font-size: 0.875rem;
   font-weight: 600;
