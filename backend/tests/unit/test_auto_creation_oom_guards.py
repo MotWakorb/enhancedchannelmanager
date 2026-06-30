@@ -159,7 +159,11 @@ class TestRunOnRefreshBreaker:
              patch("services.notification_service.create_notification_internal", new=AsyncMock()) as mock_notif, \
              patch("journal.log_entry") as mock_journal:
             os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
-            result = await AutoCreationTask().execute()
+            # i2xad: scheduled auto-creation is opt-in (default_enabled=False);
+            # enable the instance to exercise the post-(a) AUTO-FIRE GUARD path.
+            task = AutoCreationTask()
+            task._enabled = True
+            result = await task.execute()
 
         assert result.success is True
         assert result.details.get("skipped") is True
@@ -174,7 +178,9 @@ class TestRunOnRefreshBreaker:
              patch("tasks.auto_creation.get_settings", return_value=self._settings()), \
              patch("services.notification_service.create_notification_internal", new=AsyncMock()), \
              patch("journal.log_entry"):
-            result = await AutoCreationTask().execute()
+            task = AutoCreationTask()
+            task._enabled = True  # i2xad: opt-in; exercise post-(a) guard
+            result = await task.execute()
 
         assert result.details.get("skipped") is True
 
@@ -199,7 +205,9 @@ class TestRunOnRefreshBreaker:
              patch("tasks.auto_creation.get_client", return_value=MagicMock()), \
              patch("database.get_session", return_value=session):
             os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
-            result = await AutoCreationTask().execute()
+            task = AutoCreationTask()
+            task._enabled = True  # i2xad: opt-in; exercise post-(a) guard
+            result = await task.execute()
 
         assert result.details.get("channels_created") == 2
         fake_engine.run_pipeline.assert_awaited_once()

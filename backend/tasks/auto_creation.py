@@ -70,6 +70,19 @@ class AutoCreationTask(TaskScheduler):
     task_name = "Auto-Create Channels"
     task_description = "Automatically create channels from streams based on rules"
 
+    # enhancedchannelmanager-i2xad (production incident): scheduled auto-creation
+    # is OPT-IN — disabled by default. ADR-011 Phase 2 (bd-ka7j9) seeded this
+    # task ENABLED by default (and a startup migration flipped already-installed
+    # instances enabled), so auto-creation began firing autonomously on every
+    # instance after upgrade — unwanted. The INTERVAL/60s schedule + AUTO-FIRE
+    # GUARD architecture is preserved; only the default-enabled flag changed.
+    # ``default_enabled = False`` seeds the PARENT ``scheduled_tasks`` row
+    # disabled (the master switch); the child 60s cadence schedule stays enabled,
+    # so an operator opts in with the single task "Enabled" toggle in the UI
+    # (which persists). See ADR-011 "Rollout amendment" and
+    # _migrate_disable_auto_creation_schedule.
+    default_enabled = False
+
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         # ADR-011 (bd-ka7j9): default to an INTERVAL schedule (~60s, the engine's
         # check cadence) so the task ticks regularly. The AUTO-FIRE GUARD at the

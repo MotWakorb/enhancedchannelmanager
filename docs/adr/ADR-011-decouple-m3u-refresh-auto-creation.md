@@ -1,6 +1,7 @@
 # ADR-011: Decouple M3U Refresh from Auto-Creation (Event-Driven)
 
-- **Status**: Accepted
+- **Status**: Accepted — **amended 2026-06-30** (rollout: scheduled auto-creation
+  is now opt-in / disabled by default — see [Rollout amendment](#rollout-amendment-2026-06-30--scheduled-auto-creation-is-opt-in) below).
 - **Date**: 2026-06-16 (PO decisions locked) / 2026-06-16 (ADR written + accepted)
 - **Author**: IT Architect persona, on behalf of the PO, encoding the PO-locked
   decisions of 2026-06-16. This ADR **documents and makes implementable**
@@ -169,3 +170,63 @@ journal semantics are unchanged.
 - **Risk — lost watermark on shutdown**: the watermark is a best-effort settings
   write; if it fails, the worst case is one missed/extra auto-fire, never a
   crash loop (consume-before-run bounds re-fire to once per refresh).
+
+## Rollout amendment (2026-06-30) — scheduled auto-creation is opt-in
+
+- **Bead**: `enhancedchannelmanager-i2xad` (production incident).
+- **Supersedes**: the original rollout choice in §D2 to seed the
+  `AutoCreationTask` **enabled by default** and to leave the
+  `manual -> interval` flip migration ENABLED on upgrade.
+
+**Incident.** As shipped (build `v0.17.6-0002`, commit `3bfd93cf`), §D2 made the
+`AutoCreationTask` a self-firing ~60s INTERVAL task seeded **enabled**, and
+`_migrate_auto_creation_task_manual_to_interval` flipped every existing
+instance's persisted `auto_creation` row `manual -> interval` while leaving it
+enabled. The combined effect on upgrade was that auto-creation began firing
+autonomously on every instance — unwanted. Operators reported auto-creation
+"kicking off all of a sudden" on production.
+
+**Decision (PO-locked, 2026-06-30).**
+
+1. **Scheduled auto-creation is OPT-IN — disabled by default.** The INTERVAL/60s
+   schedule and the entire AUTO-FIRE GUARD architecture (§D2–§D5) are
+   **preserved unchanged**; only the default-enabled flag flips. A fresh install
+   seeds the **parent task disabled** (`AutoCreationTask.default_enabled = False`,
+   which `task_registry._save_task_to_db` writes as `scheduled_tasks.enabled =
+   False`) while the **child `task_schedules` cadence row stays enabled** (the
+   "every 60s" schedule exists). `task_engine` gates firing on BOTH the child
+   schedule's `enabled` AND the parent task's `enabled`, so the disabled parent
+   fully stops autonomous firing, and an operator opts in with the **single task
+   "Enabled" toggle** in the UI (`PATCH /api/tasks/{id}` → parent on). Leaving the
+   child enabled is deliberate: seeding it disabled too would make that prominent
+   toggle a no-op trap — the task would read "Enabled" yet never run. Every other
+   default-scheduled task keeps `default_enabled = True` and stays enabled.
+
+2. **Already-flipped instances are auto-corrected on upgrade.** A one-time,
+   idempotent corrective migration
+   (`database._migrate_disable_auto_creation_schedule`, in `_run_migrations`)
+   disables the `auto_creation` **parent task** (`scheduled_tasks.enabled = 0`)
+   **once** — leaving the child cadence row enabled — so instances already
+   flipped-and-enabled stop firing as soon as they take the new build, with no
+   manual step, and a single task toggle re-opts-in. The PO **accepted** the
+   tradeoff that this also disables auto-creation for an operator who deliberately
+   enabled it: we cannot reliably distinguish a deliberate enable from the §D2
+   migration-driven enable, so the disable is unconditional. Such operators simply
+   re-enable once in the UI.
+
+   - **Not an Alembic migration** — same reasoning as §D2: the bd-5w6jz
+     fast-path stamps `alembic_version` forward when the live schema covers the
+     model shape, so a data-only Alembic migration is silently skipped on
+     exactly the already-flipped population we must fix.
+   - **One-time gate** — `_run_migrations` runs every startup, so the corrective
+     records a marker row in a small internal `ecm_oneshot_migrations` table and
+     short-circuits thereafter. This reproduces Alembic's once-only semantics and
+     is what lets an operator's later re-enable persist (the corrective never
+     re-runs to stomp it).
+
+**Unchanged.** The decoupling, the refresh watermark (§D1), the AUTO-FIRE GUARD
+conditions (§D3), the single-entry-point/cap/notification collapse (§D4), the
+exo4j breaker / crash-sentinel / break-glass (§D5), and `run_on_refresh` rule
+semantics are all preserved. This amendment changes only the **default enabled
+state** and adds the corrective disable — it does not re-open the GH #473 OOM
+blast radius.
