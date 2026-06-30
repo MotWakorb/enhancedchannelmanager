@@ -50,6 +50,12 @@ vi.mock('../../contexts/NotificationContext', () => ({
   }),
 }));
 
+// CloudTargetsCard (a child) uses the backup-destination prompt context (bead
+// s5a3o); stub it so this section test renders without the provider.
+vi.mock('../../contexts/BackupDestinationPromptContext', () => ({
+  useBackupDestinationPrompt: () => ({ promptBackupDestination: vi.fn() }),
+}));
+
 import * as api from '../../services/api';
 
 describe('BackupRestoreSection', () => {

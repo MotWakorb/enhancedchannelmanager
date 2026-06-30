@@ -8,8 +8,12 @@ import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ModalOverlay } from './ModalOverlay';
 import { useNotifications } from '../contexts/NotificationContext';
+import { useBackupDestinationPrompt } from '../contexts/BackupDestinationPromptContext';
 import './ModalBase.css';
 import './TaskEditorModal.css';
+
+/** The scheduled-backup task whose schedule enable/create triggers the backup-destination choice (bead s5a3o). */
+const BACKUP_TASK_ID = 'dbas_backup';
 
 interface TaskEditorModalProps {
   task: TaskStatus;
@@ -57,6 +61,17 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [runningSchedules, setRunningSchedules] = useState<Set<number>>(new Set());
   const notifications = useNotifications();
+  const { promptBackupDestination } = useBackupDestinationPrompt();
+
+  // Enabling/creating a backup schedule is one of the two "actively configuring
+  // backups" triggers for the backup-destination first-run choice (bead s5a3o).
+  // Only fires for the dbas_backup task, and only the first time (no-op once the
+  // operator has answered). Non-blocking — the schedule change has already committed.
+  const maybePromptBackupDestination = useCallback(() => {
+    if (task.task_id === BACKUP_TASK_ID) {
+      promptBackupDestination();
+    }
+  }, [task.task_id, promptBackupDestination]);
 
   // Load data for task-specific config and schedule parameters
   useEffect(() => {
@@ -235,6 +250,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       await refreshSchedules();
       setIsAddingSchedule(false);
       onSaved();
+      // Creating a backup schedule = actively configuring backups (bead s5a3o).
+      maybePromptBackupDestination();
     } catch (err) {
       logger.error('Failed to create schedule', err);
       throw err;
@@ -252,6 +269,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       await refreshSchedules();
       setEditingSchedule(null);
       onSaved();
+      // Editing a backup schedule into the enabled state = actively configuring
+      // backups (bead s5a3o). Only when the save results in an enabled schedule.
+      if (data.enabled) maybePromptBackupDestination();
     } catch (err) {
       logger.error('Failed to update schedule', err);
       throw err;
@@ -263,11 +283,14 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   // Toggle schedule enabled/disabled
   const handleToggleSchedule = async (schedule: TaskSchedule) => {
     try {
+      const nowEnabled = !schedule.enabled;
       await api.updateTaskSchedule(task.task_id, schedule.id, {
-        enabled: !schedule.enabled,
+        enabled: nowEnabled,
       });
       await refreshSchedules();
       onSaved();
+      // Toggling a backup schedule ON = actively configuring backups (bead s5a3o).
+      if (nowEnabled) maybePromptBackupDestination();
     } catch (err) {
       logger.error('Failed to toggle schedule', err);
     }
