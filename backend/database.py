@@ -1054,6 +1054,14 @@ def _run_migrations(engine) -> None:
             # Flip auto_creation task MANUAL -> INTERVAL 60s for existing operators (ADR-011 - bd-ka7j9)
             _migrate_auto_creation_task_manual_to_interval(conn)
 
+            # Disable the auto_creation TASK ONCE on upgrade — scheduled
+            # auto-creation is now opt-in (incident enhancedchannelmanager-i2xad).
+            # Runs AFTER the flip above: the flip's interval/60s child-schedule
+            # shape is kept (harmless), this corrective disables the parent task
+            # so the end-state after all migrations settle is DISABLED — no window
+            # where the task is enabled+interval.
+            _migrate_disable_auto_creation_schedule(conn)
+
             # Heal task_schedules rows with NULL next_run_at (v0.17.0 - bd-1weac / bd-p5b8i)
             _heal_task_schedules_null_next_run_at(conn)
 
@@ -2794,6 +2802,14 @@ def _migrate_auto_creation_task_manual_to_interval(conn) -> None:
     INTERVAL once; auto-creation only actually runs when a run_on_refresh rule
     exists and a refresh has occurred, so the practical effect for an operator
     with no run_on_refresh rules is nil.
+
+    Reconciliation with the opt-in model (enhancedchannelmanager-i2xad): this
+    flip changes the schedule TYPE only and never sets ``enabled``. The
+    corrective ``_migrate_disable_auto_creation_schedule`` runs immediately after
+    it in ``_run_migrations`` and disables the PARENT task, so the settled
+    end-state on an upgrading instance is an interval/60s child schedule with the
+    task DISABLED. There is no window where the task is enabled+interval (both
+    run before the task engine arms).
     """
     from sqlalchemy import text
 
@@ -2819,6 +2835,110 @@ def _migrate_auto_creation_task_manual_to_interval(conn) -> None:
             update.rowcount,
         )
         conn.commit()
+
+
+def _migrate_disable_auto_creation_schedule(conn) -> None:
+    """Disable the auto_creation TASK ONCE on upgrade (incident i2xad).
+
+    ADR-011 Phase 2 (bd-ka7j9) shipped auto-creation as a self-firing ~60s
+    INTERVAL task seeded ENABLED, plus ``_migrate_auto_creation_task_manual_to_interval``
+    (above) which flips an existing install's persisted ``scheduled_tasks`` row
+    ``manual -> interval`` and leaves it ENABLED. The net effect on upgrade was
+    that auto-creation began firing autonomously on every instance — the
+    production incident this migration corrects (enhancedchannelmanager-i2xad).
+
+    PO decision: scheduled auto-creation is now OPT-IN (disabled by default), and
+    already-flipped-and-enabled instances are auto-corrected on upgrade by
+    disabling auto-creation once. The PO has ACCEPTED that this also disables it
+    for an operator who *deliberately* enabled it — we cannot reliably
+    distinguish a deliberate enable from the migration-driven enable, so the
+    disable is unconditional. Operators re-opt-in via the UI, which persists
+    (this one-time migration does not re-run — see the marker).
+
+    WHAT IS DISABLED — the PARENT task row only (``scheduled_tasks.enabled=0``),
+    NOT the child ``task_schedules`` cadence row. task_engine gates firing on
+    BOTH the child schedule's ``enabled`` AND the parent task's ``enabled``, so
+    disabling the parent alone fully stops autonomous firing. We deliberately
+    LEAVE the child schedule enabled so that opt-in is a single operator action:
+    the prominent "Enabled" task toggle (UI list + editor → ``PATCH /api/tasks/{id}``)
+    flips the parent, and with the child already enabled the task then fires on
+    its 60s cadence. Disabling the child too would make that toggle a no-op
+    trap — the task would read "Enabled" yet never run (the child stays off and
+    the engine's child-``enabled`` filter excludes it).
+
+    Why ``_run_migrations`` and not Alembic: the bd-5w6jz smart-bootstrap
+    fast-path stamps ``alembic_version`` forward to head when the live schema
+    already covers the model shape. A *data-only* Alembic migration adds no
+    schema, so on every already-flipped install (the exact population we must
+    fix) the fast-path would stamp past it WITHOUT running its DML — silently
+    skipping the correction. ``_run_migrations`` runs unconditionally every
+    startup, which is what this fix needs. This is the same reasoning recorded
+    for the sibling flip migration and in ADR-011 §D2.
+
+    One-time gate: because ``_run_migrations`` runs on EVERY startup, an
+    unconditional disable would re-stomp an operator who later re-enabled
+    auto-creation (breaking opt-in). A persisted marker row in
+    ``ecm_oneshot_migrations`` makes the disable run exactly once, reproducing
+    Alembic's once-only semantics in the ``_run_migrations`` path. The marker
+    table is deliberately NOT a SQLAlchemy model: it is internal migration
+    bookkeeping, never read by the app, and kept out of ``Base.metadata`` so the
+    Alembic drift test / autogenerate ignore it. (A future engineer running
+    ``alembic revision --autogenerate`` against a live DB will see a spurious
+    ``drop_table('ecm_oneshot_migrations')`` suggestion — hand-review removes it,
+    per ``docs/database_migrations.md``.)
+
+    Idempotency / safety: the marker short-circuits every call after the first;
+    the disable is a WHERE-gated UPDATE (no-op when no auto_creation row exists
+    or it is already disabled); a missing ``scheduled_tasks`` table is tolerated
+    by deferring (no marker written) so a fresh install applies it once the table
+    exists. Touches ONLY ``task_id='auto_creation'`` — no other task is affected.
+    """
+    from datetime import datetime
+    from sqlalchemy import text
+
+    marker = "disable_auto_creation_schedule_i2xad"
+
+    # One-time marker table (DB-native gate). Created idempotently every call.
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS ecm_oneshot_migrations ("
+        "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+    ))
+    already_applied = conn.execute(text(
+        "SELECT 1 FROM ecm_oneshot_migrations WHERE name=:n"
+    ), {"n": marker}).fetchone()
+    if already_applied:
+        # One-time gate satisfied — never re-disable an operator's opt-in.
+        return
+
+    st_exists = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+    )).fetchone() is not None
+    if not st_exists:
+        # Defer (do NOT write the marker) so a later startup, after the table
+        # has been created, still applies the correction exactly once.
+        logger.debug(
+            "[DATABASE] scheduled_tasks table absent — deferring auto_creation "
+            "disable corrective (i2xad)"
+        )
+        return
+
+    # Disable the PARENT task only (the master opt-in switch). Leave the child
+    # task_schedules cadence row enabled so the single task toggle re-fires it.
+    result = conn.execute(text(
+        "UPDATE scheduled_tasks SET enabled=0 WHERE task_id='auto_creation'"
+    ))
+    conn.execute(text(
+        "INSERT INTO ecm_oneshot_migrations (name, applied_at) VALUES (:n, :t)"
+    ), {"n": marker, "t": datetime.utcnow().isoformat()})
+    conn.commit()
+
+    if result.rowcount and result.rowcount > 0:
+        logger.info(
+            "[DATABASE] Disabled auto_creation task (%d row(s)) on upgrade "
+            "— scheduled auto-creation is now opt-in "
+            "(enhancedchannelmanager-i2xad)",
+            result.rowcount,
+        )
 
 
 def _heal_orphaned_normalization_group_refs(conn) -> None:
