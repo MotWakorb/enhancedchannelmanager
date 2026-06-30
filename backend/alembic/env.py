@@ -37,7 +37,6 @@ os.environ.setdefault("CONFIG_DIR", "/config")
 import database  # noqa: E402  pylint: disable=wrong-import-position
 import models  # noqa: E402,F401  pylint: disable=wrong-import-position
 import export_models  # noqa: E402,F401  pylint: disable=wrong-import-position
-from ffmpeg_builder import persistence as _ffmpeg_persistence  # noqa: E402,F401
 
 # The combined metadata Alembic compares against live DB for autogenerate.
 target_metadata = database.Base.metadata

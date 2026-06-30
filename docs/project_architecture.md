@@ -46,7 +46,6 @@ Ports: `6100` (HTTP), `6143` (HTTPS when TLS enabled)
 | `epg.py` | 12 | EPG sources, data, grid, LCN lookup |
 | `settings.py` | 8 | App configuration, connection test, service restart |
 | `tasks.py` | 16 | Task engine, cron, schedules |
-| `ffmpeg.py` | 16+ | FFMPEG builder, profiles, probing |
 | `auto_creation.py` | 15+ | Rule-based channel auto-creation |
 | `stream_stats.py` | 10+ | Stream probing and health |
 | `stream_preview.py` | 3 | Live stream/channel preview |

@@ -8,7 +8,7 @@ tables). See bead wlvxh for the topology rationale.
 
 Everything else — engine, session factory, migrations, init hooks —
 stays in ``database.py``. ``database`` re-exports ``Base`` so existing
-``from database import Base`` call sites (e.g. ``ffmpeg_builder``) keep
+``from database import Base`` call sites (e.g. ``export_models``) keep
 working without a sweeping rewrite.
 """
 from sqlalchemy.orm import declarative_base

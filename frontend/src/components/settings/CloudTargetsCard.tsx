@@ -1,10 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { CloudTarget } from '../../types/export';
-import * as exportApi from '../../services/exportApi';
+import type { CloudTarget } from '../../types/cloudTargets';
+import * as cloudApi from '../../services/cloudTargetsApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { CloudTargetEditor } from './CloudTargetEditor';
 import { ModalOverlay } from '../ModalOverlay';
 import '../ModalBase.css';
+import './CloudTargetsCard.css';
+
+/**
+ * Cloud Storage Targets card — manage DBAS backup upload destinations.
+ *
+ * Relocated from the removed Export tab (beads vrrxv / 1w428) into Settings →
+ * Backup & Restore, alongside SyncTargetsCard. Cloud targets are the off-site
+ * upload destinations DBAS backup (`tasks/dbas_backup.py`) uploads encrypted
+ * backups to; this card is their only management UI.
+ */
 
 const PROVIDER_ICONS: Record<string, string> = {
   s3: 'cloud',
@@ -20,7 +30,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   dropbox: 'Dropbox',
 };
 
-export function CloudTargetList() {
+export function CloudTargetsCard() {
   const notifications = useNotifications();
   const [targets, setTargets] = useState<CloudTarget[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,7 +41,7 @@ export function CloudTargetList() {
 
   const loadTargets = useCallback(async () => {
     try {
-      const data = await exportApi.getCloudTargets();
+      const data = await cloudApi.getCloudTargets();
       setTargets(data);
     } catch (e) {
       notifications.error(e instanceof Error ? e.message : 'Failed to load targets');
@@ -55,7 +65,7 @@ export function CloudTargetList() {
   const handleDelete = async () => {
     if (!deletingTarget) return;
     try {
-      await exportApi.deleteCloudTarget(deletingTarget.id);
+      await cloudApi.deleteCloudTarget(deletingTarget.id);
       notifications.success(`Deleted target '${deletingTarget.name}'`);
       setDeletingTarget(null);
       loadTargets();
@@ -67,7 +77,7 @@ export function CloudTargetList() {
   const handleTest = async (target: CloudTarget) => {
     setTestingId(target.id);
     try {
-      const result = await exportApi.testCloudTarget(target.id);
+      const result = await cloudApi.testCloudTarget(target.id);
       if (result.success) {
         notifications.success(`Connection to '${target.name}' successful`);
       } else {
@@ -82,7 +92,7 @@ export function CloudTargetList() {
 
   const handleToggle = async (target: CloudTarget) => {
     try {
-      await exportApi.updateCloudTarget(target.id, { enabled: !target.enabled });
+      await cloudApi.updateCloudTarget(target.id, { enabled: !target.enabled });
       loadTargets();
     } catch (e) {
       notifications.error(e instanceof Error ? e.message : 'Update failed');
@@ -112,7 +122,7 @@ export function CloudTargetList() {
         <div className="profile-list-empty">
           <span className="material-icons">cloud_off</span>
           <p>No cloud targets configured</p>
-          <p className="export-hint">Cloud targets are optional — you can generate and download exports locally without one.</p>
+          <p className="export-hint">Cloud targets are optional — backups are always stored locally; add one to also upload encrypted backups off-site.</p>
           <button className="btn btn-primary" onClick={handleCreate}>
             Add Cloud Target
           </button>
@@ -179,7 +189,7 @@ export function CloudTargetList() {
           <div className="modal-container modal-sm">
             <div className="modal-header"><h3>Delete Target</h3></div>
             <div className="modal-body">
-              <p>Delete cloud target <strong>{deletingTarget.name}</strong>? Publish configs using this target will switch to local-only.</p>
+              <p>Delete cloud target <strong>{deletingTarget.name}</strong>? Scheduled backups using this target will stop uploading off-site.</p>
             </div>
             <div className="modal-footer">
               <button className="modal-btn modal-btn-secondary" onClick={() => setDeletingTarget(null)}>Cancel</button>

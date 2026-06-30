@@ -15,7 +15,6 @@ from routers.stats import router as stats_router
 from routers.stream_stats import router as stream_stats_router
 from routers.stream_preview import router as stream_preview_router
 from routers.auto_creation import router as auto_creation_router
-from routers.ffmpeg import router as ffmpeg_router
 from routers.tasks import router as tasks_router
 from routers.settings import router as settings_router
 from routers.epg import router as epg_router
@@ -25,7 +24,7 @@ from routers.channels import router as channels_router
 from routers.channel_groups import router as channel_groups_router
 from routers.channel_merges import router as channel_merges_router
 from routers.dummy_epg import router as dummy_epg_router
-from routers.export import router as export_router
+from routers.cloud_targets import router as cloud_targets_router
 from routers.sync_targets import router as sync_targets_router
 from routers.backup import router as backup_router
 from routers.lookup_tables import router as lookup_tables_router
@@ -47,7 +46,6 @@ all_routers = [
     stream_stats_router,
     stream_preview_router,
     auto_creation_router,
-    ffmpeg_router,
     settings_router,
     epg_router,
     m3u_router,
@@ -56,7 +54,7 @@ all_routers = [
     channel_groups_router,
     channel_merges_router,
     dummy_epg_router,
-    export_router,
+    cloud_targets_router,
     sync_targets_router,
     backup_router,
     lookup_tables_router,

@@ -99,7 +99,6 @@ tags_metadata = [
     {"name": "Popularity", "description": "Channel popularity scores, rankings, and trending analysis"},
     {"name": "Stream Preview", "description": "Live stream and channel preview endpoints"},
     {"name": "Admin", "description": "User management (admin only)"},
-    {"name": "FFMPEG Profiles", "description": "Save and load FFMPEG Builder profiles"},
     {"name": "Backup", "description": "Backup and restore ECM configuration"},
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
@@ -132,7 +131,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0028",
+    version="0.17.6-0029",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -396,7 +395,6 @@ _REQUEST_TIMEOUT_SECONDS = float(os.environ.get("ECM_REQUEST_TIMEOUT_SECONDS", "
 # by exempting here until we move XMLTV to a background cache refresh.
 _TIMEOUT_EXEMPT_PREFIXES = (
     "/api/stream-preview/",   # streaming endpoints
-    "/api/ffmpeg/",            # long-running ffmpeg jobs
     "/api/tasks/",             # task triggering / status
     "/api/backup/",            # backup/restore can be large
     # Note: /api/auto-creation/ was previously exempt as a hotfix (bd-zv6pi)
