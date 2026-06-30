@@ -476,65 +476,16 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/dummy-epg/generate",
     ),
-    # -- export domain -----------------------------------------------------
-    "export_list_profiles": Endpoint(
-        name="export_list_profiles",
+    # -- cloud-targets domain ----------------------------------------------
+    # The Export tab's profile / generate / publish endpoints were removed with
+    # the tab (beads vrrxv / 1w428). The cloud-targets list remains, used by the
+    # list_cloud_targets MCP tool — cloud targets are still load-bearing for
+    # DBAS backup uploads. Relocated from /api/export/cloud-targets to the
+    # dedicated /api/cloud-targets router with the Export tab's removal.
+    "cloud_list_targets": Endpoint(
+        name="cloud_list_targets",
         method="GET",
-        path="/api/export/profiles",
-    ),
-    "export_create_profile": Endpoint(
-        name="export_create_profile",
-        method="POST",
-        path="/api/export/profiles",
-        # ProfileCreateRequest — full field set; the tool sends only {"name"}.
-        request_fields=frozenset(
-            {
-                "name",
-                "description",
-                "selection_mode",
-                "selected_groups",
-                "selected_channels",
-                "stream_url_mode",
-                "include_logos",
-                "include_epg_ids",
-                "include_channel_numbers",
-                "sort_order",
-                "filename_prefix",
-            }
-        ),
-    ),
-    "export_delete_profile": Endpoint(
-        name="export_delete_profile",
-        method="DELETE",
-        path="/api/export/profiles/{profile_id}",
-    ),
-    "export_generate_profile": Endpoint(
-        name="export_generate_profile",
-        method="POST",
-        path="/api/export/profiles/{profile_id}/generate",
-    ),
-    "export_list_cloud_targets": Endpoint(
-        name="export_list_cloud_targets",
-        method="GET",
-        path="/api/export/cloud-targets",
-    ),
-    # bd-1wq7z.21 — list publish configurations so callers can discover valid
-    # config_id values for publish_export.  Backend: GET /api/export/publish-configs
-    # (backend/routers/export.py::list_publish_configs).  Returns a JSON array
-    # of PublishConfiguration rows enriched with profile_name / target_name.
-    "export_list_publish_configs": Endpoint(
-        name="export_list_publish_configs",
-        method="GET",
-        path="/api/export/publish-configs",
-        # Backend route is an untyped bare-list response (no response_model), so
-        # OpenAPI declares no array schema — matches the sibling list endpoints
-        # (export_list_profiles / export_list_cloud_targets) which also leave
-        # response_is_list at its default. The tool iterates the runtime list.
-    ),
-    "export_publish_config": Endpoint(
-        name="export_publish_config",
-        method="POST",
-        path="/api/export/publish-configs/{config_id}/publish",
+        path="/api/cloud-targets",
     ),
     # -- m3u domain --------------------------------------------------------
     "m3u_list_providers": Endpoint(

@@ -27,9 +27,8 @@ Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 import database
 import models  # noqa: F401 — registers all tables with SQLAlchemy Base
 import export_models  # noqa: F401 — registers export tables with SQLAlchemy Base
-from ffmpeg_builder import persistence  # noqa: F401 — registers table
 # Reference side-effect imports so static analysis sees them as used
-assert models and persistence and export_models
+assert models and export_models
 
 
 def closing_create_task_mock() -> MagicMock:

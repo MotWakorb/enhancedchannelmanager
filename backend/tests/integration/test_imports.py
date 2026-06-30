@@ -98,20 +98,6 @@ class TestTaskImports:
         assert hasattr(task_engine, "get_engine")
 
 
-class TestFFmpegImports:
-    """Verify FFmpeg builder imports."""
-
-    def test_ffmpeg_builder_importable(self):
-        """ffmpeg_builder package should be importable."""
-        import ffmpeg_builder
-        assert ffmpeg_builder is not None
-
-    def test_ffmpeg_persistence_importable(self):
-        """ffmpeg_builder.persistence should be importable."""
-        from ffmpeg_builder.persistence import SavedConfig
-        assert SavedConfig is not None
-
-
 class TestNoCircularImports:
     """Verify no circular import issues."""
 

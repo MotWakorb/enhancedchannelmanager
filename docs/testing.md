@@ -21,7 +21,6 @@ Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 - `test_epg.py` - EPG sources, data, grid
 - `test_settings.py` - Settings configuration
 - `test_tasks.py` - Task engine, cron, schedules
-- `test_ffmpeg.py` - FFMPEG builder, profiles
 - `test_stream_stats.py` - Stream probing/health
 - `test_stream_preview.py` - Stream/channel preview
 - `test_auto_creation.py` - Auto-creation pipeline
@@ -54,7 +53,6 @@ Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 - `test_api_alert_methods.py` - Alert methods API endpoints
 - `test_api_auto_creation.py` - Auto-creation API endpoints
 - `test_api_stream_preview.py` - Stream preview API
-- `test_api_ffmpeg.py` - FFMPEG builder API
 - `test_api_csv.py` - CSV import/export API
 - `test_normalize_channel_create.py` - Normalization on create
 - `test_router_registration.py` - Route uniqueness validation
