@@ -101,6 +101,55 @@ _REGIONAL_RE = re.compile(
 # HD pattern
 _HD_RE = re.compile(r"\bhd\b", re.IGNORECASE)
 
+# --- Token-overlap signal (a6445) ---------------------------------------
+# Among same-call-sign candidates, the entry sharing MORE of the channel
+# name's meaningful tokens (call sign AND network/affiliate/city) should win.
+# Tokens are derived from the SPACED cleaned core (engine.extract_core_name)
+# before it is flattened into the match key, because flattening destroys word
+# boundaries ("FOX WTVT Tampa" -> "foxwtvttampa").
+_TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+
+# Subchannel / feed markers ("DT", "DT2", "DT3", ...): identity-free noise that
+# never distinguishes the correct network, so drop them from token sets.
+_SUBCHANNEL_TOKEN_RE = re.compile(r"^d?t?\d+$|^dt$")
+
+# Generic tokens that carry no network/affiliate identity and would only create
+# spurious overlap if counted (format/quality markers, bare articles).
+_TOKEN_STOPWORDS = frozenset(
+    {"dt", "tv", "hd", "sd", "uhd", "fhd", "4k", "the"}
+)
+
+# Each shared meaningful token is worth this many points, capped at
+# _TOKEN_OVERLAP_CAP tokens. One extra shared token (12) strictly exceeds the
+# full reduced length-similarity range (10), so token overlap is GUARANTEED to
+# be the primary same-bucket discriminator and length is only a minor
+# tiebreaker once the overlap saturates.
+_TOKEN_OVERLAP_WEIGHT = 12
+_TOKEN_OVERLAP_CAP = 3
+
+
+def _extract_match_tokens(name: str, engine=None) -> frozenset:
+    """Derive a set of meaningful tokens from a channel/EPG display name.
+
+    Tokens come from the SPACED core name (``extract_core_name(..., for_match
+    ing=True)`` when an engine is supplied; the raw name on the deprecated
+    engine-less path). Subchannel markers and generic format words are dropped
+    so the overlap reflects real network/affiliate/city identity, not noise.
+    """
+    if not name:
+        return frozenset()
+
+    core = engine.extract_core_name(name, for_matching=True) if engine else name
+
+    tokens = set()
+    for tok in _TOKEN_SPLIT_RE.split(core.lower()):
+        if len(tok) < 2:
+            continue
+        if tok in _TOKEN_STOPWORDS or _SUBCHANNEL_TOKEN_RE.match(tok):
+            continue
+        tokens.add(tok)
+    return frozenset(tokens)
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -432,6 +481,8 @@ def build_epg_lookup(
             "country": tvg_country,
             "tvg_normalized": tvg_normalized,
             "call_sign": extract_broadcast_call_sign(epg_name),
+            # Meaningful tokens for the overlap signal (a6445).
+            "match_tokens": _extract_match_tokens(epg_name, engine=engine),
         }
 
         all_entries.append(entry)
@@ -472,15 +523,28 @@ def _compute_confidence(
     channel_call_sign: Optional[str],
     epg_entry: dict,
     match_type: str,
+    channel_tokens: Optional[frozenset] = None,
 ) -> int:
     """Compute confidence score for a channel-EPG match.
 
-    Scoring (100 points total):
+    Scoring:
     - Country OR League match: 40 points
-    - Exact vs prefix match: 25 points
-    - Name length similarity: 20 points
+    - Exact vs prefix match: 25 / 15 points
+    - Token overlap: up to 36 points (a6445 — PRIMARY same-bucket discriminator)
     - Call sign match: 10 points
+    - Name length similarity: up to 10 points (minor tiebreaker)
     - HD variant: 5 points
+
+    The token-overlap term (a6445) rewards candidates that share more of the
+    channel name's meaningful tokens (call sign AND network/affiliate/city).
+    It is weighted above call sign and length so that, among entries in the
+    same call-sign bucket, the one matching the network wins. Length similarity
+    was reduced from a 20-point to a 10-point range in the same change because
+    it was actively misleading — it rewarded coincidental character counts and
+    could flip a same-bucket tie against stronger token evidence (it ranked
+    'WTVT-DT2 (MVIES)' over 'WTVT-DT (FOX)'). One extra shared token (12 pts)
+    now strictly exceeds the full length range (10 pts), so length can only
+    break a tie once token overlap is equal.
     """
     score = 0
 
@@ -497,24 +561,33 @@ def _compute_confidence(
         if channel_country.upper() == epg_country.upper():
             score += 40
 
-    # Exact vs prefix match: 25 points
+    # Exact vs prefix match: 25 / 15 points
     if match_type == "exact":
         score += 25
     elif match_type == "prefix" and len(channel_normalized) > MIN_PREFIX_LENGTH:
         # Partial credit for prefix matches
         score += 15
 
-    # Name length similarity: 20 points
-    if channel_normalized and epg_normalized:
-        len_ratio = min(len(channel_normalized), len(epg_normalized)) / max(
-            len(channel_normalized), len(epg_normalized), 1
-        )
-        score += int(len_ratio * 20)
+    # Token overlap: up to _TOKEN_OVERLAP_CAP * _TOKEN_OVERLAP_WEIGHT points.
+    # Zero when either side lacks tokens (e.g. legacy direct callers), so it is
+    # purely additive and never penalises existing matches.
+    epg_tokens = epg_entry.get("match_tokens")
+    if channel_tokens and epg_tokens:
+        shared = len(channel_tokens & epg_tokens)
+        if shared:
+            score += min(shared, _TOKEN_OVERLAP_CAP) * _TOKEN_OVERLAP_WEIGHT
 
     # Call sign match: 10 points
     if channel_call_sign and epg_call_sign:
         if channel_call_sign == epg_call_sign:
             score += 10
+
+    # Name length similarity: up to 10 points (minor tiebreaker, a6445)
+    if channel_normalized and epg_normalized:
+        len_ratio = min(len(channel_normalized), len(epg_normalized)) / max(
+            len(channel_normalized), len(epg_normalized), 1
+        )
+        score += int(len_ratio * 10)
 
     # HD variant: 5 points
     if _HD_RE.search(epg_entry.get("name", "")):
@@ -671,6 +744,8 @@ def find_epg_matches_with_lookup(
     channel_normalized = norm_info["normalized"]
     channel_league = norm_info["league"]
     channel_call_sign = extract_broadcast_call_sign(channel_name)
+    # Meaningful tokens for the overlap signal (a6445).
+    channel_tokens = _extract_match_tokens(channel_name, engine=engine)
 
     # Detect country from streams
     channel_country = detect_country_from_streams(streams)
@@ -702,6 +777,7 @@ def find_epg_matches_with_lookup(
             confidence = _compute_confidence(
                 channel_normalized, channel_league, channel_country,
                 channel_call_sign, entry, "exact",
+                channel_tokens=channel_tokens,
             )
             matches.append(EPGMatchWithScore(
                 epg_id=epg_id,
@@ -723,6 +799,7 @@ def find_epg_matches_with_lookup(
             confidence = _compute_confidence(
                 channel_normalized, channel_league, channel_country,
                 channel_call_sign, entry, "exact",
+                channel_tokens=channel_tokens,
             )
             matches.append(EPGMatchWithScore(
                 epg_id=epg_id,
@@ -751,6 +828,7 @@ def find_epg_matches_with_lookup(
                     confidence = _compute_confidence(
                         channel_normalized, channel_league, channel_country,
                         channel_call_sign, entry, "prefix",
+                        channel_tokens=channel_tokens,
                     )
                     matches.append(EPGMatchWithScore(
                         epg_id=epg_id,
@@ -778,6 +856,7 @@ def find_epg_matches_with_lookup(
                     confidence = _compute_confidence(
                         channel_normalized, channel_league, channel_country,
                         channel_call_sign, entry, "prefix",
+                        channel_tokens=channel_tokens,
                     )
                     matches.append(EPGMatchWithScore(
                         epg_id=epg_id,
@@ -799,6 +878,7 @@ def find_epg_matches_with_lookup(
             confidence = _compute_confidence(
                 channel_normalized, channel_league, channel_country,
                 channel_call_sign, entry, "callsign",
+                channel_tokens=channel_tokens,
             )
             matches.append(EPGMatchWithScore(
                 epg_id=epg_id,
@@ -829,6 +909,7 @@ def find_epg_matches_with_lookup(
                     confidence = _compute_confidence(
                         channel_normalized, channel_league, channel_country,
                         channel_call_sign, entry, "league",
+                        channel_tokens=channel_tokens,
                     )
                     matches.append(EPGMatchWithScore(
                         epg_id=epg_id,
