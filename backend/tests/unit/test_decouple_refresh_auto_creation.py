@@ -189,6 +189,10 @@ async def _run_autofire(settings, rules, engine_result=None, env=None):
         if "ECM_DISABLE_RUN_ON_REFRESH" not in env:
             os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
         task = AutoCreationTask()
+        # i2xad: scheduled auto-creation is opt-in (default_enabled=False). These
+        # tests exercise AUTO-FIRE GUARD conditions (b)/(c)/(d), which only apply
+        # once condition (a) "enabled" holds — i.e. after an operator opts in.
+        task._enabled = True
         result = await task.execute()
 
     return result, fake_engine, mock_save

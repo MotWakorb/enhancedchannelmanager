@@ -373,6 +373,18 @@ class TaskRegistry:
         task_schedule = TaskSchedule(
             task_id=instance.task_id,
             name="Default Schedule",
+            # The child schedule row represents the cadence ("every 60s") and is
+            # always seeded enabled. FIRING is gated by the PARENT
+            # ``scheduled_tasks.enabled``: task_engine requires BOTH the child
+            # schedule's ``enabled`` AND the parent task's ``enabled`` to fire.
+            # For an opt-in task (``default_enabled = False`` — currently only
+            # ``auto_creation``, enhancedchannelmanager-i2xad) the PARENT row is
+            # seeded disabled by ``_save_task_to_db`` (it writes
+            # ``enabled=instance._enabled``), so the task does not fire until an
+            # operator flips the single task "Enabled" toggle in the UI. Seeding
+            # the child disabled too would break that single-action opt-in — the
+            # prominent task toggle only enables the parent, so the child would
+            # stay off and the task would read "Enabled" yet never run.
             enabled=True,
             schedule_type=task_schedule_type,
             interval_seconds=interval_seconds,
