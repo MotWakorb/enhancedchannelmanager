@@ -6,7 +6,7 @@ export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 't
 const VALID_TABS: Set<string> = new Set([
   'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
   'logo-manager', 'm3u-changes', 'auto-creation', 'journal',
-  'stats', 'ffmpeg-builder', 'settings',
+  'stats', 'settings',
 ]);
 
 const VALID_SETTINGS_PAGES: Set<string> = new Set([

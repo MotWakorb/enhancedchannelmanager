@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import type { CloudTarget, ProviderType } from '../../types/export';
-import * as exportApi from '../../services/exportApi';
+import type { CloudTarget, ProviderType } from '../../types/cloudTargets';
+import * as cloudApi from '../../services/cloudTargetsApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
 import { CustomSelect } from '../CustomSelect';
@@ -99,9 +99,9 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
     try {
       let result;
       if (isEditing && Object.keys(creds).length === 0) {
-        result = await exportApi.testCloudTarget(target!.id);
+        result = await cloudApi.testCloudTarget(target!.id);
       } else {
-        result = await exportApi.testCloudConnectionInline({
+        result = await cloudApi.testCloudConnectionInline({
           provider_type: providerType,
           credentials: creds,
         });
@@ -146,11 +146,11 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
       }
 
       if (isEditing) {
-        await exportApi.updateCloudTarget(target!.id, data as Partial<CloudTarget>);
+        await cloudApi.updateCloudTarget(target!.id, data as Partial<CloudTarget>);
         notifications.success(`Target '${name}' updated`);
       } else {
         data.credentials = creds;
-        await exportApi.createCloudTarget(data as Partial<CloudTarget>);
+        await cloudApi.createCloudTarget(data as Partial<CloudTarget>);
         notifications.success(`Target '${name}' created`);
       }
       onSaved();

@@ -1,0 +1,131 @@
+/*
+ * Cloud Storage Targets card styling.
+ *
+ * Relocated from the removed Export tab's ExportTab.css (beads vrrxv / 1w428).
+ * Only the rules used by the cloud-target list + editor were carried over.
+ */
+
+.profile-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.profile-list-header h3 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.profile-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 4rem 0;
+  color: var(--text-secondary);
+}
+
+.profile-list-empty .material-icons {
+  font-size: 3rem;
+  opacity: 0.4;
+}
+
+.profile-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 0.5rem;
+  margin-bottom: 0.5rem;
+  overflow: hidden;
+}
+
+.profile-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.profile-card-header:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.profile-card-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-card-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-card-mode,
+.profile-card-size {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.profile-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.is-disabled {
+  opacity: 0.6;
+}
+
+.cloud-target-icon {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+}
+
+.cloud-target-credentials {
+  border-top: 1px solid var(--border-primary);
+  padding-top: 1rem;
+  margin-top: 0.5rem;
+}
+
+.export-hint {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+/* Status badges */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 1rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.status-disabled {
+  background: rgba(168, 168, 184, 0.15);
+  color: var(--text-secondary);
+}
+
+.export-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem 0;
+  color: var(--text-secondary);
+}

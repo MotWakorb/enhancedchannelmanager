@@ -55,7 +55,7 @@ class TestRoutePrefixes:
         "/api/tags",
         "/api/cache",
         "/api/auto-creation",
-        "/api/ffmpeg",
+        "/api/cloud-targets",
         "/api/auth",
     ]
 

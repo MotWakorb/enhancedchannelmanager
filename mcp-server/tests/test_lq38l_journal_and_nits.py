@@ -488,29 +488,9 @@ class TestTopWatchedViewers:
 
 
 # ===========================================================================
-# lq38l.13 #7 — create_export_profile rejects an empty name
+# lq38l.13 #7 — create_export_profile validation: removed with the Export tab
+# (beads vrrxv / 1w428). The create_export_profile MCP tool no longer exists.
 # ===========================================================================
-
-class TestExportProfileNameValidation:
-    @pytest.mark.asyncio
-    async def test_empty_name_rejected_without_backend_call(self):
-        mcp = _register("export")
-        mock_client = _client(return_value={"id": 1, "name": ""})
-        with patch("tools.export.get_ecm_client", return_value=mock_client):
-            result = await mcp.call_tool("create_export_profile", {"name": "   "})
-        text = result[0][0].text
-        assert "must not be empty" in text
-        mock_client.call_endpoint.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_valid_name_creates_profile(self):
-        mcp = _register("export")
-        mock_client = _client(return_value={"id": 1, "name": "Plex"})
-        with patch("tools.export.get_ecm_client", return_value=mock_client):
-            result = await mcp.call_tool("create_export_profile", {"name": "Plex"})
-        text = result[0][0].text
-        assert "Export profile created: Plex" in text
-        mock_client.call_endpoint.assert_called_once()
 
 
 # ===========================================================================

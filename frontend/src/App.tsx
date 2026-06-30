@@ -74,8 +74,6 @@ const JournalTab = lazy(() => withImportTelemetry(import('./components/tabs/Jour
 const StatsTab = lazy(() => withImportTelemetry(import('./components/tabs/StatsTab')).then(m => ({ default: m.StatsTab })));
 const SettingsTab = lazy(() => withImportTelemetry(import('./components/tabs/SettingsTab')).then(m => ({ default: m.SettingsTab })));
 const AutoCreationTab = lazy(() => withImportTelemetry(import('./components/autoCreation/AutoCreationTab')).then(m => ({ default: m.AutoCreationTab })));
-const FFMPEGBuilderTab = lazy(() => withImportTelemetry(import('./components/ffmpegBuilder/FFMPEGBuilderTab')).then(m => ({ default: m.FFMPEGBuilderTab })));
-const ExportTab = lazy(() => withImportTelemetry(import('./components/tabs/ExportTab')).then(m => ({ default: m.ExportTab })));
 
 // Self-contained timer component — updates only itself every second,
 // not the entire App tree (which was the previous behavior)
@@ -2533,11 +2531,6 @@ function App() {
               <AutoCreationTab />
             </ErrorBoundary>
           )}
-          {activeTab === 'export' && (
-            <ErrorBoundary key="tab-export" scopeLabel="Export tab" reloadMode="reset">
-              <ExportTab />
-            </ErrorBoundary>
-          )}
           {activeTab === 'journal' && (
             <ErrorBoundary key="tab-journal" scopeLabel="Journal tab" reloadMode="reset">
               <JournalTab />
@@ -2546,11 +2539,6 @@ function App() {
           {activeTab === 'stats' && (
             <ErrorBoundary key="tab-stats" scopeLabel="Stats tab" reloadMode="reset">
               <StatsTab />
-            </ErrorBoundary>
-          )}
-          {activeTab === 'ffmpeg-builder' && (
-            <ErrorBoundary key="tab-ffmpeg-builder" scopeLabel="FFMPEG Builder tab" reloadMode="reset">
-              <FFMPEGBuilderTab />
             </ErrorBoundary>
           )}
           {activeTab === 'settings' && (

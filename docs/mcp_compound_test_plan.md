@@ -279,25 +279,19 @@ user/channel — a pure read chain where the seam is *data consistency*.
 
 ---
 
-## Scenario 9 — Export profile → generate → publish discovery
+## Scenario 9 — Cloud targets + backup export-sections discovery
 
-**Goal:** Test the export chain and the publish-config discovery seam.
-**Tools chained:** `create_export_profile` → `list_export_profiles` →
-`generate_export` → `get_export_sections` → `list_publish_configs` →
-`list_cloud_targets` → (`publish_export`) → `delete_export_profile`.
+**Goal:** Verify the cloud-targets surface (relocated to `/api/cloud-targets` in v0.18.0, now managed via Settings → Backup & Restore) is discoverable via MCP, and that the backup export-sections tool accurately describes what YAML sections are available for selective restore.
+**Tools chained:** `list_cloud_targets` → `get_export_sections`.
 
 **Steps**
-1. *"Create an export profile 'MCPTEST_Export'."* — `create_export_profile`.
-2. *"List my export profiles."* — `list_export_profiles`. **Seam:** the new profile appears; resolve its id for the next step.
-3. *"Generate the export for 'MCPTEST_Export'."* — `generate_export`. **Seam:** the profile id from #2 is the one generated.
-4. *"What export sections are available?"* — `get_export_sections`.
-5. *"What publish configs and cloud targets do I have?"* — `list_publish_configs` + `list_cloud_targets`. (Expect "none configured" on a fresh instance — this is the discovery seam for `publish_export`.)
-6. *(Only if a publish config exists)* *"Publish using <that config>."* — `publish_export`. **Seam:** the config id comes from `list_publish_configs` (no other tool exposes it).
-7. *"Delete the 'MCPTEST_Export' profile."* — `delete_export_profile`.
+1. *"List my cloud storage targets."* — `list_cloud_targets`. **Seam:** returns a list (may be empty on a fresh instance — both empty list and real entries are valid; the key check is that the tool responds with a structured result, not an error).
+2. *"What YAML export sections are available?"* — `get_export_sections`. **Seam:** returns a non-empty list of section names (e.g. `normalization_rules`, `auto_creation_rules`, `dummy_epg_profiles`, `channel_profiles`) that represents what a YAML backup/export covers.
+3. *(Only if a cloud target exists)* *"Show me the details of the first cloud target."* Note the provider type and whether credentials are masked in the response — they should be (credentials are never returned in clear by `list_cloud_targets`).
 
-**Expected end-state:** profile created→generated→deleted cleanly; publish-config discovery returns an honest empty/real list.
-**Seam checks:** profile id flows create→list→generate→delete; `publish_export` can only be driven from a `list_publish_configs` id (verify there's a discovery path, not a guess).
-**Cleanup:** delete the profile (step 7).
+**Expected end-state:** `list_cloud_targets` responds with a structured result (empty list is valid); `get_export_sections` returns a non-empty section list; any returned cloud-target credentials are masked.
+**Seam checks:** (a) `list_cloud_targets` does not raise an error or return an unstructured blob; (b) `get_export_sections` sections are real names, not an empty list or a stub `["..."]` placeholder; (c) if a cloud target exists, its `provider` field is present and credential fields (access keys, tokens) are absent or masked.
+**Cleanup:** none (read-only).
 **Result:** ☐
 
 ---
@@ -380,7 +374,7 @@ dedup/duplicate tools rely on — a cross-feature consistency seam.
 | 6 | EPG source lifecycle → grid → match → logos | ✅ PASS (seam fix: znc76.2) |
 | 7 | Stream-health triage loop | ⚠️ PARTIAL (znc76.5) |
 | 8 | Stats cross-reference (consistency) | ✅ PASS (seam fix: znc76.1) |
-| 9 | Export profile → generate → publish discovery | ✅ PASS |
+| 9 | Cloud targets + backup export-sections discovery | ☐ |
 | 10 | Backup-guarded destructive operation | ✅ PASS |
 | 11 | Task + schedule lifecycle | ✅ PASS |
 | 12 | Normalization-driven dedup preview | ❌ FAIL (znc76.3 — config) |
