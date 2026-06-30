@@ -35,7 +35,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import database
-from bandwidth_tracker import BandwidthTracker, _coerce_session_user_id
+from bandwidth_tracker import (
+    LOCAL_TUNER_PROVIDER_ID,
+    LOCAL_TUNER_PROVIDER_NAME,
+    BandwidthTracker,
+    _coerce_session_user_id,
+)
 from models import ChannelWatchStats, SessionTelemetry, UniqueClientConnection, User
 
 
@@ -1015,18 +1020,24 @@ async def test_resolver_skips_lookup_when_no_resolvable_streams(
 
 
 @pytest.mark.asyncio
-async def test_resolver_handles_null_m3u_account_on_stream(
+async def test_resolver_tags_null_m3u_account_stream_as_local_tuner(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
     caplog,
 ):
-    """Stream exists in Dispatcharr but ``m3u_account`` is None
-    (orphaned stream — provider was deleted). ``provider_id`` stays
-    NULL. bd-gy5nd: the WARN this previously emitted is retired
-    (legitimate "stream has no provider" is normal data; only the
-    bulk lookup-raised path still WARNs).
+    """Stream exists in Dispatcharr but ``m3u_account`` is None — a
+    non-M3U / local-tuner source (HDHomeRun, direct tuner, custom
+    stream, or an orphaned stream whose provider was deleted).
+
+    bd-oj02b: this is a RESOLVED outcome, not an attribution failure.
+    The writer tags such rows with the synthetic local-tuner
+    ``provider_id`` (LOCAL_TUNER_PROVIDER_ID) so the provider-stats
+    panel surfaces them as their own "HD HomeRun" series instead of
+    folding them into the genuinely-unknown NULL "Unknown" bucket.
+    (Pre-bd-oj02b these rows wrote ``provider_id=NULL``.)
+    bd-gy5nd: no per-channel WARN fires.
     """
     import logging as _logging
 
@@ -1053,12 +1064,47 @@ async def test_resolver_handles_null_m3u_account_on_stream(
         rows = session.query(SessionTelemetry).all()
     finally:
         session.close()
-    assert rows and all(r.provider_id is None for r in rows)
+    assert rows and all(
+        r.provider_id == LOCAL_TUNER_PROVIDER_ID for r in rows
+    ), [r.provider_id for r in rows]
     # bd-gy5nd: the per-channel WARN is retired.
     assert not any(
         "[STATS_V2] provider_resolution_failed" in r.message
         for r in caplog.records
     ), [r.message for r in caplog.records]
+
+
+@pytest.mark.asyncio
+async def test_resolver_distinguishes_local_tuner_from_genuinely_unknown(
+    patched_session_local,
+    tracker,
+):
+    """bd-oj02b: the resolver must give a found-but-no-m3u_account stream
+    the synthetic local-tuner identity (provider_id + "HD HomeRun" name),
+    but leave a genuinely-not-found stream as the all-NULL resolution.
+    Driven directly against ``_resolve_provider_ids`` to assert the
+    resolution shape (the writer just persists ``.provider_id``)."""
+    # ch-local: stream 700 is in the catalogue with no m3u_account.
+    # ch-missing: stream 999 requested but absent from the response.
+    tracker.client.get_streams_by_ids = AsyncMock(
+        return_value=[{"id": 700, "m3u_account": None, "name": "Local CBS"}]
+    )
+    snapshot = [
+        {"channel_uuid": "ch-local", "stream_id": 700},
+        {"channel_uuid": "ch-missing", "stream_id": 999},
+    ]
+
+    result = await tracker._resolve_provider_ids(snapshot)
+
+    local = result["ch-local"]
+    assert local.provider_id == LOCAL_TUNER_PROVIDER_ID
+    assert local.provider_name == LOCAL_TUNER_PROVIDER_NAME
+    assert local.stream_id == 700
+    assert local.stream_name == "Local CBS"
+
+    missing = result["ch-missing"]
+    assert missing.provider_id is None
+    assert missing.provider_name is None
 
 
 # ---------------------------------------------------------------------------

@@ -299,6 +299,100 @@ class TestTrendingChannels:
         assert len(data) == 3
 
 
+def _add_ucc(test_session, *, ip, channel_id, channel_name, username, on_date, connected_at, watch_seconds=60):
+    """Add a single UniqueClientConnection row (one connection)."""
+    test_session.add(UniqueClientConnection(
+        ip_address=ip,
+        channel_id=channel_id,
+        channel_name=channel_name,
+        user_id=None,
+        username=username,
+        date=on_date,
+        connected_at=connected_at,
+        watch_seconds=watch_seconds,
+    ))
+
+
+class TestUniqueViewersGroupBy:
+    """Tests for the by-user / by-IP toggle on the unique-viewers endpoints (#3, #4).
+
+    PO decision: when the username is NULL, fall back to the client IP.
+    """
+
+    @pytest.mark.asyncio
+    async def test_top_viewers_by_user_collapses_ips_and_falls_back(self, async_client, test_session):
+        """group_by=user: alice's two IPs collapse to one viewer; an unresolved
+        IP appears under its own IP as the fallback (#3)."""
+        today = date(2026, 6, 30)
+        ts = datetime(2026, 6, 30, 12, 0, 0)
+        # alice connects from two distinct IPs (two connections).
+        _add_ucc(test_session, ip="10.0.0.1", channel_id="ch-news", channel_name="News",
+                 username="alice", on_date=today, connected_at=ts, watch_seconds=30)
+        _add_ucc(test_session, ip="10.0.0.2", channel_id="ch-news", channel_name="News",
+                 username="alice", on_date=today, connected_at=ts, watch_seconds=40)
+        # An unresolved viewer (no username) from a third IP.
+        _add_ucc(test_session, ip="10.0.0.9", channel_id="ch-news", channel_name="News",
+                 username=None, on_date=today, connected_at=ts, watch_seconds=10)
+        test_session.commit()
+
+        with patch("bandwidth_tracker.get_session", return_value=test_session):
+            with patch("bandwidth_tracker.get_current_date", return_value=today):
+                resp_user = await async_client.get(
+                    "/api/stats/unique-viewers", params={"group_by": "user"}
+                )
+                resp_ip = await async_client.get(
+                    "/api/stats/unique-viewers", params={"group_by": "ip"}
+                )
+
+        assert resp_user.status_code == 200
+        viewers = {(v["ip_address"], v["username"]): v for v in resp_user.json()["top_viewers"]}
+        # alice: one collapsed row, 2 connections, identity = username.
+        assert ("alice", "alice") in viewers
+        assert viewers[("alice", "alice")]["connection_count"] == 2
+        assert viewers[("alice", "alice")]["total_watch_seconds"] == 70
+        # unresolved viewer: identity = IP, username None (frontend shows the IP).
+        assert ("10.0.0.9", None) in viewers
+        assert viewers[("10.0.0.9", None)]["connection_count"] == 1
+
+        # by IP: three separate rows (no collapse).
+        assert resp_ip.status_code == 200
+        ip_rows = {v["ip_address"] for v in resp_ip.json()["top_viewers"]}
+        assert ip_rows == {"10.0.0.1", "10.0.0.2", "10.0.0.9"}
+
+    @pytest.mark.asyncio
+    async def test_by_channel_distinct_counts_per_group_by(self, async_client, test_session):
+        """group_by=user counts distinct COALESCE(username, ip); group_by=ip
+        counts distinct IPs (#4)."""
+        today = date(2026, 6, 30)
+        ts = datetime(2026, 6, 30, 12, 0, 0)
+        _add_ucc(test_session, ip="10.0.0.1", channel_id="ch-x", channel_name="X",
+                 username="alice", on_date=today, connected_at=ts)
+        _add_ucc(test_session, ip="10.0.0.2", channel_id="ch-x", channel_name="X",
+                 username="alice", on_date=today, connected_at=ts)
+        _add_ucc(test_session, ip="10.0.0.9", channel_id="ch-x", channel_name="X",
+                 username=None, on_date=today, connected_at=ts)
+        test_session.commit()
+
+        with patch("bandwidth_tracker.get_session", return_value=test_session):
+            with patch("bandwidth_tracker.get_current_date", return_value=today):
+                resp_user = await async_client.get(
+                    "/api/stats/unique-viewers-by-channel", params={"group_by": "user"}
+                )
+                resp_ip = await async_client.get(
+                    "/api/stats/unique-viewers-by-channel", params={"group_by": "ip"}
+                )
+
+        assert resp_user.status_code == 200
+        row_user = next(r for r in resp_user.json() if r["channel_id"] == "ch-x")
+        # alice (2 IPs) collapses to 1 + unresolved fallback IP = 2 unique.
+        assert row_user["unique_viewers"] == 2
+
+        assert resp_ip.status_code == 200
+        row_ip = next(r for r in resp_ip.json() if r["channel_id"] == "ch-x")
+        # three distinct IPs = 3 unique.
+        assert row_ip["unique_viewers"] == 3
+
+
 class TestCalculatePopularity:
     """Tests for POST /api/stats/popularity/calculate endpoint."""
 

@@ -162,6 +162,7 @@ beforeEach(() => {
     count: 0,
   } as unknown as Awaited<ReturnType<typeof api.getChannels>>);
   vi.mocked(api.getStreamProfiles).mockResolvedValue([]);
+  vi.mocked(api.getAllLogos).mockResolvedValue([]);
   vi.mocked(api.getM3UAccounts).mockResolvedValue(mockM3UAccounts);
   vi.mocked(api.getSystemEvents).mockResolvedValue({
     events: [],
@@ -1543,5 +1544,98 @@ describe('StatsTab — scroll-containment DOM structure (bd-tkcmu)', () => {
 
     // Sanity-check: .stats-content must not be the stats-tab root itself.
     expect(statsTab).not.toBe(statsContent);
+  });
+});
+
+// enhancedchannelmanager-2sfpt #1: a small channel logo renders beside the
+// channel number in Active Channels rows, resolved from the channel's logo_id
+// via the loaded logo map. Null/unknown logos render no <img> (no broken icon).
+describe('StatsTab — Active Channels logo (#1)', () => {
+  const CH_UUID = 'ecc0280e-af3f-47c3-b344-39f21c80b880';
+
+  it('renders the channel logo img when the channel has a resolvable logo', async () => {
+    vi.mocked(api.getChannels).mockResolvedValue({
+      results: [{ uuid: CH_UUID, name: 'ESPN HD', channel_number: 5, logo_id: 42 }],
+      next: null,
+      count: 1,
+    } as unknown as Awaited<ReturnType<typeof api.getChannels>>);
+    vi.mocked(api.getAllLogos).mockResolvedValue([
+      { id: 42, name: 'ESPN', url: 'http://logos/espn.png', cache_url: 'http://logos/cache/42', channel_count: 1, is_used: true },
+    ]);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [{ channel_id: CH_UUID, channel_name: 'ESPN HD', channel_number: 5, state: 'streaming', client_count: 0, clients: [] }],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      const img = container.querySelector('img.channel-logo-mini') as HTMLImageElement | null;
+      expect(img).not.toBeNull();
+      expect(img?.src).toContain('http://logos/cache/42');
+    });
+  });
+
+  it('renders no logo img when the channel has no logo_id', async () => {
+    vi.mocked(api.getChannels).mockResolvedValue({
+      results: [{ uuid: CH_UUID, name: 'ESPN HD', channel_number: 5, logo_id: null }],
+      next: null,
+      count: 1,
+    } as unknown as Awaited<ReturnType<typeof api.getChannels>>);
+    vi.mocked(api.getAllLogos).mockResolvedValue([]);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [{ channel_id: CH_UUID, channel_name: 'ESPN HD', channel_number: 5, state: 'streaming', client_count: 0, clients: [] }],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.channel-card')).toBeInTheDocument();
+    });
+    expect(container.querySelector('img.channel-logo-mini')).toBeNull();
+  });
+});
+
+// enhancedchannelmanager-2sfpt #2: Recent Events show the connecting /
+// disconnecting username (resolved server-side), falling back to the client IP
+// when no username is attributed.
+describe('StatsTab — Recent Events username (#2)', () => {
+  beforeEach(() => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 0, channels: [],
+    } as unknown as ChannelStatsResponse);
+  });
+
+  it('shows the resolved username on the event line', async () => {
+    vi.mocked(api.getSystemEvents).mockResolvedValue({
+      events: [
+        { id: 1, event_type: 'client_connect', channel_name: 'ESPN', message: 'connected', ip_address: '10.0.0.5', username: 'alice' },
+      ],
+      count: 1, total: 1, offset: 0, limit: 50,
+    } as unknown as Awaited<ReturnType<typeof api.getSystemEvents>>);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      const msg = container.querySelector('.event-message');
+      expect(msg?.textContent).toContain('- alice');
+    });
+  });
+
+  it('falls back to the IP when the event has no username', async () => {
+    vi.mocked(api.getSystemEvents).mockResolvedValue({
+      events: [
+        { id: 2, event_type: 'client_disconnect', channel_name: 'ESPN', message: 'disconnected', ip_address: '203.0.113.9', username: null },
+      ],
+      count: 1, total: 1, offset: 0, limit: 50,
+    } as unknown as Awaited<ReturnType<typeof api.getSystemEvents>>);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      const msg = container.querySelector('.event-message');
+      expect(msg?.textContent).toContain('- 203.0.113.9');
+    });
   });
 });

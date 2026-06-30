@@ -425,6 +425,30 @@ class ProviderResolution(NamedTuple):
 # allocate a fresh tuple for every NULL row.
 EMPTY_RESOLUTION = ProviderResolution(None, None, None, None, None)
 
+# Synthetic provider identity for non-M3U / local-tuner sources (bd-oj02b).
+# A stream that Dispatcharr returns in its catalogue but that carries NO
+# ``m3u_account`` (``extract_m3u_account_id`` -> None) is a local source —
+# an HDHomeRun / direct-tuner / custom stream that does not belong to any
+# M3U provider account. That is fundamentally DIFFERENT from a genuinely
+# unresolved stream (one we could not find at all, or that had no URL to
+# parse): the local source is a real, identifiable upstream the operator
+# wants surfaced as its own provider series, not folded into the NULL
+# "Unknown" bucket alongside true attribution failures.
+#
+# Represented as a NEGATIVE sentinel ``provider_id``. Real Dispatcharr
+# m3u_account ids are positive autoincrement integers, so ``-1`` can never
+# collide with a real provider, needs no schema change (``provider_id`` is
+# already a plain nullable INTEGER, not a FK — models.py L1349), and lets
+# the existing GROUP-BY-provider rollups in the stats router give it its
+# own line automatically. The frontend maps this id to the display label.
+#
+# Scope/limitation: a found-stream-with-no-m3u_account is indistinguishable
+# at the data layer from an *orphaned* stream whose M3U account was deleted.
+# Both are tagged here as the local-tuner source. Genuinely unattributable
+# rows (stream not found at all / no URL) stay NULL → "Unknown".
+LOCAL_TUNER_PROVIDER_ID = -1
+LOCAL_TUNER_PROVIDER_NAME = "HD HomeRun"
+
 
 def _parse_url_hostname(url: Optional[str]) -> Optional[str]:
     """Extract the bare hostname from a stream URL (bd-gy5nd).
@@ -1050,23 +1074,43 @@ async def resolve_active_channel_streams(
                 provider_by_channel[channel_uuid] = hostname_resolution
                 resolved_count += 1
                 continue
-        # Neither stream-id direct nor URL-hostname match attributed
-        # the channel — surface the empty resolution and continue.
-        # Logged at DEBUG (not WARN) because the legitimate "no URL
-        # available" case is a normal data shape, not an error
-        # condition; the SLI summary line above carries the
-        # unresolved-count signal operators monitor.
+        # bd-oj02b: the stream IS in Dispatcharr's catalogue but carries
+        # no m3u_account — a non-M3U / local-tuner source (HDHomeRun,
+        # direct tuner, custom stream, or an orphaned stream whose
+        # provider account was deleted). This is a RESOLVED outcome: we
+        # positively identified a local source. Tag it with the synthetic
+        # local-tuner identity so the provider-stats rollups give it its
+        # own series instead of folding it into the genuinely-unknown NULL
+        # bucket. ``stream_id`` / ``stream_name`` carry forward so the
+        # "what's playing" surfaces still populate.
+        if stream_in_response:
+            provider_by_channel[channel_uuid] = ProviderResolution(
+                provider_id=LOCAL_TUNER_PROVIDER_ID,
+                stream_id=stream_id,
+                stream_name=stream_name,
+                provider_name=LOCAL_TUNER_PROVIDER_NAME,
+                hostname=active_hostname,
+            )
+            resolved_count += 1
+            logger.debug(
+                "[STATS_V2] provider_local_tuner channel=%s stream=%s "
+                "(bd-oj02b)",
+                channel_uuid,
+                stream_id,
+            )
+            continue
+        # Stream not found at all — genuinely unresolved. Surface the
+        # empty resolution and continue. Logged at DEBUG (not WARN)
+        # because the legitimate "no stream / no URL" case is a normal
+        # data shape, not an error condition; the SLI summary line above
+        # carries the unresolved-count signal operators monitor.
         provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
         unresolved_count += 1
-        if not stream_in_response:
-            reason = "stream_not_found"
-        else:
-            reason = "stream_has_no_provider"
         logger.debug(
             "[STATS_V2] provider_unresolved channel=%s stream=%s reason=%s",
             channel_uuid,
             stream_id,
-            reason,
+            "stream_not_found",
         )
 
     if emit_metrics:
@@ -4942,12 +4986,18 @@ class BandwidthTracker:
     # =========================================================================
 
     @staticmethod
-    def get_unique_viewers_summary(days: int = 7) -> dict:
+    def get_unique_viewers_summary(days: int = 7, group_by: str = "ip") -> dict:
         """
         Get unique viewer statistics for the specified period.
 
         Args:
             days: Number of days to look back (default 7)
+            group_by: Bucketing key for the Top Viewers list —
+                ``"ip"`` (default) groups by client IP; ``"user"`` groups by
+                ``COALESCE(username, ip_address)`` so resolved viewers collapse
+                across their IPs and unresolved viewers fall back to their IP
+                (PO decision, enhancedchannelmanager-2sfpt). Any other value is
+                treated as ``"ip"``.
 
         Returns:
             dict with unique viewer counts and breakdown
@@ -4982,18 +5032,61 @@ class BandwidthTracker:
                 UniqueClientConnection.watch_seconds > 0
             ).scalar() or 0
 
-            # Top viewers by connection count
-            top_viewers = session.query(
-                UniqueClientConnection.ip_address,
-                func.count(UniqueClientConnection.id).label("connection_count"),
-                func.sum(UniqueClientConnection.watch_seconds).label("total_watch_seconds")
-            ).filter(
-                UniqueClientConnection.date >= cutoff
-            ).group_by(
-                UniqueClientConnection.ip_address
-            ).order_by(
-                func.count(UniqueClientConnection.id).desc()
-            ).limit(10).all()
+            # Top viewers by connection count. ``group_by`` selects the bucket:
+            #   "user" → COALESCE(username, ip_address): one row per resolved
+            #            viewer (collapsing their IPs), or per IP when the
+            #            username is NULL (fallback).
+            #   "ip"   → one row per client IP (default / legacy behaviour).
+            if group_by == "user":
+                viewer_key = func.coalesce(
+                    UniqueClientConnection.username,
+                    UniqueClientConnection.ip_address,
+                )
+                top_viewers_rows = session.query(
+                    viewer_key.label("viewer_key"),
+                    func.max(UniqueClientConnection.username).label("username"),
+                    func.count(UniqueClientConnection.id).label("connection_count"),
+                    func.sum(UniqueClientConnection.watch_seconds).label("total_watch_seconds")
+                ).filter(
+                    UniqueClientConnection.date >= cutoff
+                ).group_by(
+                    viewer_key
+                ).order_by(
+                    func.count(UniqueClientConnection.id).desc()
+                ).limit(10).all()
+                top_viewers = [
+                    {
+                        # ``ip_address`` carries the group identity (the coalesced
+                        # key): the username when resolved, else the real IP. The
+                        # frontend renders ``username ?? ip_address``.
+                        "ip_address": v.viewer_key,
+                        "username": v.username,
+                        "connection_count": v.connection_count,
+                        "total_watch_seconds": v.total_watch_seconds or 0,
+                    }
+                    for v in top_viewers_rows
+                ]
+            else:
+                top_viewers_rows = session.query(
+                    UniqueClientConnection.ip_address,
+                    func.count(UniqueClientConnection.id).label("connection_count"),
+                    func.sum(UniqueClientConnection.watch_seconds).label("total_watch_seconds")
+                ).filter(
+                    UniqueClientConnection.date >= cutoff
+                ).group_by(
+                    UniqueClientConnection.ip_address
+                ).order_by(
+                    func.count(UniqueClientConnection.id).desc()
+                ).limit(10).all()
+                top_viewers = [
+                    {
+                        "ip_address": v.ip_address,
+                        "username": None,
+                        "connection_count": v.connection_count,
+                        "total_watch_seconds": v.total_watch_seconds or 0,
+                    }
+                    for v in top_viewers_rows
+                ]
 
             # Daily unique viewer counts for chart
             daily_unique = session.query(
@@ -5013,14 +5106,7 @@ class BandwidthTracker:
                 "today_unique_viewers": today_unique,
                 "total_connections": total_connections,
                 "avg_watch_seconds": round(avg_watch_time, 1),
-                "top_viewers": [
-                    {
-                        "ip_address": v.ip_address,
-                        "connection_count": v.connection_count,
-                        "total_watch_seconds": v.total_watch_seconds or 0,
-                    }
-                    for v in top_viewers
-                ],
+                "top_viewers": top_viewers,
                 "daily_unique": [
                     {"date": d.date.isoformat(), "unique_count": d.unique_count}
                     for d in daily_unique
@@ -5088,13 +5174,24 @@ class BandwidthTracker:
             session.close()
 
     @staticmethod
-    def get_unique_viewers_by_channel(days: int = 7, limit: int = 20) -> list[dict]:
+    def get_unique_viewers_by_channel(days: int = 7, limit: int = 20, group_by: str = "ip") -> list[dict]:
         """
         Get unique viewer counts per channel.
 
         Args:
             days: Number of days to look back (default 7)
             limit: Maximum channels to return (default 20)
+            group_by: Distinct-viewer key — ``"ip"`` (default) counts distinct
+                client IPs; ``"user"`` counts ``distinct(COALESCE(username,
+                ip_address))`` so resolved viewers count once across their IPs
+                and unresolved viewers fall back to their IP (PO decision,
+                enhancedchannelmanager-2sfpt). Any other value is treated as
+                ``"ip"``.
+
+                Note: the IP variant is covered by ``idx_unique_client_channel_ip_date``
+                (models.py); the username variant has no covering index, so the
+                distinct-over-COALESCE scans the date-filtered, channel-grouped
+                rows. Acceptable at current volumes — see the bead report.
 
         Returns:
             List of channels with their unique viewer counts
@@ -5103,12 +5200,23 @@ class BandwidthTracker:
 
         cutoff = get_current_date() - timedelta(days=days)
 
+        # Distinct-viewer key: COALESCE(username, ip) for the by-user variant
+        # (resolved viewers collapse across IPs; NULL usernames fall back to IP),
+        # bare ip_address otherwise.
+        if group_by == "user":
+            viewer_key = func.coalesce(
+                UniqueClientConnection.username,
+                UniqueClientConnection.ip_address,
+            )
+        else:
+            viewer_key = UniqueClientConnection.ip_address
+
         session = get_session()
         try:
             results = session.query(
                 UniqueClientConnection.channel_id,
                 UniqueClientConnection.channel_name,
-                func.count(distinct(UniqueClientConnection.ip_address)).label("unique_viewers"),
+                func.count(distinct(viewer_key)).label("unique_viewers"),
                 func.count(UniqueClientConnection.id).label("total_connections"),
                 func.sum(UniqueClientConnection.watch_seconds).label("total_watch_seconds"),
             ).filter(
@@ -5117,7 +5225,7 @@ class BandwidthTracker:
                 UniqueClientConnection.channel_id,
                 UniqueClientConnection.channel_name
             ).order_by(
-                func.count(distinct(UniqueClientConnection.ip_address)).desc()
+                func.count(distinct(viewer_key)).desc()
             ).limit(limit).all()
 
             return [
