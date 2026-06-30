@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { CloudTarget } from '../../types/cloudTargets';
 import * as cloudApi from '../../services/cloudTargetsApi';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { useBackupDestinationPrompt } from '../../contexts/BackupDestinationPromptContext';
 import { CloudTargetEditor } from './CloudTargetEditor';
 import { ModalOverlay } from '../ModalOverlay';
 import '../ModalBase.css';
@@ -32,6 +33,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 export function CloudTargetsCard() {
   const notifications = useNotifications();
+  const { promptBackupDestination } = useBackupDestinationPrompt();
   const [targets, setTargets] = useState<CloudTarget[]>([]);
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -51,6 +53,15 @@ export function CloudTargetsCard() {
   }, [notifications]);
 
   useEffect(() => { loadTargets(); }, [loadTargets]);
+
+  // Adding/saving a cloud upload target is one of the two "actively configuring
+  // backups" triggers for the backup-destination first-run choice (bead s5a3o).
+  // Fire on commit (save), not on opening the editor, so the choice modal does
+  // not stack on top of the target editor. No-op if the operator already answered.
+  const handleTargetSaved = useCallback(() => {
+    loadTargets();
+    promptBackupDestination();
+  }, [loadTargets, promptBackupDestination]);
 
   const handleEdit = (target: CloudTarget) => {
     setEditingTarget(target);
@@ -180,7 +191,7 @@ export function CloudTargetsCard() {
         <CloudTargetEditor
           target={editingTarget}
           onClose={() => setEditorOpen(false)}
-          onSaved={loadTargets}
+          onSaved={handleTargetSaved}
         />
       )}
 
