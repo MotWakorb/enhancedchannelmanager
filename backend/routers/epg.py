@@ -21,7 +21,11 @@ from alert_methods import send_alert
 from cache import get_cache
 from config import validate_url_scheme
 from dispatcharr_client import get_client, upstream_http_exception
-from epg_matching import batch_find_epg_matches, build_source_priority_order
+from epg_matching import (
+    _epg_source_id,
+    batch_find_epg_matches,
+    build_source_priority_order,
+)
 import journal
 
 logger = logging.getLogger(__name__)
@@ -1036,6 +1040,26 @@ async def match_channels_to_epg(request: EPGMatchRequest):
             for src_id in request.epg_source_ids:
                 src_data = await client.get_epg_data(epg_source=src_id)
                 epg_data.extend(src_data)
+            # Defense-in-depth (m4hp1): the per-source fetch relies on
+            # Dispatcharr honoring the ``epg_source`` query param, but nothing
+            # downstream enforces it. If Dispatcharr ignores the filter (some
+            # versions do), candidates leak in from EVERY source. Enforce the
+            # user's selection authoritatively in ECM by dropping any entry
+            # whose source id is not one of the selected ids.
+            allowed_source_ids = set(request.epg_source_ids)
+            before = len(epg_data)
+            epg_data = [
+                e for e in epg_data
+                if _epg_source_id(e.get("epg_source")) in allowed_source_ids
+            ]
+            dropped = before - len(epg_data)
+            if dropped:
+                logger.warning(
+                    "[EPG-MATCH] Dropped %d EPG entries from non-selected "
+                    "sources (selected=%s); Dispatcharr did not honor the "
+                    "epg_source filter",
+                    dropped, sorted(allowed_source_ids),
+                )
         else:
             epg_data = await client.get_epg_data()
 

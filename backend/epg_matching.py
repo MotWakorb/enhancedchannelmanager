@@ -119,13 +119,55 @@ _TOKEN_STOPWORDS = frozenset(
     {"dt", "tv", "hd", "sd", "uhd", "fhd", "4k", "the"}
 )
 
-# Each shared meaningful token is worth this many points, capped at
-# _TOKEN_OVERLAP_CAP tokens. One extra shared token (12) strictly exceeds the
-# full reduced length-similarity range (10), so token overlap is GUARANTEED to
-# be the primary same-bucket discriminator and length is only a minor
-# tiebreaker once the overlap saturates.
-_TOKEN_OVERLAP_WEIGHT = 12
-_TOKEN_OVERLAP_CAP = 3
+# Token-set match QUALITY (m4hp1): precision-aware, not just recall.
+# A candidate is rewarded for SHARING the channel's meaningful tokens AND
+# penalised for carrying EXTRA tokens the channel does not have (e.g. the noise
+# in "TW BAK KABC B/O (ABC)" or the diginet brand in "KCOP-DT4 (HEROICN)").
+# The clean primary-feed network entry (whose tokens are a subset of the
+# channel's) therefore strictly outranks a noisier same-call-sign sibling.
+#
+# quality = min(shared, CAP) * SHARED_WEIGHT - min(extra, EXTRA_CAP) * EXTRA_WEIGHT
+#
+# Magnitudes are tuned to stay BELOW the country/league (40) and exact (25)
+# tiers so a fuzzy call-sign match can never beat an exact/country-preferred
+# match: the positive range is capped at 36 (3 * 12) and the penalty at 16
+# (4 * 4). One extra SHARED token (12) outweighs four extra noise tokens, and
+# every shared token outweighs the per-token noise penalty, so recall still
+# dominates precision — extra tokens only break what would otherwise be ties.
+_TOKEN_SHARED_WEIGHT = 12
+_TOKEN_SHARED_CAP = 3
+_TOKEN_EXTRA_WEIGHT = 4
+_TOKEN_EXTRA_CAP = 4
+
+# Parse a broadcast subchannel ("digital subchannel") number from a RAW EPG or
+# channel display name. The ATSC convention is CALLSIGN-DT for the primary feed
+# and CALLSIGN-DT2/-DT3/... for diginets. Primary feed (no marker, "-DT", or
+# "-DT1") is treated as subchannel 1; "-DT2" and up are the higher diginets.
+# Used ONLY as a tie-break so the clean primary feed wins when two candidates
+# are otherwise indistinguishable (identical tokens, e.g. KOCE-DT vs KOCE-DT2).
+_SUBCHANNEL_RE = re.compile(r"[-\s]DT(\d*)\b", re.IGNORECASE)
+
+
+def _parse_subchannel(name: str) -> int:
+    """Return the broadcast subchannel number (1 = primary feed, >=2 diginet).
+
+    Names without an ATSC ``-DT`` marker, or with a bare ``-DT``/``-DT1``, are
+    treated as the primary feed (1). ``-DT2``/``-DT3``/``-DT4`` -> 2/3/4. This is
+    a pure tie-break signal; it never changes how strongly a name matches.
+    """
+    if not name:
+        return 1
+    m = _SUBCHANNEL_RE.search(name)
+    if not m:
+        return 1
+    digits = m.group(1)
+    if not digits:
+        return 1
+    try:
+        n = int(digits)
+    except ValueError:
+        return 1
+    return n if n >= 1 else 1
 
 
 def _extract_match_tokens(name: str, engine=None) -> frozenset:
@@ -169,6 +211,11 @@ class EPGMatchWithScore:
     # outside the lookup path (e.g. direct unit-test construction); _sort_matches
     # falls back to recomputing in that case.
     epg_normalized: str = ""
+    # Broadcast subchannel number (1 = primary feed, >=2 diginet), carried from
+    # the lookup entry (m4hp1). Used by _sort_matches ONLY as a tie-break so the
+    # primary feed wins when two candidates are otherwise indistinguishable.
+    # Defaults to 1 (neutral) for objects built outside the lookup path.
+    subchannel: int = 1
 
 
 @dataclass
@@ -483,6 +530,10 @@ def build_epg_lookup(
             "call_sign": extract_broadcast_call_sign(epg_name),
             # Meaningful tokens for the overlap signal (a6445).
             "match_tokens": _extract_match_tokens(epg_name, engine=engine),
+            # Broadcast subchannel number parsed from the RAW name (m4hp1).
+            # Primary feed (no marker / -DT / -DT1) = 1; diginets -DT2.. >= 2.
+            # Pure tie-break: prefer the primary feed when tokens tie.
+            "subchannel": _parse_subchannel(epg_name),
         }
 
         all_entries.append(entry)
@@ -530,25 +581,28 @@ def _compute_confidence(
     Scoring:
     - Country OR League match: 40 points
     - Exact vs prefix match: 25 / 15 points
-    - Token overlap: up to 36 points (a6445 — PRIMARY same-bucket discriminator)
+    - Token-set match quality: +36 .. -16 points (m4hp1 — PRIMARY same-bucket
+      discriminator: rewards shared tokens, penalises extra/noise EPG tokens)
     - Call sign match: 10 points
-    - Name length similarity: up to 10 points (minor tiebreaker)
     - HD variant: 5 points
 
-    The token-overlap term (a6445) rewards candidates that share more of the
-    channel name's meaningful tokens (call sign AND network/affiliate/city).
-    It is weighted above call sign and length so that, among entries in the
-    same call-sign bucket, the one matching the network wins. Length similarity
-    was reduced from a 20-point to a 10-point range in the same change because
-    it was actively misleading — it rewarded coincidental character counts and
-    could flip a same-bucket tie against stronger token evidence (it ranked
-    'WTVT-DT2 (MVIES)' over 'WTVT-DT (FOX)'). One extra shared token (12 pts)
-    now strictly exceeds the full length range (10 pts), so length can only
-    break a tie once token overlap is equal.
+    The token-quality term (m4hp1, evolving a6445) rewards candidates that share
+    more of the channel name's meaningful tokens (call sign AND
+    network/affiliate/city) AND penalises candidates carrying EXTRA tokens the
+    channel lacks (the "TW BAK"/"Stream"/"HEROICN"/"THENEST" noise). It is
+    weighted above call sign so that, among entries in the same call-sign
+    bucket, the clean primary-feed network entry wins.
+
+    The former name-length-similarity term was REMOVED (m4hp1): it rewarded
+    coincidental character counts and actively mis-ranked — a noisier subchannel
+    whose flattened name happened to be closer in length to the channel key
+    would beat the clean network entry (it ranked 'KABC-DT Stream (ABC)' and
+    'WTVT-DT2 (MVIES)' over the correct feed). Token-set quality, not length, is
+    the same-bucket discriminator now; genuine ties are broken in _sort_matches
+    (subchannel number, then deterministic keys).
     """
     score = 0
 
-    epg_normalized = epg_entry["normalized_name"]
     epg_league = epg_entry.get("league")
     epg_country = epg_entry.get("country")
     epg_call_sign = epg_entry.get("call_sign")
@@ -568,26 +622,22 @@ def _compute_confidence(
         # Partial credit for prefix matches
         score += 15
 
-    # Token overlap: up to _TOKEN_OVERLAP_CAP * _TOKEN_OVERLAP_WEIGHT points.
-    # Zero when either side lacks tokens (e.g. legacy direct callers), so it is
-    # purely additive and never penalises existing matches.
+    # Token-set match quality (m4hp1): reward shared tokens, penalise extra
+    # EPG tokens absent from the channel. Skipped entirely when either side
+    # lacks tokens (e.g. legacy direct callers) so those scores are unchanged.
     epg_tokens = epg_entry.get("match_tokens")
     if channel_tokens and epg_tokens:
         shared = len(channel_tokens & epg_tokens)
-        if shared:
-            score += min(shared, _TOKEN_OVERLAP_CAP) * _TOKEN_OVERLAP_WEIGHT
+        extra = len(epg_tokens - channel_tokens)
+        score += (
+            min(shared, _TOKEN_SHARED_CAP) * _TOKEN_SHARED_WEIGHT
+            - min(extra, _TOKEN_EXTRA_CAP) * _TOKEN_EXTRA_WEIGHT
+        )
 
     # Call sign match: 10 points
     if channel_call_sign and epg_call_sign:
         if channel_call_sign == epg_call_sign:
             score += 10
-
-    # Name length similarity: up to 10 points (minor tiebreaker, a6445)
-    if channel_normalized and epg_normalized:
-        len_ratio = min(len(channel_normalized), len(epg_normalized)) / max(
-            len(channel_normalized), len(epg_normalized), 1
-        )
-        score += int(len_ratio * 10)
 
     # HD variant: 5 points
     if _HD_RE.search(epg_entry.get("name", "")):
@@ -638,12 +688,21 @@ def _sort_matches(
        PRIORITY_TIEBREAK_BAND)
     3. EPG source priority — within a confidence band only (rank 0 = best)
     4. Raw confidence (higher first, within band + source)
-    5. Exact over prefix (for names > 2 chars)
-    6. Special punctuation match
-    7. Channel-is-prefix-of-EPG preferred
-    8. Length similarity (closer = better)
+    5. Subchannel number (m4hp1: primary feed before diginet) — a pure
+       tie-break, applied only AFTER token-quality/confidence already tied, so
+       it never beats a genuinely higher-overlap candidate (e.g. won't let
+       KCOP-DT beat a real KCOP-DT4 (MY) MyNet diginet match).
+    6. Exact over prefix (for names > 2 chars)
+    7. Special punctuation match
+    8. Channel-is-prefix-of-EPG preferred
     9. Regional variant matching
     10. Alphabetical, then EPG id (fully deterministic)
+
+    The former name-length-similarity tie-break (``len_diff``) was REMOVED
+    (m4hp1): like the length term in _compute_confidence, it rewarded
+    coincidental character counts and mis-ranked noisier subchannels over the
+    clean primary feed. Token-set quality (confidence) plus the subchannel
+    tie-break replace it.
 
     ``source_order`` maps EPG ``source_id -> rank`` (0 = most preferred). It is a
     *banded tiebreaker*: it only reorders candidates that share a confidence
@@ -676,17 +735,19 @@ def _sort_matches(
             source_rank = 0
 
         # 4. Raw confidence (still prefer the better match within band + source)
-        # 5. Exact over prefix
+        # 5. Subchannel: lower number first (primary feed before diginet).
+        #    Placed AFTER -m.confidence so it only arbitrates genuine ties —
+        #    a candidate with higher token-quality/confidence still wins.
+        subchannel = m.subchannel
+
+        # 6. Exact over prefix
         exact_bonus = 0 if m.match_type == "exact" else 1
 
-        # 6. Special punctuation
+        # 7. Special punctuation
         has_special = 1 if _SPECIAL_PUNCT_RE.search(m.epg_name) else 0
 
-        # 7. Channel is prefix of EPG
+        # 8. Channel is prefix of EPG
         is_prefix = 0 if epg_norm.startswith(channel_normalized) else 1
-
-        # 8. Length similarity
-        len_diff = abs(len(channel_normalized) - len(epg_norm))
 
         # 9. Regional variant
         has_regional = 1 if _REGIONAL_RE.search(m.epg_name) else 0
@@ -697,10 +758,10 @@ def _sort_matches(
             confidence_band,
             source_rank,
             -m.confidence,
+            subchannel,
             exact_bonus,
             has_special,
             is_prefix,
-            len_diff,
             has_regional,
             m.epg_name.lower(),
             m.epg_id,
@@ -785,6 +846,7 @@ def find_epg_matches_with_lookup(
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
                 epg_normalized=entry["normalized_name"],
+                subchannel=entry["subchannel"],
                 confidence=confidence,
                 match_type="exact",
             ))
@@ -807,6 +869,7 @@ def find_epg_matches_with_lookup(
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
                 epg_normalized=entry["normalized_name"],
+                subchannel=entry["subchannel"],
                 confidence=confidence,
                 match_type="exact",
             ))
@@ -836,6 +899,7 @@ def find_epg_matches_with_lookup(
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
                         epg_normalized=entry["normalized_name"],
+                        subchannel=entry["subchannel"],
                         confidence=confidence,
                         match_type="prefix",
                     ))
@@ -864,6 +928,7 @@ def find_epg_matches_with_lookup(
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
                         epg_normalized=entry["normalized_name"],
+                        subchannel=entry["subchannel"],
                         confidence=confidence,
                         match_type="prefix",
                     ))
@@ -886,6 +951,7 @@ def find_epg_matches_with_lookup(
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
                 epg_normalized=entry["normalized_name"],
+                subchannel=entry["subchannel"],
                 confidence=confidence,
                 match_type="callsign",
             ))
@@ -917,6 +983,7 @@ def find_epg_matches_with_lookup(
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
                         epg_normalized=entry["normalized_name"],
+                        subchannel=entry["subchannel"],
                         confidence=confidence,
                         match_type="league",
                     ))
