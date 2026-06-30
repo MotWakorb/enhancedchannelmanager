@@ -115,6 +115,11 @@ class EPGMatchWithScore:
     epg_source: dict  # {id, name}
     confidence: int
     match_type: str  # "exact", "prefix", "league", "callsign"
+    # The EPG name's match key, carried from the lookup entry so _sort_matches
+    # reuses it instead of re-normalizing (bd-xxzxe). Empty for objects built
+    # outside the lookup path (e.g. direct unit-test construction); _sort_matches
+    # falls back to recomputing in that case.
+    epg_normalized: str = ""
 
 
 @dataclass
@@ -230,15 +235,65 @@ def detect_country_from_streams(streams: list[dict]) -> Optional[str]:
     return best_country
 
 
-def normalize_for_epg_match(name: str) -> str:
-    """Normalize a name for EPG matching.
+# Residual leading-digit sweep — EPG-MATCH-KEY ONLY (bd-xxzxe). After the engine
+# has stripped channel-number noise and we have flattened to alnum, sweep any
+# residual leading digits ("5033cw" -> "cw") so a separator the engine missed
+# still can't block a match. This MUST NOT live in the engine: it would eat
+# brand digits like "3ABN"/"9Gem". Here it is safe because the key is a
+# match-only artifact, never a stored/displayed core name.
+_RESIDUAL_LEADING_DIGITS_RE = re.compile(r"^\d+")
 
-    Strips country prefix, quality/timezone suffixes, and non-alphanumeric
-    characters. Returns lowercase alphanumeric string.
+
+def epg_match_key(engine, name: str) -> str:
+    """Build the EPG match key for a display name via the shared engine.
+
+    This is the ONE consolidated EPG normalization (bd-xxzxe). It runs the
+    shared ``NormalizationEngine.extract_core_name(name, for_matching=True)``
+    (which strips channel-number noise, country/quality, AND timezone), then
+    folds ``+``/``&`` to words and flattens to lowercase alphanumeric. A final
+    EPG-only residual leading-digit sweep catches any separator the engine
+    missed.
+
+    Args:
+        engine: a ``NormalizationEngine`` bound to a DB session.
+        name: the channel or EPG display name.
     """
     if not name:
         return ""
 
+    core = engine.extract_core_name(name, for_matching=True)
+
+    # Fold semantic punctuation BEFORE flattening so "AMC+" -> "amcplus",
+    # "A&E" -> "aande" (channel and EPG fold identically, so they still match).
+    core = core.replace("+", "plus").replace("&", "and")
+
+    key = _NON_ALNUM_RE.sub("", core.lower())
+
+    # EPG-only residual leading-digit sweep (NOT in the engine — see above).
+    key = _RESIDUAL_LEADING_DIGITS_RE.sub("", key)
+
+    return key
+
+
+def normalize_for_epg_match(name: str, engine=None) -> str:
+    """Normalize a name for EPG matching.
+
+    When ``engine`` is supplied, delegates to the shared ``NormalizationEngine``
+    via :func:`epg_match_key` — the canonical path (bd-xxzxe).
+
+    When ``engine`` is omitted this falls back to the legacy stateless
+    stream_normalization rules. **DEPRECATED**: the legacy path exists only for
+    backward compatibility with call sites that have no DB session; production
+    EPG matching always passes an engine. New code should call
+    :func:`epg_match_key` directly.
+    """
+    if engine is not None:
+        return epg_match_key(engine, name)
+
+    if not name:
+        return ""
+
+    # --- legacy stateless path (deprecated) ---
     # Strip channel number prefix (e.g., "535 | ESPN" -> "ESPN")
     result = _CHANNEL_NUMBER_PREFIX_RE.sub("", name)
 
@@ -262,8 +317,13 @@ def normalize_for_epg_match(name: str) -> str:
     return result
 
 
-def normalize_for_epg_match_with_league(name: str) -> dict:
+def normalize_for_epg_match_with_league(name: str, engine=None) -> dict:
     """Extended normalization that also extracts league info.
+
+    League extraction is shared; only the key computation differs by path. When
+    ``engine`` is supplied the remainder is keyed via :func:`epg_match_key`
+    (the canonical shared-engine path, bd-xxzxe); otherwise the deprecated
+    legacy stateless path is used.
 
     Returns dict with keys: 'normalized', 'league', 'original_name'.
     """
@@ -275,7 +335,7 @@ def normalize_for_epg_match_with_league(name: str) -> dict:
         league = league_info["league"]
         name_to_normalize = league_info["name"]
 
-    normalized = normalize_for_epg_match(name_to_normalize)
+    normalized = normalize_for_epg_match(name_to_normalize, engine=engine)
 
     return {
         "normalized": normalized,
@@ -323,8 +383,15 @@ def parse_tvg_id(tvg_id: str) -> tuple[str, Optional[str], Optional[str]]:
 
 def build_epg_lookup(
     epg_data: list[dict],
+    engine=None,
 ) -> dict:
     """Build lookup maps from EPG data for O(1) matching.
+
+    Args:
+        epg_data: list of EPG entry dicts.
+        engine: optional ``NormalizationEngine`` (bd-xxzxe). When supplied, EPG
+            names are keyed through the shared engine via :func:`epg_match_key`;
+            otherwise the deprecated legacy normalizer is used.
 
     Returns a dict with keys:
     - 'by_normalized_name': dict mapping normalized name -> list of EPG entries
@@ -348,7 +415,7 @@ def build_epg_lookup(
         epg_source = epg.get("epg_source", {})
 
         # Normalize the EPG name
-        norm_info = normalize_for_epg_match_with_league(epg_name)
+        norm_info = normalize_for_epg_match_with_league(epg_name, engine=engine)
         normalized_name = norm_info["normalized"]
         league = norm_info["league"]
 
@@ -514,7 +581,9 @@ def _sort_matches(
     """
 
     def sort_key(m: EPGMatchWithScore) -> tuple:
-        epg_norm = normalize_for_epg_match(m.epg_name)
+        # Reuse the key carried from the lookup entry (bd-xxzxe); only recompute
+        # for objects built outside the lookup path (epg_normalized == "").
+        epg_norm = m.epg_normalized or normalize_for_epg_match(m.epg_name)
 
         # 1. League match bonus
         league_bonus = 0
@@ -572,6 +641,7 @@ def find_epg_matches_with_lookup(
     streams: list[dict],
     lookup: dict,
     source_order: Optional[dict[int, int]] = None,
+    engine=None,
 ) -> EPGMatchResult:
     """Core matching: find EPG matches for a channel using pre-built lookup.
 
@@ -580,6 +650,9 @@ def find_epg_matches_with_lookup(
         streams: list of stream dicts for this channel
         lookup: pre-built lookup from build_epg_lookup()
         source_order: optional dict mapping source_id -> priority order
+        engine: optional ``NormalizationEngine`` (bd-xxzxe). Must be the SAME
+            engine passed to ``build_epg_lookup`` so the channel name and the
+            EPG names are keyed identically.
 
     Returns:
         EPGMatchResult with sorted matches and best match
@@ -594,7 +667,7 @@ def find_epg_matches_with_lookup(
     )
 
     # Normalize channel name
-    norm_info = normalize_for_epg_match_with_league(channel_name)
+    norm_info = normalize_for_epg_match_with_league(channel_name, engine=engine)
     channel_normalized = norm_info["normalized"]
     channel_league = norm_info["league"]
     channel_call_sign = extract_broadcast_call_sign(channel_name)
@@ -635,6 +708,7 @@ def find_epg_matches_with_lookup(
                 epg_name=entry["name"],
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
+                epg_normalized=entry["normalized_name"],
                 confidence=confidence,
                 match_type="exact",
             ))
@@ -655,6 +729,7 @@ def find_epg_matches_with_lookup(
                 epg_name=entry["name"],
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
+                epg_normalized=entry["normalized_name"],
                 confidence=confidence,
                 match_type="exact",
             ))
@@ -682,6 +757,7 @@ def find_epg_matches_with_lookup(
                         epg_name=entry["name"],
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
+                        epg_normalized=entry["normalized_name"],
                         confidence=confidence,
                         match_type="prefix",
                     ))
@@ -708,6 +784,7 @@ def find_epg_matches_with_lookup(
                         epg_name=entry["name"],
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
+                        epg_normalized=entry["normalized_name"],
                         confidence=confidence,
                         match_type="prefix",
                     ))
@@ -728,6 +805,7 @@ def find_epg_matches_with_lookup(
                 epg_name=entry["name"],
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
+                epg_normalized=entry["normalized_name"],
                 confidence=confidence,
                 match_type="callsign",
             ))
@@ -757,6 +835,7 @@ def find_epg_matches_with_lookup(
                         epg_name=entry["name"],
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
+                        epg_normalized=entry["normalized_name"],
                         confidence=confidence,
                         match_type="league",
                     ))
@@ -815,6 +894,7 @@ def batch_find_epg_matches(
     all_streams: list[dict],
     epg_data: list[dict],
     source_order: Optional[dict[int, int]] = None,
+    engine=None,
 ) -> list[EPGMatchResult]:
     """Batch process EPG matching for multiple channels.
 
@@ -825,6 +905,9 @@ def batch_find_epg_matches(
         epg_data: list of EPG entry dicts with 'id', 'name', 'tvg_id',
                   'epg_source' keys
         source_order: optional dict mapping EPG source_id -> priority (0=best)
+        engine: optional ``NormalizationEngine`` (bd-xxzxe). When supplied, all
+            EPG matching is keyed through ECM's one shared engine. When omitted
+            the deprecated legacy normalizer is used (back-compat only).
 
     Returns:
         List of EPGMatchResult, one per channel
@@ -844,7 +927,7 @@ def batch_find_epg_matches(
             stream_by_id[sid] = stream
 
     # Build EPG lookup
-    lookup = build_epg_lookup(epg_data)
+    lookup = build_epg_lookup(epg_data, engine=engine)
 
     progress = BatchMatchProgress(total=len(channels))
     results: list[EPGMatchResult] = []
@@ -860,7 +943,7 @@ def batch_find_epg_matches(
 
         # Find matches
         match_result = find_epg_matches_with_lookup(
-            channel, channel_streams, lookup, source_order,
+            channel, channel_streams, lookup, source_order, engine=engine,
         )
         results.append(match_result)
 
