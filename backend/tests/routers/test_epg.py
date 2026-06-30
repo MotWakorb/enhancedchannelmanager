@@ -10,6 +10,45 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 
+class _FakeEPGHTTPClient:
+    """Minimal async-context-manager stand-in for httpx.AsyncClient used by the
+    LCN lookup endpoints. Serves canned XMLTV bytes per URL so the parser runs on
+    real content. HEAD returns no content-length, so the endpoints take the
+    "small file, download fully" path (no streaming/gzip branches)."""
+
+    def __init__(self, content_by_url: dict[str, bytes]):
+        self._content_by_url = content_by_url
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def head(self, url, *args, **kwargs):
+        # No content-length header -> file_size == 0 -> small-file path.
+        return httpx.Response(200, headers={})
+
+    async def get(self, url, *args, **kwargs):
+        # request must be set so response.raise_for_status() can run.
+        return httpx.Response(
+            200, content=self._content_by_url[url], request=httpx.Request("GET", url)
+        )
+
+
+def _xmltv(channels_xml: str) -> bytes:
+    """Build a minimal XMLTV document. A trailing <programme> ensures the parsers
+    (which break at the first programme) terminate as they do on real EPGs."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<tv>"
+        f"{channels_xml}"
+        '<programme channel="x" start="20260101000000 +0000" stop="20260101010000 +0000">'
+        "<title>p</title></programme>"
+        "</tv>"
+    ).encode("utf-8")
+
+
 class TestGetEPGSources:
     """Tests for GET /api/epg/sources."""
 
@@ -359,6 +398,67 @@ class TestGetEPGLCN:
 
         assert response.status_code == 404
 
+    async def _lookup(self, async_client, channels_xml: str, tvg_id: str = "ESPN.us"):
+        """Run GET /api/epg/lcn against a single XMLTV source serving channels_xml."""
+        url = "http://epg.example/xmltv.xml"
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {"id": 1, "name": "XMLTV", "source_type": "xmltv", "url": url},
+        ]
+        fake_http = _FakeEPGHTTPClient({url: _xmltv(channels_xml)})
+        with patch("routers.epg.get_client", return_value=mock_client), \
+                patch("routers.epg.httpx.AsyncClient", return_value=fake_http):
+            return await async_client.get("/api/epg/lcn", params={"tvg_id": tvg_id})
+
+    @pytest.mark.asyncio
+    async def test_reads_gnid_primary(self, async_client):
+        """<gnid> present -> returns the gnid value under the legacy 'lcn' key."""
+        resp = await self._lookup(
+            async_client,
+            '<channel id="ESPN.us"><display-name>ESPN</display-name><gnid>12345</gnid></channel>',
+        )
+        assert resp.status_code == 200
+        assert resp.json()["lcn"] == "12345"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_lcn_legacy(self, async_client):
+        """Only <lcn> present (legacy EPG) -> returns the lcn value."""
+        resp = await self._lookup(
+            async_client,
+            '<channel id="ESPN.us"><lcn>206</lcn></channel>',
+        )
+        assert resp.status_code == 200
+        assert resp.json()["lcn"] == "206"
+
+    @pytest.mark.asyncio
+    async def test_gnid_wins_over_lcn_regardless_of_order(self, async_client):
+        """Both present, with <lcn> first in document order -> <gnid> still wins."""
+        resp = await self._lookup(
+            async_client,
+            '<channel id="ESPN.us"><lcn>206</lcn><gnid>99999</gnid></channel>',
+        )
+        assert resp.status_code == 200
+        assert resp.json()["lcn"] == "99999"
+
+    @pytest.mark.asyncio
+    async def test_neither_present_returns_404(self, async_client):
+        """Neither <gnid> nor <lcn> present -> 404 (unchanged behavior)."""
+        resp = await self._lookup(
+            async_client,
+            '<channel id="ESPN.us"><display-name>ESPN</display-name></channel>',
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_whitespace_gnid_falls_back_to_lcn(self, async_client):
+        """Whitespace-only <gnid> is treated as empty -> falls back to <lcn>."""
+        resp = await self._lookup(
+            async_client,
+            '<channel id="ESPN.us"><gnid>   </gnid><lcn>206</lcn></channel>',
+        )
+        assert resp.status_code == 200
+        assert resp.json()["lcn"] == "206"
+
 
 class TestBatchLCN:
     """Tests for POST /api/epg/lcn/batch."""
@@ -372,6 +472,74 @@ class TestBatchLCN:
 
         assert response.status_code == 200
         assert response.json()["results"] == {}
+
+    async def _batch_lookup(self, async_client, channels_xml: str, tvg_ids: list[str]):
+        """Run POST /api/epg/lcn/batch against a single XMLTV source."""
+        url = "http://epg.example/xmltv.xml"
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {"id": 1, "name": "XMLTV", "source_type": "xmltv", "url": url},
+        ]
+        fake_http = _FakeEPGHTTPClient({url: _xmltv(channels_xml)})
+        with patch("routers.epg.get_client", return_value=mock_client), \
+                patch("routers.epg.httpx.AsyncClient", return_value=fake_http):
+            return await async_client.post("/api/epg/lcn/batch", json={
+                "items": [{"tvg_id": t} for t in tvg_ids],
+            })
+
+    @pytest.mark.asyncio
+    async def test_reads_gnid_primary(self, async_client):
+        """<gnid> present -> returns the gnid value under the legacy 'lcn' key."""
+        resp = await self._batch_lookup(
+            async_client,
+            '<channel id="ESPN.us"><gnid>12345</gnid></channel>',
+            ["ESPN.us"],
+        )
+        assert resp.status_code == 200
+        assert resp.json()["results"]["ESPN.us"]["lcn"] == "12345"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_lcn_legacy(self, async_client):
+        """Only <lcn> present (legacy EPG) -> returns the lcn value."""
+        resp = await self._batch_lookup(
+            async_client,
+            '<channel id="ESPN.us"><lcn>206</lcn></channel>',
+            ["ESPN.us"],
+        )
+        assert resp.status_code == 200
+        assert resp.json()["results"]["ESPN.us"]["lcn"] == "206"
+
+    @pytest.mark.asyncio
+    async def test_gnid_wins_over_lcn_regardless_of_order(self, async_client):
+        """Both present, <lcn> first in document order -> <gnid> still wins."""
+        resp = await self._batch_lookup(
+            async_client,
+            '<channel id="ESPN.us"><lcn>206</lcn><gnid>99999</gnid></channel>',
+            ["ESPN.us"],
+        )
+        assert resp.status_code == 200
+        assert resp.json()["results"]["ESPN.us"]["lcn"] == "99999"
+
+    @pytest.mark.asyncio
+    async def test_mixed_channels_in_one_document(self, async_client):
+        """A mix across multiple <channel> ids in one document: gnid, legacy lcn,
+        both (gnid wins), and neither (absent from results)."""
+        channels = (
+            '<channel id="GNID.us"><gnid>11111</gnid></channel>'
+            '<channel id="LCN.us"><lcn>206</lcn></channel>'
+            '<channel id="BOTH.us"><lcn>500</lcn><gnid>22222</gnid></channel>'
+            '<channel id="NONE.us"><display-name>none</display-name></channel>'
+        )
+        resp = await self._batch_lookup(
+            async_client, channels,
+            ["GNID.us", "LCN.us", "BOTH.us", "NONE.us"],
+        )
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        assert results["GNID.us"]["lcn"] == "11111"
+        assert results["LCN.us"]["lcn"] == "206"
+        assert results["BOTH.us"]["lcn"] == "22222"
+        assert "NONE.us" not in results
 
 
 class TestLinkChannelToEPG:
