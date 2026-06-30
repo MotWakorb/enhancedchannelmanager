@@ -144,7 +144,7 @@ In-app notification bell with history, active task pinning, and external alert m
 
 ## MCP Server (Claude Integration)
 
-ECM includes an MCP (Model Context Protocol) server: an optional sidecar container that exposes ECM's functionality to Claude — **Claude Desktop**, **Claude Code**, or any MCP-capable client — so you can manage your install in plain language instead of clicking through the UI. **105 tools across 12 domains** (channels, channel groups, M3U accounts, EPG sources, streams, normalization, auto-creation, stats, scheduled tasks, profiles, journal, notifications, system), plus an `overview` resource that gives Claude a one-shot snapshot of your install.
+ECM includes an MCP (Model Context Protocol) server: an optional sidecar container that exposes ECM's functionality to Claude — **Claude Desktop**, **Claude Code**, or any MCP-capable client — so you can manage your install in plain language instead of clicking through the UI. **130 tools across 14 domains** (channels, channel groups, streams, M3U accounts, EPG sources, auto-creation, scheduled tasks, stats, system/backup, notifications, profiles, normalization, deduplication, Emby integration), plus an `overview` resource that gives Claude a one-shot snapshot of your install.
 
 Everything Claude does runs against your live ECM through the API — it's the same operations the UI performs, just driven by conversation. Mutating actions report the resulting state back (e.g. the new channel's group and number) so you can confirm the change took effect.
 
@@ -284,11 +284,11 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 
 **For the full reference** — step-by-step connection setup, key rotation details, and troubleshooting — see **[docs/user_guide/integrations/mcp.md](docs/user_guide/integrations/mcp.md)**.
 
-### Available Tools (105)
+### Available Tools (130)
 
 | Tool | Description |
 |-|-|
-| **Channels (18)** | |
+| **Channels (20)** | |
 | `list_channels` | List channels with optional group/search/stream count filtering |
 | `get_channel` | Get detailed channel info (streams, EPG, logo) |
 | `create_channel` | Create a new channel |
@@ -296,6 +296,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `delete_channel` | Delete a channel |
 | `bulk_delete_channels` | Delete multiple channels at once |
 | `add_stream_to_channel` | Add a stream to a channel |
+| `add_stream` | Create a channel from a stream name and assign it to a group, with deduplication control |
 | `remove_stream_from_channel` | Remove a stream from a channel |
 | `reorder_streams` | Reorder streams within a channel by priority |
 | `assign_channel_numbers` | Bulk-assign sequential channel numbers |
@@ -307,6 +308,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `clear_auto_created` | Remove auto-created channels by group |
 | `bulk_add_streams_to_channel` | Add multiple streams to a channel in one backend call (single Dispatcharr roundtrip) |
 | `bulk_assign_epg` | Assign EPG IDs (tvg_id) to multiple channels |
+| `set_logo_from_epg` | Set channel logos from their linked EPG entry's icon_url |
 | **Groups (8)** | |
 | `list_channel_groups` | List all groups with channel counts |
 | `create_channel_group` | Create a new group |
@@ -316,7 +318,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `get_hidden_groups` | List hidden channel groups |
 | `get_auto_created_groups` | List auto-created groups |
 | `get_groups_with_streams` | List groups with stream count info |
-| **Streams (17)** | |
+| **Streams (18)** | |
 | `list_streams` | List streams with group/provider/search filtering |
 | `search_streams` | Search streams by name across all providers |
 | `get_streams_by_ids` | Fetch detailed info for specific stream IDs |
@@ -333,6 +335,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `cancel_probe` | Cancel a running probe |
 | `bulk_search_streams` | Search multiple stream names in one call |
 | `fuzzy_match_stream` | Find best fuzzy match for a stream name |
+| `preview_fuzzy_matches` | Preview scored stream→channel fuzzy matches without writing anything |
 | `match_streams_to_channels` | Match streams to channels by name similarity |
 | **M3U (9)** | |
 | `list_m3u_accounts` | List all M3U provider accounts |
@@ -344,18 +347,23 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `refresh_all_m3u` | Refresh all M3U accounts |
 | `update_m3u_group_settings` | Enable/disable stream groups on an account |
 | `bulk_update_m3u_group_settings` | Enable/disable multiple stream groups at once |
-| **EPG (10)** | |
+| **EPG (15)** | |
 | `list_epg_sources` | List EPG data sources |
 | `create_epg_source` | Create a new EPG source |
 | `update_epg_source` | Update an EPG source |
 | `delete_epg_source` | Delete an EPG source |
 | `refresh_epg` | Refresh a specific EPG source |
 | `match_channels_epg` | Auto-match channels to EPG data |
+| `link_channel_epg` | Link a channel to a chosen EPG candidate so its guide data attaches |
 | `refresh_all_epg` | Refresh multiple or all EPG sources at once |
 | `get_epg_grid` | What's on TV now — EPG schedule grid |
+| `list_sd_lineups` | List the active Schedules Direct lineups for an SD EPG source |
+| `search_sd_lineups` | Search Schedules Direct headends/lineups by country + postal code |
+| `add_sd_lineup` | Add a Schedules Direct lineup to the account (rate-limited) |
+| `remove_sd_lineup` | Remove a Schedules Direct lineup from the account |
 | `list_dummy_epg_profiles` | List dummy EPG profiles |
 | `generate_dummy_epg` | Regenerate dummy EPG XMLTV data |
-| **Auto-Creation (12)** | |
+| **Auto-Creation (14)** | |
 | `list_auto_creation_rules` | List all rules |
 | `get_auto_creation_rule` | Get rule details (conditions, actions, normalization groups, sort config) |
 | `create_auto_creation_rule` | Create a rule with conditions, actions, and per-rule normalization groups |
@@ -366,6 +374,8 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `run_auto_creation` | Run pipeline (dry_run=true by default) |
 | `list_auto_creation_executions` | View execution history |
 | `rollback_auto_creation` | Undo an execution |
+| `restore_auto_creation_snapshot` | Full whole-run revert of an auto-creation run from its pre-run snapshot |
+| `analyze_auto_creation_rules` | Lint and structurally analyze auto-creation rules |
 | `get_auto_creation_debug_bundle` | Info about the diagnostic debug bundle for troubleshooting |
 | `bulk_toggle_auto_creation_rules` | Toggle multiple rules at once |
 | **Tasks (7)** | |
@@ -376,22 +386,32 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `list_task_schedules` | List schedules for a task |
 | `create_task_schedule` | Create a schedule for a task (interval / daily / weekly / biweekly / monthly) |
 | `delete_task_schedule` | Delete a schedule |
-| **Stats (7)** | |
+| **Stats (14)** | |
 | `get_channel_stats` | Channel viewing stats and active viewers |
 | `get_top_watched` | Most-watched channels by viewing time |
 | `get_bandwidth` | Bandwidth usage (today, week, month, all-time) |
+| `get_channel_bandwidth` | Per-channel bandwidth statistics |
 | `get_popularity_rankings` | Channel popularity scores and trending |
+| `get_channel_popularity` | Popularity score and metrics for a specific channel |
+| `get_trending` | Channels trending up or down in popularity |
 | `get_watch_history` | Watch history with user attribution and filters (channel, IP, days) |
 | `get_unique_viewers` | Unique viewer counts by channel |
+| `get_user_watch_time` | Per-user watch-time totals |
+| `get_user_channel_breakdown` | Per-channel watch-time breakdown for a specific user |
+| `get_provider_stats` | Per-provider statistics |
+| `get_activity` | Recent system activity (channel start/stop, buffering, client connections) |
 | `compute_stream_sort` | Compute optimal stream sort order (resolution, bitrate, video codec, etc.) |
-| **System (7)** | |
+| **System (10)** | |
 | `get_settings` | ECM settings overview |
 | `create_backup` | Create config backup |
+| `restore_backup` | Restore ECM configuration from a saved backup ZIP on the server |
+| `create_dbas_backup` | Create a DBAS backup artifact (ecm-backup-<ts>.zip) on the server |
+| `restore_dbas_backup_saved` | Restore from a saved DBAS artifact on the server, by filename |
 | `get_export_sections` | List available YAML export sections |
-| `list_saved_backups` | List saved YAML backup files |
+| `list_saved_backups` | List saved backup files |
 | `delete_saved_backup` | Delete a saved backup file |
 | `get_journal` | Activity audit log (with limit/category filters) |
-| `list_cloud_targets` | List configured cloud storage targets |
+| `list_cloud_targets` | List configured cloud storage targets (DBAS backup upload destinations) |
 | **Notifications (5)** | |
 | `list_notifications` | List notifications with unread count |
 | `mark_notifications_read` | Mark all as read |
@@ -402,9 +422,16 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `list_channel_profiles` | List channel profiles |
 | `list_stream_profiles` | List stream profiles |
 | `apply_profile_to_channels` | Bulk-assign a profile to channels |
-| **Normalization (2)** | |
+| **Normalization (3)** | |
 | `test_normalization` | Test how stream names normalize |
 | `list_normalization_rules` | List normalization rule groups |
+| `set_normalization_group_enabled` | Enable or disable a normalization rule group globally |
+| **Dedup (3)** | |
+| `list_pending_channel_merges` | List pending channel-merge candidates from the dedup queue |
+| `accept_channel_merge` | Accept a pending channel merge — triggers the Dispatcharr merge |
+| `dismiss_channel_merge` | Dismiss a pending channel merge — rejects the dedup candidate |
+| **Emby (1)** | |
+| `clear_emby_logos` | Clear cached Emby channel logos so Emby re-fetches fresh ones |
 
 Three read-only MCP resources provide quick context without a tool call: `ecm://stats/overview`, `ecm://channels/summary`, and `ecm://tasks/status`.
 
@@ -435,7 +462,7 @@ docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'si
 |-|-|
 | Frontend | React 18, TypeScript, Vite, @dnd-kit |
 | Backend | Python, FastAPI, 20+ modular API routers |
-| MCP Server | Python, FastMCP, Streamable HTTP transport, 105 tools |
+| MCP Server | Python, FastMCP, Streamable HTTP transport, 130 tools |
 | Deployment | Docker Compose, two containers (ECM + MCP) |
 
 ## API Reference
