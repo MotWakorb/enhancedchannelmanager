@@ -1,9 +1,16 @@
 /**
- * SecurityFirstRunModal — the one-time first-run choice for where ECM may send
- * backups (bead nngkg).
+ * SecurityFirstRunModal — the one-time choice for where ECM may send backups
+ * (beads nngkg, s5a3o).
  *
- * Pattern: modal-once-then-Settings. It appears on the first run only (gated by
- * a localStorage flag) and asks the operator to pick where backups can go. After
+ * Pattern: modal-once-then-Settings. It is a CONTROLLED component — it renders
+ * only when its host mounts it (`open` prop true) and reports closure via
+ * `onClose`. The host (BackupDestinationPromptContext) decides WHEN to show it:
+ * the moment the operator FIRST actively configures backups (enabling/creating
+ * a backup schedule, or adding/saving a cloud upload target) — never on login.
+ *
+ * The "already answered" semantics live in the localStorage flag
+ * (SECURITY_FIRST_RUN_KEY): persist() sets it once the operator makes (or skips)
+ * the choice, and the host refuses to re-open the modal while it is set. After
  * that, the choice is changed in Settings > Security — never re-prompted.
  *
  * The DEFAULT is the home-network choice (lan_friendly), so a backup to a local
@@ -41,15 +48,15 @@ const OPTIONS: { value: OutboundPolicyMode; title: string; detail: string }[] = 
   },
 ];
 
-export function SecurityFirstRunModal() {
+interface SecurityFirstRunModalProps {
+  /** Called once the choice has been recorded (confirm or dismiss), so the host can unmount the modal. */
+  onClose: () => void;
+}
+
+export function SecurityFirstRunModal({ onClose }: SecurityFirstRunModalProps) {
   const notifications = useNotifications();
-  const [open, setOpen] = useState(
-    () => localStorage.getItem(SECURITY_FIRST_RUN_KEY) !== '1',
-  );
   const [selected, setSelected] = useState<OutboundPolicyMode>(DEFAULT_MODE);
   const [saving, setSaving] = useState(false);
-
-  if (!open) return null;
 
   const persist = async (mode: OutboundPolicyMode) => {
     localStorage.setItem(SECURITY_FIRST_RUN_KEY, '1');
@@ -60,7 +67,7 @@ export function SecurityFirstRunModal() {
       // and the operator can set it explicitly later in Settings > Security.
       logger.warn('Failed to persist first-run security choice', err);
     }
-    setOpen(false);
+    onClose();
   };
 
   const handleConfirm = async () => {
