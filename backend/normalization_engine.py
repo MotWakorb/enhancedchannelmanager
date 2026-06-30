@@ -82,6 +82,20 @@ _PREFIX_SEP_STRICT_RE = re.compile(r'^\s*[:\-|/]')
 _SUFFIX_SEP_LENIENT_RE = re.compile(r'[\s:\-|/]$')
 _SUFFIX_SEP_STRICT_RE = re.compile(r'[:\-|/]\s*$')
 
+# Channel-number noise stripping for extract_core_name (bd-xxzxe). Applied
+# UNCONDITIONALLY so every consumer (merge core-name matching, EPG matching)
+# ignores leading channel numbers and trailing "(NNN)" channel-number tags.
+# Ported from the frontend EPG matcher (frontend/src/utils/epgMatching.ts):
+#   - delimited prefix:        "107 | Name", "2.2 - Name", "535: Name"
+#   - number + space + letter: "201 ESPN", "2.2 KATU"  (the bug this fixes)
+#   - trailing parenthesized:  "ESPN (201)"
+# NOTE: there is NO bare "^\d+" (no-space) sweep here — that would eat brand
+# digits like "3ABN"/"9Gem"/"7Mate". The aggressive residual digit sweep lives
+# ONLY in the EPG match-key shim (epg_matching.epg_match_key).
+_NUM_PREFIX_DELIM_RE = re.compile(r'^\d+(?:\.\d+)?\s*[|:\-.]\s*')
+_NUM_PREFIX_SPACE_RE = re.compile(r'^\d+(?:\.\d+)?\s+(?=[A-Za-z])')
+_NUM_TRAILING_PAREN_RE = re.compile(r'\s*\(\d+\)\s*$')
+
 
 def _current_policy_version(policy_obj: "NormalizationPolicy") -> str:
     """Return the canonical policy-version tag for the decision log."""
@@ -785,11 +799,15 @@ class NormalizationEngine:
         self.db = db
         self._rules_cache: Optional[list] = None
         self._groups_cache: Optional[list] = None
+        # Per-instance memo for extract_core_name(for_matching=True) — see
+        # extract_core_name (bd-xxzxe). Bounded by the request's unique names.
+        self._core_name_match_cache: dict[str, str] = {}
 
     def invalidate_cache(self):
         """Clear cached rules to force reload from database."""
         self._rules_cache = None
         self._groups_cache = None
+        self._core_name_match_cache.clear()
         # Also clear tag group cache
         global _tag_group_cache
         _tag_group_cache.clear()
@@ -1600,12 +1618,23 @@ class NormalizationEngine:
         self._tag_group_id_cache[name] = gid
         return gid
 
-    def extract_core_name(self, name: str) -> str:
+    def extract_core_name(self, name: str, for_matching: bool = False) -> str:
         """
         Strip country prefix and quality suffix from a name using tag groups
         DIRECTLY — does NOT depend on normalization rules being enabled.
 
-        Used by merge_streams core-name fallback when normalize_names=true.
+        Also strips channel-number noise UNCONDITIONALLY (leading channel
+        numbers, trailing "(NNN)" — bd-xxzxe) so "201 ESPN" -> "ESPN".
+
+        Args:
+            name: the display name to reduce to its core.
+            for_matching: when True, ALSO strip the "Timezone Tags" group as a
+                suffix ("ESPN East" -> "ESPN"). This is OPT-IN: the default
+                (False) keeps East/West DISTINCT so auto-creation never
+                cross-merges regional feeds. Only the EPG match path sets True.
+
+        Used by merge_streams core-name fallback when normalize_names=true, and
+        (with for_matching=True) by the shared-engine EPG match key.
 
         Returns the core name (never empty; falls back to input).
         """
@@ -1613,16 +1642,31 @@ class NormalizationEngine:
         if not current:
             return current
 
+        # Per-request memo for the matching-mode path (bd-xxzxe): EPG batches
+        # re-derive the core name for many duplicate display names. The default
+        # (merge) path is NOT cached so it can never be perturbed by it.
+        if for_matching and name in self._core_name_match_cache:
+            return self._core_name_match_cache[name]
+
         # Convert Unicode superscripts (ᴴᴰ -> HD, etc.)
         current = convert_superscripts(current)
 
-        # Strip leading channel-number prefix: "107 | Name", "107 - Name"
-        current = re.sub(r'^\d+\s*[|:\-]\s*', '', current).strip()
+        # Strip channel-number noise UNCONDITIONALLY (bd-xxzxe): delimited
+        # prefix, "number + space + letter" prefix, and trailing "(NNN)".
+        current = _NUM_PREFIX_DELIM_RE.sub('', current)
+        current = _NUM_PREFIX_SPACE_RE.sub('', current)
+        current = _NUM_TRAILING_PAREN_RE.sub('', current)
+        current = current.strip()
         if not current:
-            return name.strip()
+            return self._cache_core_match(name, name.strip(), for_matching)
 
         country_id = self._get_tag_group_id_by_name("Country Tags")
         quality_id = self._get_tag_group_id_by_name("Quality Tags")
+        # Timezone is matching-mode only (opt-in) — see docstring.
+        timezone_id = (
+            self._get_tag_group_id_by_name("Timezone Tags")
+            if for_matching else None
+        )
 
         # Multi-pass: keep stripping until stable (handles stacked tags)
         for _ in range(5):
@@ -1652,13 +1696,33 @@ class NormalizationEngine:
                         if result and not _would_collapse_to_generic(result):
                             current = result
 
+            # Strip timezone suffix (matching mode only, bd-xxzxe) — same
+            # mechanism + generic-collapse guard as the quality strip.
+            if timezone_id:
+                match = self._match_tag_group(current, timezone_id, "suffix")
+                if match.matched:
+                    if match.match_end == len(current) or match.match_end == len(current.rstrip()):
+                        result = current[:match.match_start]
+                        result = re.sub(r'[\s:|\-/]+$', '', result).strip()
+                        if result and not _would_collapse_to_generic(result):
+                            current = result
+
             # Normalize whitespace between passes
             current = re.sub(r'\s+', ' ', current).strip()
 
             if current == before:
                 break
 
-        return current if current else name.strip()
+        return self._cache_core_match(
+            name, current if current else name.strip(), for_matching
+        )
+
+    def _cache_core_match(self, name: str, result: str, for_matching: bool) -> str:
+        """Memoize a matching-mode core-name result (bd-xxzxe). No-op for the
+        default (merge) path so it is never affected by the cache."""
+        if for_matching:
+            self._core_name_match_cache[name] = result
+        return result
 
     # =================================================================
     # Call Sign Extraction (for merge_streams local affiliate matching)
