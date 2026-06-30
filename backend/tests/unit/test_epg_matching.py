@@ -578,16 +578,20 @@ class TestConfidenceScoring:
         score_exact = _compute_confidence("espn", None, None, None, entry, "exact")
         score_prefix = _compute_confidence("espn", None, None, None, entry, "prefix")
         assert score_exact > score_prefix
-        # Exact gives 25; prefix with len == MIN_PREFIX_LENGTH gives 0
-        assert score_exact == 45  # 25 exact + 20 length
-        assert score_prefix == 20  # 0 prefix (not > MIN_PREFIX_LENGTH) + 20 length
+        # Exact gives 25; prefix with len == MIN_PREFIX_LENGTH gives 0.
+        # Length similarity is now weighted to a max of 10 (was 20) so that
+        # token overlap is the primary same-bucket discriminator (a6445).
+        assert score_exact == 35  # 25 exact + 10 length
+        assert score_prefix == 10  # 0 prefix (not > MIN_PREFIX_LENGTH) + 10 length
 
-    def test_length_similarity_20pts(self):
+    def test_length_similarity_10pts(self):
         entry = self._make_entry(name="ESPN", country=None)
-        # Identical length = full 20 pts
+        # Identical length = full 10 pts (length-similarity weight reduced from
+        # 20 -> 10 in a6445 so it can no longer flip a same-bucket tie against
+        # stronger token-overlap evidence).
         score = _compute_confidence("espn", None, None, None, entry, "exact")
-        # exact 25 + length 20 = 45
-        assert score == 45
+        # exact 25 + length 10 = 35
+        assert score == 35
 
     def test_call_sign_10pts(self):
         entry = self._make_entry(name="WABC", country=None, call_sign="WABC")
@@ -611,5 +615,159 @@ class TestConfidenceScoring:
     def test_no_country_no_league_0pts(self):
         entry = self._make_entry(country=None, league=None)
         score = _compute_confidence("espn", None, None, None, entry, "exact")
-        # No country/league bonus, just exact + length
-        assert score == 45  # 25 exact + 20 length
+        # No country/league bonus, just exact + length (length weight now 10)
+        assert score == 35  # 25 exact + 10 length
+
+
+# ===================================================================
+# 12. Token-overlap ranking (a6445)
+# ===================================================================
+
+class TestTokenOverlapRanking:
+    """Among same-call-sign candidates, the entry sharing MORE of the
+    channel-name's meaningful tokens (call sign AND network/affiliate/city)
+    must outrank one sharing fewer. Regression for a6445: '64 | FOX: WTVT
+    Tampa' was matching 'WTVT-DT2 (MVIES)' over the correct 'WTVT-DT (FOX)'
+    because coincidental name-length similarity beat the shared FOX token.
+    """
+
+    def test_wtvt_fox_beats_wtvt_dt2_mvies(self):
+        # Headline case. Both EPG entries share call sign WTVT, but only
+        # 'WTVT-DT (FOX)' shares the network token FOX with the channel.
+        epg_data = [
+            make_epg(300, "WTVT-DT2 (MVIES)", "WTVT-DT2.us"),
+            make_epg(301, "WTVT-DT (FOX)", "WTVT-DT.us"),
+        ]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(1, "64 | FOX: WTVT Tampa", [1])
+        streams = [make_stream(1, "FOX: WTVT Tampa")]
+        result = find_epg_matches_with_lookup(channel, streams, lookup)
+
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "WTVT-DT (FOX)"
+
+    def test_keye_cbs_beats_keye_dt2_movies(self):
+        # Generalization: not WTVT-specific, and structurally the SAME trap.
+        # Channel key 'cbskeyeaustin' (len 13); the WRONG subchannel
+        # 'KEYE-DT2 (Movies)' flattens to 'keyedt2movies' (len 13 -
+        # coincidental length match -> wins on the old length-similarity
+        # scoring), while the correct 'KEYE-DT (CBS)' flattens to 'keyedtcbs'
+        # (len 9). Only the correct entry shares the CBS network token, so
+        # token overlap (CBS + call sign KEYE = 2) must override the
+        # misleading length tie. Proves the fix is token-driven, not WTVT luck.
+        epg_data = [
+            make_epg(310, "KEYE-DT2 (Movies)", "KEYE-DT2.us"),
+            make_epg(311, "KEYE-DT (CBS)", "KEYE-DT.us"),
+        ]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(1, "CBS: KEYE Austin", [1])
+        streams = [make_stream(1, "CBS: KEYE Austin")]
+        result = find_epg_matches_with_lookup(channel, streams, lookup)
+
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "KEYE-DT (CBS)"
+
+
+class TestTokenOverlapConfidence:
+    """Unit-level checks on the token-overlap term in _compute_confidence."""
+
+    def _entry(self, name, tokens, call_sign=None):
+        return {
+            "id": 100,
+            "name": name,
+            "tvg_id": "",
+            "epg_source": {"id": 1, "name": "Source1"},
+            "normalized_name": normalize_for_epg_match(name),
+            "league": None,
+            "country": None,
+            "call_sign": call_sign,
+            "match_tokens": frozenset(tokens),
+        }
+
+    def test_more_shared_tokens_scores_higher(self):
+        channel_tokens = frozenset({"wtvt", "fox", "tampa"})
+        high = self._entry("WTVT-DT (FOX)", {"wtvt", "fox"}, call_sign="WTVT")
+        low = self._entry("WTVT-DT2 (MVIES)", {"wtvt", "mvies"}, call_sign="WTVT")
+        score_high = _compute_confidence(
+            "foxwtvttampa", None, None, "WTVT", high, "callsign",
+            channel_tokens=channel_tokens,
+        )
+        score_low = _compute_confidence(
+            "foxwtvttampa", None, None, "WTVT", low, "callsign",
+            channel_tokens=channel_tokens,
+        )
+        assert score_high > score_low
+
+    def test_one_extra_token_outweighs_length_swing(self):
+        # The +1 shared token on the FOX entry must beat the misleading length
+        # advantage MVIES enjoys (its flattened name is the same length as the
+        # channel key). This is the exact failure mode from a6445.
+        channel_tokens = frozenset({"wtvt", "fox", "tampa"})
+        fox = self._entry("WTVT-DT (FOX)", {"wtvt", "fox"}, call_sign="WTVT")
+        mvies = self._entry(
+            "WTVT-DT2 (MVIES)", {"wtvt", "mvies"}, call_sign="WTVT"
+        )
+        # channel key 'foxwtvttampa' len 12; 'wtvtdtfox' len 9, 'wtvtdt2mvies'
+        # len 12 (coincidental length match -> MVIES wins on old scoring).
+        score_fox = _compute_confidence(
+            "foxwtvttampa", None, None, "WTVT", fox, "callsign",
+            channel_tokens=channel_tokens,
+        )
+        score_mvies = _compute_confidence(
+            "foxwtvttampa", None, None, "WTVT", mvies, "callsign",
+            channel_tokens=channel_tokens,
+        )
+        assert score_fox > score_mvies
+
+    def test_exact_match_still_outranks_high_overlap_callsign(self):
+        # Hierarchy preserved: a mere call-sign match with strong token overlap
+        # must NOT beat an exact match. Exact share-all tokens too, plus the
+        # exact tier (25). A token-overlap-only callsign sibling stays below.
+        channel_tokens = frozenset({"espn"})
+        exact = self._entry("ESPN", {"espn"})
+        callsign_sibling = self._entry(
+            "ESPN News WXYZ", {"espn", "news", "wxyz"}, call_sign="WXYZ"
+        )
+        score_exact = _compute_confidence(
+            "espn", None, None, None, exact, "exact",
+            channel_tokens=channel_tokens,
+        )
+        score_sibling = _compute_confidence(
+            "espn", None, None, None, callsign_sibling, "callsign",
+            channel_tokens=channel_tokens,
+        )
+        assert score_exact > score_sibling
+
+    def test_country_match_still_outranks_token_overlap(self):
+        # Country (40) dominates token overlap. A country-preferred exact match
+        # must stay on top of a fuzzy callsign sibling with more shared tokens.
+        channel_tokens = frozenset({"cnn"})
+        country_exact = self._entry("CNN", {"cnn"})
+        country_exact["country"] = "US"
+        fuzzy = self._entry(
+            "CNN Sports Network", {"cnn", "sports", "network"}, call_sign=None
+        )
+        score_country = _compute_confidence(
+            "cnn", None, "US", None, country_exact, "exact",
+            channel_tokens=channel_tokens,
+        )
+        score_fuzzy = _compute_confidence(
+            "cnn", None, "US", None, fuzzy, "prefix",
+            channel_tokens=channel_tokens,
+        )
+        assert score_country > score_fuzzy
+
+    def test_no_tokens_means_no_overlap_bonus(self):
+        # Back-compat: entries built without match_tokens (legacy direct calls)
+        # contribute zero token overlap, so scores are unchanged by the term.
+        entry = {
+            "id": 1, "name": "ESPN", "tvg_id": "", "epg_source": {},
+            "normalized_name": "espn", "league": None, "country": None,
+            "call_sign": None,
+        }
+        with_tokens = _compute_confidence(
+            "espn", None, None, None, entry, "exact",
+            channel_tokens=frozenset({"espn"}),
+        )
+        without = _compute_confidence("espn", None, None, None, entry, "exact")
+        assert with_tokens == without == 35
