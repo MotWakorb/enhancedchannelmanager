@@ -1916,9 +1916,16 @@ export async function getTopWatchedChannels(limit: number = 10, sortBy: 'views' 
 
 /**
  * Get unique viewer statistics for the specified period.
+ *
+ * ``groupBy`` controls the Top Viewers bucketing: 'ip' (default) groups by
+ * client IP; 'user' groups by COALESCE(username, ip) so resolved viewers
+ * collapse across IPs and unresolved viewers fall back to their IP.
  */
-export async function getUniqueViewersSummary(days: number = 7): Promise<import('../types').UniqueViewersSummary> {
-  return fetchJson(`${API_BASE}/stats/unique-viewers?days=${days}`);
+export async function getUniqueViewersSummary(
+  days: number = 7,
+  groupBy: 'ip' | 'user' = 'ip'
+): Promise<import('../types').UniqueViewersSummary> {
+  return fetchJson(`${API_BASE}/stats/unique-viewers?days=${days}&group_by=${groupBy}`);
 }
 
 /**
@@ -1937,9 +1944,10 @@ export async function getChannelBandwidthStats(
  */
 export async function getUniqueViewersByChannel(
   days: number = 7,
-  limit: number = 20
+  limit: number = 20,
+  groupBy: 'ip' | 'user' = 'ip'
 ): Promise<import('../types').ChannelUniqueViewers[]> {
-  return fetchJson(`${API_BASE}/stats/unique-viewers-by-channel?days=${days}&limit=${limit}`);
+  return fetchJson(`${API_BASE}/stats/unique-viewers-by-channel?days=${days}&limit=${limit}&group_by=${groupBy}`);
 }
 
 // =============================================================================
