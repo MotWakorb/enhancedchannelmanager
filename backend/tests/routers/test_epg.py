@@ -861,6 +861,56 @@ class TestMatchChannelsToEPG:
         assert self._best(second.json())["epg_source"]["id"] == 2
 
     @pytest.mark.asyncio
+    async def test_selected_source_filter_enforced(self, async_client):
+        """m4hp1 Part 1: with epg_source_ids=[1], entries from source 2 are
+        excluded EVEN IF Dispatcharr ignores the epg_source query param and
+        returns mixed-source data. Defense-in-depth filter in the endpoint.
+        """
+        from cache import get_cache
+        get_cache().clear()
+        sources = [
+            {"id": 1, "name": "Selected", "priority": 10},
+            {"id": 2, "name": "Other", "priority": 1},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = sources
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 1, "name": "ESPN", "streams": [1]}],
+        }
+        mock_client.get_streams.return_value = {
+            "results": [{"id": 1, "name": "US | ESPN",
+                         "channel_group_name": "US Sports"}],
+            "next": None,
+        }
+        # Simulate Dispatcharr IGNORING the epg_source filter: every per-source
+        # fetch returns BOTH a source-1 and a source-2 ESPN entry.
+        def _mixed(*args, **kwargs):
+            return [
+                {"id": 100, "name": "ESPN", "tvg_id": "ESPN.us",
+                 "epg_source": {"id": 1, "name": "Selected"}},
+                {"id": 200, "name": "ESPN", "tvg_id": "ESPN.us",
+                 "epg_source": {"id": 2, "name": "Other"}},
+            ]
+        mock_client.get_epg_data.side_effect = _mixed
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post("/api/epg/match", json={
+                "channel_ids": [1],
+                "epg_source_ids": [1],
+            })
+        assert response.status_code == 200
+        data = response.json()
+        # Gather every candidate's source id across all buckets.
+        all_source_ids = set()
+        for bucket in (data["exact"], data["multiple"], data["none"]):
+            for ch in bucket:
+                for m in ch.get("matches", []):
+                    all_source_ids.add(m["epg_source"]["id"])
+        # Only the selected source may appear; source 2 must be filtered out.
+        assert 2 not in all_source_ids
+        assert all_source_ids == {1}
+
+    @pytest.mark.asyncio
     async def test_deprecated_source_order_ignored(self, async_client):
         """A client-sent source_order is ignored; server priority still wins."""
         from cache import get_cache

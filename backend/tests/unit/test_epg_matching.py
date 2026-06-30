@@ -482,6 +482,35 @@ class TestSortMatchesPriority:
     def test_band_constant_is_five(self):
         assert PRIORITY_TIEBREAK_BAND == 5
 
+    def test_subchannel_breaks_confidence_tie(self):
+        # m4hp1: equal confidence -> the lower subchannel (primary feed) wins.
+        primary = _scored(1, source_id=1, confidence=80, name="KOCE-DT (PBS)")
+        primary.subchannel = 1
+        diginet = _scored(2, source_id=1, confidence=80, name="KOCE-DT2 (PBS)")
+        diginet.subchannel = 2
+        ordered = _sort_matches([diginet, primary], None, "koce", None)
+        assert ordered[0].epg_id == 1  # primary feed first
+
+    def test_subchannel_does_not_override_confidence(self):
+        # A higher-confidence diginet still beats a lower-confidence primary —
+        # subchannel sits AFTER raw confidence in the sort key.
+        primary = _scored(1, source_id=1, confidence=70, name="KCOP-DT")
+        primary.subchannel = 1
+        diginet = _scored(2, source_id=1, confidence=82, name="KCOP-DT4 (MY)")
+        diginet.subchannel = 4
+        ordered = _sort_matches([primary, diginet], None, "kcop", None)
+        assert ordered[0].epg_id == 2  # higher confidence wins despite -DT4
+
+    def test_subchannel_does_not_disturb_source_priority(self):
+        # Within a band, source priority must still decide BEFORE subchannel:
+        # a preferred-source diginet outranks a non-preferred primary feed.
+        primary = _scored(1, source_id=2, confidence=80, name="WXYZ-DT")
+        primary.subchannel = 1
+        diginet = _scored(2, source_id=1, confidence=80, name="WXYZ-DT2")
+        diginet.subchannel = 2
+        ordered = _sort_matches([primary, diginet], None, "wxyz", {1: 0, 2: 1})
+        assert ordered[0].epg_source["id"] == 1  # preferred source wins
+
 
 class TestBuildSourcePriorityOrder:
     """build_source_priority_order maps source_id -> rank (0 = best)."""
@@ -569,29 +598,35 @@ class TestConfidenceScoring:
     def test_country_match_40pts(self):
         entry = self._make_entry(country="US")
         score = _compute_confidence("espn", None, "US", None, entry, "exact")
-        # Country 40 + exact 25 + length similarity 20 = 85
+        # Country 40 + exact 25 (no length term post-m4hp1) = 65
         assert score >= 40
 
     def test_exact_match_25pts(self):
         entry = self._make_entry(country=None)
-        # Use same channel_normalized for both so length similarity is identical
         score_exact = _compute_confidence("espn", None, None, None, entry, "exact")
         score_prefix = _compute_confidence("espn", None, None, None, entry, "prefix")
         assert score_exact > score_prefix
-        # Exact gives 25; prefix with len == MIN_PREFIX_LENGTH gives 0.
-        # Length similarity is now weighted to a max of 10 (was 20) so that
-        # token overlap is the primary same-bucket discriminator (a6445).
-        assert score_exact == 35  # 25 exact + 10 length
-        assert score_prefix == 10  # 0 prefix (not > MIN_PREFIX_LENGTH) + 10 length
+        # m4hp1: the name-length-similarity term was REMOVED (it mis-ranked
+        # noisier subchannels over the clean feed). With no token sets passed,
+        # exact == 25 and prefix (len == MIN_PREFIX_LENGTH, not >) == 0.
+        # Previously these were 35 / 10 (the extra +10 was length similarity).
+        assert score_exact == 25  # 25 exact, no length term
+        assert score_prefix == 0  # 0 prefix (not > MIN_PREFIX_LENGTH), no length
 
-    def test_length_similarity_10pts(self):
-        entry = self._make_entry(name="ESPN", country=None)
-        # Identical length = full 10 pts (length-similarity weight reduced from
-        # 20 -> 10 in a6445 so it can no longer flip a same-bucket tie against
-        # stronger token-overlap evidence).
-        score = _compute_confidence("espn", None, None, None, entry, "exact")
-        # exact 25 + length 10 = 35
-        assert score == 35
+    def test_length_has_no_effect(self):
+        # m4hp1: length similarity was removed entirely. A much longer EPG name
+        # now scores identically to an exact-length one (only the match tier
+        # counts), where previously the closer-length name got up to +10.
+        short = self._make_entry(name="ESPN", country=None)
+        longer = self._make_entry(name="ESPN Sports Network HD", country=None)
+        score_short = _compute_confidence("espn", None, None, None, short, "exact")
+        # Strip HD bonus from the comparison by using a non-HD long name.
+        longer["name"] = "ESPN Sports Network Plus"
+        longer["normalized_name"] = normalize_for_epg_match("ESPN Sports Network Plus")
+        score_long = _compute_confidence("espn", None, None, None, longer, "exact")
+        # Both are exact (25), no length term -> identical. Pre-m4hp1 the long
+        # name would have lost ~10 length points.
+        assert score_short == score_long == 25
 
     def test_call_sign_10pts(self):
         entry = self._make_entry(name="WABC", country=None, call_sign="WABC")
@@ -609,14 +644,15 @@ class TestConfidenceScoring:
     def test_league_match_40pts(self):
         entry = self._make_entry(name="RedZone", country=None, league="NFL")
         score = _compute_confidence("redzone", "NFL", None, None, entry, "exact")
-        # League 40 + exact 25 + length similarity 20 = 85 (approx, depends on len)
+        # League 40 + exact 25 = 65 (no length term post-m4hp1)
         assert score >= 65
 
     def test_no_country_no_league_0pts(self):
         entry = self._make_entry(country=None, league=None)
         score = _compute_confidence("espn", None, None, None, entry, "exact")
-        # No country/league bonus, just exact + length (length weight now 10)
-        assert score == 35  # 25 exact + 10 length
+        # No country/league bonus, just exact 25 (length term removed in m4hp1;
+        # was 35 = 25 exact + 10 length).
+        assert score == 25
 
 
 # ===================================================================
@@ -666,6 +702,105 @@ class TestTokenOverlapRanking:
 
         assert result.best_match is not None
         assert result.best_match.epg_name == "KEYE-DT (CBS)"
+
+
+class TestOtaPrimaryFeedRanking:
+    """m4hp1: the clean primary-feed network entry must beat noisier /
+    higher-subchannel siblings for OTA call-sign matches. Headline guards for
+    the five real cases reported after build 0035.
+    """
+
+    def _run(self, channel_name, stream_name, epg_specs):
+        # epg_specs: list of (epg_id, name, tvg_id)
+        epg_data = [make_epg(i, n, t) for (i, n, t) in epg_specs]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(1, channel_name, [1])
+        streams = [make_stream(1, stream_name, "US")]
+        return find_epg_matches_with_lookup(channel, streams, lookup)
+
+    def test_kabc_clean_feed_beats_noise(self):
+        # 70 | ABC: KABC LA -> KABC-DT (ABC), NOT 'TW BAK KABC B/O (ABC)' (extra
+        # noise tokens) nor 'KABC-DT Stream (ABC)' (extra 'stream' token).
+        result = self._run(
+            "70 | ABC: KABC Los Angeles", "US | ABC KABC",
+            [
+                (100, "TW BAK KABC B/O (ABC)", "KABC.us"),
+                (101, "KABC-DT (ABC)", "KABC-DT.us"),
+                (102, "KABC-DT Stream (ABC)", "KABC.us"),
+            ],
+        )
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "KABC-DT (ABC)"
+
+    def test_kcal_clean_feed_beats_diginet(self):
+        # 71 | CBS: KCAL LA -> the clean KCAL-DT, NOT 'KCAL-DT2 (THENEST)'.
+        result = self._run(
+            "71 | CBS: KCAL Los Angeles", "US | CBS KCAL",
+            [
+                (110, "KCAL-DT2 (THENEST)", "KCAL-DT2.us"),
+                (111, "KCAL-DT", "KCAL-DT.us"),
+            ],
+        )
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "KCAL-DT"
+
+    def test_kcop_primary_beats_higher_subchannel(self):
+        # 75 | MY: KCOP LA -> KCOP-DT, NOT 'KCOP-DT4 (HEROICN)'.
+        result = self._run(
+            "75 | MY: KCOP Los Angeles", "US | MY KCOP",
+            [
+                (120, "KCOP-DT4 (HEROICN)", "KCOP-DT4.us"),
+                (121, "KCOP-DT", "KCOP-DT.us"),
+            ],
+        )
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "KCOP-DT"
+
+    def test_koce_identical_tokens_primary_wins(self):
+        # 77 | PBS: KOCE LA -> KOCE-DT (PBS) over KOCE-DT2 (PBS). The IDENTICAL
+        # token case: both flatten to {koce, pbs}, so confidence ties exactly
+        # and ONLY the subchannel tie-break (primary -DT over -DT2) can decide.
+        result = self._run(
+            "77 | PBS: KOCE Los Angeles", "US | PBS KOCE",
+            [
+                (130, "KOCE-DT2 (PBS)", "KOCE-DT2.us"),
+                (131, "KOCE-DT (PBS)", "KOCE-DT.us"),
+            ],
+        )
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "KOCE-DT (PBS)"
+        # Prove it was a genuine confidence tie broken by subchannel.
+        by_name = {m.epg_name: m for m in result.matches}
+        assert by_name["KOCE-DT (PBS)"].confidence == by_name["KOCE-DT2 (PBS)"].confidence
+        assert by_name["KOCE-DT (PBS)"].subchannel == 1
+        assert by_name["KOCE-DT2 (PBS)"].subchannel == 2
+
+    def test_kcbs_regression_still_correct(self):
+        # 72 | CBS: KCBS LA -> KCBS-DT (CBS) (was already correct; must stay).
+        result = self._run(
+            "72 | CBS: KCBS Los Angeles", "US | CBS KCBS",
+            [
+                (140, "KCBS-DT (CBS)", "KCBS-DT.us"),
+                (141, "KCBS-DT2 (DECADES)", "KCBS-DT2.us"),
+            ],
+        )
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "KCBS-DT (CBS)"
+
+    def test_subchannel_tiebreak_does_not_beat_better_overlap(self):
+        # Guard: the subchannel tie-break must ONLY break genuine ties. If the
+        # channel is actually the MyNet diginet, 'KCOP-DT4 (MY)' shares the MY
+        # network token and must WIN over the primary 'KCOP-DT' despite having a
+        # higher subchannel number — token quality outranks the tie-break.
+        result = self._run(
+            "75 | MY: KCOP Los Angeles", "US | MY KCOP",
+            [
+                (150, "KCOP-DT", "KCOP-DT.us"),
+                (151, "KCOP-DT4 (MY)", "KCOP-DT4.us"),
+            ],
+        )
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "KCOP-DT4 (MY)"
 
 
 class TestTokenOverlapConfidence:
@@ -770,4 +905,29 @@ class TestTokenOverlapConfidence:
             channel_tokens=frozenset({"espn"}),
         )
         without = _compute_confidence("espn", None, None, None, entry, "exact")
-        assert with_tokens == without == 35
+        # 25 exact only (length term removed in m4hp1; was 35).
+        assert with_tokens == without == 25
+
+    def test_extra_epg_tokens_penalised(self):
+        # m4hp1: precision-aware quality. Two entries share the same single
+        # token (kabc) but the noisier one carries extra tokens the channel
+        # lacks; it must score LOWER. shared(1)*12 - extra*4.
+        channel_tokens = frozenset({"abc", "kabc", "los", "angeles"})
+        clean = self._entry("KABC-DT (ABC)", {"kabc", "abc"}, call_sign="KABC")
+        noisy = self._entry(
+            "TW BAK KABC B/O (ABC)", {"kabc", "abc", "tw", "bak"},
+            call_sign="KABC",
+        )
+        score_clean = _compute_confidence(
+            "abckabclosangeles", None, None, "KABC", clean, "callsign",
+            channel_tokens=channel_tokens,
+        )
+        score_noisy = _compute_confidence(
+            "abckabclosangeles", None, None, "KABC", noisy, "callsign",
+            channel_tokens=channel_tokens,
+        )
+        # clean: shared {kabc,abc}=2 *12, extra 0 -> +24, +10 callsign = 34.
+        # noisy: shared 2 *12 - extra {tw,bak}=2 *4 -> +16, +10 = 26.
+        assert score_clean == 34
+        assert score_noisy == 26
+        assert score_clean > score_noisy
