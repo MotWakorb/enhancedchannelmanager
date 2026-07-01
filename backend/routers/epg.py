@@ -88,7 +88,14 @@ async def get_epg_source(source_id: int):
 
 @router.post("/sources")
 async def create_epg_source(request: Request):
-    """Create an EPG source (including dummy sources)."""
+    """Create an EPG source (including dummy sources).
+
+    No /match cache invalidation here (bd-41pcv): match_channels_to_epg
+    fetches the full EPG source list fresh on every call and rebuilds the
+    priority signature from it before checking the cache, so a newly
+    created source's id/priority is already reflected in the cache key on
+    the very next request — there's no stale-response window to close.
+    """
     logger.debug("[EPG] POST /api/epg/sources")
     client = get_client()
     start = time.time()
@@ -150,6 +157,13 @@ async def update_epg_source(source_id: int, request: Request):
             after_value=data,
         )
 
+        # Bust cached /match responses (bd-41pcv): the cache key is derived
+        # from channel/source IDs + priority ranks only, not source content —
+        # an in-place edit (e.g. URL swap) keeps the same id, so a stale
+        # pre-edit response would otherwise be served for up to the cache TTL.
+        cache = get_cache()
+        cache.invalidate_prefix("epg_match:")
+
         logger.info("[EPG] Updated EPG source id=%s name='%s' in %.1fms", source_id, result.get("name"), elapsed_ms)
         return result
     except HTTPException:
@@ -188,6 +202,11 @@ async def delete_epg_source(source_id: int):
             description=f"Deleted EPG source '{source_name}'",
             before_value={"name": source_name},
         )
+
+        # Bust cached /match responses (bd-41pcv): a match response for this
+        # source's id/priority signature must not outlive the source itself.
+        cache = get_cache()
+        cache.invalidate_prefix("epg_match:")
 
         logger.info("[EPG] Deleted EPG source id=%s name='%s' in %.1fms", source_id, source_name, elapsed_ms)
         return {"status": "deleted"}
@@ -383,6 +402,13 @@ async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial
                     description=f"Refreshed EPG source '{source_name}' in {wait_duration:.1f}s",
                 )
 
+                # Bust cached /match responses (bd-41pcv): this is the point
+                # where new EPG data has actually landed under the source's
+                # unchanged id — the strongest case for staleness, since a
+                # match run right after a refresh completes must not serve a
+                # pre-refresh cached response.
+                get_cache().invalidate_prefix("epg_match:")
+
                 await send_alert(
                     title=f"EPG Refresh: {source_name}",
                     message=f"Successfully refreshed EPG source '{source_name}' in {wait_duration:.1f}s",
@@ -405,6 +431,11 @@ async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial
                     entity_name=source_name,
                     description=f"Refreshed EPG source '{source_name}'",
                 )
+
+                # Bust cached /match responses (bd-41pcv) — same reasoning as
+                # the timestamp-changed branch above; this path is taken when
+                # the source has no updated_at field to compare.
+                get_cache().invalidate_prefix("epg_match:")
 
                 await send_alert(
                     title=f"EPG Refresh: {source_name}",

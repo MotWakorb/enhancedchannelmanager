@@ -9,6 +9,7 @@ from epg_matching import (
     detect_country_from_streams,
     extract_broadcast_call_sign,
     extract_league_prefix,
+    extract_paren_acronym,
     find_epg_matches_with_lookup,
     matches_epg_search,
     normalize_for_epg_match,
@@ -931,3 +932,193 @@ class TestTokenOverlapConfidence:
         assert score_clean == 34
         assert score_noisy == 26
         assert score_clean > score_noisy
+
+
+# ===================================================================
+# 13. Parenthetical acronym matching (bd-6rz70)
+# ===================================================================
+#
+# Root cause: Dispatcharr's guide DB encodes many entries' short acronym
+# INSIDE the tvg_id (and sometimes the display name) as a parenthetical,
+# e.g. "FamilyEntertainmentTelevision(FETV).us". epg_match_key flattens the
+# WHOLE tvg_id into one blob ("familyentertainmenttelevisionfetv"), burying
+# the acronym mid-string where no exact/prefix boundary check can find it.
+# Real channels named after the acronym ("890 | Fetv", "876 | HGTV",
+# "846 | OWN") therefore got zero or wrong candidates.
+
+class TestExtractParenAcronym:
+    def test_tvg_id_form(self):
+        assert extract_paren_acronym(
+            "FamilyEntertainmentTelevision(FETV).us"
+        ) == "fetv"
+
+    def test_name_form(self):
+        assert extract_paren_acronym(
+            "Family Entertainment Television (FETV)"
+        ) == "fetv"
+
+    def test_html_escaped_ampersand_in_prefix_ignored(self):
+        # The "&amp;" HTML-entity artifact sits OUTSIDE the parens, so
+        # extraction is unaffected by it.
+        assert extract_paren_acronym(
+            "Home&amp;GardenTelevision(HGTV).us"
+        ) == "hgtv"
+
+    def test_no_parens_returns_none(self):
+        assert extract_paren_acronym("ESPN.us") is None
+        assert extract_paren_acronym("ESPN") is None
+
+    def test_empty_string_returns_none(self):
+        assert extract_paren_acronym("") is None
+        assert extract_paren_acronym(None) is None
+
+    def test_too_short_acronym_returns_none(self):
+        # A single-character parenthetical isn't trustworthy as an exact key.
+        assert extract_paren_acronym("Something(X).us") is None
+
+    def test_non_alnum_inside_parens_stripped(self):
+        assert extract_paren_acronym("Some Channel (F-M)") == "fm"
+
+    def test_first_parenthetical_wins(self):
+        assert extract_paren_acronym("Weird(ABC)Name(DEF)") == "abc"
+
+
+class TestBuildEpgLookupAcronym:
+    def test_by_acronym_indexed_from_tvg_id(self):
+        epg_data = [make_epg(12334, "Family Entertainment Television",
+                              "FamilyEntertainmentTelevision(FETV).us")]
+        lookup = build_epg_lookup(epg_data)
+        assert "by_acronym" in lookup
+        assert "fetv" in lookup["by_acronym"]
+        assert lookup["by_acronym"]["fetv"][0]["id"] == 12334
+
+    def test_by_acronym_indexed_from_name(self):
+        epg_data = [make_epg(57679, "Family Entertainment Television (FETV)",
+                              "FETV.us")]
+        lookup = build_epg_lookup(epg_data)
+        assert "fetv" in lookup["by_acronym"]
+        assert lookup["by_acronym"]["fetv"][0]["id"] == 57679
+
+    def test_no_acronym_no_entry(self):
+        epg_data = [make_epg(100, "ESPN", "ESPN.us")]
+        lookup = build_epg_lookup(epg_data)
+        assert lookup["by_acronym"] == {}
+
+    def test_acronym_folded_into_match_tokens(self):
+        # bd-6rz70: the tvg_id-only acronym is folded into match_tokens so
+        # the token-overlap term can see it (it isn't otherwise tokenized,
+        # since match_tokens only derives from the display name).
+        epg_data = [make_epg(12334, "Family Entertainment Television",
+                              "FamilyEntertainmentTelevision(FETV).us")]
+        lookup = build_epg_lookup(epg_data)
+        entry = lookup["by_acronym"]["fetv"][0]
+        assert "fetv" in entry["match_tokens"]
+
+
+class TestAcronymMatching:
+    """End-to-end regression for the three headline PO-reported failures."""
+
+    def test_own_zero_matches_to_present(self):
+        # "846 | OWN" -> 0 matches before the fix (channel_normalized "own"
+        # is 3 chars, below MIN_PREFIX_LENGTH=4, so the prefix-scan path
+        # never runs, and no exact/tvg_id/callsign path catches it either).
+        epg_data = [
+            make_epg(30033, "Oprah Winfrey Network",
+                     "OprahWinfreyNetwork(OWN).us"),
+        ]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(1, "846 | OWN", [])
+        result = find_epg_matches_with_lookup(channel, [], lookup)
+
+        assert result.best_match is not None
+        assert result.best_match.epg_id == 30033
+        assert result.best_match.match_type == "acronym"
+        assert result.best_match.confidence > 0
+
+    def test_fetv_correct_entry_becomes_candidate(self):
+        # "890 | Fetv" -> before the fix, only a wrong low-confidence match
+        # ("FeTV Canal 5", a Colombian channel) surfaced; the correct
+        # id-12334 entry never became a candidate at all.
+        epg_data = [
+            make_epg(12334, "Family Entertainment Television",
+                     "FamilyEntertainmentTelevision(FETV).us"),
+            # tvg_id normalizes to the SAME key as the name ("fetvcanal5"),
+            # so this is only ever a weak prefix match, not a coincidental
+            # exact tvg_id match — matching the real-world Colombian entry's
+            # low-confidence (8pt) behavior reported by the PO.
+            make_epg(99001, "FeTV Canal 5", "FeTVCanal5.co"),
+        ]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(1, "890 | Fetv", [])
+        result = find_epg_matches_with_lookup(channel, [], lookup)
+
+        matched_ids = {m.epg_id for m in result.matches}
+        assert 12334 in matched_ids
+        correct = next(m for m in result.matches if m.epg_id == 12334)
+        assert correct.match_type == "acronym"
+        # The correct entry should outrank the coincidental Colombian match.
+        assert result.best_match is not None
+        assert result.best_match.epg_id == 12334
+
+    def test_hgtv_correct_entry_becomes_candidate_alongside_wrong_country(self):
+        # "876 | HGTV" -> before the fix, candidates existed but were ALL
+        # wrong-country HD variants (Chile/Italy/Poland/Brazil); the correct
+        # US entry (id 16985) never became a candidate at all.
+        epg_data = [
+            make_epg(16985, "Home & Garden Television",
+                     "Home&amp;GardenTelevision(HGTV).us"),
+            make_epg(70001, "HGTVHD", "HGTVCL-HD.cl"),
+            make_epg(70002, "HGTVHD", "HGTVIT-HD.it"),
+        ]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(1, "876 | HGTV", [])
+        result = find_epg_matches_with_lookup(channel, [], lookup)
+
+        matched_ids = {m.epg_id for m in result.matches}
+        assert 16985 in matched_ids
+        correct = next(m for m in result.matches if m.epg_id == 16985)
+        assert correct.match_type == "acronym"
+        # Present and reasonably scored — not required to be #1 without
+        # real stream/country data (see bd-6rz70 verification notes), but
+        # must not be scored at/near zero.
+        assert correct.confidence >= 20
+
+    def test_acronym_not_gated_by_min_prefix_length(self):
+        # Regression guard: a 3-char acronym match must still surface even
+        # though it's below MIN_PREFIX_LENGTH (4).
+        from epg_matching import MIN_PREFIX_LENGTH
+        assert len("own") < MIN_PREFIX_LENGTH
+        epg_data = [make_epg(1, "Oprah Winfrey Network",
+                              "OprahWinfreyNetwork(OWN).us")]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(1, "OWN", [])
+        result = find_epg_matches_with_lookup(channel, [], lookup)
+        assert result.best_match is not None
+
+    def test_acronym_does_not_duplicate_an_already_exact_match(self):
+        # An entry can be indexed under BOTH by_normalized_name (exact) AND
+        # by_acronym (its tvg_id also has a matching parenthetical). The
+        # acronym branch runs after exact/tvg_id/callsign and must respect
+        # seen_epg_ids — the entry should appear exactly once, tagged
+        # "exact" (the higher-fidelity signal), never duplicated as a
+        # separate "acronym" candidate.
+        epg_data = [make_epg(1, "OWN", "OWN(OWN).us")]
+        lookup = build_epg_lookup(epg_data)
+        assert "own" in lookup["by_acronym"]  # sanity: it IS acronym-indexed
+        channel = make_channel(1, "OWN", [])
+        result = find_epg_matches_with_lookup(channel, [], lookup)
+        assert len(result.matches) == 1
+        assert result.best_match is not None
+        assert result.best_match.match_type == "exact"
+
+    def test_acronym_weight_equals_exact_weight(self):
+        # Documents the confidence-weight decision (bd-6rz70): acronym and
+        # exact share the same base weight (25).
+        entry = {
+            "id": 1, "name": "Oprah Winfrey Network", "tvg_id": "",
+            "epg_source": {}, "normalized_name": "oprahwinfreynetwork",
+            "league": None, "country": None, "call_sign": None,
+        }
+        score_acronym = _compute_confidence("own", None, None, None, entry, "acronym")
+        score_exact = _compute_confidence("own", None, None, None, entry, "exact")
+        assert score_acronym == score_exact == 25
