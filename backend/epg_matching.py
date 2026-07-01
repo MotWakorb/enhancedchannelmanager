@@ -202,14 +202,48 @@ def _extract_match_tokens(name: str, engine=None) -> frozenset:
     ing=True)`` when an engine is supplied; the raw name on the deprecated
     engine-less path). Subchannel markers and generic format words are dropped
     so the overlap reflects real network/affiliate/city identity, not noise.
+
+    A standalone digit-run token is fused onto the immediately preceding
+    token (e.g. ["espn", "2"] -> ["espn2"]) before the drop filters run
+    (bd-gl3sd). Without this, a spaced channel name like "ESPN 2" and its
+    fused EPG counterpart "ESPN2" — which already collapse to the IDENTICAL
+    match key via epg_match_key's flatten-and-strip — produce disjoint token
+    sets ({"espn"} vs {"espn2"}), because the lone digit "2" is dropped by
+    the length filter while "espn2" survives whole. That let a coincidental
+    "ESPN HD" prefix match outscore the correct "ESPN2" exact match on the
+    token-overlap term alone. The fuse is intentionally conservative:
+    - Only merges into the RAW previous token (not an already-fused one), so
+      two independent digit runs ("Channel 4 +1" -> "4", "1") never get
+      glued into one bogus number ("channel41").
+    - Skips fusing onto a stopword or subchannel-marker predecessor ("dt",
+      "hd", ...), so "WUNC-DT 20 (PBS)" keeps dropping "dt" and "20"
+      independently exactly as before, and "Eurosport 360 HD 8" doesn't let
+      "8" smuggle through fused to "hd" as "hd8" (which would evade both the
+      stopword and subchannel filters as one new token).
     """
     if not name:
         return frozenset()
 
     core = engine.extract_core_name(name, for_matching=True) if engine else name
 
+    raw_tokens = _TOKEN_SPLIT_RE.split(core.lower())
+    fused_tokens: list[str] = []
+    for i, tok in enumerate(raw_tokens):
+        prev = raw_tokens[i - 1] if i > 0 else ""
+        if (
+            tok.isdigit()
+            and fused_tokens
+            and prev
+            and not prev.isdigit()
+            and prev not in _TOKEN_STOPWORDS
+            and not _SUBCHANNEL_TOKEN_RE.match(prev)
+        ):
+            fused_tokens[-1] += tok
+        else:
+            fused_tokens.append(tok)
+
     tokens = set()
-    for tok in _TOKEN_SPLIT_RE.split(core.lower()):
+    for tok in fused_tokens:
         if len(tok) < 2:
             continue
         if tok in _TOKEN_STOPWORDS or _SUBCHANNEL_TOKEN_RE.match(tok):

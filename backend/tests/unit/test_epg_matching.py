@@ -16,6 +16,7 @@ from epg_matching import (
     normalize_for_epg_match_with_league,
     parse_tvg_id,
     _compute_confidence,
+    _extract_match_tokens,
     _sort_matches,
 )
 
@@ -932,6 +933,120 @@ class TestTokenOverlapConfidence:
         assert score_clean == 34
         assert score_noisy == 26
         assert score_clean > score_noisy
+
+
+# ===================================================================
+# 12b. Trailing-digit token fuse (bd-gl3sd)
+# ===================================================================
+#
+# Root cause: "ESPN 2" (spaced) and "ESPN2" (fused) already collapse to the
+# IDENTICAL match key via epg_match_key's flatten-and-strip, but
+# _extract_match_tokens split "ESPN 2" into ["espn", "2"] and dropped the
+# lone digit "2" (length filter), leaving token set {"espn"} -- disjoint from
+# "ESPN2"'s {"espn2"}. That zero-overlap meant a coincidental "ESPN HD"
+# prefix match (which DOES share "espn") outscored the correct "ESPN2" exact
+# match on the token-overlap term. The fix fuses a standalone digit-run onto
+# its immediately preceding token before the drop filters run.
+
+class TestExtractMatchTokensDigitFuse:
+    def test_espn_2_matches_espn2_tokens(self):
+        assert _extract_match_tokens("ESPN 2") == _extract_match_tokens("ESPN2")
+        assert _extract_match_tokens("ESPN 2") == frozenset({"espn2"})
+
+    def test_fs_1_matches_fs1_tokens(self):
+        assert _extract_match_tokens("FS 1") == _extract_match_tokens("FS1")
+        assert _extract_match_tokens("FS 1") == frozenset({"fs1"})
+
+    def test_fs_2_matches_fs2_tokens(self):
+        assert _extract_match_tokens("FS 2") == _extract_match_tokens("FS2")
+        assert _extract_match_tokens("FS 2") == frozenset({"fs2"})
+
+    def test_espn_2_does_not_collapse_to_bare_espn(self):
+        # The whole point: "ESPN 2" must NOT tokenize the same as plain
+        # "ESPN" (that would recreate the collision with "ESPN HD" etc.).
+        assert _extract_match_tokens("ESPN 2") != _extract_match_tokens("ESPN")
+        assert "espn" not in _extract_match_tokens("ESPN 2")
+
+    def test_wtvt_dt2_subchannel_marker_still_dropped(self):
+        # bd-a6445/m4hp1 regression guard: fused ATSC subchannel markers
+        # ("DT2") were ALREADY a single raw token before this fix (no space
+        # to split on) and must keep being dropped as identity-free noise.
+        assert _extract_match_tokens("WTVT-DT2 (MVIES)") == frozenset(
+            {"wtvt", "mvies"}
+        )
+        assert _extract_match_tokens("WTVT-DT (FOX)") == frozenset(
+            {"wtvt", "fox"}
+        )
+
+    def test_koce_dt_vs_dt2_still_identical_tokens(self):
+        # m4hp1's tie-break case depends on these two staying token-identical
+        # (subchannel number is the ONLY difference) so the primary-feed
+        # tie-break, not the token-overlap term, decides.
+        assert _extract_match_tokens("KOCE-DT (PBS)") == _extract_match_tokens(
+            "KOCE-DT2 (PBS)"
+        )
+        assert _extract_match_tokens("KOCE-DT (PBS)") == frozenset(
+            {"koce", "pbs"}
+        )
+
+    def test_dt_marker_with_space_before_digit_still_dropped(self):
+        # "WUNC-DT 20 (PBS)": digit "20" follows the STOPWORD "dt", so it must
+        # NOT fuse into "dt20" (which would evade both the stopword filter
+        # and the subchannel-marker filter as one new surviving token).
+        assert _extract_match_tokens("WUNC-DT 20 (PBS)") == frozenset(
+            {"wunc", "pbs"}
+        )
+
+    def test_two_independent_digit_runs_not_glued_together(self):
+        # "Channel 4 +1": two SEPARATE digit runs ("4" time-shift channel
+        # number, "1" the +1 hour offset) must not fuse into one bogus
+        # "channel41" token -- only the first digit run fuses onto its own
+        # word predecessor; the second, following a digit, stays independent
+        # (and gets dropped by the subchannel-token filter, same as today).
+        tokens = _extract_match_tokens("Channel 4 +1")
+        assert "channel41" not in tokens
+        assert tokens == frozenset({"channel4"})
+
+    def test_quality_suffix_digit_not_smuggled_through(self):
+        # "Eurosport 360 HD 8": the trailing "8" follows the STOPWORD "hd"
+        # and must not fuse into "hd8" (evading the stopword filter). The
+        # leading "360" DOES fuse onto "eurosport" (genuine name token).
+        tokens = _extract_match_tokens("Eurosport 360 HD 8")
+        assert tokens == frozenset({"eurosport360"})
+        assert "hd8" not in tokens
+
+
+class TestEspn2RegressionEndToEnd:
+    """bd-gl3sd headline case: channel '5 | US : ESPN 2' must match the
+    EPG's ESPN2 entry, not the plain ESPN HD entry, once the token-overlap
+    term stops seeing a spurious "espn" overlap with ESPN HD instead of a
+    real "espn2" overlap with ESPN2.
+    """
+
+    def test_espn_2_beats_espn_hd(self):
+        epg_data = [
+            make_epg(11589, "ESPN HD", "ESPNHD(ESPNHD).us"),
+            make_epg(11608, "ESPN2", "ESPN2(ESPN2).us"),
+        ]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(11874, "5 | US : ESPN 2", [])
+        result = find_epg_matches_with_lookup(channel, [], lookup)
+
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "ESPN2"
+
+    def test_espn_2_fhd_beats_espn_hd(self):
+        # The other PO-reported channel spelling for the same bug.
+        epg_data = [
+            make_epg(11589, "ESPN HD", "ESPNHD(ESPNHD).us"),
+            make_epg(11608, "ESPN2", "ESPN2(ESPN2).us"),
+        ]
+        lookup = build_epg_lookup(epg_data)
+        channel = make_channel(11871, "2 | US: ESPN 2 FHD", [])
+        result = find_epg_matches_with_lookup(channel, [], lookup)
+
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "ESPN2"
 
 
 # ===================================================================
