@@ -139,6 +139,31 @@ _TOKEN_SHARED_CAP = 3
 _TOKEN_EXTRA_WEIGHT = 4
 _TOKEN_EXTRA_CAP = 4
 
+# --- Parenthetical-acronym match weight (bd-6rz70) ----------------------
+# An "acronym" candidate comes from an EXACT dict-key lookup against a
+# parenthetical abbreviation Dispatcharr embeds in the tvg_id (and sometimes
+# the display name) — e.g. "OWN" resolves via OprahWinfreyNetwork(OWN).us,
+# "HGTV" via Home&GardenTelevision(HGTV).us. This is NOT a fuzzy/partial
+# signal like "prefix" (15pts): the acronym is the deliberate, canonical
+# short identifier for the network, and the lookup matches it exactly, not
+# via a substring guess. It is therefore weighted EQUAL to "exact" (25pts)
+# rather than below it — matching the acronym carries the same certainty as
+# matching the full flattened name/tvg_id, just through a different (and,
+# for channels literally named after the acronym, e.g. "890 | Fetv", the
+# ONLY working) field.
+#
+# It is deliberately NOT weighted ABOVE "exact": a full name/tvg_id match
+# remains the most complete identity signal when it is available; acronym
+# matching only kicks in as an alternate discovery path when the flattened
+# name/tvg_id blob buries the acronym mid-string where no boundary check can
+# find it (see parse_tvg_id / epg_match_key). build_epg_lookup folds the
+# extracted acronym into the entry's match_tokens set, so when multiple
+# candidates share the same acronym (e.g. HGTV entries from several
+# countries), the token-overlap term below still discriminates between them
+# via the surrounding network-name tokens (and, when stream data is
+# available, country/league +40 discriminates further).
+_ACRONYM_MATCH_WEIGHT = 25
+
 # Parse a broadcast subchannel ("digital subchannel") number from a RAW EPG or
 # channel display name. The ATSC convention is CALLSIGN-DT for the primary feed
 # and CALLSIGN-DT2/-DT3/... for diginets. Primary feed (no marker, "-DT", or
@@ -205,7 +230,7 @@ class EPGMatchWithScore:
     tvg_id: str
     epg_source: dict  # {id, name}
     confidence: int
-    match_type: str  # "exact", "prefix", "league", "callsign"
+    match_type: str  # "exact", "prefix", "league", "callsign", "acronym"
     # The EPG name's match key, carried from the lookup entry so _sort_matches
     # reuses it instead of re-normalizing (bd-xxzxe). Empty for objects built
     # outside the lookup path (e.g. direct unit-test construction); _sort_matches
@@ -477,6 +502,49 @@ def parse_tvg_id(tvg_id: str) -> tuple[str, Optional[str], Optional[str]]:
     return (normalized, country, league)
 
 
+# Parenthetical acronym embedded in a tvg_id or display name, e.g.
+# "FamilyEntertainmentTelevision(FETV).us" or "Family Entertainment
+# Television (FETV)". Captures the FIRST parenthetical group — matches the
+# precedent in auto_creation_executor._match_epg_data's call-sign extraction
+# (bd-6rz70), which is a different, non-bulk matching path but established
+# the pattern.
+_PAREN_ACRONYM_RE = re.compile(r"\(([^)]+)\)")
+
+# An extracted acronym shorter than this is too generic to trust as an exact
+# lookup key (collision risk, e.g. stray single-letter annotations) — same
+# 2-character floor _extract_match_tokens already applies to any token.
+_MIN_ACRONYM_LENGTH = 2
+
+
+def extract_paren_acronym(text: str) -> Optional[str]:
+    """Extract a parenthetical acronym from a TVG-ID or display name.
+
+    Dispatcharr's guide database often encodes a network's canonical short
+    acronym as a parenthetical INSIDE the tvg_id (and sometimes the display
+    name), e.g. ``FamilyEntertainmentTelevision(FETV).us`` or
+    ``Family Entertainment Television (FETV)``. ``epg_match_key`` flattens
+    the whole string (parens included) into one blob, which buries the
+    acronym mid-string where no ``.startswith()``/``.endswith()`` check can
+    find it — this extracts it directly instead (bd-6rz70).
+
+    The acronym is a bare token, not a display name needing tag-stripping,
+    so it is normalized with the plain ``_NON_ALNUM_RE`` + lowercase fold —
+    NOT routed through ``epg_match_key``'s full engine pipeline.
+
+    Returns the normalized acronym, or ``None`` if no parenthetical is
+    present or it normalizes to fewer than ``_MIN_ACRONYM_LENGTH`` characters.
+    """
+    if not text:
+        return None
+    match = _PAREN_ACRONYM_RE.search(text)
+    if not match:
+        return None
+    acronym = _NON_ALNUM_RE.sub("", match.group(1).lower())
+    if len(acronym) < _MIN_ACRONYM_LENGTH:
+        return None
+    return acronym
+
+
 def build_epg_lookup(
     epg_data: list[dict],
     engine=None,
@@ -493,6 +561,8 @@ def build_epg_lookup(
     - 'by_normalized_name': dict mapping normalized name -> list of EPG entries
     - 'by_tvg_id': dict mapping normalized TVG-ID name -> list of EPG entries
     - 'by_call_sign': dict mapping call sign -> list of EPG entries
+    - 'by_acronym': dict mapping normalized parenthetical acronym (extracted
+      from tvg_id or name, e.g. "OWN") -> list of EPG entries (bd-6rz70)
     - 'all_entries': list of all processed EPG entries with normalized data
     """
     start = time.time()
@@ -503,6 +573,7 @@ def build_epg_lookup(
     by_normalized_name: dict[str, list[dict]] = {}
     by_tvg_id: dict[str, list[dict]] = {}
     by_call_sign: dict[str, list[dict]] = {}
+    by_acronym: dict[str, list[dict]] = {}
     all_entries: list[dict] = []
 
     for epg in epg_data:
@@ -518,6 +589,19 @@ def build_epg_lookup(
         # Parse TVG-ID
         tvg_normalized, tvg_country, tvg_league = parse_tvg_id(tvg_id)
 
+        # Parenthetical acronym extraction (bd-6rz70): Dispatcharr often
+        # buries a network's canonical acronym as "(ACRONYM)" inside the
+        # tvg_id, and sometimes inside the display name too. Extract both
+        # explicitly — the tvg_id form is invisible to normalized_name (it's
+        # flattened into a long blob) and the name form CAN be buried by
+        # flattening too (e.g. "Family Entertainment Television (FETV)" ->
+        # "familyentertainmenttelevisionfetv" is not a prefix of "fetv").
+        tvg_acronym = extract_paren_acronym(tvg_id)
+        name_acronym = extract_paren_acronym(epg_name)
+        acronym_tokens = frozenset(
+            a for a in (tvg_acronym, name_acronym) if a
+        )
+
         entry = {
             "id": epg.get("id"),
             "name": epg_name,
@@ -528,8 +612,17 @@ def build_epg_lookup(
             "country": tvg_country,
             "tvg_normalized": tvg_normalized,
             "call_sign": extract_broadcast_call_sign(epg_name),
-            # Meaningful tokens for the overlap signal (a6445).
-            "match_tokens": _extract_match_tokens(epg_name, engine=engine),
+            # Meaningful tokens for the overlap signal (a6445), extended
+            # with any parenthetical acronym (bd-6rz70) — the acronym IS a
+            # network identity token, on par with a call sign, so folding it
+            # in lets the token-quality term discriminate between multiple
+            # candidates that share the same acronym (e.g. HGTV entries from
+            # several countries). A no-op when the acronym already appears
+            # in the display name (already tokenized by the split below).
+            "match_tokens": (
+                _extract_match_tokens(epg_name, engine=engine)
+                | acronym_tokens
+            ),
             # Broadcast subchannel number parsed from the RAW name (m4hp1).
             # Primary feed (no marker / -DT / -DT1) = 1; diginets -DT2.. >= 2.
             # Pure tie-break: prefer the primary feed when tokens tie.
@@ -552,17 +645,25 @@ def build_epg_lookup(
                 entry["call_sign"], []
             ).append(entry)
 
+        # Index by parenthetical acronym (bd-6rz70). acronym_tokens is a set
+        # derived from THIS entry alone, so each key gets the entry once.
+        for acronym in acronym_tokens:
+            by_acronym.setdefault(acronym, []).append(entry)
+
     elapsed = (time.time() - start) * 1000
     logger.info(
         "[EPG-MATCH] Built EPG lookup in %.1fms: "
-        "%s name entries, %s tvg-id entries, %s call sign entries",
+        "%s name entries, %s tvg-id entries, %s call sign entries, "
+        "%s acronym entries",
         elapsed, len(by_normalized_name), len(by_tvg_id), len(by_call_sign),
+        len(by_acronym),
     )
 
     return {
         "by_normalized_name": by_normalized_name,
         "by_tvg_id": by_tvg_id,
         "by_call_sign": by_call_sign,
+        "by_acronym": by_acronym,
         "all_entries": all_entries,
     }
 
@@ -580,7 +681,9 @@ def _compute_confidence(
 
     Scoring:
     - Country OR League match: 40 points
-    - Exact vs prefix match: 25 / 15 points
+    - Exact vs acronym vs prefix match: 25 / 25 / 15 points (bd-6rz70: an
+      "acronym" candidate is an exact dict-key lookup on a parenthetical
+      abbreviation, weighted equal to "exact" — see _ACRONYM_MATCH_WEIGHT)
     - Token-set match quality: +36 .. -16 points (m4hp1 — PRIMARY same-bucket
       discriminator: rewards shared tokens, penalises extra/noise EPG tokens)
     - Call sign match: 10 points
@@ -615,9 +718,13 @@ def _compute_confidence(
         if channel_country.upper() == epg_country.upper():
             score += 40
 
-    # Exact vs prefix match: 25 / 15 points
+    # Exact vs acronym vs prefix match: 25 / 25 / 15 points
     if match_type == "exact":
         score += 25
+    elif match_type == "acronym":
+        # bd-6rz70: exact dict-key lookup on a parenthetical acronym — see
+        # _ACRONYM_MATCH_WEIGHT for the full weighting rationale.
+        score += _ACRONYM_MATCH_WEIGHT
     elif match_type == "prefix" and len(channel_normalized) > MIN_PREFIX_LENGTH:
         # Partial credit for prefix matches
         score += 15
@@ -827,6 +934,7 @@ def find_epg_matches_with_lookup(
     by_name = lookup["by_normalized_name"]
     by_tvg = lookup["by_tvg_id"]
     by_sign = lookup["by_call_sign"]
+    by_acronym = lookup["by_acronym"]
 
     # 1. Exact name matches
     if channel_normalized in by_name:
@@ -956,7 +1064,35 @@ def find_epg_matches_with_lookup(
                 match_type="callsign",
             ))
 
-    # 5. League-specific matches
+    # 5. Acronym matches (bd-6rz70): exact lookup on a parenthetical
+    # acronym extracted from the EPG entry's tvg_id or display name (e.g.
+    # "OWN" -> OprahWinfreyNetwork(OWN).us). Deliberately NOT gated on
+    # MIN_PREFIX_LENGTH — short cable acronyms like "OWN" (3 chars) are
+    # exactly the case this exists for; gating them out would defeat the
+    # purpose (they'd never reach the prefix-scan path either).
+    if channel_normalized in by_acronym:
+        for entry in by_acronym[channel_normalized]:
+            epg_id = entry["id"]
+            if epg_id in seen_epg_ids:
+                continue
+            seen_epg_ids.add(epg_id)
+            confidence = _compute_confidence(
+                channel_normalized, channel_league, channel_country,
+                channel_call_sign, entry, "acronym",
+                channel_tokens=channel_tokens,
+            )
+            matches.append(EPGMatchWithScore(
+                epg_id=epg_id,
+                epg_name=entry["name"],
+                tvg_id=entry["tvg_id"],
+                epg_source=entry["epg_source"],
+                epg_normalized=entry["normalized_name"],
+                subchannel=entry["subchannel"],
+                confidence=confidence,
+                match_type="acronym",
+            ))
+
+    # 6. League-specific matches
     if channel_league:
         league_lower = channel_league.lower()
         for entry in lookup["all_entries"]:

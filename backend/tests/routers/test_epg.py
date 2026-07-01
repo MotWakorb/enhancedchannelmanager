@@ -928,3 +928,160 @@ class TestMatchChannelsToEPG:
             })
         assert response.status_code == 200
         assert self._best(response.json())["epg_source"]["id"] == 1
+
+
+class TestMatchCachePersistsAcrossRepeatCalls:
+    """bd-41pcv: the /match response cache exists so a repeat request for the
+    same channel/source/priority selection (e.g. re-opening the bulk-assign
+    modal, or its "rerun analysis" button) skips the full channel/stream/EPG
+    refetch + rematch. That perf behavior must survive the staleness fix
+    below — this pins it so a future change doesn't regress it."""
+
+    @pytest.mark.asyncio
+    async def test_identical_repeat_request_is_cache_hit(self, async_client):
+        from cache import get_cache
+        get_cache().clear()
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {"id": 1, "name": "Primary", "priority": 10},
+        ]
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 1, "name": "ESPN", "streams": [1]}],
+        }
+        mock_client.get_streams.return_value = {
+            "results": [{"id": 1, "name": "US | ESPN",
+                         "channel_group_name": "US Sports"}],
+            "next": None,
+        }
+        mock_client.get_epg_data.return_value = [
+            {"id": 100, "name": "ESPN", "tvg_id": "ESPN.us",
+             "epg_source": {"id": 1, "name": "Primary"}},
+        ]
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            first = await async_client.post("/api/epg/match", json={
+                "channel_ids": [1], "epg_source_ids": [1],
+            })
+            second = await async_client.post("/api/epg/match", json={
+                "channel_ids": [1], "epg_source_ids": [1],
+            })
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json() == second.json()
+        # The expensive fetch + rematch only happened once; the second call
+        # was served from cache.
+        assert mock_client.get_epg_data.await_count == 1
+
+
+class TestMatchCacheInvalidatedOnSourceChange:
+    """bd-41pcv: PO-reported bug — after editing an EPG source's data in
+    place (same source id, e.g. swapping its URL or letting a refresh pull
+    new content) and running a fresh bulk match, results still showed
+    TVG-IDs from the OLD data. The /match cache key is built only from
+    channel/source IDs + priority ranks, none of which change when a
+    source's *content* changes, so a match within the TTL window served the
+    pre-swap response. update/delete/refresh-completion must bust the
+    epg_match: cache prefix so this can't happen."""
+
+    @pytest.mark.asyncio
+    async def test_update_busts_match_cache(self, async_client):
+        """A same-selection match run after an in-place source update must
+        reflect the post-update data, not a cached pre-update response."""
+        from cache import get_cache
+        get_cache().clear()
+        sources = [{"id": 1, "name": "Primary", "priority": 10}]
+
+        def _match_client(epg_data):
+            mock_client = AsyncMock()
+            mock_client.get_epg_sources.return_value = sources
+            mock_client.get_channels.return_value = {
+                "results": [{"id": 1, "name": "ESPN", "streams": [1]}],
+            }
+            mock_client.get_streams.return_value = {
+                "results": [{"id": 1, "name": "US | ESPN",
+                             "channel_group_name": "US Sports"}],
+                "next": None,
+            }
+            mock_client.get_epg_data.return_value = epg_data
+            return mock_client
+
+        old_client = _match_client([
+            {"id": 100, "name": "ESPN", "tvg_id": "OLD.us",
+             "epg_source": {"id": 1, "name": "Primary"}},
+        ])
+        with patch("routers.epg.get_client", return_value=old_client):
+            first = await async_client.post("/api/epg/match", json={
+                "channel_ids": [1], "epg_source_ids": [1],
+            })
+        assert TestMatchChannelsToEPG._best(first.json())["tvg_id"] == "OLD.us"
+
+        # PO edits the source in place -- same id, new content.
+        update_client = AsyncMock()
+        update_client.get_epg_source.return_value = {"id": 1, "name": "Primary"}
+        update_client.update_epg_source.return_value = {"id": 1, "name": "Primary"}
+        with patch("routers.epg.get_client", return_value=update_client), \
+             patch("routers.epg.journal"):
+            update_resp = await async_client.patch("/api/epg/sources/1", json={
+                "url": "http://example.com/new-epg.xml",
+            })
+        assert update_resp.status_code == 200
+
+        # Same channel/source/priority selection as the first call -- a
+        # byte-identical cache key pre-fix -- but the source now serves
+        # fresh (post-swap) data.
+        new_client = _match_client([
+            {"id": 101, "name": "ESPN", "tvg_id": "NEW.us",
+             "epg_source": {"id": 1, "name": "Primary"}},
+        ])
+        with patch("routers.epg.get_client", return_value=new_client):
+            second = await async_client.post("/api/epg/match", json={
+                "channel_ids": [1], "epg_source_ids": [1],
+            })
+        new_client.get_epg_data.assert_awaited()
+        assert TestMatchChannelsToEPG._best(second.json())["tvg_id"] == "NEW.us"
+
+    @pytest.mark.asyncio
+    async def test_delete_busts_epg_match_cache_prefix(self, async_client):
+        """Deleting a source must not leave a match response referencing it
+        servable from cache."""
+        from cache import get_cache
+        cache = get_cache()
+        cache.clear()
+        cache.set("epg_match:123:456:789", {"stale": True})
+
+        mock_client = AsyncMock()
+        mock_client.get_epg_source.return_value = {"id": 1, "name": "XMLTV"}
+        mock_client.delete_epg_source.return_value = None
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.delete("/api/epg/sources/1")
+
+        assert response.status_code == 200
+        assert cache.get("epg_match:123:456:789") is None
+
+    @pytest.mark.asyncio
+    async def test_refresh_completion_busts_epg_match_cache_prefix(self):
+        """The background poller -- not the trigger endpoint -- is what
+        actually confirms new data landed, so it must be the one that
+        invalidates the cache. Simulates the ``updated_at`` timestamp
+        changing on the very first poll tick."""
+        from cache import get_cache
+        from routers.epg import _poll_epg_refresh_completion
+        cache = get_cache()
+        cache.clear()
+        cache.set("epg_match:123:456:789", {"stale": True})
+
+        mock_client = AsyncMock()
+        mock_client.get_epg_source.return_value = {
+            "id": 1, "name": "XMLTV", "updated_at": "2026-06-30T12:00:00Z",
+        }
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.asyncio.sleep", new=AsyncMock()), \
+             patch("routers.epg.send_alert", new=AsyncMock()), \
+             patch("routers.epg.journal"):
+            await _poll_epg_refresh_completion(1, "XMLTV", "2026-06-30T11:00:00Z")
+
+        assert cache.get("epg_match:123:456:789") is None
