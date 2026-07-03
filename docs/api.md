@@ -428,6 +428,7 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 | `POST /api/stream-stats/clear-all` | Clear all probe stats |
 | `GET /api/stream-stats/struck-out` | List struck-out streams (exceeding failure threshold) |
 | `POST /api/stream-stats/struck-out/remove` | Bulk remove struck-out streams from all channels |
+| `GET /api/stream-stats/stale?days=7` | List stale streams: not probed by ECM in `days` days (or never), OR flagged `is_stale` by Dispatcharr's own M3U refresh — each tagged with which `reasons` fired |
 | `POST /api/stream-stats/compute-sort` | Compute sort scores for streams (resolution, bitrate, framerate, video codec, M3U priority, audio channels) |
 
 ## Enhanced Stats

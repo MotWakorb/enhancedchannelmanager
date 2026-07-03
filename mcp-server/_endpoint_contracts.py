@@ -804,6 +804,12 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/stream-stats/struck-out/remove",
         request_fields=frozenset({"stream_ids"}),  # RemoveStruckOutRequest
     ),
+    "stream_stats_stale": Endpoint(
+        name="stream_stats_stale",
+        method="GET",
+        path="/api/stream-stats/stale",
+        query_params=frozenset({"days"}),
+    ),
     "channels_streams": Endpoint(
         name="channels_streams",
         method="GET",

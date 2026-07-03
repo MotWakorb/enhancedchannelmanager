@@ -606,6 +606,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [selectedStruckOut, setSelectedStruckOut] = useState<Set<number>>(new Set());
   const [struckOutScanned, setStruckOutScanned] = useState(false);
 
+  // Stale streams state
+  const [staleStreamDays, setStaleStreamDays] = useState(7);
+  const [staleStreams, setStaleStreams] = useState<api.StaleStream[]>([]);
+  const [loadingStaleStreams, setLoadingStaleStreams] = useState(false);
+  const [probingStaleStreams, setProbingStaleStreams] = useState(false);
+  const [selectedStaleStreams, setSelectedStaleStreams] = useState<Set<number>>(new Set());
+  const [staleStreamsScanned, setStaleStreamsScanned] = useState(false);
+
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
   const [originalUsername, setOriginalUsername] = useState('');
@@ -1756,6 +1764,64 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       notifications.error(`Failed to remove struck-out streams: ${err}`);
     } finally {
       setRemovingStruckOut(false);
+    }
+  };
+
+  const handleScanStaleStreams = async () => {
+    setLoadingStaleStreams(true);
+    setStaleStreamsScanned(true);
+    try {
+      const result = await api.getStaleStreams(staleStreamDays);
+      setStaleStreams(result.streams);
+      setSelectedStaleStreams(new Set());
+      if (result.streams.length === 0) {
+        notifications.success('No stale streams found.');
+      }
+    } catch (err) {
+      notifications.error(`Failed to scan for stale streams: ${err}`);
+    } finally {
+      setLoadingStaleStreams(false);
+    }
+  };
+
+  const handleProbeSelectedStale = async () => {
+    if (selectedStaleStreams.size === 0) return;
+    setProbingStaleStreams(true);
+    try {
+      const streamIds = Array.from(selectedStaleStreams);
+      // NOTE: probeBulkStreams() is typed as returning { probed, results } (BulkProbeResult),
+      // but POST /probe/bulk was made async in enhancedchannelmanager-znc76.5 (synchronous
+      // probing 504'd at batches >=3) — it now actually responds immediately with
+      // { status: 'started' | 'already_running', message, total } and probes in the
+      // background. The declared type is stale; see enhancedchannelmanager-n4g7g follow-up
+      // bead for fixing it (and its two other ChannelsPane.tsx callers) at the source.
+      const startResult = await api.probeBulkStreams(streamIds) as unknown as {
+        status: 'started' | 'already_running';
+        message?: string;
+        total?: number;
+      };
+
+      if (startResult.status === 'already_running') {
+        notifications.warning('A probe is already in progress; try again once it finishes.');
+        return;
+      }
+
+      notifications.info(`Probing ${streamIds.length} stream(s)...`);
+
+      // Poll until the background probe finishes before rescanning — an immediate
+      // rescan would race the background job and show the list unchanged.
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const progress = await api.getProbeProgress();
+        if (!progress.in_progress) break;
+      }
+
+      notifications.success(`Finished probing ${streamIds.length} stream(s).`);
+      await handleScanStaleStreams();
+    } catch (err) {
+      notifications.error(`Failed to probe stale streams: ${err}`);
+    } finally {
+      setProbingStaleStreams(false);
     }
   };
 
@@ -5163,6 +5229,137 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             )}
           </div>
         )}
+      </div>
+
+      {/* Stale Streams Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">schedule</span>
+          <h3>Stale Streams</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Flag streams that haven't been re-checked recently, or that the provider's own M3U
+          refresh no longer lists. Unlike struck-out streams, a stale stream may still be
+          playable — it just hasn't been confirmed lately.
+        </p>
+
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label htmlFor="staleStreamDays">Not probed in (days)</label>
+            <span className="form-description">
+              Streams last probed longer ago than this, or never probed, are flagged.
+              Provider-reported stale streams are always flagged regardless of this value.
+            </span>
+            <input
+              id="staleStreamDays"
+              type="number"
+              min="1"
+              value={staleStreamDays}
+              onChange={(e) => setStaleStreamDays(e.target.value === '' ? 7 : parseInt(e.target.value))}
+              onBlur={() => setStaleStreamDays(Math.max(1, staleStreamDays || 1))}
+              style={{ width: '80px' }}
+            />
+          </div>
+        </div>
+
+        <div className="settings-group" style={{ marginTop: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleScanStaleStreams}
+              disabled={loadingStaleStreams || probingStaleStreams}
+            >
+              <span className="material-icons">search</span>
+              {loadingStaleStreams ? 'Scanning...' : 'Scan for Stale Streams'}
+            </button>
+          </div>
+
+          {staleStreamsScanned && staleStreams.length > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <p style={{ margin: 0 }}>
+                  Found <strong>{staleStreams.length}</strong> stale stream(s)
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="btn-secondary"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                    onClick={() => setSelectedStaleStreams(new Set(staleStreams.map(s => s.stream_id)))}
+                  >
+                    Select All
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                    onClick={() => setSelectedStaleStreams(new Set())}
+                  >
+                    Select None
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                {staleStreams.map((stream) => (
+                  <label
+                    key={stream.stream_id}
+                    className="checkbox-label"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      borderBottom: '1px solid var(--border-color)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedStaleStreams.has(stream.stream_id)}
+                      onChange={(e) => {
+                        const next = new Set(selectedStaleStreams);
+                        if (e.target.checked) next.add(stream.stream_id);
+                        else next.delete(stream.stream_id);
+                        setSelectedStaleStreams(next);
+                      }}
+                      style={{ marginTop: '2px' }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500 }}>{stream.stream_name || `Stream #${stream.stream_id}`}</div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '2px' }}>
+                        {stream.reasons.includes('not_probed_recently') && (
+                          <span className="badge badge-warning badge-sm badge-pill">
+                            {stream.last_probed ? `Last probed: ${formatTimestamp(stream.last_probed)}` : 'Never probed'}
+                          </span>
+                        )}
+                        {stream.reasons.includes('provider_stale') && (
+                          <span className="badge badge-error badge-sm badge-pill">
+                            {stream.provider_last_seen ? `Provider last saw: ${formatTimestamp(stream.provider_last_seen)}` : 'Provider reports missing'}
+                          </span>
+                        )}
+                      </div>
+                      {stream.channels.length > 0 && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                          In channels: {stream.channels.map(c => c.name).join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                <button
+                  className="btn-secondary"
+                  onClick={handleProbeSelectedStale}
+                  disabled={selectedStaleStreams.size === 0 || probingStaleStreams}
+                >
+                  <span className="material-icons">refresh</span>
+                  {probingStaleStreams ? 'Probing...' : `Probe ${selectedStaleStreams.size} Stream(s)`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Auto-Created Channels Section */}
