@@ -381,6 +381,65 @@ def register(mcp: FastMCP):
             return f"Error getting struck-out streams: {e}"
 
     @mcp.tool()
+    async def get_stale_streams(days: int = 7) -> str:
+        """List streams flagged stale by either of two independent signals.
+
+        - not_probed_recently: ECM hasn't ffprobed the stream in `days` days,
+          or never has. It may still be listed and playable — just unchecked.
+          Run probe_streams to refresh.
+        - provider_stale: Dispatcharr's own M3U refresh no longer re-matched
+          this stream in the source playlist. The provider may have removed
+          it; Dispatcharr will delete it automatically after its own grace
+          period. Independent of `days`.
+
+        Distinct from get_struck_out_streams (consecutive probe *failures*):
+        a stale stream may be passing every probe it gets.
+
+        Args:
+            days: Age threshold in days (default 7) for the not_probed_recently
+                signal only. Does not affect provider_stale.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["stream_stats_stale"], query={"days": days})
+
+            streams = result.get("streams", []) if isinstance(result, dict) else result
+            threshold_days = result.get("threshold_days", days) if isinstance(result, dict) else days
+
+            if not streams:
+                return f"No stale streams (probe threshold: {threshold_days} days)."
+
+            lines = [f"Stale streams ({len(streams)}, probe threshold: {threshold_days}+ days):"]
+            for s in streams[:30]:
+                name = s.get("stream_name") or "Unknown"
+                sid = s.get("stream_id", s.get("id", "?"))
+                reasons = s.get("reasons", [])
+                reason_bits = []
+                if "not_probed_recently" in reasons:
+                    reason_bits.append(f"last probed: {s.get('last_probed') or 'never'}")
+                if "provider_stale" in reasons:
+                    reason_bits.append(f"provider last saw it: {s.get('provider_last_seen') or 'unknown'}")
+                reason_info = ", ".join(reason_bits) if reason_bits else "stale"
+
+                channels = s.get("channels", [])
+                if channels:
+                    ch_info = ", ".join(
+                        f"{c.get('name', '?')} (ch_id={c.get('id', '?')})"
+                        for c in channels
+                    )
+                    lines.append(f"  {name} (id={sid}) — {reason_info} — in: {ch_info}")
+                else:
+                    lines.append(f"  {name} (id={sid}) — {reason_info} — not assigned to any channel")
+
+            if len(streams) > 30:
+                lines.append(f"  ... and {len(streams) - 30} more")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_stale_streams failed: %s", e)
+            return f"Error getting stale streams: {e}"
+
+    @mcp.tool()
     async def cleanup_struck_out_streams(delete_empty_channels: bool = False) -> str:
         """Remove all struck-out streams from their channels in one operation.
 

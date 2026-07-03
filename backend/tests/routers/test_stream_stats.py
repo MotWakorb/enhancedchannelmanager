@@ -6,7 +6,7 @@ Tests: 19 endpoints covering stream probe stats, probe operations,
 Mocks: StreamProber, get_prober(), get_client(), get_settings(), get_session().
 """
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from models import StreamStats
@@ -157,6 +157,228 @@ class TestRemoveStruckOutStreams:
         test_session.expire_all()
         stats = test_session.query(StreamStats).filter_by(stream_id=10).first()
         assert stats.consecutive_failures == 0
+
+
+def _mock_client_for_stale(streams=None, channels=None):
+    """Build an AsyncMock client for the /stale endpoint's two upstream calls."""
+    mock_client = AsyncMock()
+    mock_client.get_streams.return_value = {"results": streams or [], "count": len(streams or [])}
+    mock_client.get_channels.return_value = {"results": channels or [], "count": len(channels or [])}
+    return mock_client
+
+
+class TestGetStaleStreams:
+    """Tests for GET /api/stream-stats/stale."""
+
+    @pytest.mark.asyncio
+    async def test_returns_never_probed_streams(self, async_client, test_session):
+        """A stream with no last_probed is stale regardless of days."""
+        _create_stream_stats(test_session, 10, last_probed=None)
+
+        mock_client = _mock_client_for_stale(
+            streams=[{"id": 10, "name": "Stream 10", "is_stale": False}],
+        )
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["threshold_days"] == 7
+        assert len(data["streams"]) == 1
+        assert data["streams"][0]["stream_id"] == 10
+        assert data["streams"][0]["reasons"] == ["not_probed_recently"]
+        assert data["streams"][0]["provider_last_seen"] is None
+
+    @pytest.mark.asyncio
+    async def test_returns_old_probes_with_channels(self, async_client, test_session):
+        """Streams last probed beyond the threshold are stale, with channel info."""
+        _create_stream_stats(test_session, 10, last_probed=datetime.utcnow() - timedelta(days=10))
+
+        mock_client = _mock_client_for_stale(
+            streams=[{"id": 10, "name": "Stream 10", "is_stale": False}],
+            channels=[{"id": 1, "name": "ESPN", "streams": [10, 20]}],
+        )
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["streams"]) == 1
+        assert data["streams"][0]["channels"][0]["name"] == "ESPN"
+
+    @pytest.mark.asyncio
+    async def test_excludes_orphaned_stream_stats_no_longer_in_provider(self, async_client, test_session):
+        """A StreamStats row for a stream_id Dispatcharr no longer has at all is
+        dropped from not_probed_recently — there's nothing left to re-probe, so
+        it isn't an actionable stale stream (just unswept probe history for a
+        deleted stream). Regression guard for a live-deployment finding: this
+        project's own StreamStats table had ~4857 rows against ~2620 live
+        Dispatcharr streams before this cross-check existed.
+        """
+        _create_stream_stats(test_session, 10, last_probed=None)  # still exists upstream
+        _create_stream_stats(test_session, 999, last_probed=None)  # deleted upstream
+
+        mock_client = _mock_client_for_stale(
+            streams=[{"id": 10, "name": "Stream 10", "is_stale": False}],
+        )
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [s["stream_id"] for s in data["streams"]] == [10]
+
+    @pytest.mark.asyncio
+    async def test_excludes_recently_probed_streams(self, async_client, test_session):
+        """Streams probed within the threshold are not stale."""
+        _create_stream_stats(test_session, 10, last_probed=datetime.utcnow() - timedelta(days=1))
+
+        mock_client = _mock_client_for_stale()
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale")
+
+        assert response.status_code == 200
+        assert response.json()["streams"] == []
+
+    @pytest.mark.asyncio
+    async def test_respects_custom_days_param(self, async_client, test_session):
+        """A custom `days` query param changes the cutoff."""
+        _create_stream_stats(test_session, 10, last_probed=datetime.utcnow() - timedelta(days=2))
+
+        mock_client = _mock_client_for_stale(
+            streams=[{"id": 10, "name": "Stream 10", "is_stale": False}],
+        )
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale?days=1")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["threshold_days"] == 1
+        assert len(data["streams"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_positive_days(self, async_client):
+        """Rejects a zero or negative days value."""
+        response = await async_client.get("/api/stream-stats/stale?days=0")
+
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_includes_provider_reported_stale_streams(self, async_client, test_session):
+        """A stream Dispatcharr flags is_stale surfaces even if ECM probed it recently."""
+        _create_stream_stats(test_session, 10, last_probed=datetime.utcnow() - timedelta(hours=1))
+
+        mock_client = _mock_client_for_stale(
+            streams=[
+                {"id": 10, "name": "ESPN Feed", "is_stale": False, "last_seen": "2026-07-02T00:00:00Z"},
+                {"id": 99, "name": "Orphaned Feed", "is_stale": True, "last_seen": "2026-06-01T00:00:00Z"},
+            ],
+        )
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["streams"]) == 1
+        stream = data["streams"][0]
+        assert stream["stream_id"] == 99
+        assert stream["stream_name"] == "Orphaned Feed"
+        assert stream["reasons"] == ["provider_stale"]
+        assert stream["provider_last_seen"] == "2026-06-01T00:00:00Z"
+        # No StreamStats row exists for stream 99 — the response shape must still
+        # include last_probed (as null), not omit the key, so API consumers can
+        # rely on a consistent shape regardless of which signal(s) fired.
+        assert "last_probed" in stream
+        assert stream["last_probed"] is None
+
+    @pytest.mark.asyncio
+    async def test_merges_both_reasons_for_same_stream(self, async_client, test_session):
+        """A stream flagged by both signals reports both reasons, deduplicated."""
+        _create_stream_stats(test_session, 10, last_probed=None)
+
+        mock_client = _mock_client_for_stale(
+            streams=[{"id": 10, "name": "ESPN Feed", "is_stale": True, "last_seen": "2026-06-01T00:00:00Z"}],
+        )
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["streams"]) == 1
+        stream = data["streams"][0]
+        assert set(stream["reasons"]) == {"not_probed_recently", "provider_stale"}
+        assert stream["provider_last_seen"] == "2026-06-01T00:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_paginates_across_multiple_provider_stream_pages(self, async_client, test_session):
+        """The Dispatcharr-streams pagination loop accumulates across 2+ pages.
+
+        Forces get_streams to return a first page whose `count` exceeds the
+        number of results on that page, so the endpoint must fetch a second
+        page to see the rest. Regression guard: a mock that always returns a
+        single page (.return_value) can't exercise this loop's continuation
+        branch at all.
+        """
+        _create_stream_stats(test_session, 10, last_probed=None)
+
+        mock_client = AsyncMock()
+        mock_client.get_streams.side_effect = [
+            {"results": [{"id": 10, "name": "Stream 10", "is_stale": False}], "count": 2},
+            {"results": [{"id": 20, "name": "Stream 20", "is_stale": True, "last_seen": "2026-06-01T00:00:00Z"}], "count": 2},
+        ]
+        mock_client.get_channels.return_value = {"results": [], "count": 0}
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale")
+
+        assert response.status_code == 200
+        data = response.json()
+        stream_ids = {s["stream_id"] for s in data["streams"]}
+        # stream 10 comes from page 1 (not_probed_recently); stream 20's
+        # is_stale flag only exists on page 2 — both must be present.
+        assert stream_ids == {10, 20}
+        assert mock_client.get_streams.call_count == 2
+        stream_20 = next(s for s in data["streams"] if s["stream_id"] == 20)
+        assert stream_20["reasons"] == ["provider_stale"]
+
+    @pytest.mark.asyncio
+    async def test_paginates_across_multiple_channel_pages(self, async_client, test_session):
+        """The channels pagination loop accumulates across 2+ pages.
+
+        Forces get_channels to return a first page whose `count` exceeds the
+        number of channels on that page, so the endpoint must fetch a second
+        page to find the channel association. Regression guard: a mock that
+        always returns a single page can't exercise this loop's continuation
+        branch, and would silently miss channel associations living on later
+        pages.
+        """
+        _create_stream_stats(test_session, 10, last_probed=None)
+
+        mock_client = AsyncMock()
+        mock_client.get_streams.return_value = {
+            "results": [{"id": 10, "name": "Stream 10", "is_stale": False}], "count": 1,
+        }
+        mock_client.get_channels.side_effect = [
+            {"results": [{"id": 1, "name": "Channel 1", "streams": []}], "count": 2},
+            {"results": [{"id": 2, "name": "Channel 2", "streams": [10]}], "count": 2},
+        ]
+
+        with patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stream-stats/stale")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert mock_client.get_channels.call_count == 2
+        assert len(data["streams"]) == 1
+        # The channel association only exists on page 2 of get_channels.
+        assert data["streams"][0]["channels"] == [{"id": 2, "name": "Channel 2"}]
 
 
 class TestComputeSort:
