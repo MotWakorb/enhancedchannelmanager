@@ -2272,6 +2272,31 @@ export async function removeStruckOutStreams(streamIds: number[]): Promise<{ rem
   });
 }
 
+// Stale Streams API
+//
+// A stream is stale when either signal fires:
+// - not_probed_recently: ECM hasn't ffprobed it within the `days` threshold (or ever)
+// - provider_stale: Dispatcharr's own M3U refresh no longer re-matched it in the source playlist
+export type StaleReason = 'not_probed_recently' | 'provider_stale';
+
+export interface StaleStream {
+  stream_id: number;
+  stream_name: string | null;
+  last_probed: string | null;
+  provider_last_seen: string | null;
+  reasons: StaleReason[];
+  channels: { id: number; name: string }[];
+}
+
+export interface StaleStreamsResponse {
+  streams: StaleStream[];
+  threshold_days: number;
+}
+
+export async function getStaleStreams(days = 7): Promise<StaleStreamsResponse> {
+  return fetchJson(`${API_BASE}/stream-stats/stale?days=${days}`);
+}
+
 export interface SortConfig {
   priority: string[];
   enabled: Record<string, boolean>;
