@@ -248,6 +248,74 @@ class TestGetStreamHealth:
         assert "No stream health data" in result[0][0].text
 
 
+class TestGetStaleStreams:
+    """Tests for get_stale_streams tool."""
+
+    @pytest.mark.asyncio
+    async def test_returns_stale_streams_with_channels(self):
+        """Returns formatted stale-stream list including channel associations."""
+        from tools.streams import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={
+            "streams": [
+                {
+                    "stream_id": 10,
+                    "stream_name": "ESPN Feed",
+                    "last_probed": None,
+                    "reasons": ["not_probed_recently"],
+                    "channels": [{"id": 1, "name": "ESPN"}],
+                },
+            ],
+            "threshold_days": 7,
+        })
+
+        with patch("tools.streams.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("get_stale_streams", {})
+
+        text = result[0][0].text
+        assert "Stale streams (1" in text
+        assert "ESPN Feed" in text
+        assert "never" in text
+        assert "ESPN (ch_id=1)" in text
+
+    @pytest.mark.asyncio
+    async def test_empty_result_reports_threshold(self):
+        """Returns a clean message when no streams are stale."""
+        from tools.streams import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={"streams": [], "threshold_days": 7})
+
+        with patch("tools.streams.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("get_stale_streams", {})
+
+        assert "No stale streams" in result[0][0].text
+
+    @pytest.mark.asyncio
+    async def test_passes_days_as_query_param(self):
+        """Passes a custom `days` argument through to the endpoint call."""
+        from tools.streams import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(call_endpoint={"streams": [], "threshold_days": 14})
+
+        with patch("tools.streams.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("get_stale_streams", {"days": 14})
+
+        _, kwargs = mock_client.call_endpoint.call_args
+        assert kwargs["query"] == {"days": 14}
+
+
 class TestCreateChannel:
     """Tests for create_channel tool."""
 

@@ -15,6 +15,8 @@ import {
   getChannelMergeCandidates,
   // Compute sort
   computeSort,
+  // Stale streams (enhancedchannelmanager-n4g7g)
+  getStaleStreams,
   // Enhanced stats (v0.11.0)
   getBandwidthStats,
   getUniqueViewersSummary,
@@ -1030,6 +1032,61 @@ describe('API Service', () => {
       );
 
       await expect(computeSort([{ channel_id: 1, stream_ids: [1] }])).rejects.toThrow();
+    });
+  });
+
+  describe('getStaleStreams', () => {
+    it('defaults to a 7-day threshold and returns the parsed response', async () => {
+      let requestUrl: URL | undefined;
+      server.use(
+        http.get('/api/stream-stats/stale', ({ request }) => {
+          requestUrl = new URL(request.url);
+          return HttpResponse.json({
+            streams: [
+              {
+                stream_id: 10,
+                stream_name: 'ESPN Feed',
+                last_probed: null,
+                provider_last_seen: null,
+                reasons: ['not_probed_recently'],
+                channels: [],
+              },
+            ],
+            threshold_days: 7,
+          });
+        })
+      );
+
+      const result = await getStaleStreams();
+
+      expect(requestUrl?.searchParams.get('days')).toBe('7');
+      expect(result.threshold_days).toBe(7);
+      expect(result.streams).toHaveLength(1);
+      expect(result.streams[0].reasons).toEqual(['not_probed_recently']);
+    });
+
+    it('passes a custom days threshold through as a query param', async () => {
+      let requestUrl: URL | undefined;
+      server.use(
+        http.get('/api/stream-stats/stale', ({ request }) => {
+          requestUrl = new URL(request.url);
+          return HttpResponse.json({ streams: [], threshold_days: 14 });
+        })
+      );
+
+      await getStaleStreams(14);
+
+      expect(requestUrl?.searchParams.get('days')).toBe('14');
+    });
+
+    it('handles network error', async () => {
+      server.use(
+        http.get('/api/stream-stats/stale', () => {
+          return HttpResponse.error();
+        })
+      );
+
+      await expect(getStaleStreams()).rejects.toThrow();
     });
   });
 
