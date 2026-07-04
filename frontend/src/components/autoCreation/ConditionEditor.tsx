@@ -57,6 +57,7 @@ const TEXT_OPS: OperatorDef[] = [
   { id: 'begins_with', label: 'Begins With', valueType: 'string', placeholder: 'Enter text' },
   { id: 'ends_with', label: 'Ends With', valueType: 'string', placeholder: 'Enter text' },
   { id: 'matches', label: 'Matches (Regex)', valueType: 'regex', placeholder: 'Enter regex pattern' },
+  { id: 'does_not_match', label: 'Does Not Match (Regex)', valueType: 'regex', placeholder: 'Enter regex pattern' },
 ];
 
 const EXISTS_OPS: OperatorDef[] = [
@@ -149,6 +150,7 @@ function buildCondition(
         case 'begins_with': type = 'stream_name_matches'; value = `^${escapeRegex(String(userValue))}`; break;
         case 'ends_with': type = 'stream_name_matches'; value = `${escapeRegex(String(userValue))}$`; break;
         case 'matches': type = 'stream_name_matches'; value = userValue; break;
+        case 'does_not_match': type = 'stream_name_matches'; value = userValue; negate = true; break;
         default: type = 'stream_name_contains'; value = userValue; break;
       }
       break;
@@ -158,6 +160,7 @@ function buildCondition(
         case 'begins_with': type = 'stream_group_matches'; value = `^${escapeRegex(String(userValue))}`; break;
         case 'ends_with': type = 'stream_group_matches'; value = `${escapeRegex(String(userValue))}$`; break;
         case 'matches': type = 'stream_group_matches'; value = userValue; break;
+        case 'does_not_match': type = 'stream_group_matches'; value = userValue; negate = true; break;
         default: type = 'stream_group_contains'; value = userValue; break;
       }
       break;
@@ -170,6 +173,7 @@ function buildCondition(
         case 'begins_with': type = 'tvg_id_matches'; value = `^${escapeRegex(String(userValue))}`; break;
         case 'ends_with': type = 'tvg_id_matches'; value = `${escapeRegex(String(userValue))}$`; break;
         case 'matches': type = 'tvg_id_matches'; value = userValue; break;
+        case 'does_not_match': type = 'tvg_id_matches'; value = userValue; negate = true; break;
         default: type = 'tvg_id_exists'; value = true; break;
       }
       break;
@@ -205,6 +209,7 @@ function buildCondition(
         case 'begins_with': type = 'channel_exists_matching'; value = `^${escapeRegex(String(userValue))}`; break;
         case 'ends_with': type = 'channel_exists_matching'; value = `${escapeRegex(String(userValue))}$`; break;
         case 'matches': type = 'channel_exists_matching'; value = userValue; break;
+        case 'does_not_match': type = 'channel_exists_matching'; value = userValue; negate = true; break;
         default: type = 'channel_exists_with_name'; value = userValue; break;
       }
       break;
@@ -246,12 +251,12 @@ function parseCondition(condition: Condition): { field: string; operator: string
     case 'stream_name_contains':
       return { field: 'stream_name', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
     case 'stream_name_matches':
-      return detectRegexOp('stream_name', String(value ?? ''), true);
+      return detectRegexOp('stream_name', String(value ?? ''), true, negate);
 
     case 'stream_group_contains':
       return { field: 'stream_group', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
     case 'stream_group_matches':
-      return detectRegexOp('stream_group', String(value ?? ''), true);
+      return detectRegexOp('stream_group', String(value ?? ''), true, negate);
 
     case 'tvg_id_exists':
       return { field: 'tvg_id', operator: value === false ? 'does_not_exist' : 'exists', displayValue: '' };
@@ -260,7 +265,7 @@ function parseCondition(condition: Condition): { field: string; operator: string
         const lit = tryUnescapeRegex(String(value ?? ''));
         if (lit !== null) return { field: 'tvg_id', operator: 'does_not_contain', displayValue: lit };
       }
-      return detectRegexOp('tvg_id', String(value ?? ''), false);
+      return detectRegexOp('tvg_id', String(value ?? ''), false, negate);
 
     case 'logo_exists':
       return { field: 'logo', operator: (negate || value === false) ? 'does_not_exist' : 'exists', displayValue: '' };
@@ -284,7 +289,7 @@ function parseCondition(condition: Condition): { field: string; operator: string
         const lit = tryUnescapeRegex(String(value ?? ''));
         if (lit !== null) return { field: 'channel_name', operator: 'does_not_contain', displayValue: lit };
       }
-      return detectRegexOp('channel_name', String(value ?? ''), false);
+      return detectRegexOp('channel_name', String(value ?? ''), false, negate);
     case 'channel_in_group':
       return { field: 'channel_group', operator: 'is', displayValue: String(value ?? '') };
     case 'normalized_name_in_group':
@@ -307,10 +312,16 @@ function parseCondition(condition: Condition): { field: string; operator: string
 /**
  * Detect the UI operator from a regex value stored in a _matches condition type.
  * @param hasNativeContains If true, plain escaped literals stay as "matches" (the field has a separate _contains type).
+ * @param negate If true, the condition inverts the match — shown as the raw pattern under
+ *   "Does Not Match (Regex)" rather than decomposed into begins/ends/contains (those simplified
+ *   forms have no negated UI counterpart, so negation always round-trips through the full regex).
  */
 function detectRegexOp(
-  field: string, value: string, hasNativeContains: boolean,
+  field: string, value: string, hasNativeContains: boolean, negate = false,
 ): { field: string; operator: string; displayValue: string } {
+  if (negate) {
+    return { field, operator: 'does_not_match', displayValue: value };
+  }
   if (value.startsWith('^') && !value.endsWith('$')) {
     const lit = tryUnescapeRegex(value.slice(1));
     if (lit !== null) return { field, operator: 'begins_with', displayValue: lit };
