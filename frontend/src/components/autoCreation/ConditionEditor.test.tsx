@@ -109,6 +109,20 @@ describe('ConditionEditor', () => {
       expect(container.querySelector('.condition-hint')).toHaveTextContent('Regex');
     });
 
+    it('shows "Does Not Match (Regex)" for a negated regex condition', () => {
+      render(
+        <ConditionEditor
+          condition={{ type: 'stream_name_matches', value: '.*FOX.*', negate: true }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const input = screen.getByRole('textbox');
+      expect(input).toHaveValue('.*FOX.*');
+      expect(screen.getByText(/Does Not Match.*Regex/i)).toBeInTheDocument();
+    });
+
     it('renders no value input for existence conditions', () => {
       render(
         <ConditionEditor
@@ -158,6 +172,27 @@ describe('ConditionEditor', () => {
 
       expect(onChange).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'stream_name_matches' })
+      );
+    });
+
+    it('sets negate:true when "Does Not Match (Regex)" is selected', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ConditionEditor
+          condition={{ type: 'stream_name_contains', value: 'test' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const operatorTrigger = screen.getByText(/^Contains$/).closest('button')!;
+      await user.click(operatorTrigger);
+      await user.click(screen.getByText(/Does Not Match.*Regex/i));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'stream_name_matches', negate: true })
       );
     });
 
