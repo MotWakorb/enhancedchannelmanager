@@ -447,7 +447,9 @@ def register(mcp: FastMCP):
 
         Args:
             name: Rule name
-            conditions: List of condition dicts. Each has 'type', 'value', and optional 'connector' ("and"/"or").
+            conditions: List of condition dicts. Each has 'type', 'value', optional 'connector'
+                ("and"/"or"), optional 'negate' (bool, inverts the match — see below), and
+                optional 'case_sensitive' (bool, string/regex types only).
                 Condition types:
                   stream_name_contains — substring match on stream name
                   stream_name_matches — regex match on stream name
@@ -472,6 +474,12 @@ def register(mcp: FastMCP):
                     target_channel_not_in_group param (see actions below).
                   normalized_name_exists / normalized_name_not_exists
                   always / never — always or never matches
+                'negate': true inverts ANY condition's result — this is how to express
+                  exclusions. Most useful on the regex (_matches) types for a "does NOT
+                  match this regex" filter, e.g. exclude everything matching a pattern:
+                  {"type": "stream_name_matches", "value": "(?i)test|demo", "negate": true}
+                  Also works on non-regex types, e.g. {"type": "provider_is", "value": 3,
+                  "negate": true} means "NOT from M3U account 3".
                 Example: [{"type": "stream_group_contains", "value": "USA | Entertainment", "connector": "and"}]
             actions: List of action dicts. Each has 'type' and type-specific fields.
                 Action types:
