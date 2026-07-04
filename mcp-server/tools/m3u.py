@@ -5,8 +5,22 @@ from mcp.server.fastmcp import FastMCP
 
 from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
+from tools import _guardrails
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_priorities(client) -> dict:
+    """Fetch the ECM-local M3U account priority map (account_id str -> priority).
+
+    Lives in ``settings.m3u_account_priorities`` (Smart Sort's "m3u_priority"
+    criterion) — NOT a Dispatcharr account field, so it's read via
+    ``/api/settings`` rather than the account endpoint. Reuses
+    ``_guardrails.get_caps_settings`` (degrades to ``{}`` on failure) since this
+    is a read-only display lookup, not the authoritative fetch a save needs.
+    """
+    settings = await _guardrails.get_caps_settings(client)
+    return dict(settings.get("m3u_account_priorities", {}))
 
 
 def register(mcp: FastMCP):
@@ -19,6 +33,11 @@ def register(mcp: FastMCP):
 
             if not providers:
                 return "No M3U accounts configured."
+
+            # m3u_account_priorities is an ECM-local setting (Smart Sort's
+            # "m3u_priority" criterion) — one settings fetch covers every
+            # account in the list, rather than N+1 lookups.
+            priorities = await _get_priorities(client)
 
             lines = [f"Found {len(providers)} M3U accounts:"]
             for p in providers:
@@ -38,7 +57,9 @@ def register(mcp: FastMCP):
                     except Exception:
                         pass  # Stream count is supplementary display info; degrade gracefully.
                 status = p.get("status", p.get("is_active", "unknown"))
-                lines.append(f"  {name} (id={pid}) — {stream_count_str}status: {status}")
+                priority = priorities.get(str(pid))
+                priority_str = f", priority: {priority}" if priority is not None else ""
+                lines.append(f"  {name} (id={pid}) — {stream_count_str}status: {status}{priority_str}")
 
             return "\n".join(lines)
         except Exception as e:
@@ -101,6 +122,7 @@ def register(mcp: FastMCP):
                     stream_count = sc_resp.get("count", 0) if isinstance(sc_resp, dict) else 0
                 except Exception:
                     pass  # Stream count is supplementary display info; degrade gracefully.
+            priority = (await _get_priorities(client)).get(str(aid)) if aid is not None else None
             lines = [
                 f"M3U Account: {a.get('name', 'Unknown')}",
                 f"  ID: {aid}",
@@ -108,6 +130,7 @@ def register(mcp: FastMCP):
                 f"  URL: {url_display}",
                 f"  Status: {a.get('status', a.get('is_active', 'unknown'))}",
                 f"  Streams: {stream_count}",
+                f"  Priority: {priority if priority is not None else 'not set (Smart Sort default)'}",
                 f"  Last refresh: {a.get('last_refresh', a.get('updated_at', 'never'))}",
             ]
 
@@ -177,6 +200,63 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] update_m3u_account failed: %s", e)
             return f"Error updating M3U account {account_id}: {e}"
+
+    @mcp.tool()
+    async def set_m3u_account_priority(account_id: int, priority: int) -> str:
+        """Set (or clear) an M3U account's Smart Sort priority.
+
+        This is an ECM-local setting (stored in ``settings.m3u_account_priorities``,
+        NOT a Dispatcharr account field) consumed by Smart Sort's "m3u_priority"
+        criterion — higher priority wins when that criterion is enabled
+        (Settings -> Stream Sort). It has no effect unless "m3u_priority" is
+        enabled in the stream sort configuration.
+
+        Args:
+            account_id: The M3U account ID
+            priority: Priority value, 1-100 (higher = preferred streams from this
+                account sort first). 0 clears the priority for this account.
+        """
+        if priority < 0 or priority > 100:
+            return "Priority must be between 0 and 100 (0 clears the account's priority)."
+        try:
+            client = get_ecm_client()
+            # Best-effort display name only — deliberately NOT allowed to block the
+            # priority write below. delete_m3u_account doesn't clean up
+            # m3u_account_priorities, so a stale entry for an already-deleted
+            # account (404 here) must still be clearable with priority=0.
+            name = str(account_id)
+            try:
+                acct = await client.call_endpoint(
+                    ENDPOINTS["m3u_get_account"], path_args={"account_id": account_id}
+                )
+                if isinstance(acct, dict):
+                    name = acct.get("name", name)
+            except Exception:
+                pass  # Account may be gone; still allow clearing a stale priority entry.
+
+            # Read-modify-write the full settings blob, mirroring the frontend's
+            # M3UManagerTab save pattern ({...settings, m3u_account_priorities}) —
+            # m3u_account_priorities isn't in the admin-only settings field list,
+            # so the MCP service principal is permitted to write it. This fetch
+            # must raise on failure (unlike _get_priorities' advisory read) —
+            # swallowing it here would POST a settings blob missing every other
+            # field, resetting them to defaults.
+            current = await client.call_endpoint(ENDPOINTS["settings_get"])
+            priorities = dict(current.get("m3u_account_priorities", {}))
+            if priority == 0:
+                priorities.pop(str(account_id), None)
+            else:
+                priorities[str(account_id)] = priority
+
+            payload = {**current, "m3u_account_priorities": priorities}
+            await client.post("/api/settings", json_data=payload)  # contract-exempt: full settings round-trip (dynamic body mirrors M3UManagerTab save pattern)
+
+            if priority == 0:
+                return f"Priority cleared for M3U account {account_id} ('{name}')."
+            return f"M3U account {account_id} ('{name}') priority set to {priority}."
+        except Exception as e:
+            logger.error("[MCP] set_m3u_account_priority failed: %s", e)
+            return f"Error setting priority for M3U account {account_id}: {e}"
 
     @mcp.tool()
     async def delete_m3u_account(account_id: int, confirm: bool = False) -> str:
