@@ -15,7 +15,7 @@ export const MCP_TOOL_CATEGORIES: McpToolCategory[] = [
   { category: 'Channels', count: 12, icon: 'tv', desc: 'CRUD, streams, merge, bulk numbering' },
   { category: 'Groups', count: 6, icon: 'folder', desc: 'CRUD, hidden, orphaned, auto-created' },
   { category: 'Streams', count: 11, icon: 'stream', desc: 'List, search, probe, health, struck-out' },
-  { category: 'M3U', count: 8, icon: 'playlist_play', desc: 'Account CRUD, refresh, group settings' },
+  { category: 'M3U', count: 10, icon: 'playlist_play', desc: 'Account CRUD, refresh, group settings, priority' },
   { category: 'EPG', count: 7, icon: 'schedule', desc: 'Source CRUD, grid, refresh, auto-match' },
   { category: 'Auto-Create', count: 9, icon: 'auto_fix_high', desc: 'Rule CRUD, toggle, executions, rollback' },
   { category: 'Export', count: 6, icon: 'file_download', desc: 'Profiles, cloud targets, publish' },
