@@ -167,8 +167,8 @@ class TestDryRunWritesZeroRows:
         The W2 preview path and auto-creation dry-run must short-circuit BEFORE
         any journal write. We assert the journal table is empty after a dry run.
         """
-        from auto_creation_executor import ActionExecutor, ExecutionContext
-        from auto_creation_evaluator import StreamContext
+        from channel_pipeline_executor import ActionExecutor, ExecutionContext
+        from channel_pipeline_evaluator import StreamContext
 
         before = test_session.query(JournalEntry).count()
 
@@ -194,7 +194,7 @@ class TestDryRunWritesZeroRows:
     @pytest.mark.asyncio
     async def test_log_entry_dry_run_short_circuit_is_structural(self):
         """The executor buffer stays empty in dry-run (no append happened)."""
-        from auto_creation_executor import ActionExecutor
+        from channel_pipeline_executor import ActionExecutor
 
         executor = ActionExecutor(client=None, existing_channels=[])
         assert executor._journal_buffer == [], "buffer must start empty"
@@ -213,14 +213,14 @@ class TestAutoCreationAttribution:
         proof that the executor stamps the source itself, independent of the
         contextvar/middleware.
         """
-        from auto_creation_executor import ActionExecutor
-        from auto_creation_evaluator import StreamContext
+        from channel_pipeline_executor import ActionExecutor
+        from channel_pipeline_evaluator import StreamContext
 
         executor = ActionExecutor(client=None, existing_channels=[])
         executor._execution_id = 4242  # enable journaling
         stream_ctx = StreamContext(stream_id=99, stream_name="Stream X")
 
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             executor._journal_manual_channel_adoption(
                 channel={"id": 50, "name": "Manual CH"},
                 stream_ctx=stream_ctx,

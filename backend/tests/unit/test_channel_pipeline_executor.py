@@ -7,12 +7,12 @@ and streams with proper rollback tracking.
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
 
-from auto_creation_executor import (
+from channel_pipeline_executor import (
     ActionResult,
     ExecutionContext,
     ActionExecutor,
 )
-from auto_creation_evaluator import StreamContext
+from channel_pipeline_evaluator import StreamContext
 
 
 class TestActionResult:
@@ -606,7 +606,7 @@ class TestCreateChannelNormalizationLookup:
 
     def test_attaches_to_normalized_existing_instead_of_creating_duplicate(self):
         """Stream 'RTL ᴿᴬᵂ' attaches to existing 'RTL' via normalized lookup."""
-        from auto_creation_executor import ActionExecutor
+        from channel_pipeline_executor import ActionExecutor
 
         client = MagicMock()
         client.update_channel = AsyncMock()
@@ -654,7 +654,7 @@ class TestCreateChannelNormalizationLookup:
         when ``normalization_group_ids`` is non-empty and the channel has a
         number prefix whose core differs from the normalized incoming name
         ('107 | RTL ᴿᴬᵂ' stays number-prefixed as '107 | RTL')."""
-        from auto_creation_executor import ActionExecutor
+        from channel_pipeline_executor import ActionExecutor
 
         client = MagicMock()
         client.update_channel = AsyncMock(return_value={})
@@ -2111,7 +2111,7 @@ class TestDeferredEPGAssignment:
         ])
 
         # Retry: should succeed now
-        from auto_creation_schema import Action
+        from channel_pipeline_schema import Action
         action_obj = Action.from_dict(action)
         result2 = asyncio.get_event_loop().run_until_complete(
             executor._execute_assign_epg(action_obj, self.stream_ctx, exec_ctx)
@@ -2534,7 +2534,7 @@ class TestMergeStreamsTargetChannelGroupFilter:
     stream-side — they only gate whether a rule FIRES, never which existing
     channel merge_streams target=auto resolves to. This new action-level
     filter is a post-resolution reject (mirroring the GH #298 scope-reject at
-    auto_creation_executor.py): after the target channel is resolved, the merge
+    channel_pipeline_executor.py): after the target channel is resolved, the merge
     is skipped if the resolved channel's ``channel_group_id`` is in
     ``target_channel_not_in_group`` (or, for ``target_channel_in_group``, NOT
     in the allow-list). Resolution itself is unchanged.
@@ -2712,7 +2712,7 @@ class TestCreateChannelSuperscriptStripping:
 
     def test_raw_letter_superscripts_stripped_in_created_channel_name(self, test_session):
         """Stream 'Foo ᴿᴬᵂ' creates channel 'Foo RAW' (ᴿᴬᵂ converted)."""
-        from auto_creation_executor import ActionExecutor, ExecutionContext
+        from channel_pipeline_executor import ActionExecutor, ExecutionContext
         from normalization_engine import NormalizationEngine
         from tests.fixtures.factories import create_normalization_rule_group
 
@@ -2779,7 +2779,7 @@ class TestCreateChannelSuperscriptStripping:
         `test_numeric_superscripts_preserved_in_created_channel_name`
         which locked in the broken behavior from PR #61.
         """
-        from auto_creation_executor import ActionExecutor, ExecutionContext
+        from channel_pipeline_executor import ActionExecutor, ExecutionContext
         from normalization_engine import NormalizationEngine
         from tests.fixtures.factories import create_normalization_rule_group
 
@@ -2877,7 +2877,7 @@ class TestMergeJournalEntry:
 
     def test_live_merge_flushes_one_journal_entry(self):
         """A live merge flushes exactly one auto_creation/merge_stream entry."""
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             result = self._run_live_merge(execution_id=42)
 
         assert result.success is True
@@ -2892,7 +2892,7 @@ class TestMergeJournalEntry:
 
     def test_journal_batch_id_is_execution_id(self):
         """batch_id carries the run's execution_id (as a string)."""
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
         entry = mock_log.call_args.kwargs["entries"][0]
@@ -2900,7 +2900,7 @@ class TestMergeJournalEntry:
 
     def test_journal_before_after_carry_stream_ids_only(self):
         """before/after hold stream IDs only — never URLs/objects (creds)."""
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
         entry = mock_log.call_args.kwargs["entries"][0]
@@ -2915,7 +2915,7 @@ class TestMergeJournalEntry:
 
     def test_journal_round_trip_recovers_channel_stream_pair(self):
         """The (channel_id, stream_id) pair is recoverable from the entry."""
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             self._run_live_merge(execution_id=42)
 
         entry = mock_log.call_args.kwargs["entries"][0]
@@ -2940,7 +2940,7 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext(dry_run=True)
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, self.stream_ctx, exec_ctx)
             )
@@ -2970,7 +2970,7 @@ class TestMergeJournalEntry:
                           m3u_account_id=1, tvg_id="ESPN.US")
             for sid in (301, 302, 303)
         ]
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             for sc in stream_ctxs:
                 asyncio.get_event_loop().run_until_complete(
                     executor.execute(action, sc, exec_ctx)
@@ -3003,7 +3003,7 @@ class TestMergeJournalEntry:
             for sid in range(300, 400)
         ]
 
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             for sc in stream_ctxs:
                 result = asyncio.get_event_loop().run_until_complete(
                     executor.execute(action, sc, exec_ctx)
@@ -3034,7 +3034,7 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, self.stream_ctx, exec_ctx)
             )
@@ -3063,7 +3063,7 @@ class TestMergeJournalEntry:
             "find_channel_value": "ESPN",
         }
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
@@ -3108,7 +3108,7 @@ class TestMergeCountLabels:
             m3u_account_id=1,
         )
         exec_ctx = ExecutionContext()
-        with patch("auto_creation_executor.journal.log_entries"):
+        with patch("channel_pipeline_executor.journal.log_entries"):
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
@@ -3273,7 +3273,7 @@ class TestChannelsTouchedDryRun:
             m3u_account_id=1,
         )
         exec_ctx = ExecutionContext(dry_run=False)
-        with patch("auto_creation_executor.journal.log_entries"):
+        with patch("channel_pipeline_executor.journal.log_entries"):
             result = asyncio.get_event_loop().run_until_complete(
                 executor.execute(action, stream_ctx, exec_ctx)
             )
@@ -3423,7 +3423,7 @@ class TestChannelsTouchedDryRun:
 # allow_manual_channel_merge=True.
 #
 # CONVENTION (mirrors the ADR-010 snapshot precedent
-# auto_creation_engine.py:_capture_snapshot — ``not ch.get("auto_created",
+# channel_pipeline_engine.py:_capture_snapshot — ``not ch.get("auto_created",
 # False)``): a channel dict with a MISSING or falsy ``auto_created`` key is
 # treated as MANUAL (protected). Only an explicit truthy ``auto_created`` makes
 # a channel an auto-created merge candidate.

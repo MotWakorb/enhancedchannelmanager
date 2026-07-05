@@ -115,14 +115,14 @@ MAX_CONCURRENT_TASKS = 3  # Maximum tasks running simultaneously
 
 
 def _abandon_orphaned_auto_creation_executions(session=None) -> int:
-    """bd-exo4j crash-sentinel: reconcile AutoCreationExecution rows orphaned
+    """bd-exo4j crash-sentinel: reconcile ChannelPipelineExecution rows orphaned
     by a hard restart, and trip the circuit breaker if any were found.
 
     A kernel OOM-kill is a SIGKILL — no Python ``finally`` runs — so an
-    in-flight auto-creation run leaves its ``AutoCreationExecution`` row at
+    in-flight auto-creation run leaves its ``ChannelPipelineExecution`` row at
     ``status='running'`` forever. ``task_engine`` already reconciles stale
     ``TaskExecution`` rows (``_cleanup_stale_executions``) but NOT
-    ``AutoCreationExecution``; this closes that gap.
+    ``ChannelPipelineExecution``; this closes that gap.
 
     Idempotent: only ``status='running'`` rows are touched (``WHERE`` filter),
     so ``completed`` / ``failed`` / ``capped`` rows are left alone and a second
@@ -145,14 +145,14 @@ def _abandon_orphaned_auto_creation_executions(session=None) -> int:
     Returns:
         Count of rows transitioned 'running' -> 'abandoned'.
     """
-    from models import AutoCreationExecution
+    from models import ChannelPipelineExecution
 
     owns_session = session is None
     if owns_session:
         session = get_session()
     try:
-        abandoned_count = session.query(AutoCreationExecution).filter(
-            AutoCreationExecution.status == "running"
+        abandoned_count = session.query(ChannelPipelineExecution).filter(
+            ChannelPipelineExecution.status == "running"
         ).update({
             "status": "abandoned",
             "completed_at": datetime.utcnow(),
@@ -330,7 +330,7 @@ class TaskEngine:
         # BEFORE the scheduler loop arms (below) so a doomed auto-creation run
         # cannot be re-fired before reconciliation.
         self._cleanup_stale_executions()
-        # bd-exo4j (GH #473): reconcile orphaned AutoCreationExecution rows the
+        # bd-exo4j (GH #473): reconcile orphaned ChannelPipelineExecution rows the
         # OOM SIGKILL left 'running', and trip the run-on-refresh breaker if
         # any were found. MUST be before the scheduler loop starts.
         _abandon_orphaned_auto_creation_executions()

@@ -1,35 +1,35 @@
 """
 Unit tests for the auto-creation engine service.
 
-Tests the AutoCreationEngine class which orchestrates the entire auto-creation
+Tests the ChannelPipelineEngine class which orchestrates the entire auto-creation
 pipeline, coordinating rules, streams, and executions.
 """
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
 import pytest
 
-from auto_creation_engine import (
-    AutoCreationEngine,
-    get_auto_creation_engine,
-    set_auto_creation_engine,
-    init_auto_creation_engine,
+from channel_pipeline_engine import (
+    ChannelPipelineEngine,
+    get_channel_pipeline_engine,
+    set_channel_pipeline_engine,
+    init_channel_pipeline_engine,
     _sort_key,
     _smart_sort_streams,
     _sort_streams_by_m3u_account_priority,
     _sort_streams_by_resolution_height,
     _reorder_streams_for_rule,
 )
-from auto_creation_evaluator import StreamContext
-from auto_creation_evaluator import StreamContext
+from channel_pipeline_evaluator import StreamContext
+from channel_pipeline_evaluator import StreamContext
 
 
-class TestAutoCreationEngineInit:
-    """Tests for AutoCreationEngine initialization."""
+class TestChannelPipelineEngineInit:
+    """Tests for ChannelPipelineEngine initialization."""
 
     def test_init(self):
         """Initialize engine with client."""
         client = MagicMock()
-        engine = AutoCreationEngine(client)
+        engine = ChannelPipelineEngine(client)
 
         assert engine.client == client
         assert engine._existing_channels is None
@@ -37,38 +37,38 @@ class TestAutoCreationEngineInit:
         assert engine._stream_stats_cache == {}
 
 
-class TestAutoCreationEngineSingleton:
+class TestChannelPipelineEngineSingleton:
     """Tests for singleton pattern helpers."""
 
     def test_get_engine_default_none(self):
-        """get_auto_creation_engine returns None by default."""
+        """get_channel_pipeline_engine returns None by default."""
         # Reset global
-        set_auto_creation_engine(None)
-        assert get_auto_creation_engine() is None
+        set_channel_pipeline_engine(None)
+        assert get_channel_pipeline_engine() is None
 
     def test_set_and_get_engine(self):
-        """set_auto_creation_engine and get work together."""
+        """set_channel_pipeline_engine and get work together."""
         client = MagicMock()
-        engine = AutoCreationEngine(client)
+        engine = ChannelPipelineEngine(client)
 
-        set_auto_creation_engine(engine)
-        result = get_auto_creation_engine()
+        set_channel_pipeline_engine(engine)
+        result = get_channel_pipeline_engine()
 
         assert result is engine
 
-    def test_init_auto_creation_engine(self):
-        """init_auto_creation_engine creates and sets engine."""
+    def test_init_channel_pipeline_engine(self):
+        """init_channel_pipeline_engine creates and sets engine."""
         client = MagicMock()
 
         result = asyncio.get_event_loop().run_until_complete(
-            init_auto_creation_engine(client)
+            init_channel_pipeline_engine(client)
         )
 
         assert result is not None
-        assert get_auto_creation_engine() is result
+        assert get_channel_pipeline_engine() is result
 
 
-class TestAutoCreationEngineLoadData:
+class TestChannelPipelineEngineLoadData:
     """Tests for data loading methods."""
 
     def setup_method(self):
@@ -85,7 +85,7 @@ class TestAutoCreationEngineLoadData:
             {"id": 1, "name": "Sports"},
             {"id": 2, "name": "News"},
         ])
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
     def test_load_existing_data_success(self):
         """Load existing channels and groups successfully."""
@@ -123,7 +123,7 @@ class TestAutoCreationEngineLoadData:
         assert self.engine._existing_groups == []
 
 
-class TestAutoCreationEngineLoadRules:
+class TestChannelPipelineEngineLoadRules:
     """Tests for rule loading methods — real in-memory session with seeded rows.
 
     The original tests mocked the SQLAlchemy session with inert MagicMock chains
@@ -135,13 +135,13 @@ class TestAutoCreationEngineLoadRules:
     def setup_method(self):
         """Set up test fixtures."""
         self.client = MagicMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
     def _make_rule(self, name: str, priority: int, enabled: bool = True):
-        """Create a minimal AutoCreationRule for seeding."""
-        from models import AutoCreationRule
+        """Create a minimal ChannelPipelineRule for seeding."""
+        from models import ChannelPipelineRule
         import json
-        return AutoCreationRule(
+        return ChannelPipelineRule(
             name=name,
             enabled=enabled,
             priority=priority,
@@ -162,7 +162,7 @@ class TestAutoCreationEngineLoadRules:
         test_session.add_all([rule1, rule2, rule3])
         test_session.commit()
 
-        with patch("auto_creation_engine.get_session", return_value=test_session):
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
             rules = asyncio.get_event_loop().run_until_complete(
                 self.engine._load_rules()
             )
@@ -185,7 +185,7 @@ class TestAutoCreationEngineLoadRules:
         test_session.add_all([rule1, rule2])
         test_session.commit()
 
-        with patch("auto_creation_engine.get_session", return_value=test_session):
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
             rules = asyncio.get_event_loop().run_until_complete(
                 self.engine._load_rules(rule_ids=[rule1.id])
             )
@@ -195,7 +195,7 @@ class TestAutoCreationEngineLoadRules:
         assert rules[0].name == "Rule A"
 
 
-class TestAutoCreationEngineFetchStreams:
+class TestChannelPipelineEngineFetchStreams:
     """Tests for stream fetching methods."""
 
     def setup_method(self):
@@ -212,11 +212,11 @@ class TestAutoCreationEngineFetchStreams:
                 {"id": 102, "name": "CNN HD", "group_title": "News"},
             ]
         })
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
         # Pre-populate existing groups so _fetch_streams doesn't need them unset
         self.engine._existing_groups = []
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_fetch_streams_all_accounts(self, mock_get_session):
         """Fetch streams from all M3U accounts."""
         mock_session = MagicMock()
@@ -231,7 +231,7 @@ class TestAutoCreationEngineFetchStreams:
         assert len(streams) == 4
         assert all(isinstance(s, StreamContext) for s in streams)
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_fetch_streams_specific_accounts(self, mock_get_session):
         """Fetch streams from specific M3U accounts."""
         mock_session = MagicMock()
@@ -245,7 +245,7 @@ class TestAutoCreationEngineFetchStreams:
         # 1 account * 2 streams
         assert len(streams) == 2
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_fetch_streams_api_failure(self, mock_get_session):
         """Fetch streams handles API failure gracefully."""
         mock_session = MagicMock()
@@ -260,7 +260,7 @@ class TestAutoCreationEngineFetchStreams:
 
         assert streams == []
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_fetch_streams_from_rules(self, mock_get_session):
         """Fetch streams from accounts specified in rules."""
         mock_session = MagicMock()
@@ -278,7 +278,7 @@ class TestAutoCreationEngineFetchStreams:
         assert len(streams) == 2
 
 
-class TestAutoCreationEngineRunPipeline:
+class TestChannelPipelineEngineRunPipeline:
     """Tests for run_pipeline method."""
 
     def setup_method(self):
@@ -296,9 +296,9 @@ class TestAutoCreationEngineRunPipeline:
             ]
         })
         self.client.create_channel = AsyncMock(return_value={"id": 1, "name": "ESPN HD"})
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_run_pipeline_no_rules(self, mock_get_session):
         """Run pipeline with no enabled rules."""
         mock_session = MagicMock()
@@ -313,7 +313,7 @@ class TestAutoCreationEngineRunPipeline:
         assert result["message"] == "No enabled rules to process"
         assert result["streams_evaluated"] == 0
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_run_pipeline_dry_run(self, mock_get_session):
         """Run pipeline in dry run mode."""
         mock_session = MagicMock()
@@ -354,7 +354,7 @@ class TestAutoCreationEngineRunPipeline:
         # Stream was skipped by rule
         assert result["streams_matched"] == 1
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_run_rule(self, mock_get_session):
         """Run specific rule."""
         mock_session = MagicMock()
@@ -378,15 +378,15 @@ class TestAutoCreationEngineRunPipeline:
 def _route_rollback_queries(mock_session, mock_execution):
     """Wire a MagicMock session so the LEGACY (no-snapshot) rollback path runs.
 
-    uc51o.5 made ``rollback_execution`` first probe for an AutoCreationSnapshot
+    uc51o.5 made ``rollback_execution`` first probe for an ChannelPipelineSnapshot
     and divert to the full restore when one exists. A plain
     ``mock_session.query.return_value...`` returns the SAME chain for every
     query, so the snapshot-existence probe would wrongly see the execution mock
     and treat the run as snapshotted. These legacy tests model NO-snapshot runs,
-    so route the AutoCreationSnapshot probe to None and everything else to the
+    so route the ChannelPipelineSnapshot probe to None and everything else to the
     execution.
     """
-    from models import AutoCreationSnapshot
+    from models import ChannelPipelineSnapshot
 
     exec_chain = MagicMock()
     exec_chain.filter.return_value.first.return_value = mock_execution
@@ -394,10 +394,10 @@ def _route_rollback_queries(mock_session, mock_execution):
     none_chain.filter.return_value.first.return_value = None
 
     def _is_snapshot_arg(a):
-        # The probe is session.query(AutoCreationSnapshot.id) — a column
-        # attribute whose owning class is AutoCreationSnapshot. Also match the
+        # The probe is session.query(ChannelPipelineSnapshot.id) — a column
+        # attribute whose owning class is ChannelPipelineSnapshot. Also match the
         # class itself for robustness.
-        return a is AutoCreationSnapshot or getattr(a, "class_", None) is AutoCreationSnapshot
+        return a is ChannelPipelineSnapshot or getattr(a, "class_", None) is ChannelPipelineSnapshot
 
     def _query(*args, **kwargs):
         if any(_is_snapshot_arg(a) for a in args):
@@ -407,7 +407,7 @@ def _route_rollback_queries(mock_session, mock_execution):
     mock_session.query.side_effect = _query
 
 
-class TestAutoCreationEngineRollback:
+class TestChannelPipelineEngineRollback:
     """Tests for rollback functionality."""
 
     def setup_method(self):
@@ -416,9 +416,9 @@ class TestAutoCreationEngineRollback:
         self.client.delete_channel = AsyncMock()
         self.client.delete_channel_group = AsyncMock()
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_rollback_execution_not_found(self, mock_get_session):
         """Rollback returns error if execution not found."""
         mock_session = MagicMock()
@@ -432,7 +432,7 @@ class TestAutoCreationEngineRollback:
         assert result["success"] is False
         assert "not found" in result["error"].lower()
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_rollback_execution_already_rolled_back(self, mock_get_session):
         """Rollback returns error if already rolled back."""
         mock_session = MagicMock()
@@ -449,7 +449,7 @@ class TestAutoCreationEngineRollback:
         assert result["success"] is False
         assert "already rolled back" in result["error"].lower()
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_rollback_dry_run_execution(self, mock_get_session):
         """Rollback returns error for dry-run executions."""
         mock_session = MagicMock()
@@ -467,7 +467,7 @@ class TestAutoCreationEngineRollback:
         assert result["success"] is False
         assert "dry-run" in result["error"].lower()
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_rollback_execution_success(self, mock_get_session):
         """Rollback execution successfully."""
         mock_session = MagicMock()
@@ -502,7 +502,7 @@ class TestAutoCreationEngineRollback:
         assert mock_execution.status == "rolled_back"
         assert mock_execution.rolled_back_at is not None
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_rollback_execution_api_error(self, mock_get_session):
         """Rollback handles API errors gracefully."""
         mock_session = MagicMock()
@@ -530,7 +530,7 @@ class TestAutoCreationEngineRollback:
         # The delete was attempted — the API-error swallow path was actually hit.
         self.client.delete_channel.assert_called_once_with(1)
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_rollback_unmerge_multiple_into_same_channel_restores_original(self, mock_get_session):
         """bd-a7okb: multiple merges into ONE pre-existing channel restore to the
         true original stream list, not the second-to-last snapshot.
@@ -574,7 +574,7 @@ class TestAutoCreationEngineRollback:
         )
 
 
-class TestAutoCreationEngineProcessStreams:
+class TestChannelPipelineEngineProcessStreams:
     """Tests for stream processing logic."""
 
     def setup_method(self):
@@ -583,11 +583,11 @@ class TestAutoCreationEngineProcessStreams:
         self.client.create_channel = AsyncMock(return_value={"id": 1, "name": "Test"})
         self.client.update_channel = AsyncMock()
         self.client.create_channel_group = AsyncMock(return_value={"id": 1, "name": "Test"})
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
         self.engine._existing_channels = []
         self.engine._existing_groups = []
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_process_streams_no_match(self, mock_get_session):
         """Process streams with no matching rules."""
         mock_session = MagicMock()
@@ -615,7 +615,7 @@ class TestAutoCreationEngineProcessStreams:
         assert result["streams_evaluated"] == 1
         assert result["streams_matched"] == 0
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_process_streams_match_skip(self, mock_get_session):
         """Process streams that match a skip rule."""
         mock_session = MagicMock()
@@ -675,7 +675,7 @@ class TestAutoCreationEngineProcessStreams:
         mock_execution = MagicMock()
         mock_execution.id = 1
 
-        with patch("auto_creation_engine.get_session") as mock_get_session:
+        with patch("channel_pipeline_engine.get_session") as mock_get_session:
             mock_session = MagicMock()
             mock_get_session.return_value = mock_session
 
@@ -688,7 +688,7 @@ class TestAutoCreationEngineProcessStreams:
         assert result["conflicts"][0]["winning_rule_id"] == 1
         assert result["conflicts"][0]["losing_rule_ids"] == [2]
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_process_streams_stop_processing(self, mock_get_session):
         """A stop_processing action does NOT halt Pass 2 for other streams.
 
@@ -729,7 +729,7 @@ class TestAutoCreationEngineProcessStreams:
         assert result["streams_evaluated"] == 2
         assert result["streams_matched"] == 2
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_process_streams_stop_processing_does_not_truncate_large_batch(self, mock_get_session):
         """bd-iqm50 / GH #225: with many matching streams + a stop_processing
         rule, ALL streams are processed in Pass 2 (not just the first one)."""
@@ -782,7 +782,7 @@ class TestPass3RenumberGating:
 
     def setup_method(self):
         """Set up test fixtures."""
-        from auto_creation_executor import ActionResult, ExecutionContext
+        from channel_pipeline_executor import ActionResult, ExecutionContext
 
         self.ActionResult = ActionResult
         self.ExecutionContext = ExecutionContext
@@ -790,7 +790,7 @@ class TestPass3RenumberGating:
         self.client = MagicMock()
         self.client.assign_channel_numbers = AsyncMock()
         self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
         self.engine._existing_channels = []
         self.engine._existing_groups = []
 
@@ -851,7 +851,7 @@ class TestPass3RenumberGating:
             )
         return _fake_execute
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_does_not_renumber_foreign_channel_matched_via_fallback(self, mock_get_session):
         """
         Rule B (sort_field=name) with no pre-run managed channels. Stream matches
@@ -887,7 +887,7 @@ class TestPass3RenumberGating:
         mock_execution = MagicMock()
         mock_execution.id = 1
 
-        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls:
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls:
             mock_executor = MagicMock()
             mock_executor.execute = AsyncMock(side_effect=dispatch_execute)
             mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
@@ -913,7 +913,7 @@ class TestPass3RenumberGating:
             f"(call args: {self.client.assign_channel_numbers.await_args_list})"
         )
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_stream_reorder_runs_on_modified_existing_channel(self, mock_get_session):
         """
         Pass 3.5 gating: when a rule merges streams into an existing channel
@@ -958,7 +958,7 @@ class TestPass3RenumberGating:
         mock_execution = MagicMock()
         mock_execution.id = 1
 
-        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls, \
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls, \
              patch.object(self.engine, "_reorder_channel_streams", new_callable=AsyncMock) as mock_reorder:
             mock_executor = MagicMock()
             mock_executor.execute = AsyncMock(side_effect=_fake_execute)
@@ -982,8 +982,8 @@ class TestPass3RenumberGating:
         passed_rule_channel_order = mock_reorder.await_args.args[1]
         assert passed_rule_channel_order.get(rule.id) == [501]
 
-    @patch("auto_creation_engine._auto_rename_after_renumber", new_callable=AsyncMock)
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine._auto_rename_after_renumber", new_callable=AsyncMock)
+    @patch("channel_pipeline_engine.get_session")
     def test_renumbers_own_created_channels(self, mock_get_session, mock_rename):
         """
         Rule creates 2 new channels with sort_field=name set. Pass 3 should
@@ -1014,7 +1014,7 @@ class TestPass3RenumberGating:
         mock_execution = MagicMock()
         mock_execution.id = 1
 
-        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls:
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls:
             mock_executor = MagicMock()
             mock_executor.execute = AsyncMock(side_effect=dispatch_execute)
             mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
@@ -1039,8 +1039,8 @@ class TestPass3RenumberGating:
         assert call_args.args[0] == [201, 202]
         assert call_args.args[1] == 100
 
-    @patch("auto_creation_engine._auto_rename_after_renumber", new_callable=AsyncMock)
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine._auto_rename_after_renumber", new_callable=AsyncMock)
+    @patch("channel_pipeline_engine.get_session")
     def test_renumbers_previously_managed_channels(self, mock_get_session, mock_rename):
         """
         Re-run scenario: rule already owns channels 301/302 (in its
@@ -1073,7 +1073,7 @@ class TestPass3RenumberGating:
         mock_execution = MagicMock()
         mock_execution.id = 1
 
-        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls:
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls:
             mock_executor = MagicMock()
             mock_executor.execute = AsyncMock(side_effect=dispatch_execute)
             mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
@@ -1099,15 +1099,15 @@ class TestPass3RenumberGating:
         assert call_args.args[1] == 4000
 
 
-class TestAutoCreationEngineStreamReorderLogging:
+class TestChannelPipelineEngineStreamReorderLogging:
     """Tests for Pass 3.5 stream reorder logging."""
 
     def setup_method(self):
         self.client = MagicMock()
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
-    @patch("auto_creation_engine._reorder_streams_for_rule")
+    @patch("channel_pipeline_engine._reorder_streams_for_rule")
     def test_reorder_logs_when_order_unchanged(self, mock_reorder):
         """If a channel is already sorted, still record a log entry for UI visibility."""
         rule = MagicMock()
@@ -1142,13 +1142,13 @@ class TestAutoCreationEngineStreamReorderLogging:
         assert "already sorted" in action["description"]
 
 
-class TestAutoCreationEngineStreamReorderUsesChannelNames:
+class TestChannelPipelineEngineStreamReorderUsesChannelNames:
     """Regression: name-based stream sorting should work without probe stats rows."""
 
     def setup_method(self):
         self.client = MagicMock()
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
         self.engine._stream_stats_cache = {}  # no probe stats
 
     def test_stream_name_sort_uses_channel_stream_names(self):
@@ -1182,13 +1182,13 @@ class TestAutoCreationEngineStreamReorderUsesChannelNames:
         self.client.update_channel.assert_awaited_once_with(channel_id, {"streams": [1, 2]})
 
 
-class TestAutoCreationEngineExecutionTracking:
+class TestChannelPipelineEngineExecutionTracking:
     """Tests for execution tracking methods."""
 
     def setup_method(self):
         """Set up test fixtures."""
         self.client = MagicMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
     def test_create_execution(self, test_session):
         """_create_execution writes a persisted row with correct mode, triggered_by, and status.
@@ -1197,9 +1197,9 @@ class TestAutoCreationEngineExecutionTracking:
         were not saved to the row, these assertions fail. The original mock-only version
         passed even if the row fields were wrong.
         """
-        from models import AutoCreationExecution
+        from models import ChannelPipelineExecution
 
-        with patch("auto_creation_engine.get_session", return_value=test_session):
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
             execution = asyncio.get_event_loop().run_until_complete(
                 self.engine._create_execution(mode="execute", triggered_by="manual")
             )
@@ -1208,8 +1208,8 @@ class TestAutoCreationEngineExecutionTracking:
         assert execution.id is not None
 
         # Verify the row is really in the DB with the right fields
-        row = test_session.query(AutoCreationExecution).filter(
-            AutoCreationExecution.id == execution.id
+        row = test_session.query(ChannelPipelineExecution).filter(
+            ChannelPipelineExecution.id == execution.id
         ).first()
         assert row is not None
         assert row.mode == "execute"
@@ -1217,7 +1217,7 @@ class TestAutoCreationEngineExecutionTracking:
         assert row.status == "running"
         assert row.started_at is not None
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_save_execution(self, mock_get_session):
         """Save execution record."""
         mock_session = MagicMock()
@@ -1233,17 +1233,17 @@ class TestAutoCreationEngineExecutionTracking:
         mock_session.commit.assert_called_once()
 
     def test_record_conflict(self, test_session):
-        """_record_conflict writes a persisted AutoCreationConflict row with correct field values.
+        """_record_conflict writes a persisted ChannelPipelineConflict row with correct field values.
 
         Mutation guard: if conflict_type, stream_name, winning_rule_id, or losing_rule_ids were
         not set correctly, these assertions fail. The original mock-only version passed as long
         as session.add() and session.commit() were called, even with wrong field values.
         """
-        from models import AutoCreationExecution, AutoCreationConflict
+        from models import ChannelPipelineExecution, ChannelPipelineConflict
         import json
 
         # Seed a real execution row (foreign key constraint on conflict)
-        execution = AutoCreationExecution(
+        execution = ChannelPipelineExecution(
             mode="execute",
             triggered_by="manual",
             started_at=__import__("datetime").datetime.utcnow(),
@@ -1266,7 +1266,7 @@ class TestAutoCreationEngineExecutionTracking:
         losing_rule = MagicMock()
         losing_rule.id = 2
 
-        with patch("auto_creation_engine.get_session", return_value=test_session):
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
             asyncio.get_event_loop().run_until_complete(
                 self.engine._record_conflict(
                     execution=execution,
@@ -1277,8 +1277,8 @@ class TestAutoCreationEngineExecutionTracking:
                 )
             )
 
-        conflict = test_session.query(AutoCreationConflict).filter(
-            AutoCreationConflict.execution_id == execution.id
+        conflict = test_session.query(ChannelPipelineConflict).filter(
+            ChannelPipelineConflict.execution_id == execution.id
         ).first()
         assert conflict is not None
         assert conflict.stream_id == 101
@@ -1287,7 +1287,7 @@ class TestAutoCreationEngineExecutionTracking:
         assert conflict.conflict_type == "duplicate_match"
         assert conflict.get_losing_rule_ids() == [2]
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_update_rule_stats(self, mock_get_session):
         """Update rule statistics after execution."""
         mock_session = MagicMock()
@@ -1310,7 +1310,7 @@ class TestAutoCreationEngineExecutionTracking:
         mock_session.commit.assert_called_once()
 
 
-class TestAutoCreationEngineRollbackHelpers:
+class TestChannelPipelineEngineRollbackHelpers:
     """Tests for rollback helper methods."""
 
     def setup_method(self):
@@ -1319,7 +1319,7 @@ class TestAutoCreationEngineRollbackHelpers:
         self.client.delete_channel = AsyncMock()
         self.client.delete_channel_group = AsyncMock()
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
     def test_rollback_created_channel(self):
         """Rollback created channel by deleting it."""
@@ -1398,7 +1398,7 @@ class TestAutoCreationEngineRollbackHelpers:
         self.client.update_channel.assert_called_once_with(1, {"logo_url": "old.png"})
 
 
-class TestAutoCreationEngineIntegration:
+class TestChannelPipelineEngineIntegration:
     """Integration-style tests for the engine."""
 
     def setup_method(self):
@@ -1435,9 +1435,9 @@ class TestAutoCreationEngineIntegration:
             ]
         })
         self.client.create_channel = AsyncMock(return_value={"id": 2, "name": "ESPN2 HD"})
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_full_pipeline_dry_run(self, mock_get_session):
         """Run full pipeline in dry-run mode with real stream data."""
         mock_session = MagicMock()
@@ -1646,7 +1646,7 @@ def _mk_smart_sort_settings(
     """Build a MagicMock-backed settings object for _smart_sort_streams.
 
     Mirrors the DispatcharrSettings attribute surface that
-    ``auto_creation_engine._smart_sort_streams`` reads via ``getattr``.
+    ``channel_pipeline_engine._smart_sort_streams`` reads via ``getattr``.
     """
     settings = MagicMock()
     settings.stream_sort_priority = stream_sort_priority or [
@@ -1704,7 +1704,7 @@ def _failed_stats_dict(stream_id, resolution, fps, stream_name=None):
 
 class TestAutoCreateSmartSortWithinBucketPrimaryCriteria:
     """Regression tests for bd-bqpq0 (same pattern as bd-sw883 / GitHub #73)
-    applied to ``auto_creation_engine._smart_sort_streams``.
+    applied to ``channel_pipeline_engine._smart_sort_streams``.
 
     Primary sort criteria (resolution, framerate, ...) must be applied WITHIN
     each failed-rank bucket — not just at the bucket-boundary level. Previously
@@ -2110,19 +2110,19 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
                 "streams": data.get("streams", []),
             }
         )
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
     def _make_rule(self, if_exists="merge"):
-        """A real (unpersisted) AutoCreationRule: create_channel + if_exists=merge.
+        """A real (unpersisted) ChannelPipelineRule: create_channel + if_exists=merge.
 
         Using a real model instance (not a MagicMock) keeps sort_field=None,
         get_managed_channel_ids()=[], get_normalization_group_ids()=[], etc., so
         the pipeline's sort/renumber passes stay inert and the merge path is the
         only thing exercised.
         """
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
 
-        rule = AutoCreationRule()
+        rule = ChannelPipelineRule()
         rule.id = 1
         rule.name = "Create+Merge Rule"
         rule.priority = 0
@@ -2159,7 +2159,7 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
         self.engine._save_execution = AsyncMock()
         self.engine._update_rule_stats = AsyncMock()
 
-        with patch("auto_creation_engine.get_session") as mock_get_session:
+        with patch("channel_pipeline_engine.get_session") as mock_get_session:
             mock_get_session.return_value = MagicMock()
             return asyncio.get_event_loop().run_until_complete(
                 self.engine.run_pipeline(dry_run=dry_run)
@@ -2210,7 +2210,7 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
             ("FOX", 921),
         ])
 
-        with patch("auto_creation_executor.journal.log_entries"):
+        with patch("channel_pipeline_executor.journal.log_entries"):
             result = self._run(rule, streams, dry_run=False)
 
         assert result["streams_merged"] == 3, (
@@ -2233,7 +2233,7 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
             side_effect=RuntimeError("reorder failed")
         )
 
-        with patch("auto_creation_executor.journal.log_entries") as mock_log:
+        with patch("channel_pipeline_executor.journal.log_entries") as mock_log:
             with pytest.raises(RuntimeError, match="reorder failed"):
                 self._run(rule, streams, dry_run=False)
 

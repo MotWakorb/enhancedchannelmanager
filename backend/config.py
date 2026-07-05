@@ -319,7 +319,7 @@ class DispatcharrSettings(BaseModel):
     # side-effect; instead it advances ``last_m3u_refresh_completed_at`` on
     # EVERY successful refresh (Q1: NOT change-gated — preserves today's
     # "runs after every refresh" behavior). The interval-scheduled
-    # AutoCreationTask auto-fires only when the refresh watermark is newer than
+    # ChannelPipelineTask auto-fires only when the refresh watermark is newer than
     # ``last_auto_creation_consumed_refresh_at`` (which it advances to the
     # consumed value when it runs). Both are ISO-8601 UTC strings (matching the
     # other timestamp fields); empty string == "never" (sorts before any real

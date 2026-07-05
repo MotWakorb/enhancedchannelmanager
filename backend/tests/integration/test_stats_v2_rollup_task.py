@@ -171,7 +171,7 @@ def _run_task(Session, **kwargs):
     ``new_event_loop()`` + ``run_until_complete()`` rather than
     ``asyncio.run()`` because the latter closes the loop and unbinds it
     from the thread, which breaks downstream tests in
-    ``test_auto_creation_engine.py`` that call the deprecated
+    ``test_channel_pipeline_engine.py`` that call the deprecated
     ``asyncio.get_event_loop()`` pattern. We restore the original loop
     (or None) after completion so the suite's test ordering remains
     insensitive to ours.

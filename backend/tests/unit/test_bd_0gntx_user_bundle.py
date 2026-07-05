@@ -13,7 +13,7 @@ investigate whether the analyzer regressed.
 Note: ``MERGE_STREAMS_NO_TARGET_CHANNELS`` is not exercised here
 because the user's rules all have ``target_group_id: null`` (the
 bundle's merge rules pick a target dynamically). The dedicated unit
-tests in ``test_auto_creation_rule_analyzer.py`` cover that finding.
+tests in ``test_channel_pipeline_rule_analyzer.py`` cover that finding.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from auto_creation_rule_analyzer import analyze_rules
+from channel_pipeline_rule_analyzer import analyze_rules
 
 
 _FIXTURE = (

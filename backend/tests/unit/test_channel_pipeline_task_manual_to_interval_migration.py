@@ -1,6 +1,6 @@
 """Tests for ``database._migrate_auto_creation_task_manual_to_interval`` (ADR-011, bd-ka7j9).
 
-ADR-011 decoupled M3U refresh from auto-creation: the ``AutoCreationTask``
+ADR-011 decoupled M3U refresh from auto-creation: the ``ChannelPipelineTask``
 constructor default flipped MANUAL -> INTERVAL (60s) so the task self-fires on
 a schedule and decides for itself whether to run the post-refresh pipeline. As
 with the bd-ifmr5 cleanup migration, the new default only reaches fresh
@@ -55,7 +55,7 @@ def _read_row(conn) -> dict | None:
     return {"schedule_type": row[0], "interval_seconds": row[1], "next_run_at": row[2]}
 
 
-class TestAutoCreationTaskManualToIntervalMigration:
+class TestChannelPipelineTaskManualToIntervalMigration:
     def test_flips_existing_manual_row_to_interval_and_logs(self, tmp_path, caplog):
         db_file = tmp_path / "manual.db"
         engine = _make_engine(db_file)

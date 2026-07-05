@@ -1881,7 +1881,7 @@ class UserIdentity(Base):
 # Auto-Creation Pipeline Models (v0.12.0)
 # =============================================================================
 
-class AutoCreationRule(Base):
+class ChannelPipelineRule(Base):
     """
     Rule for automatic channel creation from streams.
 
@@ -2091,10 +2091,10 @@ class AutoCreationRule(Base):
         }
 
     def __repr__(self):
-        return f"<AutoCreationRule(id={self.id}, name={self.name}, enabled={self.enabled}, priority={self.priority})>"
+        return f"<ChannelPipelineRule(id={self.id}, name={self.name}, enabled={self.enabled}, priority={self.priority})>"
 
 
-class AutoCreationExecution(Base):
+class ChannelPipelineExecution(Base):
     """
     Tracks each pipeline execution for audit and undo support.
 
@@ -2167,7 +2167,7 @@ class AutoCreationExecution(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationship to rule
-    rule = relationship("AutoCreationRule", lazy="joined")
+    rule = relationship("ChannelPipelineRule", lazy="joined")
 
     __table_args__ = (
         Index("idx_auto_exec_rule", rule_id),
@@ -2301,10 +2301,10 @@ class AutoCreationExecution(Base):
         return result
 
     def __repr__(self):
-        return f"<AutoCreationExecution(id={self.id}, rule_id={self.rule_id}, status={self.status}, mode={self.mode})>"
+        return f"<ChannelPipelineExecution(id={self.id}, rule_id={self.rule_id}, status={self.status}, mode={self.mode})>"
 
 
-class AutoCreationSnapshot(Base):
+class ChannelPipelineSnapshot(Base):
     """Point-in-time snapshot of the manual (non-Dispatcharr-auto-created)
     channel<->stream state captured BEFORE an auto-creation execution mutated
     anything, to enable a full whole-run revert (ADR-010).
@@ -2330,7 +2330,7 @@ class AutoCreationSnapshot(Base):
     # without parsing the BLOB; feeds the retention metric in ADR-010 §D7).
     channel_count = Column(Integer, default=0, nullable=False)
     # Serialized per-channel payload. JSON TEXT (the project convention for
-    # snapshot/entity BLOBs — cf. AutoCreationExecution.created_entities and
+    # snapshot/entity BLOBs — cf. ChannelPipelineExecution.created_entities and
     # M3USnapshot.groups_data). Shape: {"channels": [{id, name,
     # channel_group_id, epg_data_id, tvg_id, stream_ids: [int]}, ...]}.
     channels_data = Column(Text, nullable=True)
@@ -2369,10 +2369,10 @@ class AutoCreationSnapshot(Base):
         }
 
     def __repr__(self):
-        return f"<AutoCreationSnapshot(id={self.id}, execution_id={self.execution_id}, channel_count={self.channel_count})>"
+        return f"<ChannelPipelineSnapshot(id={self.id}, execution_id={self.execution_id}, channel_count={self.channel_count})>"
 
 
-class AutoCreationConflict(Base):
+class ChannelPipelineConflict(Base):
     """
     Tracks conflicts detected during pipeline execution.
 
@@ -2406,7 +2406,7 @@ class AutoCreationConflict(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationship to execution
-    execution = relationship("AutoCreationExecution", lazy="joined")
+    execution = relationship("ChannelPipelineExecution", lazy="joined")
 
     __table_args__ = (
         Index("idx_auto_conflict_execution", execution_id),
@@ -2458,7 +2458,7 @@ class AutoCreationConflict(Base):
         }
 
     def __repr__(self):
-        return f"<AutoCreationConflict(id={self.id}, execution_id={self.execution_id}, type={self.conflict_type})>"
+        return f"<ChannelPipelineConflict(id={self.id}, execution_id={self.execution_id}, type={self.conflict_type})>"
 
 
 class FFmpegProfile(Base):

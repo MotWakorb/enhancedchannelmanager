@@ -1145,7 +1145,7 @@ class TestRestartServices:
         later probe entry point resets it back to False — so the
         just-stopped tracker/prober objects stay truthy and reusable.
         Without explicitly clearing the singletons on this early-return
-        path, a caller like auto_creation_engine's
+        path, a caller like channel_pipeline_engine's
         ``prober = get_prober(); if not prober: skip`` guard would pass and
         proceed against a client for settings that are no longer configured.
         """
@@ -1169,12 +1169,12 @@ class TestRestartServices:
         mock_set_prober.assert_called_once_with(None)
 
     @pytest.mark.asyncio
-    async def test_restart_resets_auto_creation_engine_singleton(self, async_client):
-        """bd-snryv: AutoCreationEngine has the identical stale-client bug as
+    async def test_restart_resets_channel_pipeline_engine_singleton(self, async_client):
+        """bd-snryv: ChannelPipelineEngine has the identical stale-client bug as
         BandwidthTracker/StreamProber — it captures ``self.client`` once and
         never re-fetches get_client(). The rebuild must clear the engine
         singleton so the next ``_ensure_engine()`` call in
-        routers/auto_creation.py naturally rebuilds it against the fresh
+        routers/channel_pipeline.py naturally rebuilds it against the fresh
         client, instead of an auto-creation rule run hitting Dispatcharr with
         stale credentials indefinitely after a rotation."""
         mock = _mock_settings()
@@ -1191,7 +1191,7 @@ class TestRestartServices:
              patch("routers.settings.create_notification_internal"), \
              patch("routers.settings.update_notification_internal"), \
              patch("routers.settings.delete_notifications_by_source_internal"), \
-             patch("auto_creation_engine.reset_auto_creation_engine") as mock_reset_engine:
+             patch("channel_pipeline_engine.reset_channel_pipeline_engine") as mock_reset_engine:
             MockTracker.return_value = AsyncMock()
             new_prober = MagicMock()
             new_prober.start = AsyncMock()

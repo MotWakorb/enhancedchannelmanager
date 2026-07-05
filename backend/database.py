@@ -834,7 +834,7 @@ def init_db() -> None:
         _integrity_check(_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable, PendingMerge, PendingMergeJournal  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, ChannelPipelineRule, ChannelPipelineExecution, ChannelPipelineConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable, PendingMerge, PendingMergeJournal  # noqa: F401
         from export_models import CloudStorageTarget  # noqa: F401
 
         # Apply Alembic migrations first so schema tracking is authoritative
@@ -2779,7 +2779,7 @@ def _migrate_auto_creation_task_manual_to_interval(conn) -> None:
 
     ADR-011 decoupled M3U refresh from auto-creation: auto-creation is no longer
     hard-chained as a side-effect of the refresh task. Instead the
-    ``AutoCreationTask`` self-fires on an INTERVAL schedule (~60s) and a top-of-run
+    ``ChannelPipelineTask`` self-fires on an INTERVAL schedule (~60s) and a top-of-run
     guard runs the post-refresh pipeline only when a new refresh watermark is
     available. The constructor default flipped MANUAL -> INTERVAL (60s), but
     existing installs already have a persisted ``scheduled_tasks`` row with
@@ -3000,7 +3000,7 @@ def _heal_orphaned_normalization_group_refs(conn) -> None:
         if len(kept) == len(ids):
             continue  # no orphans in this row
 
-        # Mirror AutoCreationRule.set_normalization_group_ids: sorted/de-duped,
+        # Mirror ChannelPipelineRule.set_normalization_group_ids: sorted/de-duped,
         # NULL when empty so "no normalization" stays a single canonical shape.
         new_value = json.dumps(sorted(set(kept))) if kept else None
         conn.execute(text(

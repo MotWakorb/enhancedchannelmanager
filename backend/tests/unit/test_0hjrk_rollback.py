@@ -5,7 +5,7 @@ Two behaviors are pinned here:
 1. UN-MERGE of merge-only runs (modified entities, 0 created): after rollback
    the touched channel is restored to its pre-run stream list. The decisive
    reversed-restore assertion already lives in
-   ``test_auto_creation_engine.py::TestAutoCreationEngineRollback
+   ``test_channel_pipeline_engine.py::TestChannelPipelineEngineRollback
    .test_rollback_unmerge_multiple_into_same_channel_restores_original``
    (bd-a7okb). We add a focused single-channel un-merge assertion here so the
    guarantee has a home alongside the new refusal test; the cumulative-snapshot
@@ -21,20 +21,20 @@ Two behaviors are pinned here:
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from auto_creation_engine import AutoCreationEngine
+from channel_pipeline_engine import ChannelPipelineEngine
 
 
 def _route_rollback_queries(mock_session, mock_execution):
     """Route the uc51o.5 snapshot-existence probe to None so these LEGACY
     (no-snapshot) rollback tests stay on the delete-created-only path.
 
-    ``rollback_execution`` now probes for an AutoCreationSnapshot and diverts to
+    ``rollback_execution`` now probes for an ChannelPipelineSnapshot and diverts to
     the full restore when one exists. A flat ``mock_session.query.return_value``
     returns the same chain for every query, so the probe would see the execution
     mock and wrongly treat the run as snapshotted. These tests model no-snapshot
     runs, so the snapshot query must return None.
     """
-    from models import AutoCreationSnapshot
+    from models import ChannelPipelineSnapshot
 
     exec_chain = MagicMock()
     exec_chain.filter.return_value.first.return_value = mock_execution
@@ -42,7 +42,7 @@ def _route_rollback_queries(mock_session, mock_execution):
     none_chain.filter.return_value.first.return_value = None
 
     def _is_snapshot_arg(a):
-        return a is AutoCreationSnapshot or getattr(a, "class_", None) is AutoCreationSnapshot
+        return a is ChannelPipelineSnapshot or getattr(a, "class_", None) is ChannelPipelineSnapshot
 
     def _query(*args, **kwargs):
         if any(_is_snapshot_arg(a) for a in args):
@@ -60,9 +60,9 @@ class TestRollbackUnmergeMergeOnlyRun:
         self.client.delete_channel = AsyncMock()
         self.client.delete_channel_group = AsyncMock()
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_merge_only_run_restores_pre_run_stream_set(self, mock_get_session):
         """A run that ONLY merged a stream into a pre-existing channel (no
         channels created) restores that channel's pre-run stream list.
@@ -106,9 +106,9 @@ class TestRollbackRefusesWhenNoRestoreData:
         self.client.delete_channel = AsyncMock()
         self.client.delete_channel_group = AsyncMock()
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_refuses_and_does_not_mark_rolled_back(self, mock_get_session):
         """An execution with no recorded created/modified entities cannot be
         guaranteed rolled back — refuse rather than silently no-op."""
@@ -138,7 +138,7 @@ class TestRollbackRefusesWhenNoRestoreData:
         self.client.delete_channel.assert_not_called()
         self.client.update_channel.assert_not_called()
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_run_with_created_entities_is_unaffected(self, mock_get_session):
         """A run that created entities still rolls back (only the both-empty
         case refuses)."""
@@ -162,7 +162,7 @@ class TestRollbackRefusesWhenNoRestoreData:
         assert mock_execution.status == "rolled_back"
         self.client.delete_channel.assert_called_once_with(1)
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_run_with_only_modified_entities_is_unaffected(self, mock_get_session):
         """A merge-only run (0 created, modified present) still rolls back."""
         mock_session = MagicMock()
@@ -185,7 +185,7 @@ class TestRollbackRefusesWhenNoRestoreData:
         assert mock_execution.status == "rolled_back"
         self.client.update_channel.assert_called_once_with(3, {"streams": [10]})
 
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.get_session")
     def test_refusal_preserves_already_rolled_back_guard(self, mock_get_session):
         """The already-rolled-back guard still fires before the no-data check."""
         mock_session = MagicMock()

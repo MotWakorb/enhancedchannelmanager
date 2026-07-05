@@ -4,14 +4,14 @@ Unit tests for auto-creation endpoints.
 Tests: rule CRUD, bulk-update, reorder, toggle, duplicate,
        pipeline execution, execution history, rollback, YAML import/export,
        validation, and schema endpoints.
-Mocks: auto_creation_engine, auto_creation_schema, get_client(), get_session().
+Mocks: channel_pipeline_engine, channel_pipeline_schema, get_client(), get_session().
 """
 import json
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from models import AutoCreationRule, AutoCreationExecution, NormalizationRuleGroup
+from models import ChannelPipelineRule, ChannelPipelineExecution, NormalizationRuleGroup
 
 
 def _create_normalization_group(session, **overrides):
@@ -33,7 +33,7 @@ def _create_normalization_group(session, **overrides):
 
 
 def _create_rule(session, **overrides):
-    """Helper to create an AutoCreationRule."""
+    """Helper to create an ChannelPipelineRule."""
     defaults = {
         "name": "Test Rule",
         "enabled": True,
@@ -48,7 +48,7 @@ def _create_rule(session, **overrides):
         "updated_at": datetime.utcnow(),
     }
     defaults.update(overrides)
-    rule = AutoCreationRule(**defaults)
+    rule = ChannelPipelineRule(**defaults)
     session.add(rule)
     session.commit()
     session.refresh(rule)
@@ -56,7 +56,7 @@ def _create_rule(session, **overrides):
 
 
 def _create_execution(session, **overrides):
-    """Helper to create an AutoCreationExecution."""
+    """Helper to create an ChannelPipelineExecution."""
     defaults = {
         "rule_id": None,
         "rule_name": "Test Rule",
@@ -69,14 +69,14 @@ def _create_execution(session, **overrides):
         "channels_created": 3,
     }
     defaults.update(overrides)
-    execution = AutoCreationExecution(**defaults)
+    execution = ChannelPipelineExecution(**defaults)
     session.add(execution)
     session.commit()
     session.refresh(execution)
     return execution
 
 
-class TestGetAutoCreationRules:
+class TestGetChannelPipelineRules:
     """Tests for GET /api/auto-creation/rules."""
 
     @pytest.mark.asyncio
@@ -100,7 +100,7 @@ class TestGetAutoCreationRules:
         assert rules[1]["name"] == "Second"
 
 
-class TestGetAutoCreationRule:
+class TestGetChannelPipelineRule:
     """Tests for GET /api/auto-creation/rules/{rule_id}."""
 
     @pytest.mark.asyncio
@@ -121,14 +121,14 @@ class TestGetAutoCreationRule:
         assert response.status_code == 404
 
 
-class TestCreateAutoCreationRule:
+class TestCreateChannelPipelineRule:
     """Tests for POST /api/auto-creation/rules."""
 
     @pytest.mark.asyncio
     async def test_creates_rule(self, async_client):
         """Creates a new auto-creation rule."""
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/rules", json={
                 "name": "New Rule",
                 "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
@@ -143,7 +143,7 @@ class TestCreateAutoCreationRule:
     @pytest.mark.asyncio
     async def test_rejects_invalid_rule(self, async_client):
         """Returns 400 for invalid rule configuration."""
-        with patch("auto_creation_schema.validate_rule", return_value={
+        with patch("channel_pipeline_schema.validate_rule", return_value={
             "valid": False,
             "errors": ["Actions must not be empty"],
         }):
@@ -167,8 +167,8 @@ class TestCreateAutoCreationRule:
         g1 = _create_normalization_group(test_session, name="Group A")
         g2 = _create_normalization_group(test_session, name="Group B")
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/rules", json={
                 "name": "WithNorm",
                 "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
@@ -185,8 +185,8 @@ class TestCreateAutoCreationRule:
     ):
         """bd-j5p4k: POST accepts an empty normalization_group_ids list
         (no normalization groups is a legitimate state)."""
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/rules", json={
                 "name": "EmptyNorm",
                 "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
@@ -246,7 +246,7 @@ class TestCreateAutoCreationRule:
         assert g1.id not in offending
 
 
-class TestUpdateAutoCreationRule:
+class TestUpdateChannelPipelineRule:
     """Tests for PUT /api/auto-creation/rules/{rule_id}."""
 
     @pytest.mark.asyncio
@@ -254,8 +254,8 @@ class TestUpdateAutoCreationRule:
         """Updates an auto-creation rule."""
         rule = _create_rule(test_session, name="Old Name")
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.put(
                 f"/api/auto-creation/rules/{rule.id}",
                 json={"name": "New Name"},
@@ -267,7 +267,7 @@ class TestUpdateAutoCreationRule:
     @pytest.mark.asyncio
     async def test_returns_404(self, async_client):
         """Returns 404 for nonexistent rule."""
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}):
             response = await async_client.put(
                 "/api/auto-creation/rules/99999",
                 json={"name": "Ghost"},
@@ -284,8 +284,8 @@ class TestUpdateAutoCreationRule:
         g1 = _create_normalization_group(test_session, name="Group A")
         g2 = _create_normalization_group(test_session, name="Group B")
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.put(
                 f"/api/auto-creation/rules/{rule.id}",
                 json={"normalization_group_ids": [g1.id, g2.id]},
@@ -305,8 +305,8 @@ class TestUpdateAutoCreationRule:
         rule.set_normalization_group_ids([g1.id])
         test_session.commit()
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.put(
                 f"/api/auto-creation/rules/{rule.id}",
                 json={"normalization_group_ids": []},
@@ -379,8 +379,8 @@ class TestUpdateAutoCreationRule:
         rule.set_normalization_group_ids([stale_id])
         test_session.commit()
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             # Update an unrelated field — must succeed even though stored
             # normalization_group_ids reference a missing group.
             response = await async_client.put(
@@ -405,8 +405,8 @@ class TestMatchScopeGroupIdPersistence:
         self, async_client
     ):
         """POST with match_scope_group_id stores it; GET returns it."""
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             create = await async_client.post("/api/auto-creation/rules", json={
                 "name": "Scoped Rule",
                 "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
@@ -426,8 +426,8 @@ class TestMatchScopeGroupIdPersistence:
     @pytest.mark.asyncio
     async def test_create_defaults_scope_group_to_null(self, async_client):
         """POST without the field stores NULL (the Auto default)."""
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             create = await async_client.post("/api/auto-creation/rules", json={
                 "name": "Unscoped Rule",
                 "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
@@ -442,8 +442,8 @@ class TestMatchScopeGroupIdPersistence:
         """PUT match_scope_group_id stores the value."""
         rule = _create_rule(test_session, name="ToScope")
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.put(
                 f"/api/auto-creation/rules/{rule.id}",
                 json={"match_scope_group_id": 3},
@@ -463,8 +463,8 @@ class TestMatchScopeGroupIdPersistence:
         rule = _create_rule(test_session, name="ScopedThenAuto", match_scope_group_id=5)
         assert rule.match_scope_group_id == 5
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.put(
                 f"/api/auto-creation/rules/{rule.id}",
                 json={"match_scope_group_id": None},
@@ -480,8 +480,8 @@ class TestMatchScopeGroupIdPersistence:
         """PUT without the field must not touch the stored scope group."""
         rule = _create_rule(test_session, name="KeepScope", match_scope_group_id=9)
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.put(
                 f"/api/auto-creation/rules/{rule.id}",
                 json={"name": "Renamed Keep"},
@@ -499,7 +499,7 @@ class TestMatchScopeGroupIdPersistence:
         mock_client.get_channel_groups.return_value = []
         mock_client.get_m3u_accounts.return_value = []
 
-        with patch("routers.auto_creation.get_client", return_value=mock_client):
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
             response = await async_client.get("/api/auto-creation/export/yaml")
 
         assert response.status_code == 200
@@ -516,8 +516,8 @@ class TestAllowManualChannelMergePersistence:
 
     @pytest.mark.asyncio
     async def test_create_defaults_flag_to_false(self, async_client):
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             create = await async_client.post("/api/auto-creation/rules", json={
                 "name": "Protected Rule",
                 "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
@@ -528,8 +528,8 @@ class TestAllowManualChannelMergePersistence:
 
     @pytest.mark.asyncio
     async def test_create_persists_opt_in_and_get_round_trips(self, async_client):
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             create = await async_client.post("/api/auto-creation/rules", json={
                 "name": "Opt-in Rule",
                 "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
@@ -548,8 +548,8 @@ class TestAllowManualChannelMergePersistence:
     async def test_update_sets_flag(self, async_client, test_session):
         rule = _create_rule(test_session, name="ToOptIn")
         assert rule.allow_manual_channel_merge is False
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.put(
                 f"/api/auto-creation/rules/{rule.id}",
                 json={"allow_manual_channel_merge": True},
@@ -563,7 +563,7 @@ class TestAllowManualChannelMergePersistence:
         mock_client = AsyncMock()
         mock_client.get_channel_groups.return_value = []
         mock_client.get_m3u_accounts.return_value = []
-        with patch("routers.auto_creation.get_client", return_value=mock_client):
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
             response = await async_client.get("/api/auto-creation/export/yaml")
         assert response.status_code == 200
         assert "allow_manual_channel_merge" in response.text
@@ -582,8 +582,8 @@ class TestManualChannelIsolationRun:
 
     @pytest.mark.asyncio
     async def test_run_does_not_overwrite_manual_channel(self, test_session):
-        from auto_creation_executor import ActionExecutor, ExecutionContext
-        from auto_creation_evaluator import StreamContext
+        from channel_pipeline_executor import ActionExecutor, ExecutionContext
+        from channel_pipeline_evaluator import StreamContext
 
         # Persist a rule with the protective default (flag False) in real SQLite.
         rule = _create_rule(
@@ -638,7 +638,7 @@ class TestManualChannelIsolationRun:
         assert created["data"]["name"] == "ESPN"
 
 
-class TestBulkUpdateAutoCreationRules:
+class TestBulkUpdateChannelPipelineRules:
     """Tests for POST /api/auto-creation/rules/bulk-update."""
 
     @pytest.mark.asyncio
@@ -646,8 +646,8 @@ class TestBulkUpdateAutoCreationRules:
         """Applies the same scalar updates to several rules."""
         r1 = _create_rule(test_session, name="BulkA", run_on_refresh=False, orphan_action="delete")
         r2 = _create_rule(test_session, name="BulkB", run_on_refresh=False)
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
                 "rule_ids": [r1.id, r2.id],
                 "run_on_refresh": True,
@@ -658,9 +658,9 @@ class TestBulkUpdateAutoCreationRules:
         assert data["updated_count"] == 2
         assert len(data["rules"]) == 2
         test_session.expire_all()
-        assert test_session.query(AutoCreationRule).get(r1.id).run_on_refresh is True
-        assert test_session.query(AutoCreationRule).get(r1.id).orphan_action == "none"
-        assert test_session.query(AutoCreationRule).get(r2.id).run_on_refresh is True
+        assert test_session.query(ChannelPipelineRule).get(r1.id).run_on_refresh is True
+        assert test_session.query(ChannelPipelineRule).get(r1.id).orphan_action == "none"
+        assert test_session.query(ChannelPipelineRule).get(r2.id).run_on_refresh is True
 
     @pytest.mark.asyncio
     async def test_rejects_empty_rule_ids(self, async_client):
@@ -684,8 +684,8 @@ class TestBulkUpdateAutoCreationRules:
     @pytest.mark.asyncio
     async def test_accepts_exactly_500_rule_ids(self, async_client, test_session):
         rules = [_create_rule(test_session, name=f"Bulk500-{i}", enabled=True) for i in range(500)]
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
                 "rule_ids": [r.id for r in rules],
                 "enabled": False,
@@ -719,8 +719,8 @@ class TestBulkUpdateAutoCreationRules:
         r3 = _create_rule(test_session, name="BulkRB3", enabled=True)
 
         missing_id = 999999
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
                 "rule_ids": [r1.id, r2.id, r3.id, missing_id],
                 "enabled": False,
@@ -729,9 +729,9 @@ class TestBulkUpdateAutoCreationRules:
         assert response.status_code == 404
 
         test_session.expire_all()
-        assert test_session.query(AutoCreationRule).get(r1.id).enabled is True
-        assert test_session.query(AutoCreationRule).get(r2.id).enabled is True
-        assert test_session.query(AutoCreationRule).get(r3.id).enabled is True
+        assert test_session.query(ChannelPipelineRule).get(r1.id).enabled is True
+        assert test_session.query(ChannelPipelineRule).get(r2.id).enabled is True
+        assert test_session.query(ChannelPipelineRule).get(r3.id).enabled is True
 
     @pytest.mark.asyncio
     async def test_reports_all_missing_ids(self, async_client, test_session):
@@ -744,8 +744,8 @@ class TestBulkUpdateAutoCreationRules:
 
         missing_a = 99999
         missing_b = 99998
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={
@@ -773,15 +773,15 @@ class TestBulkUpdateAutoCreationRules:
             name="MergeRule",
             actions=json.dumps([merge_action]),
         )
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
                 "rule_ids": [r.id],
                 "merge_streams_remove_non_matching": True,
             })
         assert response.status_code == 200
         test_session.expire_all()
-        rule = test_session.query(AutoCreationRule).get(r.id)
+        rule = test_session.query(ChannelPipelineRule).get(r.id)
         acts = json.loads(rule.actions)
         assert acts[0]["remove_non_matching"] is True
 
@@ -802,7 +802,7 @@ class TestBulkUpdateAutoCreationRules:
             conditions=json.dumps([]),  # validate_rule rejects empty conditions
         )
 
-        with patch("routers.auto_creation.journal"):
+        with patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={"rule_ids": [rule.id], "enabled": True},
@@ -813,7 +813,7 @@ class TestBulkUpdateAutoCreationRules:
         assert data["updated_count"] == 1
 
         test_session.expire_all()
-        refreshed = test_session.query(AutoCreationRule).get(rule.id)
+        refreshed = test_session.query(ChannelPipelineRule).get(rule.id)
         assert refreshed.enabled is True
 
     @pytest.mark.asyncio
@@ -838,7 +838,7 @@ class TestBulkUpdateAutoCreationRules:
             actions=original_actions,
         )
 
-        with patch("routers.auto_creation.journal"):
+        with patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={
@@ -855,7 +855,7 @@ class TestBulkUpdateAutoCreationRules:
 
         # Rollback: actions JSON must be unchanged.
         test_session.expire_all()
-        refreshed = test_session.query(AutoCreationRule).get(rule.id)
+        refreshed = test_session.query(ChannelPipelineRule).get(rule.id)
         assert json.loads(refreshed.actions) == [merge_action]
 
     @pytest.mark.asyncio
@@ -897,8 +897,8 @@ class TestBulkUpdateAutoCreationRules:
         return 200 after the conditions/actions rejection is added.
         """
         r = _create_rule(test_session, name="ScalarsOnly", enabled=False)
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={"rule_ids": [r.id], "enabled": True, "priority": 5},
@@ -907,7 +907,7 @@ class TestBulkUpdateAutoCreationRules:
         data = response.json()
         assert data["updated_count"] == 1
         test_session.expire_all()
-        refreshed = test_session.query(AutoCreationRule).get(r.id)
+        refreshed = test_session.query(ChannelPipelineRule).get(r.id)
         assert refreshed.enabled is True
         assert refreshed.priority == 5
 
@@ -926,8 +926,8 @@ class TestBulkUpdateAutoCreationRules:
         r3 = _create_rule(test_session, name="JournalC", enabled=False)
 
         mock_journal = MagicMock()
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal", mock_journal):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal", mock_journal):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={"rule_ids": [r1.id, r2.id, r3.id], "enabled": True},
@@ -965,8 +965,8 @@ class TestBulkUpdateAutoCreationRules:
         )
 
         mock_journal = MagicMock()
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal", mock_journal):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal", mock_journal):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={"rule_ids": [rule.id], "enabled": True, "priority": 5},
@@ -1003,8 +1003,8 @@ class TestBulkUpdateAutoCreationRules:
         missing_id = 999999
 
         mock_journal = MagicMock()
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal", mock_journal):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal", mock_journal):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={
@@ -1027,8 +1027,8 @@ class TestBulkUpdateAutoCreationRules:
         g1 = _create_normalization_group(test_session, name="Bulk Group A")
         g2 = _create_normalization_group(test_session, name="Bulk Group B")
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={
@@ -1041,7 +1041,7 @@ class TestBulkUpdateAutoCreationRules:
         assert response.json()["updated_count"] == 2
         test_session.expire_all()
         for rid in (r1.id, r2.id):
-            refreshed = test_session.query(AutoCreationRule).get(rid)
+            refreshed = test_session.query(ChannelPipelineRule).get(rid)
             assert sorted(refreshed.get_normalization_group_ids()) == sorted([g1.id, g2.id])
 
     @pytest.mark.asyncio
@@ -1055,8 +1055,8 @@ class TestBulkUpdateAutoCreationRules:
         r1.set_normalization_group_ids([g1.id])
         test_session.commit()
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={
@@ -1067,7 +1067,7 @@ class TestBulkUpdateAutoCreationRules:
 
         assert response.status_code == 200, response.text
         test_session.expire_all()
-        refreshed = test_session.query(AutoCreationRule).get(r1.id)
+        refreshed = test_session.query(ChannelPipelineRule).get(r1.id)
         assert refreshed.get_normalization_group_ids() == []
 
     @pytest.mark.asyncio
@@ -1084,8 +1084,8 @@ class TestBulkUpdateAutoCreationRules:
         bad_b = 800002
 
         mock_journal = MagicMock()
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal", mock_journal):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal", mock_journal):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={
@@ -1109,7 +1109,7 @@ class TestBulkUpdateAutoCreationRules:
         # Sanity: scalar update must not have been persisted.
         test_session.expire_all()
         for rid in (r1.id, r2.id):
-            refreshed = test_session.query(AutoCreationRule).get(rid)
+            refreshed = test_session.query(ChannelPipelineRule).get(rid)
             assert refreshed.enabled is False, f"rule id={rid} was mutated despite 422"
 
     @pytest.mark.asyncio
@@ -1124,8 +1124,8 @@ class TestBulkUpdateAutoCreationRules:
         r1.set_normalization_group_ids([999997])
         test_session.commit()
 
-        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/rules/bulk-update",
                 json={"rule_ids": [r1.id], "enabled": True},
@@ -1133,11 +1133,11 @@ class TestBulkUpdateAutoCreationRules:
 
         assert response.status_code == 200, response.text
         test_session.expire_all()
-        refreshed = test_session.query(AutoCreationRule).get(r1.id)
+        refreshed = test_session.query(ChannelPipelineRule).get(r1.id)
         assert refreshed.enabled is True
 
 
-class TestDeleteAutoCreationRule:
+class TestDeleteChannelPipelineRule:
     """Tests for DELETE /api/auto-creation/rules/{rule_id}."""
 
     @pytest.mark.asyncio
@@ -1146,12 +1146,12 @@ class TestDeleteAutoCreationRule:
         rule = _create_rule(test_session)
         rule_id = rule.id
 
-        with patch("routers.auto_creation.journal"):
+        with patch("routers.channel_pipeline.journal"):
             response = await async_client.delete(f"/api/auto-creation/rules/{rule_id}")
 
         assert response.status_code == 200
         assert response.json()["status"] == "deleted"
-        assert test_session.query(AutoCreationRule).filter_by(id=rule_id).first() is None
+        assert test_session.query(ChannelPipelineRule).filter_by(id=rule_id).first() is None
 
     @pytest.mark.asyncio
     async def test_returns_404(self, async_client):
@@ -1160,7 +1160,7 @@ class TestDeleteAutoCreationRule:
         assert response.status_code == 404
 
 
-class TestReorderAutoCreationRules:
+class TestReorderChannelPipelineRules:
     """Tests for POST /api/auto-creation/rules/reorder."""
 
     @pytest.mark.asyncio
@@ -1176,11 +1176,11 @@ class TestReorderAutoCreationRules:
         assert response.status_code == 200
 
         test_session.expire_all()
-        assert test_session.query(AutoCreationRule).get(r2.id).priority == 0
-        assert test_session.query(AutoCreationRule).get(r1.id).priority == 1
+        assert test_session.query(ChannelPipelineRule).get(r2.id).priority == 0
+        assert test_session.query(ChannelPipelineRule).get(r1.id).priority == 1
 
 
-class TestToggleAutoCreationRule:
+class TestToggleChannelPipelineRule:
     """Tests for POST /api/auto-creation/rules/{rule_id}/toggle."""
 
     @pytest.mark.asyncio
@@ -1203,7 +1203,7 @@ class TestToggleAutoCreationRule:
         assert response.status_code == 404
 
 
-class TestDuplicateAutoCreationRule:
+class TestDuplicateChannelPipelineRule:
     """Tests for POST /api/auto-creation/rules/{rule_id}/duplicate."""
 
     @pytest.mark.asyncio
@@ -1243,7 +1243,7 @@ class TestRunAutoCreationPipeline:
         mock_engine = AsyncMock()
         mock_engine.run_pipeline = AsyncMock(side_effect=slow_run_pipeline)
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
 
         assert response.status_code == 202, response.text
@@ -1253,8 +1253,8 @@ class TestRunAutoCreationPipeline:
         execution_id = body["execution_id"]
 
         # Execution row should already exist with status="running"
-        from models import AutoCreationExecution
-        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        from models import ChannelPipelineExecution
+        exe = test_session.query(ChannelPipelineExecution).filter_by(id=execution_id).first()
         assert exe is not None
         assert exe.status == "running"
         assert exe.mode == "execute"
@@ -1278,13 +1278,13 @@ class TestRunAutoCreationPipeline:
         mock_engine = AsyncMock()
         mock_engine.run_pipeline = AsyncMock(return_value={"success": True})
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post("/api/auto-creation/run", json={"dry_run": True})
 
         assert response.status_code == 202
         execution_id = response.json()["execution_id"]
-        from models import AutoCreationExecution
-        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        from models import ChannelPipelineExecution
+        exe = test_session.query(ChannelPipelineExecution).filter_by(id=execution_id).first()
         assert exe is not None
         assert exe.mode == "dry_run"
 
@@ -1299,7 +1299,7 @@ class TestRunAutoCreationPipeline:
         mock_engine = AsyncMock()
         mock_engine.run_pipeline = AsyncMock(side_effect=boom)
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
 
         assert response.status_code == 202
@@ -1309,10 +1309,10 @@ class TestRunAutoCreationPipeline:
         for _ in range(50):
             await _asyncio.sleep(0)
 
-        from models import AutoCreationExecution
+        from models import ChannelPipelineExecution
         # Use a fresh query to pick up the supervised handler's commit
         test_session.expire_all()
-        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        exe = test_session.query(ChannelPipelineExecution).filter_by(id=execution_id).first()
         assert exe is not None
         assert exe.status == "failed"
         assert exe.error_message and "engine exploded" in exe.error_message
@@ -1332,7 +1332,7 @@ class TestRunAutoCreationPipeline:
         mock_engine = AsyncMock()
         mock_engine.run_pipeline = AsyncMock(side_effect=slow)
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             start = _time.monotonic()
             response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
             elapsed = _time.monotonic() - start
@@ -1346,7 +1346,7 @@ class TestRunAutoCreationPipeline:
             await _asyncio.sleep(0)
 
 
-class TestRunAutoCreationRule:
+class TestRunChannelPipelineRule:
     """Tests for POST /api/auto-creation/rules/{rule_id}/run (background-task pattern)."""
 
     @pytest.mark.asyncio
@@ -1357,7 +1357,7 @@ class TestRunAutoCreationRule:
         mock_engine = AsyncMock()
         mock_engine.run_rule = AsyncMock(return_value={"success": True})
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post(f"/api/auto-creation/rules/{rule.id}/run")
 
         assert response.status_code == 202, response.text
@@ -1397,7 +1397,7 @@ class TestRunAutoCreationRule:
         mock_engine = AsyncMock()
         mock_engine.run_rule = AsyncMock(side_effect=boom)
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post(f"/api/auto-creation/rules/{rule.id}/run")
 
         assert response.status_code == 202
@@ -1406,9 +1406,9 @@ class TestRunAutoCreationRule:
         for _ in range(50):
             await _asyncio.sleep(0)
 
-        from models import AutoCreationExecution
+        from models import ChannelPipelineExecution
         test_session.expire_all()
-        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        exe = test_session.query(ChannelPipelineExecution).filter_by(id=execution_id).first()
         assert exe is not None
         assert exe.status == "failed"
         assert exe.error_message and "rule borked" in exe.error_message
@@ -1463,14 +1463,14 @@ class TestGetExecutions:
     @pytest.mark.asyncio
     async def test_has_snapshot_flag(self, async_client, test_session):
         """Each execution carries a derived has_snapshot boolean (ADR-010 §D6):
-        true for executions that have an AutoCreationSnapshot row, false
+        true for executions that have an ChannelPipelineSnapshot row, false
         otherwise. uc51o.6/.7 gate the snapshot-restore affordance on it."""
-        from models import AutoCreationSnapshot
+        from models import ChannelPipelineSnapshot
 
         with_snap = _create_execution(test_session, rule_name="HasSnap")
         without_snap = _create_execution(test_session, rule_name="NoSnap")
 
-        snapshot = AutoCreationSnapshot(
+        snapshot = ChannelPipelineSnapshot(
             execution_id=with_snap.id,
             snapshot_time=datetime.utcnow(),
             channel_count=1,
@@ -1492,23 +1492,23 @@ class TestGetExecutions:
         """has_snapshot is resolved with a SINGLE existence query over the page's
         ids, not one query per execution. Asserts the snapshot table is hit at
         most once regardless of page size (no N+1)."""
-        from models import AutoCreationSnapshot
+        from models import ChannelPipelineSnapshot
 
         execs = [_create_execution(test_session, rule_name=f"E{i}") for i in range(5)]
         # Snapshot a couple of them.
         for ex in execs[:2]:
-            snap = AutoCreationSnapshot(
+            snap = ChannelPipelineSnapshot(
                 execution_id=ex.id, snapshot_time=datetime.utcnow(), channel_count=0,
             )
             snap.set_channels_data({"channels": []})
             test_session.add(snap)
         test_session.commit()
 
-        # Count how many times the AutoCreationSnapshot table is queried while
+        # Count how many times the ChannelPipelineSnapshot table is queried while
         # building the list response. A per-execution lookup would be 5 (N);
         # the batched IN query is exactly 1. We wrap Session.query and inspect
-        # its args (the snapshot probe is session.query(AutoCreationSnapshot
-        # .execution_id) — a column attribute owned by AutoCreationSnapshot).
+        # its args (the snapshot probe is session.query(ChannelPipelineSnapshot
+        # .execution_id) — a column attribute owned by ChannelPipelineSnapshot).
         from sqlalchemy.orm import Session
 
         snapshot_query_count = 0
@@ -1516,8 +1516,8 @@ class TestGetExecutions:
 
         def _is_snapshot_arg(a):
             return (
-                a is AutoCreationSnapshot
-                or getattr(a, "class_", None) is AutoCreationSnapshot
+                a is ChannelPipelineSnapshot
+                or getattr(a, "class_", None) is ChannelPipelineSnapshot
             )
 
         def counting_query(self, *args, **kwargs):
@@ -1565,10 +1565,10 @@ class TestGetExecutionSnapshot:
     @pytest.mark.asyncio
     async def test_returns_snapshot(self, async_client, test_session):
         """Returns the pre-run snapshot payload for an execution that has one."""
-        from models import AutoCreationSnapshot
+        from models import ChannelPipelineSnapshot
 
         execution = _create_execution(test_session)
-        snapshot = AutoCreationSnapshot(
+        snapshot = ChannelPipelineSnapshot(
             execution_id=execution.id,
             snapshot_time=datetime.utcnow(),
             channel_count=2,
@@ -1632,8 +1632,8 @@ class TestRollbackExecution:
             "entities_restored": 0,
         }
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/executions/1/rollback")
 
         assert response.status_code == 200
@@ -1648,7 +1648,7 @@ class TestRollbackExecution:
             "error": "Execution already rolled back",
         }
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post("/api/auto-creation/executions/1/rollback")
 
         assert response.status_code == 400
@@ -1664,8 +1664,8 @@ class TestRollbackExecution:
             "entities_removed": 3,
             "entities_restored": 0,
         }
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post("/api/auto-creation/executions/1/rollback")
         assert response.status_code == 200
         # confirm defaulted to False and was threaded to the engine.
@@ -1687,7 +1687,7 @@ class TestRollbackExecution:
                 "FULL restore that overwrites ... confirm=true."
             ),
         }
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post("/api/auto-creation/executions/1/rollback")
         assert response.status_code == 409
         assert "confirm" in response.json()["detail"].lower()
@@ -1704,8 +1704,8 @@ class TestRollbackExecution:
             "restored_channels": 5,
             "failed_channels": [],
         }
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/rollback?confirm=true"
             )
@@ -1728,8 +1728,8 @@ class TestRollbackExecution:
             "restored_channels": 4,
             "failed_channels": [{"id": 11, "name": "GONE", "error": "404"}],
         }
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/rollback?confirm=true"
             )
@@ -1752,7 +1752,7 @@ class TestRestoreSnapshot:
         """Without confirm=true → 400 (the §D5 warning is unacknowledged); the
         engine is never invoked."""
         mock_engine = AsyncMock()
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/restore-snapshot"
             )
@@ -1772,8 +1772,8 @@ class TestRestoreSnapshot:
             "restored_channels": 5,
             "failed_channels": [],
         }
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
             )
@@ -1792,7 +1792,7 @@ class TestRestoreSnapshot:
             "no_snapshot": True,
             "error": "No snapshot for execution 1; use /rollback instead.",
         }
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
             )
@@ -1806,7 +1806,7 @@ class TestRestoreSnapshot:
             "success": False,
             "error": "Cannot restore a dry-run execution",
         }
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
             )
@@ -1826,8 +1826,8 @@ class TestRestoreSnapshot:
             "restored_channels": 4,
             "failed_channels": [{"id": 11, "name": "GONE", "error": "404"}],
         }
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
             )
@@ -1851,7 +1851,7 @@ class TestExportYAML:
         mock_client.get_channel_groups.return_value = []
         mock_client.get_m3u_accounts.return_value = []
 
-        with patch("routers.auto_creation.get_client", return_value=mock_client):
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
             response = await async_client.get("/api/auto-creation/export/yaml")
 
         assert response.status_code == 200
@@ -1868,7 +1868,7 @@ class TestImportYAML:
         mock_client.get_channel_groups.return_value = []
         mock_client.get_m3u_accounts.return_value = []
 
-        with patch("routers.auto_creation.get_client", return_value=mock_client):
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
             response = await async_client.post("/api/auto-creation/import/yaml", json={
                 "yaml_content": "{{invalid yaml",
             })
@@ -1882,7 +1882,7 @@ class TestImportYAML:
         mock_client.get_channel_groups.return_value = []
         mock_client.get_m3u_accounts.return_value = []
 
-        with patch("routers.auto_creation.get_client", return_value=mock_client):
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
             response = await async_client.post("/api/auto-creation/import/yaml", json={
                 "yaml_content": "foo: bar",
             })
@@ -1896,7 +1896,7 @@ class TestValidateRule:
     @pytest.mark.asyncio
     async def test_validates_valid_rule(self, async_client):
         """Returns valid for good conditions/actions."""
-        with patch("auto_creation_schema.validate_rule", return_value={
+        with patch("channel_pipeline_schema.validate_rule", return_value={
             "valid": True, "errors": [],
         }):
             response = await async_client.post("/api/auto-creation/validate", json={
@@ -1910,7 +1910,7 @@ class TestValidateRule:
     @pytest.mark.asyncio
     async def test_validates_invalid_rule(self, async_client):
         """Returns invalid for bad conditions/actions."""
-        with patch("auto_creation_schema.validate_rule", return_value={
+        with patch("channel_pipeline_schema.validate_rule", return_value={
             "valid": False, "errors": ["Missing action type"],
         }):
             response = await async_client.post("/api/auto-creation/validate", json={
@@ -1975,7 +1975,7 @@ class TestDebugBundle:
         # Each test starts with an empty job dict so state never leaks across
         # tests (the dict is module-level by design so the in-memory job
         # lookup survives between requests within a single process).
-        from routers import auto_creation as router_module
+        from routers import channel_pipeline as router_module
 
         router_module._DEBUG_BUNDLE_JOBS.clear()
         yield
@@ -1992,7 +1992,7 @@ class TestDebugBundle:
             await gate.wait()
             return ("ecm-debug-bundle.tar.gz", b"fake-tar-gz")
 
-        with patch("routers.auto_creation._build_debug_bundle", side_effect=slow_build):
+        with patch("routers.channel_pipeline._build_debug_bundle", side_effect=slow_build):
             response = await async_client.post("/api/auto-creation/debug-bundle")
             assert response.status_code == 202, response.text
             body = response.json()
@@ -2001,7 +2001,7 @@ class TestDebugBundle:
             job_id = body["job_id"]
 
             # The job should already exist with status="running" before the build finishes.
-            from routers.auto_creation import _DEBUG_BUNDLE_JOBS
+            from routers.channel_pipeline import _DEBUG_BUNDLE_JOBS
             assert job_id in _DEBUG_BUNDLE_JOBS
             assert _DEBUG_BUNDLE_JOBS[job_id].status == "running"
 
@@ -2022,7 +2022,7 @@ class TestDebugBundle:
             return ("ecm-debug-bundle.tar.gz", b"fake")
 
         try:
-            with patch("routers.auto_creation._build_debug_bundle", side_effect=slow_build):
+            with patch("routers.channel_pipeline._build_debug_bundle", side_effect=slow_build):
                 enqueue = await async_client.post("/api/auto-creation/debug-bundle")
                 job_id = enqueue.json()["job_id"]
 
@@ -2045,7 +2045,7 @@ class TestDebugBundle:
         async def fast_build():
             return ("ecm-debug-bundle-test.tar.gz", b"\x1f\x8btar-bytes")
 
-        with patch("routers.auto_creation._build_debug_bundle", side_effect=fast_build):
+        with patch("routers.channel_pipeline._build_debug_bundle", side_effect=fast_build):
             enqueue = await async_client.post("/api/auto-creation/debug-bundle")
             job_id = enqueue.json()["job_id"]
 
@@ -2061,7 +2061,7 @@ class TestDebugBundle:
             assert response.content == b"\x1f\x8btar-bytes"
 
             # Single-shot read — job must be evicted so RAM is freed.
-            from routers.auto_creation import _DEBUG_BUNDLE_JOBS
+            from routers.channel_pipeline import _DEBUG_BUNDLE_JOBS
             assert job_id not in _DEBUG_BUNDLE_JOBS
 
     @pytest.mark.asyncio
@@ -2072,7 +2072,7 @@ class TestDebugBundle:
         async def boom():
             raise RuntimeError("dispatcharr unreachable")
 
-        with patch("routers.auto_creation._build_debug_bundle", side_effect=boom):
+        with patch("routers.channel_pipeline._build_debug_bundle", side_effect=boom):
             enqueue = await async_client.post("/api/auto-creation/debug-bundle")
             job_id = enqueue.json()["job_id"]
 
@@ -2087,7 +2087,7 @@ class TestDebugBundle:
             # Failed jobs stay in the dict until the TTL prune so the operator
             # can re-poll and see the error message; eviction happens only on
             # successful binary download.
-            from routers.auto_creation import _DEBUG_BUNDLE_JOBS
+            from routers.channel_pipeline import _DEBUG_BUNDLE_JOBS
             assert job_id in _DEBUG_BUNDLE_JOBS
 
     @pytest.mark.asyncio
@@ -2109,7 +2109,7 @@ class TestDebugBundle:
             return ("ecm-debug-bundle.tar.gz", b"")
 
         try:
-            with patch("routers.auto_creation._build_debug_bundle", side_effect=slow_build):
+            with patch("routers.channel_pipeline._build_debug_bundle", side_effect=slow_build):
                 start = _time.monotonic()
                 response = await async_client.post("/api/auto-creation/debug-bundle")
                 elapsed = _time.monotonic() - start
@@ -2123,7 +2123,7 @@ class TestDebugBundle:
 
     def test_prune_drops_expired_jobs(self):
         """_prune_old_debug_bundle_jobs evicts jobs older than the TTL."""
-        from routers import auto_creation as router_module
+        from routers import channel_pipeline as router_module
 
         old = router_module._DebugBundleJob()
         old.created_at = router_module.time.time() - (router_module._DEBUG_BUNDLE_JOB_TTL_SECONDS + 60)
@@ -2190,7 +2190,7 @@ class TestDebugBundle:
         mock_client.get_streams_by_ids = AsyncMock(return_value=[])
         mock_client.get_m3u_accounts = AsyncMock(return_value=[])
 
-        with patch("routers.auto_creation.get_client", return_value=mock_client), \
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client), \
              patch("log_utils.get_recent_logs", return_value=[]):
             enqueue = await async_client.post("/api/auto-creation/debug-bundle")
             assert enqueue.status_code == 202
@@ -2280,7 +2280,7 @@ class TestDebugBundle:
         mock_client.get_streams_by_ids = AsyncMock(return_value=[])
         mock_client.get_m3u_accounts = AsyncMock(return_value=[])
 
-        with patch("routers.auto_creation.get_client", return_value=mock_client), \
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client), \
              patch("log_utils.get_recent_logs", return_value=[]), \
              patch("config.get_settings", return_value=seeded), \
              patch("config.load_settings", return_value=seeded):
@@ -2328,7 +2328,7 @@ class TestDebugBundle:
 # /api/auto-creation/rules/analyze            — analyze rules in DB
 # /api/auto-creation/rules/analyze/from-bundle — analyze rules.yaml from
 #                                                 an uploaded debug bundle
-# Both reuse auto_creation_rule_analyzer.analyze_rules; the router is a
+# Both reuse channel_pipeline_rule_analyzer.analyze_rules; the router is a
 # thin adapter (DB→dict, or tar.gz→yaml→dict).
 # =========================================================================
 
@@ -2649,8 +2649,8 @@ class TestAutoCreationAdminGating:
 
         app.dependency_overrides[_prebuilt.dependency] = _allow_admin
         try:
-            with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-                 patch("routers.auto_creation.journal"):
+            with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+                 patch("routers.channel_pipeline.journal"):
                 response = await async_client.post(
                     "/api/auto-creation/executions/1/rollback"
                 )
@@ -2672,8 +2672,8 @@ class TestAutoCreationAdminGating:
             "entities_restored": 0,
         }
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/rollback"
             )
@@ -2703,8 +2703,8 @@ class TestAutoCreationAdminGating:
 
         app.dependency_overrides[_prebuilt.dependency] = _allow_admin
         try:
-            with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-                 patch("routers.auto_creation.journal"):
+            with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+                 patch("routers.channel_pipeline.journal"):
                 response = await async_client.post(
                     "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
                 )
@@ -2728,8 +2728,8 @@ class TestAutoCreationAdminGating:
             "failed_channels": [],
         }
 
-        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine), \
-             patch("routers.auto_creation.journal"):
+        with patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=mock_engine), \
+             patch("routers.channel_pipeline.journal"):
             response = await async_client.post(
                 "/api/auto-creation/executions/1/restore-snapshot?confirm=true"
             )
@@ -2790,7 +2790,7 @@ class TestDebugBundleFetchResilience:
 
     @pytest.mark.asyncio
     async def test_with_retry_retries_5xx_then_succeeds(self):
-        from routers import auto_creation as m
+        from routers import channel_pipeline as m
 
         calls = {"n": 0}
 
@@ -2800,7 +2800,7 @@ class TestDebugBundleFetchResilience:
                 raise _http_status_error(504)
             return "ok"
 
-        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+        with patch("routers.channel_pipeline.asyncio.sleep", new_callable=AsyncMock):
             result = await m._with_retry(flaky, what="test")
 
         assert result == "ok"
@@ -2808,7 +2808,7 @@ class TestDebugBundleFetchResilience:
 
     @pytest.mark.asyncio
     async def test_with_retry_does_not_retry_4xx(self):
-        from routers import auto_creation as m
+        from routers import channel_pipeline as m
 
         calls = {"n": 0}
 
@@ -2818,7 +2818,7 @@ class TestDebugBundleFetchResilience:
 
         import httpx
 
-        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+        with patch("routers.channel_pipeline.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(httpx.HTTPStatusError):
                 await m._with_retry(bad_request, what="test")
 
@@ -2826,7 +2826,7 @@ class TestDebugBundleFetchResilience:
 
     @pytest.mark.asyncio
     async def test_with_retry_exhausts_and_reraises(self):
-        from routers import auto_creation as m
+        from routers import channel_pipeline as m
 
         calls = {"n": 0}
 
@@ -2836,7 +2836,7 @@ class TestDebugBundleFetchResilience:
 
         import httpx
 
-        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+        with patch("routers.channel_pipeline.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(httpx.HTTPStatusError):
                 await m._with_retry(always_504, what="test")
 
@@ -2844,7 +2844,7 @@ class TestDebugBundleFetchResilience:
 
     @pytest.mark.asyncio
     async def test_fetch_all_channels_complete(self):
-        from routers import auto_creation as m
+        from routers import channel_pipeline as m
 
         client = MagicMock()
 
@@ -2864,7 +2864,7 @@ class TestDebugBundleFetchResilience:
 
     @pytest.mark.asyncio
     async def test_fetch_all_channels_tolerates_failed_page(self):
-        from routers import auto_creation as m
+        from routers import channel_pipeline as m
 
         client = MagicMock()
 
@@ -2876,7 +2876,7 @@ class TestDebugBundleFetchResilience:
 
         client.get_channels = AsyncMock(side_effect=get_channels)
 
-        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+        with patch("routers.channel_pipeline.asyncio.sleep", new_callable=AsyncMock):
             channels, report = await m._fetch_all_channels(client)
 
         # Page 1 (100) + page 3 (50) survive; page 2 dropped — bundle is partial,
@@ -2887,20 +2887,20 @@ class TestDebugBundleFetchResilience:
 
     @pytest.mark.asyncio
     async def test_fetch_all_channels_page1_failure_propagates(self):
-        from routers import auto_creation as m
+        from routers import channel_pipeline as m
         import httpx
 
         client = MagicMock()
         client.get_channels = AsyncMock(side_effect=_http_status_error(504))
 
         # No first page => no catalog at all; this is the one case that propagates.
-        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+        with patch("routers.channel_pipeline.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(httpx.HTTPStatusError):
                 await m._fetch_all_channels(client)
 
     @pytest.mark.asyncio
     async def test_fetch_stream_details_tolerates_failed_batch(self):
-        from routers import auto_creation as m
+        from routers import channel_pipeline as m
 
         client = MagicMock()
 
@@ -2912,7 +2912,7 @@ class TestDebugBundleFetchResilience:
         client.get_streams_by_ids = AsyncMock(side_effect=get_streams_by_ids)
 
         ids = list(range(250))  # 3 batches of 100/100/50
-        with patch("routers.auto_creation.asyncio.sleep", new_callable=AsyncMock):
+        with patch("routers.channel_pipeline.asyncio.sleep", new_callable=AsyncMock):
             lookup, report = await m._fetch_stream_details(client, ids, obfuscate_url=lambda u: u)
 
         assert report["complete"] is False

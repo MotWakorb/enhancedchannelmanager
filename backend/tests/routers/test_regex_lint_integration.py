@@ -16,7 +16,7 @@ from datetime import datetime
 import pytest
 
 from models import (
-    AutoCreationRule,
+    ChannelPipelineRule,
     DummyEPGProfile,
     NormalizationRule,
     NormalizationRuleGroup,
@@ -273,7 +273,7 @@ class TestAutoCreationCreateRuleLinting:
 class TestAutoCreationUpdateRuleLinting:
     @pytest.mark.asyncio
     async def test_put_rejects_evil_pattern(self, async_client, test_session):
-        rule = AutoCreationRule(
+        rule = ChannelPipelineRule(
             name="Initial",
             conditions=json.dumps(
                 [{"type": "stream_name_contains", "value": "ESPN"}]
@@ -300,7 +300,7 @@ class TestAutoCreationBulkUpdateRuleLinting:
     async def test_bulk_update_rejects_evil_sort_regex(
         self, async_client, test_session
     ):
-        rule = AutoCreationRule(
+        rule = ChannelPipelineRule(
             name="Bulk lint target",
             conditions=json.dumps(
                 [{"type": "stream_name_contains", "value": "ESPN"}]
@@ -326,7 +326,7 @@ class TestAutoCreationBulkUpdateRuleLinting:
 
         # Defense in depth: the rule's sort_regex must not have been written.
         test_session.expire_all()
-        refreshed = test_session.query(AutoCreationRule).get(rule_id)
+        refreshed = test_session.query(ChannelPipelineRule).get(rule_id)
         assert refreshed.sort_regex is None
 
 

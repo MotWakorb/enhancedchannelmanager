@@ -19,17 +19,17 @@ Part C (bd-0hjrk.8, test-only slice) — match_by no-op:
   that actually changes matching.
 
 Fixtures mirror the existing 0emgo.4 tests in
-``test_auto_creation_executor.py`` (ExecutionContext.add_result) and
-``test_auto_creation_engine.py::TestRunPipelineCreateChannelMergeChannelsTouched``
+``test_channel_pipeline_executor.py`` (ExecutionContext.add_result) and
+``test_channel_pipeline_engine.py::TestRunPipelineCreateChannelMergeChannelsTouched``
 (real-pipeline create+merge dry-run/live driver) so engine scaffolding is not
 rebuilt from scratch.
 """
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from auto_creation_executor import ActionResult, ExecutionContext, ActionExecutor
-from auto_creation_evaluator import StreamContext
-from auto_creation_engine import AutoCreationEngine
+from channel_pipeline_executor import ActionResult, ExecutionContext, ActionExecutor
+from channel_pipeline_evaluator import StreamContext
+from channel_pipeline_engine import ChannelPipelineEngine
 
 
 def _merge_result(entity_id, name="ESPN"):
@@ -107,12 +107,12 @@ class TestChannelsTouchedInvariant:
         self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
         self.client.get_channel_groups = AsyncMock(return_value=[])
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
     def _make_rule(self):
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
 
-        rule = AutoCreationRule()
+        rule = ChannelPipelineRule()
         rule.id = 1
         rule.name = "Create+Merge Rule"
         rule.priority = 0
@@ -144,7 +144,7 @@ class TestChannelsTouchedInvariant:
         self.engine._save_execution = AsyncMock()
         self.engine._update_rule_stats = AsyncMock()
 
-        with patch("auto_creation_engine.get_session") as mock_get_session:
+        with patch("channel_pipeline_engine.get_session") as mock_get_session:
             mock_get_session.return_value = MagicMock()
             return asyncio.get_event_loop().run_until_complete(
                 self.engine.run_pipeline(dry_run=dry_run)
@@ -194,7 +194,7 @@ class TestChannelsTouchedInvariant:
             ("FOX", 921),
         ])
 
-        with patch("auto_creation_executor.journal.log_entries"):
+        with patch("channel_pipeline_executor.journal.log_entries"):
             result = self._run(rule, streams, dry_run=False)
 
         merged = result["streams_merged"]
@@ -210,9 +210,9 @@ class TestChannelsTouchedInvariant:
 class TestExecutionIdPresentBothModes:
     """Part B (d): execution_id is returned for BOTH dry_run and real runs.
 
-    FINDING (run_pipeline, backend/auto_creation_engine.py): whenever there is
+    FINDING (run_pipeline, backend/channel_pipeline_engine.py): whenever there is
     at least one enabled rule to process, the engine creates an
-    AutoCreationExecution row (mode="dry_run"/"execute") and returns
+    ChannelPipelineExecution row (mode="dry_run"/"execute") and returns
     ``execution_id=execution.id`` for both modes (lines ~169-172, ~230). The
     only path that returns NO execution_id is the no-enabled-rules early return
     (no row is created there) — an expected no-op, not a dry_run gap. So
@@ -224,12 +224,12 @@ class TestExecutionIdPresentBothModes:
         self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
         self.client.get_channel_groups = AsyncMock(return_value=[])
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
     def _make_rule(self):
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
 
-        rule = AutoCreationRule()
+        rule = ChannelPipelineRule()
         rule.id = 1
         rule.name = "Create+Merge Rule"
         rule.priority = 0
@@ -260,8 +260,8 @@ class TestExecutionIdPresentBothModes:
         self.engine._save_execution = AsyncMock()
         self.engine._update_rule_stats = AsyncMock()
 
-        with patch("auto_creation_engine.get_session") as mock_get_session, \
-                patch("auto_creation_executor.journal.log_entries"):
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
             mock_get_session.return_value = MagicMock()
             return asyncio.get_event_loop().run_until_complete(
                 self.engine.run_pipeline(dry_run=dry_run)

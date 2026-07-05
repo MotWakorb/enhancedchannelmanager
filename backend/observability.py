@@ -1365,16 +1365,16 @@ def update_auto_creation_snapshot_metrics(session=None) -> None:
     try:
         from sqlalchemy import func
 
-        from models import AutoCreationSnapshot
+        from models import ChannelPipelineSnapshot
 
         if session is None:
             from database import get_session  # local — avoid import cycle
             session = get_session()
             own_session = True
 
-        count = session.query(func.count(AutoCreationSnapshot.id)).scalar() or 0
+        count = session.query(func.count(ChannelPipelineSnapshot.id)).scalar() or 0
         total_bytes = session.query(
-            func.coalesce(func.sum(func.length(AutoCreationSnapshot.channels_data)), 0)
+            func.coalesce(func.sum(func.length(ChannelPipelineSnapshot.channels_data)), 0)
         ).scalar() or 0
 
         get_metric("auto_creation_snapshot_count").set(float(count))
