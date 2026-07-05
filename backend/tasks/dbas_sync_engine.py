@@ -73,10 +73,17 @@ from pathlib import Path
 from typing import Optional
 
 import journal
-from dbas.preflight import ImportPlan, PlanCategory
+from dbas.preflight import (
+    CHANNEL_FK_FIELDS,
+    ImportPlan,
+    NAME_UNIQUE_CATEGORIES,
+    PlanCategory,
+)
 from dbas.restore_artifact import _SECTION_TO_ENTITY
 from dbas.restore_contracts import (
     EntityType,
+    FailureDetail,
+    FailureReason,
     IdRemapTable,
     RestoreReport,
     RollbackLedger,
@@ -310,6 +317,191 @@ async def build_live_source_plan() -> ImportPlan:
 
 
 # ---------------------------------------------------------------------------
+# Source-side name-conflict tolerance — sync degrades PER-ITEM, unlike backup/
+# restore's all-or-nothing preflight refusal.
+# ---------------------------------------------------------------------------
+
+
+def _split_name_conflicts(
+    plan: ImportPlan,
+) -> tuple[ImportPlan, dict[EntityType, list[dict]]]:
+    """Dedup name-unique categories so a source-side duplicate degrades to a
+    per-item CONFLICT instead of preflight's all-or-nothing plan refusal.
+
+    ``dbas.preflight._validate_unique_names`` refuses the ENTIRE plan when ANY
+    :data:`~dbas.preflight.NAME_UNIQUE_CATEGORIES` category carries two entities
+    sharing a (trimmed, case-insensitive) name — correct for backup/restore,
+    where a half-applied one-shot snapshot is worse than no restore at all
+    (ADR / Dispatcharr has no DB transactions). Continuous cross-instance sync
+    has the opposite failure mode: one duplicated name anywhere in the source
+    (e.g. two channel groups both named "World Cup 2026") must not blank out
+    every OTHER category's diff. This mirrors the per-item tolerance
+    ``dbas/importers/channels.py`` already applies to an unrelated ambiguity
+    (``_is_ambiguous_null_key`` — a name collision with a null channel_number on
+    both sides is surfaced as a CONFLICT for that one channel, not a plan
+    refusal) rather than inventing a second tolerance model.
+
+    For each category in :data:`NAME_UNIQUE_CATEGORIES` — the SAME set
+    preflight checks, imported directly so the two lists can never drift apart
+    on which categories they cover — entities are scanned in archive order
+    using preflight's EXACT normalization (``name.strip().lower()``; a missing,
+    non-string, or empty name is left alone and never flagged, matching
+    ``_validate_unique_names``). The first entity to claim a given name is kept;
+    every later entity with the same name is removed from the returned plan and
+    recorded in the excluded mapping so the caller can surface it as a CONFLICT
+    once the (now preflight-safe) plan has been restored.
+
+    Dropping a duplicate is not enough on its own: a CHANNEL entity elsewhere in
+    the plan may carry a ``channel_group_id`` / ``stream_profile_id`` (the two
+    fields :data:`~dbas.preflight.CHANNEL_FK_FIELDS` points at) that referenced
+    the EXCLUDED duplicate's source id. Left alone, that reference would dangle
+    and ``dbas.preflight._validate_fk_references`` would refuse the WHOLE
+    (now-deduped) plan again — reproducing the exact all-or-nothing refusal this
+    function exists to avoid, just via a different validator. So this function
+    also builds a source-id -> kept-id remap for every FK-target category
+    (:data:`~dbas.preflight.CHANNEL_FK_FIELDS` values) and rewrites any CHANNEL
+    entity's matching FK field that pointed at an excluded id, so it now points
+    at the surviving same-named entity instead.
+
+    Args:
+        plan: The freshly-assembled live-source plan, not yet preflighted.
+
+    Returns:
+        A tuple of ``(deduped_plan, excluded)`` where ``excluded`` maps each
+        affected :class:`EntityType` to the list of archive entity dicts that
+        were dropped. ``deduped_plan`` cannot trigger
+        ``PreflightProblemKind.DUPLICATE_UNIQUE_NAME`` — every name-unique
+        category now carries at most one entity per normalized name — and any
+        CHANNEL FK that referenced a dropped duplicate has been remapped onto
+        the entity that survived, so it cannot trigger
+        ``PreflightProblemKind.UNRESOLVED_FK_REFERENCE`` either.
+    """
+    excluded: dict[EntityType, list[dict]] = {}
+    # Excluded (dropped) source id -> surviving (kept, same-name) source id, per
+    # FK-target entity type. Only populated for categories CHANNEL_FK_FIELDS can
+    # point at (currently CHANNEL_GROUP / STREAM_PROFILE) — imported directly
+    # from preflight so this can never drift from the FK fields preflight
+    # actually validates.
+    fk_remap: dict[EntityType, dict[int, int]] = {}
+    new_categories: list[PlanCategory] = []
+    for cat in plan.categories:
+        if cat.entity_type not in NAME_UNIQUE_CATEGORIES:
+            new_categories.append(cat)
+            continue
+        seen: set[str] = set()
+        kept_id_by_name: dict[str, int] = {}
+        kept: list[dict] = []
+        for entity in cat.entities:
+            raw = entity.get("name")
+            if not isinstance(raw, str):
+                kept.append(entity)
+                continue
+            key = raw.strip().lower()
+            if not key:
+                kept.append(entity)
+                continue
+            if key in seen:
+                excluded.setdefault(cat.entity_type, []).append(entity)
+                excluded_id = entity.get("id")
+                kept_id = kept_id_by_name.get(key)
+                if excluded_id is not None and kept_id is not None:
+                    fk_remap.setdefault(cat.entity_type, {})[int(excluded_id)] = kept_id
+                continue
+            seen.add(key)
+            kept.append(entity)
+            kept_id = entity.get("id")
+            if kept_id is not None:
+                kept_id_by_name[key] = int(kept_id)
+        new_categories.append(
+            PlanCategory(
+                entity_type=cat.entity_type, entities=kept, selected=cat.selected
+            )
+        )
+
+    if fk_remap:
+        for index, cat in enumerate(new_categories):
+            if cat.entity_type != EntityType.CHANNEL:
+                continue
+            rewritten: list[dict] = []
+            for channel in cat.entities:
+                updated_channel = channel
+                for field, target_type in CHANNEL_FK_FIELDS.items():
+                    field_remap = fk_remap.get(target_type)
+                    if not field_remap:
+                        continue
+                    ref = updated_channel.get(field)
+                    if ref is None:
+                        continue
+                    try:
+                        ref_id = int(ref)
+                    except (TypeError, ValueError):
+                        continue
+                    if ref_id in field_remap:
+                        if updated_channel is channel:
+                            updated_channel = dict(channel)
+                        updated_channel[field] = field_remap[ref_id]
+                rewritten.append(updated_channel)
+            new_categories[index] = PlanCategory(
+                entity_type=cat.entity_type, entities=rewritten, selected=cat.selected
+            )
+
+    deduped_plan = plan.model_copy(update={"categories": new_categories})
+    return deduped_plan, excluded
+
+
+def _apply_name_conflict_details(
+    report: RestoreReport, excluded: dict[EntityType, list[dict]]
+) -> None:
+    """Surface each entity :func:`_split_name_conflicts` dropped as a CONFLICT.
+
+    Mirrors ``dbas/importers/channels.py``'s ambiguous-collision shape exactly
+    (``cat.failed += 1`` + one :class:`FailureDetail` per entity) so the sync
+    report's per-entity conflict UX is uniform regardless of which tolerance
+    path produced it. Applied UNCONDITIONALLY — dry-run and apply alike — so a
+    dry-run preview surfaces the conflict before an operator ever confirms
+    apply, matching the channels.py precedent (no ``is_dry_run`` guard there
+    either).
+
+    Args:
+        report: The :class:`RestoreReport` returned by :func:`~dbas.
+            restore_orchestrator.run_restore` for the deduped plan.
+        excluded: The mapping :func:`_split_name_conflicts` returned — entity
+            type -> the archive entities it removed from the plan.
+    """
+    for entity_type, entities in excluded.items():
+        cat = report.category(entity_type)
+        for entity in entities:
+            # Guaranteed a non-empty str by _split_name_conflicts (only entities
+            # with a valid duplicate name are ever collected here).
+            label = str(entity.get("name"))
+            source_id = entity.get("id")
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=FailureReason.CONFLICT,
+                    label=label,
+                    message=(
+                        "duplicate %s name in source archive: '%s' — a "
+                        "same-named entity was kept and synced; this one was "
+                        "skipped to avoid ambiguity." % (entity_type.value, label)
+                    ),
+                    source_export_id=int(source_id) if source_id is not None else None,
+                )
+            )
+        logger.warning(
+            "[SYNC] %d %s name-conflict(s) resolved: kept first, skipped %d "
+            "duplicate(s).",
+            len(entities),
+            entity_type.value,
+            len(entities),
+        )
+        report.notes.append(
+            "%d %s name-conflict(s) resolved: kept first, skipped %d "
+            "duplicate(s)." % (len(entities), entity_type.value, len(entities))
+        )
+
+
+# ---------------------------------------------------------------------------
 # Config-only importer step registry — REUSE the orchestrator's builders.
 # ---------------------------------------------------------------------------
 
@@ -532,6 +724,12 @@ async def run_sync(
     # --- 3. Redacted live-source plan (config categories, never users). ---
     plan = await build_live_source_plan()
 
+    # --- 3b. Degrade a source-side duplicate name to a per-item CONFLICT ---
+    # instead of inheriting preflight's all-or-nothing plan refusal (see
+    # _split_name_conflicts) — a single duplicated group/profile/M3U name must
+    # not blank out every other category's diff.
+    plan, excluded_name_conflicts = _split_name_conflicts(plan)
+
     # --- 4. Restore (reused orchestrator) — dry-run default, source-wins apply. ---
     # The per-target fuzzy-stream-matching opt-in (default off) threads into the
     # channels step; off => the stream matcher floors at Tier-3 exact (ruling 1b).
@@ -549,6 +747,9 @@ async def run_sync(
         deferred_apply_fn=_no_deferred_apply,  # ADR-013 S9 — suppress per-cycle defer.
         ledger_dir=ledger_dir,
     )
+
+    # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---
+    _apply_name_conflict_details(result, excluded_name_conflicts)
 
     # --- 5. Audit the run (D9). ---
     _journal_sync_run(sync_target, result, confirm_apply=confirm_apply)

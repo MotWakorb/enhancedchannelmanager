@@ -25,13 +25,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dbas.restore_contracts import EntityType, RestoreOutcome
+from dbas.preflight import ImportPlan, PlanCategory
+from dbas.restore_contracts import EntityType, FailureReason, RestoreOutcome
 from routers import backup as backup_mod
 from tasks import dbas_sync_engine as engine
 from tasks.dbas_sync_engine import (
     SYNC_CONFIG_CATEGORIES,
     SYNC_NEVER_CATEGORIES,
     SYNC_NEVER_CREDENTIAL_COLUMNS,
+    _split_name_conflicts,
     build_live_source_plan,
     run_sync,
 )
@@ -75,6 +77,12 @@ def _source_client() -> MagicMock:
     client.get_users = AsyncMock(
         return_value=[{"id": 99, "username": "admin", "is_superuser": True}]
     )
+    # Channels default to empty so tests that don't care about the CHANNEL
+    # category still exercise the real `_gather_live_channels` path (an
+    # unwired MagicMock here silently swallows a TypeError on `await` and
+    # returns [] anyway, masking whether the channels slice actually ran).
+    client.get_channels = AsyncMock(return_value={"results": [], "count": 0})
+    client.get_channel_streams = AsyncMock(return_value=[])
     return client
 
 
@@ -363,6 +371,269 @@ async def test_run_sync_journals_the_run(tmp_path):
     log_entry.assert_called()
     kwargs = log_entry.call_args.kwargs
     assert kwargs.get("category") == "sync_outbound"
+
+
+# ---------------------------------------------------------------------------
+# Source-side name-conflict tolerance (bug fix): a duplicate name in a
+# NAME_UNIQUE_CATEGORIES category degrades to a per-item CONFLICT instead of
+# preflight's all-or-nothing refusal blanking out every other category's diff.
+# ---------------------------------------------------------------------------
+
+
+def _source_client_with_duplicate_channel_groups() -> MagicMock:
+    """A source-A client whose channel_groups carry a source-side duplicate
+    name (e.g. two groups both named "World Cup 2026") — every OTHER category
+    is a normal, conflict-free single entity."""
+    client = _source_client()
+    client.get_channel_groups = AsyncMock(
+        return_value=[
+            {"id": 20, "name": "World Cup 2026"},
+            {"id": 21, "name": "World Cup 2026"},
+        ]
+    )
+    return client
+
+
+def test_split_name_conflicts_keeps_first_dedupes_case_insensitive_dupes():
+    """Unit-level: normalization matches preflight's exactly (trim + lowercase),
+    non-string/empty names are left alone, and a category OUTSIDE
+    NAME_UNIQUE_CATEGORIES is never touched even if it carries "duplicate"
+    names (e.g. two CHANNEL entities may legitimately share a display name)."""
+    plan = ImportPlan(
+        manifest={"schema_version": 1},
+        categories=[
+            PlanCategory(
+                entity_type=EntityType.CHANNEL_GROUP,
+                entities=[
+                    {"id": 1, "name": "World Cup 2026"},
+                    {"id": 2, "name": " world cup 2026 "},  # dup: trim+lowercase match
+                    {"id": 3, "name": "News"},
+                    {"id": 4, "name": None},  # non-string name: left alone
+                    {"id": 5},  # missing name: left alone
+                ],
+            ),
+            PlanCategory(
+                entity_type=EntityType.CHANNEL,
+                entities=[
+                    {"id": 10, "name": "CNN"},
+                    {"id": 11, "name": "CNN"},
+                ],
+            ),
+        ],
+    )
+
+    deduped, excluded = _split_name_conflicts(plan)
+
+    group_cat = deduped.category(EntityType.CHANNEL_GROUP)
+    assert {e.get("id") for e in group_cat.entities} == {1, 3, 4, 5}
+    assert [e["id"] for e in excluded[EntityType.CHANNEL_GROUP]] == [2]
+
+    # CHANNEL is not in NAME_UNIQUE_CATEGORIES — both "CNN" entities survive.
+    channel_cat = deduped.category(EntityType.CHANNEL)
+    assert len(channel_cat.entities) == 2
+    assert EntityType.CHANNEL not in excluded
+
+
+def test_split_name_conflicts_remaps_channel_fk_off_excluded_duplicate():
+    """FK-remap regression: a CHANNEL entity referencing the EXCLUDED
+    duplicate's source id must have that FK rewritten onto the KEPT (surviving,
+    first-occurrence) entity's source id — so
+    ``dbas.preflight._validate_fk_references`` does not refuse the deduped plan
+    (``UNRESOLVED_FK_REFERENCE``) all over again. Without this, a channel
+    referencing the losing duplicate's id would dangle and reproduce the exact
+    "0 items processed" bug this whole tolerance model exists to close, just
+    via a different validator than DUPLICATE_UNIQUE_NAME.
+
+    Exercises ``channel_group_id`` — the field this actually fires for today,
+    since :data:`~dbas.preflight.NAME_UNIQUE_CATEGORIES` (what
+    ``_split_name_conflicts`` dedupes) currently covers
+    ``CHANNEL_GROUP``/``CHANNEL_PROFILE``/``M3U_ACCOUNT`` but NOT
+    ``STREAM_PROFILE`` — so a duplicate stream-profile name is never deduped
+    (and its FK never remapped) yet. The remap logic itself is generic over
+    every field in ``CHANNEL_FK_FIELDS``, so ``stream_profile_id`` will pick up
+    the same fix automatically if/when ``STREAM_PROFILE`` joins
+    ``NAME_UNIQUE_CATEGORIES``."""
+    from dbas.preflight import run_preflight
+
+    plan = ImportPlan(
+        manifest={"schema_version": 1},
+        categories=[
+            PlanCategory(
+                entity_type=EntityType.CHANNEL_GROUP,
+                entities=[
+                    {"id": 20, "name": "World Cup 2026"},
+                    {"id": 21, "name": "World Cup 2026"},  # excluded duplicate
+                ],
+            ),
+            PlanCategory(
+                entity_type=EntityType.CHANNEL,
+                entities=[
+                    {
+                        "id": 5,
+                        "name": "CNN",
+                        "channel_group_id": 21,  # references the LOSING duplicate
+                    },
+                ],
+            ),
+        ],
+    )
+
+    deduped, excluded = _split_name_conflicts(plan)
+
+    assert [e["id"] for e in excluded[EntityType.CHANNEL_GROUP]] == [21]
+
+    # The channel's FK now points at the KEPT (surviving) source id.
+    channel = deduped.category(EntityType.CHANNEL).entities[0]
+    assert channel["channel_group_id"] == 20
+
+    # The deduped + remapped plan PASSES preflight outright — the regression
+    # test for the bug: previously this would still fail preflight with
+    # UNRESOLVED_FK_REFERENCE even after the name-conflict dedup.
+    result = run_preflight(deduped)
+    assert result.passed, result.problems
+
+
+@pytest.mark.asyncio
+async def test_run_sync_duplicate_channel_group_name_is_conflict_not_plan_refusal(
+    tmp_path,
+):
+    """A source-side duplicate channel-group name must NOT trigger preflight's
+    all-or-nothing refusal (the root-cause bug: "0 items processed" instead of
+    the many channels/groups the operator expected). It degrades to exactly
+    ONE per-item CONFLICT — mirroring channels.py's existing ambiguous-
+    collision precedent — while every OTHER category still gets diffed."""
+    src = _source_client_with_duplicate_channel_groups()
+    dest = _empty_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    # Preflight did NOT refuse the whole plan — the OTHER categories resolved
+    # normally (this is the exact bug: report.categories used to stay []).
+    assert report.category(EntityType.M3U_ACCOUNT).created == 1
+    assert report.category(EntityType.EPG_SOURCE).created == 1
+    assert report.category(EntityType.STREAM_PROFILE).created == 1
+
+    # channel_group: first occurrence kept + created; the duplicate is ONE conflict.
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.created == 1
+    assert cat.failed == 1
+    assert len(cat.failure_details) == 1
+    assert cat.failure_details[0].reason == FailureReason.CONFLICT
+    assert cat.failure_details[0].source_export_id == 21
+    dest.create_channel_group.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_sync_dry_run_duplicate_channel_group_name_is_conflict(tmp_path):
+    """The same tolerance applies to a dry-run preview — a conflict is visible
+    BEFORE an operator ever confirms apply (no ``is_dry_run`` guard, matching
+    the channels.py precedent)."""
+    src = _source_client_with_duplicate_channel_groups()
+    dest = _empty_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(target, session=MagicMock(), ledger_dir=tmp_path)
+
+    assert report.is_dry_run is True
+    dest.create_channel_group.assert_not_called()
+    assert report.category(EntityType.M3U_ACCOUNT).would_create == 1
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.would_create == 1
+    assert cat.failed == 1
+    assert len(cat.failure_details) == 1
+    assert cat.failure_details[0].reason == FailureReason.CONFLICT
+    assert any("name-conflict" in n for n in report.notes)
+
+
+def _source_client_with_duplicate_group_and_referencing_channel() -> MagicMock:
+    """Duplicate channel-groups (20 kept, 21 excluded) PLUS a CHANNEL entity
+    whose ``channel_group_id`` references the EXCLUDED duplicate's source id
+    (21) — the real-world scenario the FK-remap fix closes: a channel that was
+    attached to the losing duplicate group must end up on the surviving one,
+    not dangle. ``get_channels``/``get_channel_streams`` are wired as real
+    AsyncMocks so ``_gather_live_channels`` actually returns this channel
+    instead of silently swallowing an unwired-mock TypeError and returning []."""
+    client = _source_client()
+    client.get_channel_groups = AsyncMock(
+        return_value=[
+            {"id": 20, "name": "World Cup 2026"},
+            {"id": 21, "name": "World Cup 2026"},
+        ]
+    )
+    client.get_channels = AsyncMock(
+        return_value={
+            "results": [
+                {
+                    "id": 5,
+                    "name": "CNN",
+                    "channel_number": 5,
+                    "channel_group_id": 21,
+                    "streams": [],
+                },
+            ],
+            "count": 1,
+        }
+    )
+    client.get_channel_streams = AsyncMock(return_value=[])
+    return client
+
+
+@pytest.mark.asyncio
+async def test_run_sync_channel_fk_remapped_off_excluded_duplicate_group(tmp_path):
+    """End-to-end FK-remap regression (Finding 1): a channel referencing the
+    EXCLUDED duplicate channel-group's source id must NOT trip preflight's
+    UNRESOLVED_FK_REFERENCE (which would refuse the WHOLE plan again — the
+    exact "0 items processed" bug via a different validator). It must instead
+    be remapped onto the KEPT group and sync normally."""
+    src = _source_client_with_duplicate_group_and_referencing_channel()
+    dest = _dest_client_for_channels()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    # (a) preflight did NOT refuse the whole plan — every OTHER category still
+    # resolved normally (the regression: report.categories used to stay []).
+    assert report.category(EntityType.M3U_ACCOUNT).created == 1
+    assert report.category(EntityType.EPG_SOURCE).created == 1
+    assert report.category(EntityType.STREAM_PROFILE).created == 1
+
+    # channel_group: first occurrence (20) kept + created; duplicate (21) is
+    # ONE conflict, same as the existing non-FK-referencing test above.
+    group_cat = report.category(EntityType.CHANNEL_GROUP)
+    assert group_cat.created == 1
+    assert group_cat.failed == 1
+    dest.create_channel_group.assert_awaited_once()
+
+    # (b) the CHANNEL category was actually processed — not empty (this is the
+    # test-harness gap the reviewer found: an unwired get_channels mock would
+    # silently make this category empty and mask the whole FK-remap bug).
+    channel_cat = report.category(EntityType.CHANNEL)
+    assert channel_cat.created == 1
+    assert channel_cat.failed == 0
+
+    # (c) the channel that referenced the excluded group's source id (21) was
+    # created against the KEPT group's DESTINATION id — verified via the
+    # destination client's create_channel call args, mirroring how the other
+    # CHANNEL tests in this file verify channel-group attachment.
+    dest.create_channel.assert_awaited_once()
+    payload = dest.create_channel.await_args.args[0]
+    assert payload["channel_group_id"] == 120  # dest id _empty_dest_client's
+    # create_channel_group mock always returns for the (one) group it creates.
 
 
 # ---------------------------------------------------------------------------
