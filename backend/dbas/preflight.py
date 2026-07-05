@@ -59,7 +59,13 @@ DEFAULT_MAX_ENTITIES_PER_CATEGORY = 100_000
 # Categories whose ``name`` must be unique on the destination. A duplicate name
 # inside the archive would make the second create CONFLICT mid-apply, so it is a
 # pre-flight failure, not a runtime surprise.
-_NAME_UNIQUE_CATEGORIES = frozenset(
+#
+# Public (no leading underscore) so ``tasks.dbas_sync_engine`` can import the
+# SAME set to degrade a source-side duplicate into a per-item CONFLICT instead
+# of sync inheriting backup/restore's all-or-nothing refusal — one definition,
+# so the two tolerance models can never drift apart on which categories they
+# cover.
+NAME_UNIQUE_CATEGORIES = frozenset(
     {EntityType.M3U_ACCOUNT, EntityType.CHANNEL_GROUP, EntityType.CHANNEL_PROFILE}
 )
 
@@ -157,7 +163,14 @@ class ImportPlan(BaseModel):
 # FK references a channel record can carry, and the category each points at.
 # Used to check every FK in the plan resolves to a will-be-created entity or an
 # already-present destination entity. Keyed by the archive field name.
-_CHANNEL_FK_FIELDS: dict[str, EntityType] = {
+#
+# Public (no leading underscore) so ``tasks.dbas_sync_engine`` can import the
+# SAME mapping to remap a channel's FK away from a source-side duplicate that
+# ``_split_name_conflicts`` excludes, onto the surviving same-named entity —
+# one definition, so the FK-check surface and the FK-remap surface can never
+# drift apart on which fields/categories they cover (mirrors
+# ``NAME_UNIQUE_CATEGORIES`` above).
+CHANNEL_FK_FIELDS: dict[str, EntityType] = {
     "channel_group_id": EntityType.CHANNEL_GROUP,
     "stream_profile_id": EntityType.STREAM_PROFILE,
 }
@@ -227,7 +240,7 @@ def _validate_unique_names(plan: ImportPlan, problems: list[PreflightProblem]) -
     failure so no partial state is created.
     """
     for cat in plan.selected_categories():
-        if cat.entity_type not in _NAME_UNIQUE_CATEGORIES:
+        if cat.entity_type not in NAME_UNIQUE_CATEGORIES:
             continue
         seen: set[str] = set()
         for entity in cat.entities:
@@ -291,7 +304,7 @@ def _validate_fk_references(plan: ImportPlan, problems: list[PreflightProblem]) 
         return
 
     for archive_channel in channels.entities:
-        for field, target_type in _CHANNEL_FK_FIELDS.items():
+        for field, target_type in CHANNEL_FK_FIELDS.items():
             ref = archive_channel.get(field)
             if ref is None:
                 continue
