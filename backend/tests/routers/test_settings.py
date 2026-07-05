@@ -8,8 +8,12 @@ Tests: GET /api/settings, POST /api/settings, POST /api/settings/test,
 Mocks: get_settings(), save_settings(), get_client(), get_prober(), get_tracker(),
        httpx, smtplib, aiohttp.
 """
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from tests.conftest import closing_create_task_mock
 
 
 def _mock_settings(**overrides):
@@ -241,12 +245,19 @@ class TestUpdateSettings:
         """Switching auth_method to api_key with a fresh key saves without crashing."""
         current = _mock_settings(auth_method="password")
 
+        # bd-snryv: mode_changed=True here makes connection_changed True,
+        # which now schedules a background-service rebuild via
+        # asyncio.create_task(). Patch create_task out with the project's
+        # standard fire-and-forget test helper (see tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings"), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             response = await async_client.post("/api/settings", json={
                 "url": current.url,
@@ -396,12 +407,19 @@ class TestUpdateSettings:
         def capture_save(new_settings):
             captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings", side_effect=capture_save), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             response = await async_client.post("/api/settings", json={
                 "url": current.url,
@@ -425,12 +443,19 @@ class TestUpdateSettings:
         def capture_save(new_settings):
             captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings", side_effect=capture_save), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             response = await async_client.post("/api/settings", json={
                 "url": current.url,
@@ -456,12 +481,19 @@ class TestUpdateSettings:
         def capture_save(new_settings):
             captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings", side_effect=capture_save), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             response = await async_client.post("/api/settings", json={
                 "url": current.url,
@@ -484,12 +516,19 @@ class TestUpdateSettings:
         import logging
         current = _mock_settings(auth_method="password")
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings"), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             with caplog.at_level(logging.WARNING, logger="routers.settings"):
                 response = await async_client.post("/api/settings", json={
@@ -519,12 +558,19 @@ class TestUpdateSettings:
         import logging
         current = _mock_settings(auth_method="password")
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings"), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             with caplog.at_level(logging.WARNING, logger="routers.settings"):
                 response = await async_client.post("/api/settings", json={
@@ -557,6 +603,268 @@ class TestUpdateSettings:
         data = response.json()
         assert data["dispatcharr_api_key_configured"] is True
         assert data["api_key_configured"] is True
+
+
+class TestUpdateSettingsRebuildsBackgroundServices:
+    """bd-snryv: POST /api/settings must rebuild the standing BandwidthTracker
+    / StreamProber (and reconnect the prober-dependent task instances) when a
+    Dispatcharr connection-relevant field changes — not just swap the
+    get_client() singleton via reset_client(). Otherwise the background
+    tracker/prober keep talking to the OLD (stale-credential) client forever,
+    until an operator separately discovers and hits restart-services or the
+    container restarts.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rebuilds_when_password_changes_alone(self, async_client):
+        """A password rotation with url/username/mode unchanged is NOT
+        caught by ``auth_changed`` — it must still trigger a rebuild."""
+        current = _mock_settings(auth_method="password", password="old-secret")
+
+        mock_old_tracker = AsyncMock()
+        mock_old_prober = AsyncMock()
+        new_prober_instance = MagicMock()
+        new_prober_instance.start = AsyncMock()
+        mock_task_instance = MagicMock()
+        mock_registry = MagicMock()
+        mock_registry.get_task_instance.return_value = mock_task_instance
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_client", return_value=AsyncMock()), \
+             patch("routers.settings.get_tracker", return_value=mock_old_tracker), \
+             patch("routers.settings.get_prober", return_value=mock_old_prober), \
+             patch("routers.settings.BandwidthTracker") as MockTracker, \
+             patch("routers.settings.StreamProber") as MockProber, \
+             patch("routers.settings.set_tracker") as mock_set_tracker, \
+             patch("routers.settings.set_prober") as mock_set_prober, \
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("task_registry.get_registry", return_value=mock_registry):
+            MockTracker.return_value = AsyncMock()
+            MockProber.return_value = new_prober_instance
+            mock_cache.return_value = MagicMock()
+
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "password",
+                "username": current.username,
+                "password": "new-secret",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        mock_old_tracker.stop.assert_called_once()
+        mock_old_prober.stop.assert_called_once()
+        mock_set_tracker.assert_called_once()
+        mock_set_prober.assert_called_once_with(new_prober_instance)
+        assert mock_task_instance.set_prober.call_count == 3
+        mock_task_instance.set_prober.assert_called_with(new_prober_instance)
+
+    @pytest.mark.asyncio
+    async def test_rebuilds_when_api_key_changes_alone(self, async_client):
+        """Rotating the API key in api_key mode (url/mode unchanged) is NOT
+        caught by ``auth_changed`` — it must still trigger a rebuild."""
+        current = _mock_settings(
+            auth_method="api_key", dispatcharr_api_key="old-key", api_key="old-key",
+        )
+
+        mock_old_tracker = AsyncMock()
+        mock_old_prober = AsyncMock()
+        new_prober_instance = MagicMock()
+        new_prober_instance.start = AsyncMock()
+        mock_task_instance = MagicMock()
+        mock_registry = MagicMock()
+        mock_registry.get_task_instance.return_value = mock_task_instance
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_client", return_value=AsyncMock()), \
+             patch("routers.settings.get_tracker", return_value=mock_old_tracker), \
+             patch("routers.settings.get_prober", return_value=mock_old_prober), \
+             patch("routers.settings.BandwidthTracker") as MockTracker, \
+             patch("routers.settings.StreamProber") as MockProber, \
+             patch("routers.settings.set_tracker") as mock_set_tracker, \
+             patch("routers.settings.set_prober") as mock_set_prober, \
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("task_registry.get_registry", return_value=mock_registry):
+            MockTracker.return_value = AsyncMock()
+            MockProber.return_value = new_prober_instance
+            mock_cache.return_value = MagicMock()
+
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "dispatcharr_api_key": "new-key",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        mock_set_tracker.assert_called_once()
+        mock_set_prober.assert_called_once_with(new_prober_instance)
+        assert mock_task_instance.set_prober.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_rebuild_failure_does_not_break_the_save(self, async_client, caplog):
+        """If the background-service rebuild raises, the settings save must
+        still succeed (200, status=saved) — the rebuild failure is logged,
+        not surfaced as a 500."""
+        import logging
+        current = _mock_settings(auth_method="password", password="old-secret")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch(
+                 "routers.settings._restart_background_services",
+                 side_effect=RuntimeError("boom"),
+             ), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.WARNING, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "password",
+                    "username": current.username,
+                    "password": "new-secret",
+                })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        assert any(
+            "Failed to rebuild background services" in record.getMessage()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_rebuild_when_no_connection_field_changes(self, async_client):
+        """Toggling an unrelated preference (e.g. auto_reorder_after_probe)
+        must NOT tear down and restart the tracker/prober — that would be an
+        unnecessary restart storm on every minor settings tweak."""
+        current = _mock_settings(auth_method="password", password="unchanged-secret")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings._restart_background_services") as mock_rebuild, \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "password",
+                "username": current.username,
+                "auto_reorder_after_probe": True,
+            })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        mock_rebuild.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rebuild_is_fire_and_forget_does_not_block_response(self, async_client):
+        """bd-snryv: the rebuild does a real paginated Dispatcharr fetch
+        (BandwidthTracker._initialize_channel_maps()) plus an ffprobe
+        availability check — it must be scheduled via asyncio.create_task(),
+        not awaited inline, so a slow/unreachable Dispatcharr host during a
+        credential rotation can't hang the settings-save HTTP response.
+        Mocks ``_restart_background_services`` to take noticeably longer
+        than the response should, and asserts the response returns well
+        within that window (if it were awaited inline, this would take at
+        least as long as the mocked rebuild)."""
+        import time
+        current = _mock_settings(auth_method="password", password="old-secret")
+
+        async def slow_rebuild(settings):
+            await asyncio.sleep(0.3)
+            return {"success": True, "message": "restarted"}
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings._restart_background_services", side_effect=slow_rebuild), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+
+            start = time.monotonic()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "password",
+                "username": current.username,
+                "password": "new-secret",
+            })
+            elapsed = time.monotonic() - start
+            # Let the detached rebuild task run to completion inside its own
+            # mocked delay before the mocks above are torn down on exit.
+            await asyncio.sleep(0.35)
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        assert elapsed < 0.2, (
+            f"settings save took {elapsed:.3f}s — the background-service "
+            "rebuild looks like it's being awaited inline instead of "
+            "fire-and-forget"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_reported_failure_logs_warning_not_info(self, async_client, caplog):
+        """bd-snryv: ``_restart_background_services()`` catches its own
+        construction/start failures internally and RETURNS
+        ``{"success": False, ...}`` instead of raising. Before this fix the
+        fire-and-forget wrapper logged that dict unconditionally at INFO
+        ("Rebuilt background services..."), so a failed rebuild read as
+        routine success in the logs. Assert the WARNING branch fires
+        instead when ``success`` is False, and the (misleading) INFO success
+        line does not."""
+        import logging
+        current = _mock_settings(auth_method="password", password="old-secret")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch(
+                 "routers.settings._restart_background_services",
+                 return_value={"success": False, "message": "Failed to restart services"},
+             ), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.INFO, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "password",
+                    "username": current.username,
+                    "password": "new-secret",
+                })
+                # Let the fire-and-forget rebuild task run to completion
+                # before the mocks above are torn down.
+                await asyncio.sleep(0)
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        warning_records = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING
+            and "did not succeed" in r.getMessage()
+        ]
+        assert len(warning_records) == 1, (
+            f"Expected one WARNING for the failed rebuild; got: {caplog.records}"
+        )
+        assert not any(
+            "Rebuilt background services" in r.getMessage() and r.levelno == logging.INFO
+            for r in caplog.records
+        ), "Failed rebuild was logged as a routine INFO success"
 
 
 class TestTestConnection:
@@ -830,6 +1138,69 @@ class TestRestartServices:
 
         assert response.status_code == 200
         assert response.json()["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_clears_tracker_and_prober_singletons_when_not_configured(self, async_client):
+        """bd-snryv: StreamProber.stop() only flips a cancellation flag — a
+        later probe entry point resets it back to False — so the
+        just-stopped tracker/prober objects stay truthy and reusable.
+        Without explicitly clearing the singletons on this early-return
+        path, a caller like auto_creation_engine's
+        ``prober = get_prober(); if not prober: skip`` guard would pass and
+        proceed against a client for settings that are no longer configured.
+        """
+        mock = _mock_settings()
+        mock.is_configured.return_value = False
+        mock_old_tracker = AsyncMock()
+        mock_old_prober = AsyncMock()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings.get_tracker", return_value=mock_old_tracker), \
+             patch("routers.settings.get_prober", return_value=mock_old_prober), \
+             patch("routers.settings.set_tracker") as mock_set_tracker, \
+             patch("routers.settings.set_prober") as mock_set_prober:
+            response = await async_client.post("/api/settings/restart-services")
+
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+        mock_old_tracker.stop.assert_called_once()
+        mock_old_prober.stop.assert_called_once()
+        mock_set_tracker.assert_called_once_with(None)
+        mock_set_prober.assert_called_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_restart_resets_auto_creation_engine_singleton(self, async_client):
+        """bd-snryv: AutoCreationEngine has the identical stale-client bug as
+        BandwidthTracker/StreamProber — it captures ``self.client`` once and
+        never re-fetches get_client(). The rebuild must clear the engine
+        singleton so the next ``_ensure_engine()`` call in
+        routers/auto_creation.py naturally rebuilds it against the fresh
+        client, instead of an auto-creation rule run hitting Dispatcharr with
+        stale credentials indefinitely after a rotation."""
+        mock = _mock_settings()
+        mock.is_configured.return_value = True
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings.get_tracker", return_value=None), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_client", return_value=AsyncMock()), \
+             patch("routers.settings.BandwidthTracker") as MockTracker, \
+             patch("routers.settings.StreamProber") as MockProber, \
+             patch("routers.settings.set_tracker"), \
+             patch("routers.settings.set_prober"), \
+             patch("routers.settings.create_notification_internal"), \
+             patch("routers.settings.update_notification_internal"), \
+             patch("routers.settings.delete_notifications_by_source_internal"), \
+             patch("auto_creation_engine.reset_auto_creation_engine") as mock_reset_engine:
+            MockTracker.return_value = AsyncMock()
+            new_prober = MagicMock()
+            new_prober.start = AsyncMock()
+            MockProber.return_value = new_prober
+            response = await async_client.post("/api/settings/restart-services")
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        mock_reset_engine.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_restarts_services(self, async_client):
