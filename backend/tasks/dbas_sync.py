@@ -63,7 +63,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import journal
 import observability
@@ -89,6 +89,32 @@ def _bump_sync_metric(result: str) -> None:
         observability.get_metric("sync_runs_total").labels(result=result).inc()
     except Exception as e:  # pragma: no cover — metrics best-effort
         logger.warning("[DBAS_SYNC] Failed to increment sync_runs_total: %s", e)
+
+
+class SyncCounts(NamedTuple):
+    """Per-run item counts summed from ``RestoreReport.categories``.
+
+    Named fields instead of a bare tuple so ``_counts_from_report``'s callers
+    use attribute access (``counts.failed_count``) rather than positional
+    unpacking — a future reorder of this tuple's construction vs. a
+    destructuring assignment at the call site would otherwise silently swap
+    fields (e.g. failed shown as skipped) with no type-checker catch. Mirrors
+    the house pattern in ``bandwidth_tracker.py``'s ``ProviderResolution``:
+    zero runtime overhead vs. a plain tuple (``typing.NamedTuple`` is a tuple
+    subclass), field access is callsite documentation.
+
+    * ``total_items`` — success_count + skipped_count + failed_count.
+    * ``success_count`` — dry-run: would_create + would_update; apply:
+      created + updated.
+    * ``failed_count`` — dry-run: always 0 (a plan cannot fail); apply: sum
+      of ``category.failed``.
+    * ``skipped_count`` — dry-run: would_skip; apply: skipped.
+    """
+
+    total_items: int
+    success_count: int
+    failed_count: int
+    skipped_count: int
 
 
 @register_task
@@ -315,20 +341,67 @@ class DbasSyncTask(TaskScheduler):
             "[DBAS_SYNC] Sync task complete (mode=%s, outcome=%s, %d categories)",
             "dry-run" if is_dry_run else "apply", outcome, len(report.categories),
         )
+        # NOTE: task_engine.py's generic "if result.failed_count > 0" warning
+        # branch (~line 1014) now depends on an invariant enforced upstream in
+        # dbas/restore_orchestrator.py's compute_outcome(): outcome is NEVER
+        # SUCCESS while any category.failed > 0 (compute_outcome re-scans every
+        # category via _report_has_failures at outcome-decision time). So
+        # succeeded=True (dry-run, or apply with outcome==SUCCESS) implies
+        # counts.failed_count == 0 here by construction, not by convention.
+        counts = self._counts_from_report(report, is_dry_run)
         return TaskResult(
             success=succeeded,
             message=message,
             error=None if succeeded else "SYNC_%s" % outcome.upper(),
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
-            total_items=1,
-            success_count=1 if succeeded else 0,
-            failed_count=0 if succeeded else 1,
+            total_items=counts.total_items,
+            success_count=counts.success_count,
+            failed_count=counts.failed_count,
+            skipped_count=counts.skipped_count,
             details={
                 "is_dry_run": is_dry_run,
                 "outcome": outcome,
                 "sync_report": report.model_dump(mode="json"),
             },
+        )
+
+    @staticmethod
+    def _counts_from_report(report, is_dry_run: bool) -> "SyncCounts":
+        """Sum the REAL per-category item counts across ``report.categories``.
+
+        The task-level ``TaskResult`` badges (Task History UI) previously
+        hardcoded ``total_items=1`` / ``success_count=1`` — "the whole run
+        counted as one unit" — which reads as "1 of 1" even when a sync
+        dry-run/apply touches dozens of channels/groups/profiles. This mirrors
+        :meth:`_summary_message`'s sums (same underlying counts, so the
+        human-readable message and the numeric badges never disagree).
+
+        - **Dry-run**: success = would_create + would_update (items that WOULD
+          change), skipped = would_skip, failed = 0. ``EntityCategoryReport``
+          has no ``would_fail`` field — a plan cannot fail, only apply can.
+        - **Apply**: success = created + updated, skipped = skipped,
+          failed = failed.
+
+        Returns a :class:`SyncCounts` (named fields, not a positional tuple —
+        see its docstring for why).
+        """
+        if is_dry_run:
+            success_count = sum(
+                c.would_create + c.would_update for c in report.categories
+            )
+            skipped_count = sum(c.would_skip for c in report.categories)
+            failed_count = 0
+        else:
+            success_count = sum(c.created + c.updated for c in report.categories)
+            skipped_count = sum(c.skipped for c in report.categories)
+            failed_count = sum(c.failed for c in report.categories)
+        total_items = success_count + skipped_count + failed_count
+        return SyncCounts(
+            total_items=total_items,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
         )
 
     @staticmethod

@@ -36,7 +36,7 @@ from sqlalchemy.orm import sessionmaker
 
 import database
 import observability
-from dbas.restore_contracts import RestoreOutcome, RestoreReport
+from dbas.restore_contracts import EntityCategoryReport, EntityType, RestoreOutcome, RestoreReport
 from export_models import SyncTarget
 from models import JournalEntry, Notification
 from task_scheduler import ScheduleConfig, ScheduleType
@@ -107,6 +107,59 @@ def _partial_report() -> RestoreReport:
 def _dry_run_report() -> RestoreReport:
     # A dry-run plan has no realized outcome (outcome stays None).
     return RestoreReport(is_dry_run=True)
+
+
+def _dry_run_report_with_categories() -> RestoreReport:
+    """A dry-run plan across 2 categories with a mix of would_create/
+    would_update/would_skip — the real per-entity scope a preview should
+    surface, NOT the '1 of 1' task-level placeholder."""
+    report = RestoreReport(is_dry_run=True)
+    report.categories = [
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL,
+            would_create=10, would_update=5, would_skip=2,
+        ),
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL_GROUP,
+            would_create=3, would_update=1, would_skip=1,
+        ),
+    ]
+    return report
+
+
+def _apply_success_report_with_categories() -> RestoreReport:
+    """A clean SUCCESS apply across 2 categories with created/updated/skipped
+    (no failures — a clean success has zero failed entities)."""
+    report = RestoreReport(is_dry_run=False)
+    report.outcome = RestoreOutcome.SUCCESS
+    report.categories = [
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL,
+            created=8, updated=4, skipped=1, failed=0,
+        ),
+        EntityCategoryReport(
+            entity_type=EntityType.M3U_ACCOUNT,
+            created=2, updated=0, skipped=0, failed=0,
+        ),
+    ]
+    return report
+
+
+def _apply_partial_report_with_categories() -> RestoreReport:
+    """A mixed/rolled-back apply with real failures across categories."""
+    report = RestoreReport(is_dry_run=False)
+    report.outcome = RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    report.categories = [
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL,
+            created=5, updated=2, skipped=1, failed=3,
+        ),
+        EntityCategoryReport(
+            entity_type=EntityType.EPG_SOURCE,
+            created=1, updated=1, skipped=0, failed=0,
+        ),
+    ]
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +500,105 @@ async def test_fresh_target_passes_gate_and_runs(_wire_db):
 
     assert mock_run.await_count == 1
     assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# TaskResult numeric counts must reflect the REAL per-category sums, not the
+# task-level '1 of 1' placeholder (Task History UI badges consume these).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_run_counts_reflect_real_category_sums(_wire_db):
+    """A dry-run report with 2 categories (13 would_create, 6 would_update, 3
+    would_skip total) must produce a TaskResult whose total_items/success_count/
+    skipped_count reflect those REAL sums — not the old hardcoded 1/1/0."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        return _dry_run_report_with_categories()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id})
+        result = await task.execute()
+
+    assert result.success is True
+    # would_create (10+3) + would_update (5+1) = 19
+    assert result.success_count == 19
+    # would_skip (2+1) = 3
+    assert result.skipped_count == 3
+    # A dry-run plan cannot fail (no would_fail field) — always 0.
+    assert result.failed_count == 0
+    # total_items is the sum of every counted bucket: 19 + 3 + 0 = 22
+    assert result.total_items == 22
+
+
+@pytest.mark.asyncio
+async def test_apply_success_counts_reflect_real_category_sums(_wire_db):
+    """A clean SUCCESS apply across 2 categories (10 created, 4 updated, 1
+    skipped, 0 failed) must produce matching TaskResult counts."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        return _apply_success_report_with_categories()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        result = await task.execute()
+
+    assert result.success is True
+    # created (8+2) + updated (4+0) = 14
+    assert result.success_count == 14
+    # skipped (1+0) = 1
+    assert result.skipped_count == 1
+    assert result.failed_count == 0
+    # total_items: 14 + 1 + 0 = 15
+    assert result.total_items == 15
+
+
+@pytest.mark.asyncio
+async def test_apply_partial_counts_reflect_real_failures(_wire_db):
+    """A mixed/rolled-back apply with real per-category failures must surface
+    the actual failed_count, not a flattened '1'."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        return _apply_partial_report_with_categories()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        result = await task.execute()
+
+    assert result.success is False
+    # created (5+1) + updated (2+1) = 9
+    assert result.success_count == 9
+    # skipped (1+0) = 1
+    assert result.skipped_count == 1
+    # failed (3+0) = 3 — the REAL failure count, not the hardcoded 1
+    assert result.failed_count == 3
+    # total_items: 9 + 1 + 3 = 13
+    assert result.total_items == 13
 
 
 # ---------------------------------------------------------------------------
