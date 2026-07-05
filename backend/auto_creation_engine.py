@@ -3893,6 +3893,28 @@ def set_auto_creation_engine(engine: AutoCreationEngine):
     _engine_instance = engine
 
 
+def reset_auto_creation_engine() -> None:
+    """Clear the auto-creation engine singleton (bd-snryv).
+
+    ``AutoCreationEngine.__init__`` captures ``self.client`` once and uses it
+    for every live Dispatcharr call the pipeline makes thereafter (get_channels,
+    update_channel, delete_channel, assign_channel_numbers, etc.) — it never
+    re-fetches ``get_client()``. ``routers/auto_creation.py``'s
+    ``_ensure_engine()`` helper only builds a fresh engine via
+    ``init_auto_creation_engine(get_client())`` when ``get_auto_creation_engine()``
+    returns ``None``; it never rebuilds an existing engine. Without this,
+    a Dispatcharr credential rotation leaves auto-creation rule runs hitting
+    Dispatcharr with stale credentials indefinitely — same bug class as the
+    BandwidthTracker/StreamProber singletons (see
+    ``routers.settings._restart_background_services``), just a different
+    singleton. Mirrors ``dispatcharr_client.reset_client()``: clearing the
+    singleton here is sufficient because ``_ensure_engine()`` already does
+    "build if None" — the next call naturally rebuilds with the fresh client.
+    """
+    global _engine_instance
+    _engine_instance = None
+
+
 async def init_auto_creation_engine(client) -> AutoCreationEngine:
     """Initialize the auto-creation engine with a Dispatcharr client."""
     engine = AutoCreationEngine(client)
