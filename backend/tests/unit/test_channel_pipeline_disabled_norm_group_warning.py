@@ -15,19 +15,19 @@ merged/normalized):
     empty list when all referenced groups are enabled / no rule references any.
   * The warnings are surfaced in the run-summary result dict
     (``normalization_warnings``) and persisted on the execution record
-    (``AutoCreationExecution.warnings`` via ``set_warnings`` / ``get_warnings``)
+    (``ChannelPipelineExecution.warnings`` via ``set_warnings`` / ``get_warnings``)
     so the polled record and the executions UI can show them.
 """
 import asyncio
 import json
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from auto_creation_engine import AutoCreationEngine
-from models import AutoCreationRule, AutoCreationExecution, NormalizationRuleGroup
+from channel_pipeline_engine import ChannelPipelineEngine
+from models import ChannelPipelineRule, ChannelPipelineExecution, NormalizationRuleGroup
 
 
 def _make_rule(name, group_ids, enabled=True, priority=0):
-    rule = AutoCreationRule(
+    rule = ChannelPipelineRule(
         name=name,
         enabled=enabled,
         priority=priority,
@@ -42,10 +42,10 @@ class TestDetectDisabledNormalizationGroupWarnings:
     """Unit tests for the detection helper (real in-memory session)."""
 
     def setup_method(self):
-        self.engine = AutoCreationEngine(MagicMock())
+        self.engine = ChannelPipelineEngine(MagicMock())
 
     def _detect(self, session, rules):
-        with patch("auto_creation_engine.get_session", return_value=session):
+        with patch("channel_pipeline_engine.get_session", return_value=session):
             return asyncio.get_event_loop().run_until_complete(
                 self.engine._detect_disabled_normalization_group_warnings(rules)
             )
@@ -110,28 +110,28 @@ class TestDetectDisabledNormalizationGroupWarnings:
 
 
 class TestExecutionWarningsPersistence:
-    """AutoCreationExecution.warnings round-trip + to_dict exposure."""
+    """ChannelPipelineExecution.warnings round-trip + to_dict exposure."""
 
     def test_set_get_warnings_round_trip(self):
-        ex = AutoCreationExecution()
+        ex = ChannelPipelineExecution()
         payload = [{"rule_id": 1, "rule_name": "R", "disabled_groups": [{"id": 2, "name": "G"}]}]
         ex.set_warnings(payload)
         assert ex.get_warnings() == payload
 
     def test_get_warnings_empty_default(self):
-        ex = AutoCreationExecution()
+        ex = ChannelPipelineExecution()
         assert ex.get_warnings() == []
 
     def test_to_dict_includes_warnings(self):
         from datetime import datetime
-        ex = AutoCreationExecution(started_at=datetime.utcnow())
+        ex = ChannelPipelineExecution(started_at=datetime.utcnow())
         ex.set_warnings([{"rule_id": 1, "rule_name": "R", "disabled_groups": []}])
         d = ex.to_dict()
         assert d["warnings"] == [{"rule_id": 1, "rule_name": "R", "disabled_groups": []}]
 
     def test_to_dict_warnings_empty_when_none(self):
         from datetime import datetime
-        ex = AutoCreationExecution(started_at=datetime.utcnow())
+        ex = ChannelPipelineExecution(started_at=datetime.utcnow())
         assert ex.to_dict()["warnings"] == []
 
 
@@ -144,7 +144,7 @@ class TestRunPipelineSurfacesWarnings:
         self.client.get_channel_groups = AsyncMock(return_value=[])
         self.client.get_m3u_accounts = AsyncMock(return_value=[{"id": 1, "name": "Provider A"}])
         self.client.get_streams = AsyncMock(return_value={"count": 0, "results": []})
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
     def test_run_pipeline_includes_normalization_warnings(self, test_session):
         """A rule referencing a disabled group surfaces a warning in the run
@@ -156,7 +156,7 @@ class TestRunPipelineSurfacesWarnings:
         test_session.add(rule)
         test_session.commit()
 
-        with patch("auto_creation_engine.get_session", return_value=test_session):
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
             result = asyncio.get_event_loop().run_until_complete(
                 self.engine.run_pipeline(dry_run=True)
             )
@@ -167,7 +167,7 @@ class TestRunPipelineSurfacesWarnings:
         assert result["normalization_warnings"][0]["rule_name"] == "Movie Channels"
 
         # Persisted on the execution record (what the polled API / UI reads).
-        ex = test_session.get(AutoCreationExecution, result["execution_id"])
+        ex = test_session.get(ChannelPipelineExecution, result["execution_id"])
         assert ex is not None
         assert len(ex.get_warnings()) == 1
         assert ex.get_warnings()[0]["rule_name"] == "Movie Channels"
@@ -181,7 +181,7 @@ class TestRunPipelineSurfacesWarnings:
         test_session.add(rule)
         test_session.commit()
 
-        with patch("auto_creation_engine.get_session", return_value=test_session):
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
             result = asyncio.get_event_loop().run_until_complete(
                 self.engine.run_pipeline(dry_run=True)
             )

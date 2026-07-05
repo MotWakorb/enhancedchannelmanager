@@ -160,7 +160,7 @@ def _advance_refresh_watermark() -> None:
     """ADR-011 (bd-ka7j9): mark that an M3U refresh just completed successfully.
 
     Replaces the old per-account hard chain to ``run_auto_creation_after_refresh``.
-    The interval-scheduled ``AutoCreationTask`` reads this watermark FRESH on each
+    The interval-scheduled ``ChannelPipelineTask`` reads this watermark FRESH on each
     tick and auto-fires when it is newer than the consumed watermark, so a single
     failed account never suppresses auto-creation for the batch. Per Q1 it
     advances on EVERY successful refresh (NOT change-gated). Best-effort.
@@ -253,7 +253,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 )
 
                 # ADR-011 (bd-ka7j9): no more hard chain. Advance the refresh
-                # watermark; the interval-scheduled AutoCreationTask self-fires.
+                # watermark; the interval-scheduled ChannelPipelineTask self-fires.
                 _advance_refresh_watermark()
 
                 return
@@ -294,7 +294,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 )
 
                 # ADR-011 (bd-ka7j9): no more hard chain. Advance the refresh
-                # watermark; the interval-scheduled AutoCreationTask self-fires.
+                # watermark; the interval-scheduled ChannelPipelineTask self-fires.
                 _advance_refresh_watermark()
 
                 return

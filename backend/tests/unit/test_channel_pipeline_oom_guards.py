@@ -8,7 +8,7 @@ Part A (bd-sjdsq): bounded in-memory execution_log.
   - On truncation a marker + aggregate summary entry is present.
 
 Part B (bd-exo4j): crash-loop guard.
-  - Startup crash-sentinel marks status='running' AutoCreationExecution rows
+  - Startup crash-sentinel marks status='running' ChannelPipelineExecution rows
     'abandoned' (idempotent; leaves 'completed' rows untouched) and trips the
     persisted circuit-breaker flag.
   - run_auto_creation_after_refresh is SKIPPED when the flag is set, fires when
@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from auto_creation_engine import AutoCreationEngine, BoundedExecutionLog
+from channel_pipeline_engine import ChannelPipelineEngine, BoundedExecutionLog
 
 
 # ---------------------------------------------------------------------------
@@ -98,14 +98,14 @@ class TestBoundedExecutionLog:
 # ---------------------------------------------------------------------------
 class TestCrashSentinel:
     def test_sentinel_marks_running_abandoned_and_trips_breaker(self, test_session):
-        from models import AutoCreationExecution
+        from models import ChannelPipelineExecution
         from task_engine import _abandon_orphaned_auto_creation_executions
 
-        running = AutoCreationExecution(
+        running = ChannelPipelineExecution(
             mode="execute", triggered_by="m3u_refresh",
             started_at=datetime.utcnow(), status="running",
         )
-        completed = AutoCreationExecution(
+        completed = ChannelPipelineExecution(
             mode="execute", triggered_by="manual",
             started_at=datetime.utcnow(), status="completed",
             completed_at=datetime.utcnow(),
@@ -120,14 +120,14 @@ class TestCrashSentinel:
 
         assert abandoned == 1
         test_session.expire_all()
-        assert test_session.get(AutoCreationExecution, running_id).status == "abandoned"
-        assert test_session.get(AutoCreationExecution, running_id).completed_at is not None
-        assert test_session.get(AutoCreationExecution, completed_id).status == "completed"
+        assert test_session.get(ChannelPipelineExecution, running_id).status == "abandoned"
+        assert test_session.get(ChannelPipelineExecution, running_id).completed_at is not None
+        assert test_session.get(ChannelPipelineExecution, completed_id).status == "completed"
         # breaker tripped
         mock_save.assert_called_once()
 
     def test_sentinel_idempotent(self, test_session):
-        from models import AutoCreationExecution
+        from models import ChannelPipelineExecution
         from task_engine import _abandon_orphaned_auto_creation_executions
 
         with patch("config.save_settings"), \
@@ -138,7 +138,7 @@ class TestCrashSentinel:
 
 class TestRunOnRefreshBreaker:
     """exo4j breaker/break-glass still trips/skips end-to-end through the new
-    SINGLE auto-creation path (ADR-011 collapsed AutoCreationTask.execute())."""
+    SINGLE auto-creation path (ADR-011 collapsed ChannelPipelineTask.execute())."""
 
     def _settings(self, **kw):
         base = dict(
@@ -151,17 +151,17 @@ class TestRunOnRefreshBreaker:
 
     @pytest.mark.asyncio
     async def test_skipped_when_flag_set(self):
-        from tasks.auto_creation import AutoCreationTask
+        from tasks.channel_pipeline import ChannelPipelineTask
 
         with patch.dict(os.environ, {}, clear=False), \
-             patch("tasks.auto_creation.get_settings",
+             patch("tasks.channel_pipeline.get_settings",
                    return_value=self._settings(auto_creation_run_on_refresh_disabled=True)), \
              patch("services.notification_service.create_notification_internal", new=AsyncMock()) as mock_notif, \
              patch("journal.log_entry") as mock_journal:
             os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
             # i2xad: scheduled auto-creation is opt-in (default_enabled=False);
             # enable the instance to exercise the post-(a) AUTO-FIRE GUARD path.
-            task = AutoCreationTask()
+            task = ChannelPipelineTask()
             task._enabled = True
             result = await task.execute()
 
@@ -172,13 +172,13 @@ class TestRunOnRefreshBreaker:
 
     @pytest.mark.asyncio
     async def test_break_glass_env_skips_regardless(self):
-        from tasks.auto_creation import AutoCreationTask
+        from tasks.channel_pipeline import ChannelPipelineTask
 
         with patch.dict(os.environ, {"ECM_DISABLE_RUN_ON_REFRESH": "1"}, clear=False), \
-             patch("tasks.auto_creation.get_settings", return_value=self._settings()), \
+             patch("tasks.channel_pipeline.get_settings", return_value=self._settings()), \
              patch("services.notification_service.create_notification_internal", new=AsyncMock()), \
              patch("journal.log_entry"):
-            task = AutoCreationTask()
+            task = ChannelPipelineTask()
             task._enabled = True  # i2xad: opt-in; exercise post-(a) guard
             result = await task.execute()
 
@@ -186,7 +186,7 @@ class TestRunOnRefreshBreaker:
 
     @pytest.mark.asyncio
     async def test_fires_when_flag_clear(self):
-        from tasks.auto_creation import AutoCreationTask
+        from tasks.channel_pipeline import ChannelPipelineTask
 
         fake_engine = MagicMock()
         fake_engine.run_pipeline = AsyncMock(return_value={
@@ -198,14 +198,14 @@ class TestRunOnRefreshBreaker:
         session.query.return_value.filter.return_value.all.return_value = [rule]
 
         with patch.dict(os.environ, {}, clear=False), \
-             patch("tasks.auto_creation.get_settings", return_value=self._settings()), \
-             patch("tasks.auto_creation.save_settings"), \
+             patch("tasks.channel_pipeline.get_settings", return_value=self._settings()), \
+             patch("tasks.channel_pipeline.save_settings"), \
              patch("services.notification_service.create_notification_internal", new=AsyncMock()), \
-             patch("auto_creation_engine.get_auto_creation_engine", return_value=fake_engine), \
-             patch("tasks.auto_creation.get_client", return_value=MagicMock()), \
+             patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=fake_engine), \
+             patch("tasks.channel_pipeline.get_client", return_value=MagicMock()), \
              patch("database.get_session", return_value=session):
             os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
-            task = AutoCreationTask()
+            task = ChannelPipelineTask()
             task._enabled = True  # i2xad: opt-in; exercise post-(a) guard
             result = await task.execute()
 
@@ -220,7 +220,7 @@ class TestCreatedChannelCapSoftAbort:
     """With cap=10 and 50 would-create streams: exactly 10 created, status capped."""
 
     def _make_engine(self):
-        from auto_creation_evaluator import StreamContext  # noqa: F401
+        from channel_pipeline_evaluator import StreamContext  # noqa: F401
 
         client = MagicMock()
         client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
@@ -237,11 +237,11 @@ class TestCreatedChannelCapSoftAbort:
 
         client.create_channel = AsyncMock(side_effect=_create_channel)
         client.assign_channel_numbers = AsyncMock()
-        return AutoCreationEngine(client)
+        return ChannelPipelineEngine(client)
 
     def _make_rule(self):
-        from models import AutoCreationRule
-        rule = AutoCreationRule()
+        from models import ChannelPipelineRule
+        rule = ChannelPipelineRule()
         rule.id = 1
         rule.name = "Create-everything Rule"
         rule.priority = 0
@@ -258,7 +258,7 @@ class TestCreatedChannelCapSoftAbort:
         return rule
 
     def _make_streams(self, n):
-        from auto_creation_evaluator import StreamContext
+        from channel_pipeline_evaluator import StreamContext
         return [
             StreamContext(stream_id=1000 + i, stream_name=f"Chan {i}", m3u_account_id=1)
             for i in range(n)
@@ -285,8 +285,8 @@ class TestCreatedChannelCapSoftAbort:
             default_channel_profile_ids=[],
         )
 
-        with patch("auto_creation_engine.get_session", return_value=MagicMock()), \
-             patch("auto_creation_engine.get_settings", return_value=fake_settings), \
+        with patch("channel_pipeline_engine.get_session", return_value=MagicMock()), \
+             patch("channel_pipeline_engine.get_settings", return_value=fake_settings), \
              patch("config.get_settings", return_value=fake_settings):
             result = asyncio.get_event_loop().run_until_complete(
                 engine.run_pipeline(dry_run=False)

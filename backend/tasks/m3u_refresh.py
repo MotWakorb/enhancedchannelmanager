@@ -41,7 +41,7 @@ async def get_streams_grouped(
     This replaces both the per-group count probes (one
     ``GET /api/channels/streams/?page_size=1`` per group) and the per-group
     paged pulls with a SINGLE paginated ``get_streams(m3u_account=...)`` loop —
-    mirroring the proven pattern in ``auto_creation_engine._fetch_streams``.
+    mirroring the proven pattern in ``channel_pipeline_engine._fetch_streams``.
 
     Dispatcharr returns ``channel_group`` as a numeric ID; we resolve it to a
     name via ``group_lookup`` (built from ``get_channel_groups()``).
@@ -243,7 +243,7 @@ def _advance_refresh_watermark() -> None:
     """ADR-011 (bd-ka7j9): mark that an M3U refresh just completed successfully.
 
     Replaces the old hard chain that invoked auto-creation as a side-effect of
-    the refresh task. The interval-scheduled ``AutoCreationTask`` reads this
+    the refresh task. The interval-scheduled ``ChannelPipelineTask`` reads this
     watermark FRESH on each tick and auto-fires when it is newer than the
     consumed watermark — so the two subsystems are decoupled and a single
     failed M3U account no longer suppresses auto-creation for the whole batch.
@@ -516,7 +516,7 @@ class M3URefreshTask(TaskScheduler):
 
             # ADR-011 (bd-ka7j9): the hard chain to auto-creation is gone. A
             # successful refresh advances the refresh watermark; the
-            # interval-scheduled AutoCreationTask reads it FRESH on its next
+            # interval-scheduled ChannelPipelineTask reads it FRESH on its next
             # tick and decides for itself whether to auto-fire.
             _advance_refresh_watermark()
 

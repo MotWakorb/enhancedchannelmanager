@@ -8,7 +8,7 @@ write to pending_merges, no broker), the operator threshold path
 the LOCKED CONTRACT metric ``ecm_pending_merges_queue_depth_added_total``.
 
 Integration tests against the auto-creation executor live in
-``tests/unit/test_auto_creation_executor_dedup_hook.py``. These tests
+``tests/unit/test_channel_pipeline_executor_dedup_hook.py``. These tests
 exercise the hook service in isolation so failures point at hook logic
 rather than at the executor's plumbing.
 """

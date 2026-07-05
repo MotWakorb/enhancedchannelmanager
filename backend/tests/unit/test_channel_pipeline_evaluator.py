@@ -1,9 +1,9 @@
 """
-Unit tests for the auto_creation_evaluator module.
+Unit tests for the channel_pipeline_evaluator module.
 
 Tests condition evaluation against stream contexts.
 """
-from auto_creation_evaluator import (
+from channel_pipeline_evaluator import (
     ConditionEvaluator,
     StreamContext,
     EvaluationResult,

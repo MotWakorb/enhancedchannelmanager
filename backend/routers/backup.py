@@ -33,7 +33,7 @@ from dbas import artifact_crypto
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
 from models import (
-    AutoCreationRule,
+    ChannelPipelineRule,
     DummyEPGProfile,
     DummyEPGChannelAssignment,
     FFmpegProfile,
@@ -74,7 +74,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.17.6-0044"
+APP_VERSION = "0.17.6-0045"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -95,7 +95,7 @@ REDACTED = "***REDACTED***"
 # redaction would have caught.
 # Back-compat: drop 'api_key' from this tuple in v0.19.0 (bd-ewm4h) when
 # the legacy field is removed from the model. The debug-bundle redactor in
-# routers/auto_creation.py imports this tuple, so a single edit there
+# routers/channel_pipeline.py imports this tuple, so a single edit there
 # propagates everywhere.
 _SETTINGS_CREDENTIAL_FIELDS = (
     "password",
@@ -1756,7 +1756,7 @@ def _gather_db_tables() -> dict:
         sections["tag_groups"] = tag_groups_out
 
         # Auto-creation rules
-        ac_rules = session.query(AutoCreationRule).all()
+        ac_rules = session.query(ChannelPipelineRule).all()
         sections["auto_creation_rules"] = [r.to_dict() for r in ac_rules]
 
         # FFmpeg profiles
@@ -2416,9 +2416,9 @@ def _restore_auto_creation_rules(items: list) -> dict:
     """Delete all auto-creation rules and recreate from YAML."""
     session = get_session()
     try:
-        session.query(AutoCreationRule).delete()
+        session.query(ChannelPipelineRule).delete()
         for item in items:
-            rule = AutoCreationRule(
+            rule = ChannelPipelineRule(
                 name=item["name"],
                 description=item.get("description"),
                 enabled=item.get("enabled", True),

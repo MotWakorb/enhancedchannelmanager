@@ -17,7 +17,7 @@ from task_registry import register_task
 
 logger = logging.getLogger(__name__)
 
-# ADR-011 (bd-ka7j9): the AutoCreationTask self-fires on an INTERVAL schedule
+# ADR-011 (bd-ka7j9): the ChannelPipelineTask self-fires on an INTERVAL schedule
 # at the same cadence the engine ticks (DEFAULT_CHECK_INTERVAL == 60s). Imported
 # lazily inside __init__ to avoid a module-import cycle with task_engine (which
 # pulls in task_registry, which imports the task modules).
@@ -52,7 +52,7 @@ def _run_on_refresh_suppressed() -> tuple[bool, str]:
 
 
 @register_task
-class AutoCreationTask(TaskScheduler):
+class ChannelPipelineTask(TaskScheduler):
     """
     Task to run the auto-creation pipeline.
 
@@ -154,9 +154,9 @@ class AutoCreationTask(TaskScheduler):
         crash mid-run both leave the watermark consumed, preventing a re-fire
         loop against the same refresh).
         """
-        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+        from channel_pipeline_engine import get_channel_pipeline_engine, init_channel_pipeline_engine
         from database import get_session
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
 
         started_at = datetime.utcnow()
         self._set_progress(status="initializing")
@@ -198,9 +198,9 @@ class AutoCreationTask(TaskScheduler):
         self._set_progress(status="loading_rules")
         session = get_session()
         try:
-            rules_to_run = session.query(AutoCreationRule).filter(
-                AutoCreationRule.enabled == True,
-                AutoCreationRule.run_on_refresh == True,
+            rules_to_run = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.enabled == True,
+                ChannelPipelineRule.run_on_refresh == True,
             ).all()
             rule_ids = [r.id for r in rules_to_run]
             rule_names = [r.name for r in rules_to_run]
@@ -285,7 +285,7 @@ class AutoCreationTask(TaskScheduler):
         """Run the run_on_refresh rule set and emit the start/completion/cap
         notifications (migrated from the old run_auto_creation_after_refresh so
         there is ONE notification style and ONE created-channel cap path)."""
-        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+        from channel_pipeline_engine import get_channel_pipeline_engine, init_channel_pipeline_engine
         from services.notification_service import create_notification_internal
 
         self._set_progress(
@@ -305,10 +305,10 @@ class AutoCreationTask(TaskScheduler):
         )
 
         client = get_client()
-        engine = get_auto_creation_engine()
+        engine = get_channel_pipeline_engine()
         if not engine:
             logger.debug("[%s] No existing engine for post-refresh, initializing new one", self.task_id)
-            engine = await init_auto_creation_engine(client)
+            engine = await init_channel_pipeline_engine(client)
 
         try:
             result = await engine.run_pipeline(

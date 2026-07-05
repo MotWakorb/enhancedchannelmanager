@@ -5,10 +5,10 @@ Scheduled task to clean up old data:
 - Probe history
 - Task execution history
 - Journal entries
-- AutoCreationExecution BLOB columns (bd-ia28g)
+- ChannelPipelineExecution BLOB columns (bd-ia28g)
 - health_checks rows (bd-ia28g)
 - Notifications (bd-ia28g)
-- AutoCreationSnapshot rows (ADR-010 §D7 / uc51o.3)
+- ChannelPipelineSnapshot rows (ADR-010 §D7 / uc51o.3)
 - M3USnapshot and M3UChangeLog rows (bd-wehek)
 - UniqueClientConnection rows (bd-1wi3y)
 - Orphaned data
@@ -21,8 +21,8 @@ from sqlalchemy import inspect, text, update
 
 from database import get_session
 from models import (
-    AutoCreationExecution,
-    AutoCreationSnapshot,
+    ChannelPipelineExecution,
+    ChannelPipelineSnapshot,
     JournalEntry,
     M3UChangeLog,
     M3USnapshot,
@@ -46,7 +46,7 @@ class CleanupTask(TaskScheduler):
     - probe_history_days: Keep probe history for this many days (default: 30)
     - task_history_days: Keep task execution history for this many days (default: 30)
     - journal_days: Keep journal entries for this many days (default: 90)
-    - auto_creation_blob_days: NULL out AutoCreationExecution BLOB columns
+    - auto_creation_blob_days: NULL out ChannelPipelineExecution BLOB columns
       older than this many days (default: 30) — see bd-ia28g
     - health_checks_days: Delete health_checks rows older than this many days
       (default: 7) — see bd-ia28g
@@ -54,7 +54,7 @@ class CleanupTask(TaskScheduler):
       (default: 30) — see bd-ia28g; uses ``expires_at`` if set, else ``created_at``
     - vacuum_db: Run VACUUM after cleanup (default: True)
 
-    AutoCreationSnapshot retention (ADR-010 §D7, uc51o.3) is bounded by TWO
+    ChannelPipelineSnapshot retention (ADR-010 §D7, uc51o.3) is bounded by TWO
     config knobs read from the global Settings (config.py), whichever fires
     first — NOT from this task's own config, so they sit alongside the other
     ``auto_creation_*`` settings and are operator-configurable there:
@@ -269,9 +269,9 @@ class CleanupTask(TaskScheduler):
                 # JSON BLOB payloads age out. The idempotency gate ORs across
                 # all four BLOB columns: a row is eligible if ANY of them is
                 # non-NULL. Filtering on execution_log alone would miss rows
-                # whose per-stream log was empty (auto_creation_engine writes
+                # whose per-stream log was empty (channel_pipeline_engine writes
                 # ``execution_log = json.dumps(log) if log else None`` — see
-                # ``models.AutoCreationExecution.set_execution_log``) but whose
+                # ``models.ChannelPipelineExecution.set_execution_log``) but whose
                 # created_entities / modified_entities / dry_run_results
                 # payloads were populated. After one prune all four columns are
                 # NULL, so the next pass naturally returns 0 rows (idempotent)
@@ -287,13 +287,13 @@ class CleanupTask(TaskScheduler):
 
                 try:
                     result = session.execute(
-                        update(AutoCreationExecution)
-                        .where(AutoCreationExecution.started_at < auto_creation_blob_cutoff)
+                        update(ChannelPipelineExecution)
+                        .where(ChannelPipelineExecution.started_at < auto_creation_blob_cutoff)
                         .where(
-                            AutoCreationExecution.execution_log.isnot(None)
-                            | AutoCreationExecution.dry_run_results.isnot(None)
-                            | AutoCreationExecution.created_entities.isnot(None)
-                            | AutoCreationExecution.modified_entities.isnot(None)
+                            ChannelPipelineExecution.execution_log.isnot(None)
+                            | ChannelPipelineExecution.dry_run_results.isnot(None)
+                            | ChannelPipelineExecution.created_entities.isnot(None)
+                            | ChannelPipelineExecution.modified_entities.isnot(None)
                         )
                         .values(
                             execution_log=None,
@@ -426,7 +426,7 @@ class CleanupTask(TaskScheduler):
                     session.close()
                     return self._cancelled_result(started_at, deleted_counts)
 
-                # 7. ADR-010 §D7 (uc51o.3): prune AutoCreationSnapshot rows by
+                # 7. ADR-010 §D7 (uc51o.3): prune ChannelPipelineSnapshot rows by
                 # BOTH an age window and a count cap (whichever fires first),
                 # BEFORE the VACUUM step below so the freed pages are reclaimed
                 # in this pass. Without retention, a per-run ~570-channel
@@ -461,8 +461,8 @@ class CleanupTask(TaskScheduler):
                     # snapshot_time (the idx_auto_snapshot_time index covers
                     # this scan).
                     snapshot_cutoff = datetime.utcnow() - timedelta(days=snapshot_days)
-                    aged = session.query(AutoCreationSnapshot).filter(
-                        AutoCreationSnapshot.snapshot_time < snapshot_cutoff,
+                    aged = session.query(ChannelPipelineSnapshot).filter(
+                        ChannelPipelineSnapshot.snapshot_time < snapshot_cutoff,
                     ).delete(synchronize_session=False)
                     snapshots_pruned += aged
 
@@ -472,14 +472,14 @@ class CleanupTask(TaskScheduler):
                     # and deleting the remainder by id.
                     surplus_ids = [
                         row.id
-                        for row in session.query(AutoCreationSnapshot.id)
-                        .order_by(AutoCreationSnapshot.snapshot_time.desc())
+                        for row in session.query(ChannelPipelineSnapshot.id)
+                        .order_by(ChannelPipelineSnapshot.snapshot_time.desc())
                         .offset(snapshot_max)
                         .all()
                     ]
                     if surplus_ids:
-                        capped = session.query(AutoCreationSnapshot).filter(
-                            AutoCreationSnapshot.id.in_(surplus_ids),
+                        capped = session.query(ChannelPipelineSnapshot).filter(
+                            ChannelPipelineSnapshot.id.in_(surplus_ids),
                         ).delete(synchronize_session=False)
                         snapshots_pruned += capped
 

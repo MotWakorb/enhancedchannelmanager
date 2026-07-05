@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool
 
 import database
 import observability
-from models import AutoCreationExecution, AutoCreationSnapshot
+from models import ChannelPipelineExecution, ChannelPipelineSnapshot
 
 
 @pytest.fixture(autouse=True)
@@ -48,13 +48,13 @@ def session():
 
 
 def _add_snapshot(session, channels):
-    execution = AutoCreationExecution(
+    execution = ChannelPipelineExecution(
         mode="execute", triggered_by="manual",
         started_at=datetime.utcnow(), status="completed",
     )
     session.add(execution)
     session.commit()
-    snap = AutoCreationSnapshot(
+    snap = ChannelPipelineSnapshot(
         execution_id=execution.id,
         snapshot_time=datetime.utcnow(),
         channel_count=len(channels),
@@ -65,7 +65,7 @@ def _add_snapshot(session, channels):
     return snap
 
 
-class TestUpdateAutoCreationSnapshotMetrics:
+class TestUpdateChannelPipelineSnapshotMetrics:
     def test_publishes_count_and_bytes(self, session):
         observability.install_metrics()
         snap1 = _add_snapshot(session, [{"id": 1, "stream_ids": [1, 2]}])

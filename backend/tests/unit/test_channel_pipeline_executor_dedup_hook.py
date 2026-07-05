@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import database
-from auto_creation_evaluator import StreamContext
-from auto_creation_executor import ActionExecutor, ExecutionContext
+from channel_pipeline_evaluator import StreamContext
+from channel_pipeline_executor import ActionExecutor, ExecutionContext
 from models import PendingMerge
 
 
