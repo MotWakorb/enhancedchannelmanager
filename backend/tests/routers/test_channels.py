@@ -2116,7 +2116,7 @@ class TestBulkMergeChannelsStaleSourceIds:
 # ---------------------------------------------------------------------------
 # Admin gating (bd-um30y) — destructive / bulk operator-level channel
 # endpoints carry RequireAdminIfEnabled, matching the bd-757hc gate on
-# auto_creation.py and backup.py's create_backup / restore_backup.
+# channel_pipeline.py and backup.py's create_backup / restore_backup.
 #
 # SECURITY FINDING: POST /api/channels/clear-auto-created (and its
 # destructive/bulk siblings) were only authenticated via the global
@@ -2128,7 +2128,7 @@ class TestBulkMergeChannelsStaleSourceIds:
 # bulk-commit, assign-numbers, import-csv). These tests prove the gate is
 # now in place.
 #
-# Pattern mirrors test_auto_creation.py::TestAutoCreationAdminGating: the
+# Pattern mirrors test_channel_pipeline.py::TestAutoCreationAdminGating: the
 # default `async_client` fixture runs with auth DISABLED (so
 # RequireAdminIfEnabled is a no-op → returns None, and the existing
 # happy-path tests above already prove behavior is unchanged when auth is
@@ -2180,7 +2180,7 @@ _GATED_CHANNEL_ENDPOINTS = [
 class TestChannelsAdminGating:
     """Destructive / bulk channel endpoints require admin when auth is enabled;
     read endpoints and routine single-resource mutations stay reachable.
-    Mirrors test_auto_creation.py::TestAutoCreationAdminGating."""
+    Mirrors test_channel_pipeline.py::TestAutoCreationAdminGating."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("path, method, kwargs", _GATED_CHANNEL_ENDPOINTS)

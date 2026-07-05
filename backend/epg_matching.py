@@ -539,7 +539,7 @@ def parse_tvg_id(tvg_id: str) -> tuple[str, Optional[str], Optional[str]]:
 # Parenthetical acronym embedded in a tvg_id or display name, e.g.
 # "FamilyEntertainmentTelevision(FETV).us" or "Family Entertainment
 # Television (FETV)". Captures the FIRST parenthetical group — matches the
-# precedent in auto_creation_executor._match_epg_data's call-sign extraction
+# precedent in channel_pipeline_executor._match_epg_data's call-sign extraction
 # (bd-6rz70), which is a different, non-bulk matching path but established
 # the pattern.
 _PAREN_ACRONYM_RE = re.compile(r"\(([^)]+)\)")

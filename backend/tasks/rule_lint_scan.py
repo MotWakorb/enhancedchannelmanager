@@ -85,7 +85,7 @@ def _scan_normalization_rule(rule: Any) -> list[LintViolation]:
 
 
 def _scan_auto_creation_rule(rule: Any) -> list[LintViolation]:
-    """Collect lint violations for one ``AutoCreationRule`` row.
+    """Collect lint violations for one ``ChannelPipelineRule`` row.
 
     Fields linted:
       - ``sort_regex`` (top-level column).
@@ -205,7 +205,7 @@ def run_scan(session: Session) -> dict:
     and commits its own transactions. Best-effort: any exception per-row
     is logged and the scan continues.
     """
-    from models import AutoCreationRule, DummyEPGProfile, NormalizationRule
+    from models import ChannelPipelineRule, DummyEPGProfile, NormalizationRule
 
     summary: dict = {}
     total_findings = 0
@@ -238,7 +238,7 @@ def run_scan(session: Session) -> dict:
     total_findings += norm_findings
 
     # --- auto_creation ---
-    ac_rules = session.query(AutoCreationRule).all()
+    ac_rules = session.query(ChannelPipelineRule).all()
     ac_flagged = 0
     ac_findings = 0
     for rule in ac_rules:

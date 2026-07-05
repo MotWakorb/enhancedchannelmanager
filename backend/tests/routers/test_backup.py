@@ -14,7 +14,7 @@ import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from models import (
-    AutoCreationRule,
+    ChannelPipelineRule,
     DummyEPGProfile,
     DummyEPGChannelAssignment,
     FFmpegProfile,
@@ -1153,7 +1153,7 @@ class TestRestoreYaml:
         assert test_session.query(Tag).count() == 2
         assert test_session.query(NormalizationRuleGroup).count() == 1
         assert test_session.query(NormalizationRule).count() == 1
-        assert test_session.query(AutoCreationRule).count() == 1
+        assert test_session.query(ChannelPipelineRule).count() == 1
         assert test_session.query(FFmpegProfile).count() == 1
         assert test_session.query(DummyEPGProfile).count() == 1
         assert test_session.query(DummyEPGChannelAssignment).count() == 1
@@ -1180,7 +1180,7 @@ class TestRestoreYaml:
         assert test_session.query(FFmpegProfile).count() == 1
         # Unselected sections should be empty
         assert test_session.query(ScheduledTask).count() == 0
-        assert test_session.query(AutoCreationRule).count() == 0
+        assert test_session.query(ChannelPipelineRule).count() == 0
 
     @pytest.mark.asyncio
     async def test_settings_restore_preserves_redacted(self, async_client, test_session):

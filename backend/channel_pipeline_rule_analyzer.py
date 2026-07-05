@@ -1,5 +1,5 @@
 """
-auto_creation_rule_analyzer — advisory analyzer for auto-creation rules.
+channel_pipeline_rule_analyzer — advisory analyzer for auto-creation rules.
 
 Surfaces structural and regex-style configuration bugs in auto-creation
 rules WITHOUT running them. Used by the /api/auto-creation/rules/analyze
@@ -11,7 +11,7 @@ Design rules:
   never block on analyzer findings; that is what :mod:`regex_lint`'s
   strict path is for.
 * The OR-grouping algorithm is duplicated from
-  :func:`auto_creation_evaluator.evaluate_conditions` (lines 828–834).
+  :func:`channel_pipeline_evaluator.evaluate_conditions` (lines 828–834).
   Duplication is intentional — the evaluator is performance-critical
   and we don't want a runtime import dependency just to read the
   algorithm. :func:`split_or_groups` and the test
@@ -83,7 +83,7 @@ class RuleFinding:
 def split_or_groups(conditions: list) -> list[list]:
     """Split a flat condition list into OR-groups.
 
-    Mirrors :func:`auto_creation_evaluator.evaluate_conditions` (the
+    Mirrors :func:`channel_pipeline_evaluator.evaluate_conditions` (the
     ``or_groups`` construction). Each ``connector="or"`` after a
     non-empty current group starts a new group; conditions within a
     group are AND'd. The first connector is effectively ignored

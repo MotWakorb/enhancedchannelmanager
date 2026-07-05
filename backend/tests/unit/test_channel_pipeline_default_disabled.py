@@ -1,6 +1,6 @@
 """Tests for the auto-creation opt-in model (enhancedchannelmanager-i2xad).
 
-Scheduled auto-creation is now OPT-IN: the ``AutoCreationTask`` ships with
+Scheduled auto-creation is now OPT-IN: the ``ChannelPipelineTask`` ships with
 ``default_enabled = False``, so a fresh install seeds the PARENT
 ``scheduled_tasks`` row disabled and never fires auto-creation autonomously. The
 child ``task_schedules`` cadence row is seeded ENABLED (the "every 60s" schedule
@@ -29,7 +29,7 @@ from task_registry import TaskRegistry
 
 # Import task classes (registers them via @register_task as a side effect, and
 # gives us the concrete classes to instantiate directly).
-from tasks.auto_creation import AutoCreationTask
+from tasks.channel_pipeline import ChannelPipelineTask
 from tasks.cleanup import CleanupTask
 from tasks.stats_v2_rollup import StatsV2RollupTask
 from tasks.m3u_change_monitor import M3UChangeMonitorTask
@@ -51,22 +51,22 @@ def _seed_task(session, instance):
 
 class TestAutoCreationDefaultDisabled:
     def test_default_enabled_is_false(self):
-        assert AutoCreationTask.default_enabled is False
-        assert AutoCreationTask()._enabled is False
+        assert ChannelPipelineTask.default_enabled is False
+        assert ChannelPipelineTask()._enabled is False
 
     def test_schedule_architecture_preserved(self):
         """Opt-in must NOT change the INTERVAL/60s schedule (ADR-011)."""
         from task_scheduler import ScheduleType
         from task_engine import DEFAULT_CHECK_INTERVAL
 
-        task = AutoCreationTask()
+        task = ChannelPipelineTask()
         assert task.schedule_config.schedule_type == ScheduleType.INTERVAL
         assert task.schedule_config.interval_seconds == DEFAULT_CHECK_INTERVAL
 
     def test_parent_seeded_disabled_child_cadence_enabled(self, test_session):
         """Fresh install: parent task disabled (no autonomous firing), child
         cadence row enabled (so the single task toggle is the opt-in)."""
-        parent, child = _seed_task(test_session, AutoCreationTask())
+        parent, child = _seed_task(test_session, ChannelPipelineTask())
         assert parent.enabled is False
         assert child.enabled is True
         assert child.schedule_type == "interval"
@@ -82,7 +82,7 @@ class TestAutoCreationDefaultDisabled:
         unsets it, breaking sibling tests that call ``asyncio.get_event_loop()``
         (the cross-test event-loop pollution class).
         """
-        result = await AutoCreationTask().execute()
+        result = await ChannelPipelineTask().execute()
         assert result.success is True
         assert result.message == "Auto-creation task disabled"
         assert result.details == {}
@@ -130,7 +130,7 @@ class TestOptInFires:
     def test_disabled_task_does_not_fire_even_with_due_child(self, test_session):
         """Default state: parent disabled. Even with the child cadence enabled
         and due, the parent gate prevents firing."""
-        parent, child = _seed_task(test_session, AutoCreationTask())
+        parent, child = _seed_task(test_session, ChannelPipelineTask())
         child.next_run_at = datetime.utcnow() - timedelta(seconds=1)  # due
         test_session.commit()
 
@@ -143,7 +143,7 @@ class TestOptInFires:
         child cadence already enabled makes the task fire on its 60s interval."""
         from schedule_calculator import calculate_next_run
 
-        parent, child = _seed_task(test_session, AutoCreationTask())
+        parent, child = _seed_task(test_session, ChannelPipelineTask())
         # Operator flips the task "Enabled" toggle -> parent enabled.
         parent.enabled = True
         # The schedule endpoint recomputes a valid next_run_at on enable.

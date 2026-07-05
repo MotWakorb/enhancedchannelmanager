@@ -12,8 +12,8 @@ import re
 
 import safe_regex
 import journal
-from auto_creation_schema import Action, ActionType, TemplateVariables
-from auto_creation_evaluator import StreamContext
+from channel_pipeline_schema import Action, ActionType, TemplateVariables
+from channel_pipeline_evaluator import StreamContext
 from services.dedup_matcher import (
     NameCleanMode,
     is_admissible,
@@ -184,7 +184,7 @@ class ActionExecutor:
                 per ADR-008 §D1. Defaults to "manual" so non-engine
                 callers (and existing tests that construct executors
                 directly) keep their pre-BD-F behaviour.
-            execution_id: The ``AutoCreationExecution.id`` for this run,
+            execution_id: The ``ChannelPipelineExecution.id`` for this run,
                 threaded from the engine. Used as the journal ``batch_id``
                 so an operator can list every ``(channel_id, stream_id)``
                 pair a run touched via ``get_journal(batch_id=...)`` and
@@ -2986,7 +2986,7 @@ class ActionExecutor:
 
         enhancedchannelmanager-orzck: a channel is MANUAL when its
         ``auto_created`` key is missing or falsy. This mirrors the ADR-010
-        snapshot precedent (``auto_creation_engine._capture_snapshot`` →
+        snapshot precedent (``channel_pipeline_engine._capture_snapshot`` →
         ``not ch.get("auto_created", False)``): a missing key means manual /
         protected, NOT auto. Only an explicit truthy ``auto_created`` makes a
         channel an unprotected auto-created merge candidate.

@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import database
-from models import Base, NormalizationRuleGroup, AutoCreationRule
+from models import Base, NormalizationRuleGroup, ChannelPipelineRule
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def _seed(engine, *, valid_group_ids: list[int], rule_ids_json: str) -> int:
     try:
         for gid in valid_group_ids:
             s.add(NormalizationRuleGroup(id=gid, name=f"G{gid}", enabled=True, priority=gid))
-        rule = AutoCreationRule(
+        rule = ChannelPipelineRule(
             name="Rule", conditions="[]", actions="[]",
             normalization_group_ids=rule_ids_json,
         )
@@ -63,7 +63,7 @@ def _read_norm_ids(engine, rule_id: int):
     SessionLocal = sessionmaker(bind=engine)
     s = SessionLocal()
     try:
-        return s.query(AutoCreationRule).get(rule_id).get_normalization_group_ids()
+        return s.query(ChannelPipelineRule).get(rule_id).get_normalization_group_ids()
     finally:
         s.close()
 
@@ -88,7 +88,7 @@ def test_sets_null_when_all_ids_orphaned(file_engine):
     SessionLocal = sessionmaker(bind=file_engine)
     s = SessionLocal()
     try:
-        rule = s.query(AutoCreationRule).get(rule_id)
+        rule = s.query(ChannelPipelineRule).get(rule_id)
         assert rule.normalization_group_ids is None
         assert rule.get_normalization_group_ids() == []
     finally:

@@ -45,7 +45,7 @@ class TestFuzzyPreview:
             {"id": 202, "name": "WI | Green Bay | NBC WGBA", "tvg_id": None},
         ]
         client = _client_with(channels, streams)
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42], "min_score": 0.6},
@@ -78,7 +78,7 @@ class TestFuzzyPreview:
         streams = [{"id": 201, "name": "ABC something only loosely related",
                     "tvg_id": None}]
         client = _client_with(channels, streams)
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42], "min_score": 0.1},
@@ -100,7 +100,7 @@ class TestFuzzyPreview:
         streams = [{"id": 201, "name": "WI | Green Bay | ABC 2 WBAY",
                     "tvg_id": None}]
         client = _client_with(channels, streams)
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42], "min_score": 0.1,
@@ -116,7 +116,7 @@ class TestFuzzyPreview:
     @pytest.mark.asyncio
     async def test_empty_group_ids_rejected(self, async_client):
         client = _client_with([], [])
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview", params={"min_score": 0.6},
             )
@@ -126,7 +126,7 @@ class TestFuzzyPreview:
     @pytest.mark.asyncio
     async def test_duplicate_group_ids_rejected(self, async_client):
         client = _client_with([], [])
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42, 42], "min_score": 0.6},
@@ -138,7 +138,7 @@ class TestFuzzyPreview:
     async def test_too_many_group_ids_rejected(self, async_client):
         client = _client_with([], [])
         many = list(range(100))
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": many, "min_score": 0.6},
@@ -166,7 +166,7 @@ class TestPreviewAdmissionPolicy:
                      "channel_group_id": 42}]
         streams = [{"id": 201, "name": "Travel Channel", "tvg_id": None}]
         client = _client_with(channels, streams)
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42], "min_score": 0.6},
@@ -186,7 +186,7 @@ class TestPreviewAdmissionPolicy:
         streams = [{"id": 202, "name": "WI | Green Bay | NBC WGBA",
                     "tvg_id": None}]
         client = _client_with(channels, streams)
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42], "min_score": 0.0},
@@ -205,14 +205,14 @@ class TestPreviewAdmissionPolicy:
         streams = [{"id": 201, "name": "Travel Channel", "tvg_id": None}]
         client = _client_with(channels, streams)
 
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp_default = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42], "min_score": 0.6},
             )
         assert resp_default.json()["triples"] == []  # absent, opt-in off
 
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp_optin = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42], "min_score": 0.6,
@@ -231,7 +231,7 @@ class TestPreviewAdmissionPolicy:
                      "channel_group_id": 42}]
         streams = [{"id": 201, "name": "Travel Channel", "tvg_id": None}]
         client = _client_with(channels, streams)
-        with patch("routers.auto_creation.get_client", return_value=client):
+        with patch("routers.channel_pipeline.get_client", return_value=client):
             resp = await async_client.get(
                 "/api/auto-creation/fuzzy-preview",
                 params={"group_ids": [42], "min_score": 0.6,

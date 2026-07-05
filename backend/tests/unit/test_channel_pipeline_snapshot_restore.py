@@ -3,7 +3,7 @@
 Bead: ``enhancedchannelmanager-uc51o.4`` (Phase 3 of epic
 ``enhancedchannelmanager-uc51o``).
 
-SAFETY-CRITICAL: ``AutoCreationEngine.restore_snapshot`` mutates live
+SAFETY-CRITICAL: ``ChannelPipelineEngine.restore_snapshot`` mutates live
 Dispatcharr channels. These tests pin the restore contract:
 
 * Happy path — run-CREATED channels are deleted; every snapshot channel's
@@ -18,7 +18,7 @@ Dispatcharr channels. These tests pin the restore contract:
 * Guards — dry-run / already-reverted executions are refused.
 
 Tests use a real in-memory SQLite session (so the persisted snapshot/execution
-rows are read back) bound by patching ``auto_creation_engine.get_session``.
+rows are read back) bound by patching ``channel_pipeline_engine.get_session``.
 The Dispatcharr client is a mock with async methods.
 """
 from __future__ import annotations
@@ -33,8 +33,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import database
-from auto_creation_engine import AutoCreationEngine
-from models import AutoCreationExecution, AutoCreationSnapshot
+from channel_pipeline_engine import ChannelPipelineEngine
+from models import ChannelPipelineExecution, ChannelPipelineSnapshot
 
 
 @pytest.fixture()
@@ -70,7 +70,7 @@ def _seed_execution_and_snapshot(
     """Create an execution (+ optional snapshot) and return the execution id."""
     session = session_factory()
     try:
-        execution = AutoCreationExecution(
+        execution = ChannelPipelineExecution(
             mode=mode,
             triggered_by="manual",
             started_at=datetime.utcnow(),
@@ -85,7 +85,7 @@ def _seed_execution_and_snapshot(
         execution_id = execution.id
 
         if with_snapshot:
-            snapshot = AutoCreationSnapshot(
+            snapshot = ChannelPipelineSnapshot(
                 execution_id=execution_id,
                 snapshot_time=datetime.utcnow(),
                 channel_count=len(channels or []),
@@ -103,7 +103,7 @@ def _make_engine_with_client():
     client.update_channel = AsyncMock()
     client.delete_channel = AsyncMock()
     client.delete_channel_group = AsyncMock()
-    return AutoCreationEngine(client), client
+    return ChannelPipelineEngine(client), client
 
 
 def _run(coro):
@@ -129,7 +129,7 @@ class TestRestoreHappyPath:
         )
 
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.restore_snapshot(execution_id))
 
         assert result["success"] is True
@@ -155,8 +155,8 @@ class TestRestoreHappyPath:
         # Execution marked terminal (shared rolled_back state).
         session = db_session_factory()
         try:
-            ex = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            ex = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             assert ex.status == "rolled_back"
             assert ex.rolled_back_at is not None
@@ -171,7 +171,7 @@ class TestRestoreHappyPath:
             db_session_factory, channels=channels,
         )
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             _run(engine.restore_snapshot(execution_id))
 
         body = client.update_channel.await_args_list[0].args[1]
@@ -199,7 +199,7 @@ class TestRestoreIdempotency:
 
         engine, client = _make_engine_with_client()
 
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             first = _run(engine.restore_snapshot(execution_id))
             patches_after_first = client.update_channel.await_count
             second = _run(engine.restore_snapshot(execution_id))
@@ -231,7 +231,7 @@ class TestRestoreIdempotency:
             return {}
         client.update_channel = AsyncMock(side_effect=_fail_11)
 
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             first = _run(engine.restore_snapshot(execution_id))
             # Retry: now everything succeeds.
             client.update_channel = AsyncMock(return_value={})
@@ -267,7 +267,7 @@ class TestRestorePartialFailure:
 
         client.update_channel = AsyncMock(side_effect=_update)
 
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.restore_snapshot(execution_id))
 
         # NOT a blanket success — one item failed.
@@ -286,8 +286,8 @@ class TestRestorePartialFailure:
         # A partial restore stays re-runnable: execution NOT marked terminal.
         session = db_session_factory()
         try:
-            ex = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            ex = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             assert ex.status == "completed", "partial restore must stay re-runnable"
         finally:
@@ -302,7 +302,7 @@ class TestRestoreGuards:
             db_session_factory, with_snapshot=False,
         )
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.restore_snapshot(execution_id))
 
         assert result["success"] is False
@@ -312,7 +312,7 @@ class TestRestoreGuards:
 
     def test_execution_not_found(self, db_session_factory):
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.restore_snapshot(99999))
         assert result["success"] is False
         assert "not found" in result["error"].lower()
@@ -322,7 +322,7 @@ class TestRestoreGuards:
             db_session_factory, mode="dry_run", with_snapshot=False,
         )
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.restore_snapshot(execution_id))
         assert result["success"] is False
         assert "dry-run" in result["error"].lower()
@@ -334,7 +334,7 @@ class TestRestoreGuards:
             channels=[{"id": 10, "name": "ESPN", "stream_ids": [501]}],
         )
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.restore_snapshot(execution_id))
         assert result["success"] is False
         assert "already reverted" in result["error"].lower()
@@ -366,7 +366,7 @@ class TestUnifiedRollback:
         )
 
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.rollback_execution(execution_id, confirm=True))
 
         # Restore-shaped result (not the legacy entities_* shape).
@@ -380,8 +380,8 @@ class TestUnifiedRollback:
         # Terminal state set (shared rolled_back).
         session = db_session_factory()
         try:
-            ex = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            ex = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             assert ex.status == "rolled_back"
             assert ex.rolled_back_by == "api" or ex.rolled_back_by == "manual"
@@ -396,14 +396,14 @@ class TestUnifiedRollback:
             db_session_factory, channels=channels,
         )
         engine, _client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             _run(engine.rollback_execution(
                 execution_id, rolled_back_by="api", confirm=True,
             ))
         session = db_session_factory()
         try:
-            ex = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            ex = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             assert ex.rolled_back_by == "api"
         finally:
@@ -419,7 +419,7 @@ class TestUnifiedRollback:
         )
 
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.rollback_execution(execution_id))  # confirm defaults False
 
         assert result["success"] is False
@@ -432,8 +432,8 @@ class TestUnifiedRollback:
         # Execution NOT marked terminal.
         session = db_session_factory()
         try:
-            ex = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            ex = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             assert ex.status == "completed"
         finally:
@@ -455,7 +455,7 @@ class TestUnifiedRollback:
         engine, client = _make_engine_with_client()
         # No merge journal entries → surgical unmerge returns (False, 0); with no
         # modified entities the legacy path simply deletes created entities.
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory), \
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory), \
              patch.object(engine, "_journal_driven_unmerge",
                           new=AsyncMock(return_value=(False, 0))):
             result = _run(engine.rollback_execution(execution_id))  # NO confirm
@@ -471,8 +471,8 @@ class TestUnifiedRollback:
         # Terminal state set via the legacy path.
         session = db_session_factory()
         try:
-            ex = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            ex = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             assert ex.status == "rolled_back"
         finally:
@@ -486,7 +486,7 @@ class TestUnifiedRollback:
             db_session_factory, created_entities=created, with_snapshot=False,
         )
         engine, client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory), \
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory), \
              patch.object(engine, "_journal_driven_unmerge",
                           new=AsyncMock(return_value=(False, 0))):
             result = _run(engine.rollback_execution(execution_id, confirm=True))
@@ -501,7 +501,7 @@ class TestUnifiedRollback:
             db_session_factory, created_entities=[], with_snapshot=False,
         )
         engine, _client = _make_engine_with_client()
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             result = _run(engine.rollback_execution(execution_id))
         assert result["success"] is False
         assert "no recorded" in result["error"].lower()

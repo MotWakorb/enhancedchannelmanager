@@ -13,7 +13,7 @@ from tasks.stream_probe import StreamProbeTask
 from tasks.failed_stream_reprobe import FailedStreamReprobeTask
 from tasks.struck_stream_cleanup import StruckStreamCleanupTask
 from tasks.popularity_calculation import PopularityCalculationTask
-from tasks.auto_creation import AutoCreationTask
+from tasks.channel_pipeline import ChannelPipelineTask
 from tasks.dummy_epg_refresh import DummyEPGRefreshTask
 from tasks.black_screen_scan import BlackScreenScanTask
 from tasks.yaml_backup import YamlBackupTask
@@ -31,7 +31,7 @@ __all__ = [
     "FailedStreamReprobeTask",
     "StruckStreamCleanupTask",
     "PopularityCalculationTask",
-    "AutoCreationTask",
+    "ChannelPipelineTask",
     "DummyEPGRefreshTask",
     "BlackScreenScanTask",
     "YamlBackupTask",

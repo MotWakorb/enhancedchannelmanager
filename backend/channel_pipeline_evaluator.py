@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import safe_regex
-from auto_creation_schema import Condition, ConditionType
+from channel_pipeline_schema import Condition, ConditionType
 
 
 logger = logging.getLogger(__name__)

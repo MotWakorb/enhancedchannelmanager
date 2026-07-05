@@ -131,7 +131,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0044",
+    version="0.17.6-0045",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -400,7 +400,7 @@ _TIMEOUT_EXEMPT_PREFIXES = (
     # Note: /api/auto-creation/ was previously exempt as a hotfix (bd-zv6pi)
     # for synchronous /run handlers that could exceed the 30s budget. As of
     # bd-enfsy those handlers are now 202+poll background tasks (the
-    # supervisor lives in routers/auto_creation.py), so the prefix is back
+    # supervisor lives in routers/channel_pipeline.py), so the prefix is back
     # under the timeout — every CRUD and the now-fast enqueue must respect
     # the budget.
 )
@@ -939,11 +939,11 @@ async def startup_event():
 
     # Repair duplicate auto-creation rule priorities
     try:
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         sess = get_session()
         try:
-            all_rules = sess.query(AutoCreationRule).order_by(
-                AutoCreationRule.priority, AutoCreationRule.id
+            all_rules = sess.query(ChannelPipelineRule).order_by(
+                ChannelPipelineRule.priority, ChannelPipelineRule.id
             ).all()
             priorities = [r.priority for r in all_rules]
             if len(priorities) != len(set(priorities)):

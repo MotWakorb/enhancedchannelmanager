@@ -1217,7 +1217,7 @@ async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> None:
     """Add ``stream_id`` to ``channel``'s stream list via Dispatcharr.
 
     Mirrors the proven pattern in ``backend/routers/channels.py``
-    (``add_stream_to_channel``) and ``backend/auto_creation_executor.py``
+    (``add_stream_to_channel``) and ``backend/channel_pipeline_executor.py``
     (``_add_stream_to_channel``). No-op if the stream is already
     present — Dispatcharr would silently dedup the list, but skipping
     the PATCH saves an HTTP round-trip.

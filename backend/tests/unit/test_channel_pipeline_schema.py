@@ -1,11 +1,11 @@
 """
-Unit tests for the auto_creation_schema module.
+Unit tests for the channel_pipeline_schema module.
 
 Tests condition/action validation, parsing, and template expansion.
 """
 import pytest
 
-from auto_creation_schema import (
+from channel_pipeline_schema import (
     Condition,
     ConditionType,
     Action,
@@ -970,7 +970,7 @@ class TestSafeRegexMigrationWriteTimeValidation:
     # be rejected at write time.
     OVERSIZE_PATTERN = "a" * 600
 
-    # ----- Site 1: Condition regex types (auto_creation_schema.py:167) -----
+    # ----- Site 1: Condition regex types (channel_pipeline_schema.py:167) -----
 
     def test_oversize_pattern_rejected_for_stream_name_matches(self):
         """Oversize pattern must be rejected at validation time."""
@@ -997,7 +997,7 @@ class TestSafeRegexMigrationWriteTimeValidation:
         assert len(errors) > 0
         assert "Invalid regex" in errors[0]
 
-    # ----- Site 2: set_variable pattern (auto_creation_schema.py:492) -----
+    # ----- Site 2: set_variable pattern (channel_pipeline_schema.py:492) -----
 
     def test_oversize_pattern_rejected_for_set_variable_regex_extract(self):
         action = Action(
@@ -1028,7 +1028,7 @@ class TestSafeRegexMigrationWriteTimeValidation:
         assert len(errors) > 0
         assert "Invalid regex" in errors[0]
 
-    # ----- Site 3: name_transform_pattern (auto_creation_schema.py:520) -----
+    # ----- Site 3: name_transform_pattern (channel_pipeline_schema.py:520) -----
 
     def test_oversize_pattern_rejected_for_name_transform(self):
         action = Action(
