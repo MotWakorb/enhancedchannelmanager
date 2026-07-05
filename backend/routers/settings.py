@@ -3,6 +3,7 @@ Settings router — Dispatcharr connection, preferences, and service management 
 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
+import asyncio
 import ipaddress
 import logging
 import re
@@ -19,7 +20,7 @@ from auth import RequireAdminIfEnabled
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
-from dispatcharr_client import get_client, reset_client
+from dispatcharr_client import get_client, reset_client, _settings_hash
 from emby_client import EmbyClient, EmbyClientError
 from jellyfin_client import JellyfinClient, JellyfinClientError
 from plex_client import PlexClient, PlexClientError
@@ -39,6 +40,17 @@ _DISCORD_WEBHOOK_RE = re.compile(
 )
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
+
+# bd-snryv: serializes the entire stop/construct/set_tracker/set_prober/start
+# sequence in ``_restart_background_services()``. Without it, two overlapping
+# calls (the manual POST /restart-services racing the automatic rebuild this
+# bead adds to ``update_settings()``, or two rapid settings saves) can
+# interleave across that sequence — whichever ``set_tracker()``/``set_prober()``
+# call lands last wins, orphaning the other call's live, running
+# tracker/prober with no remaining reference able to stop it (a leak). One
+# lock per process is correct here: there is exactly one tracker/prober
+# singleton pair for the whole app, so there is nothing to shard the lock by.
+_rebuild_lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -1087,6 +1099,43 @@ async def update_settings(
     clear_settings_cache()
     reset_client()
 
+    # bd-snryv: does this save change anything get_client() would return
+    # differently? Reuse dispatcharr_client._settings_hash() — the exact
+    # function get_client() itself uses to decide whether to recreate the
+    # client — instead of hand-rolling an equivalent field-by-field
+    # comparison. This guarantees connection_changed tracks get_client()'s
+    # own cache-invalidation decision exactly. Must run AFTER save_settings()
+    # above: save_settings() mirrors a populated dispatcharr_api_key into the
+    # legacy api_key field on new_settings in place, and that mirroring is
+    # exactly what the next get_client() call will see, so hashing before the
+    # mirror would compare against a new_settings.api_key that doesn't match
+    # reality yet.
+    connection_changed = _settings_hash(current_settings) != _settings_hash(new_settings)
+
+    # reset_client() only swaps the get_client() singleton. The standing
+    # BandwidthTracker / StreamProber (and the stream_probe /
+    # failed_stream_reprobe / black_screen_scan task instances holding a
+    # reference to the old prober) captured the OLD client at construction
+    # time and never re-fetch get_client() themselves — so a Dispatcharr
+    # credential change here left them permanently stuck on stale credentials
+    # until an operator separately discovered and hit "restart services" (or
+    # restarted the container). Rebuild + rewire them here, same as the
+    # restart-services endpoint, whenever a connection-relevant field changed.
+    #
+    # This rebuild is fire-and-forget (asyncio.create_task, not awaited): the
+    # rebuild does a real paginated Dispatcharr fetch
+    # (BandwidthTracker._initialize_channel_maps(), up to 20 pages / 30s
+    # httpx timeout each, no aggregate bound) plus an ffprobe availability
+    # check (StreamProber.start()). Awaiting it inline would hang the
+    # settings-save HTTP response for minutes against a slow/unreachable
+    # Dispatcharr host during a credential rotation — the settings save
+    # itself already succeeded above, so the caller shouldn't wait on it.
+    # ``_rebuild_background_services_after_settings_change()`` wraps the call
+    # so a failure (or an outcome the call reports as unsuccessful without
+    # raising) is still logged — nothing else awaits this task to observe it.
+    if connection_changed:
+        asyncio.create_task(_rebuild_background_services_after_settings_change(new_settings))
+
     # If the Dispatcharr URL changed, invalidate all cached data from the old server
     server_changed = request.url != current_settings.url
     if server_changed:
@@ -1798,26 +1847,109 @@ async def test_jellyfin_connection(
     return {"ok": True}
 
 
-@router.post("/restart-services")
-async def restart_services():
-    """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
-    logger.debug("[SETTINGS] POST /api/settings/restart-services")
-    settings = get_settings()
+async def _rebuild_background_services_after_settings_change(settings: DispatcharrSettings) -> None:
+    """Fire-and-forget wrapper around ``_restart_background_services()`` for
+    ``update_settings()`` (bd-snryv).
 
-    # Stop existing tracker
-    tracker = get_tracker()
-    if tracker:
-        await tracker.stop()
-        logger.info("[SETTINGS] Stopped existing bandwidth tracker")
+    ``update_settings()`` schedules this via ``asyncio.create_task()`` rather
+    than awaiting it, so nothing else observes an exception raised here or a
+    ``{"success": False, ...}`` result returned without raising — both are
+    logged here at WARNING so a failed rebuild is never silently mistaken for
+    routine background-service maintenance.
+    """
+    try:
+        restart_result = await _restart_background_services(settings)
+        if restart_result.get("success"):
+            logger.info(
+                "[SETTINGS] Rebuilt background services after Dispatcharr connection change: %s",
+                restart_result,
+            )
+        else:
+            logger.warning(
+                "[SETTINGS] Background service rebuild did not succeed after Dispatcharr connection change: %s",
+                restart_result,
+            )
+    except Exception as e:
+        logger.warning(
+            "[SETTINGS] Failed to rebuild background services after Dispatcharr connection change: %s", e
+        )
 
-    # Stop existing stream prober
-    prober = get_prober()
-    if prober:
-        await prober.stop()
-        logger.info("[SETTINGS] Stopped existing stream prober")
 
-    # Start new tracker and prober with current settings
-    if settings.is_configured():
+async def _restart_background_services(settings: DispatcharrSettings) -> dict:
+    """Stop and rebuild the BandwidthTracker / StreamProber singletons from the
+    CURRENT ``get_client()``, rewire their notification callbacks, and
+    reconnect the prober-dependent task instances (``stream_probe``,
+    ``failed_stream_reprobe``, ``black_screen_scan``) to the fresh prober.
+
+    Extracted from ``restart_services()`` (bd-snryv) so ``update_settings()``
+    can call the same rebuild-and-rewire logic automatically when a
+    Dispatcharr connection-relevant field changes, instead of leaving the
+    standing tracker/prober stuck on a stale client until an operator
+    separately discovers and hits POST /api/settings/restart-services.
+
+    Guarded by ``_rebuild_lock`` for the whole stop/construct/set/start
+    sequence: two overlapping calls (the manual restart-services endpoint
+    racing the automatic rebuild ``update_settings()`` now schedules, or two
+    rapid settings saves) must not interleave, or whichever ``set_tracker()``/
+    ``set_prober()`` call lands last wins and orphans the other call's live,
+    running tracker/prober with no remaining reference able to stop it.
+    """
+    async with _rebuild_lock:
+        # Stop existing tracker
+        tracker = get_tracker()
+        if tracker:
+            await tracker.stop()
+            logger.info("[SETTINGS] Stopped existing bandwidth tracker")
+
+        # Stop existing stream prober. A rebuild used to only fire from a
+        # deliberate manual "restart services" click; it now also fires
+        # automatically from update_settings() on any connection-relevant
+        # save, so a probe that happens to be running gets hard-cancelled
+        # (StreamProber.stop() sets _probe_cancelled, which the probe loop
+        # treats as an abort — active asyncio tasks cancelled, pending
+        # streams abandoned, not a graceful drain) without the operator
+        # having asked for that. Make the interruption loud in the logs
+        # since deferring the rebuild until the probe finishes would add
+        # real complexity for a rare timing window.
+        prober = get_prober()
+        if prober:
+            # ``is True`` (not a bare truthiness check) is deliberate: real
+            # StreamProber always sets this to an actual Python bool, so the
+            # stricter check is exactly as correct for production while not
+            # spuriously firing against a bare Mock/AsyncMock test double in
+            # unrelated tests, whose auto-vivified attribute access would
+            # otherwise be truthy.
+            if getattr(prober, "_probing_in_progress", False) is True:
+                logger.warning(
+                    "[SETTINGS] Rebuilding stream prober while a probe is actively "
+                    "running - the in-progress probe is being hard-cancelled and its "
+                    "pending results discarded."
+                )
+            await prober.stop()
+            logger.info("[SETTINGS] Stopped existing stream prober")
+
+        # bd-snryv: AutoCreationEngine has the identical stale-client bug —
+        # it captures ``self.client`` once at construction and never re-fetches
+        # get_client(). routers/auto_creation.py's _ensure_engine() only builds
+        # a fresh engine when get_auto_creation_engine() returns None, so
+        # clearing the singleton here is sufficient: the next _ensure_engine()
+        # call naturally rebuilds it against the current (fresh) get_client().
+        from auto_creation_engine import reset_auto_creation_engine
+        reset_auto_creation_engine()
+
+        # Start new tracker and prober with current settings
+        if not settings.is_configured():
+            # bd-snryv: StreamProber.stop() only flips a cancellation flag —
+            # later probe entry points reset it back to False — so the
+            # just-stopped prober object stays truthy and reusable. Without
+            # clearing the singletons here, callers like
+            # auto_creation_engine's ``prober = get_prober(); if not prober:
+            # skip`` guard would pass and proceed against a client for
+            # settings that are no longer configured.
+            set_tracker(None)
+            set_prober(None)
+            return {"success": False, "message": "Settings not configured"}
+
         try:
             # Restart bandwidth tracker
             new_tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
@@ -1878,8 +2010,14 @@ async def restart_services():
         except Exception as e:
             logger.exception("[SETTINGS] Failed to restart services: %s", e)
             return {"success": False, "message": "Failed to restart services"}
-    else:
-        return {"success": False, "message": "Settings not configured"}
+
+
+@router.post("/restart-services")
+async def restart_services():
+    """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
+    logger.debug("[SETTINGS] POST /api/settings/restart-services")
+    settings = get_settings()
+    return await _restart_background_services(settings)
 
 
 @router.post("/reset-stats")
