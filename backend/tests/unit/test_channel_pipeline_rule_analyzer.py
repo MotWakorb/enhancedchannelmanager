@@ -1,5 +1,5 @@
 """
-Unit tests for :mod:`auto_creation_rule_analyzer` — bd-0gntx Phase 1.
+Unit tests for :mod:`channel_pipeline_rule_analyzer` — bd-0gntx Phase 1.
 
 The analyzer emits advisory findings on a rule's structure (not its
 runtime behavior) so users can spot common configuration bugs before
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-import auto_creation_rule_analyzer as analyzer
-from auto_creation_rule_analyzer import (
+import channel_pipeline_rule_analyzer as analyzer
+from channel_pipeline_rule_analyzer import (
     RuleFinding,
     analyze_rule,
     analyze_rules,
@@ -26,7 +26,7 @@ from auto_creation_rule_analyzer import (
 # OR-grouping algorithm parity with the evaluator.
 #
 # split_or_groups mirrors evaluate_conditions's OR-group construction
-# (auto_creation_evaluator.py:828-834). If that algorithm changes the
+# (channel_pipeline_evaluator.py:828-834). If that algorithm changes the
 # analyzer must change with it — these tests pin the contract.
 # =========================================================================
 

@@ -171,7 +171,7 @@ class TestSmartSortCustomStreamsProber:
     """Reviewer Warn-2 coverage (bd-sgtmx / GH #244): stream_prober.smart_sort_streams
     respects the ``"custom"`` key in m3u_account_priorities for operator-added
     streams without an M3U account. Mirrors TestSmartSortCustomStreams in
-    test_auto_creation_engine.py for the prober's smart-sort path."""
+    test_channel_pipeline_engine.py for the prober's smart-sort path."""
 
     def test_custom_key_lifts_custom_stream_above_m3u(self):
         """``"custom": 200`` sorts custom streams above M3U account with priority 100."""

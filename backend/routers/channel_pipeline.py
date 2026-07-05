@@ -45,6 +45,15 @@ _BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 logger = logging.getLogger(__name__)
 
+# NOTE (enhancedchannelmanager-dl0kk): route handler function names in this
+# module (get_auto_creation_rules, create_auto_creation_rule,
+# run_auto_creation_pipeline, _lint_auto_creation_rule_request, etc.)
+# intentionally keep their old "auto_creation" names for now. FastAPI derives
+# each endpoint's OpenAPI operationId from the handler function name when one
+# isn't set explicitly, so renaming these here would change the external API
+# contract ahead of schedule. The handler rename is coordinated with the
+# API route path + MCP tool alias rename in a later phase — do not rename
+# these in isolation.
 router = APIRouter(prefix="/api/auto-creation", tags=["Auto-Creation"])
 
 
@@ -53,7 +62,7 @@ router = APIRouter(prefix="/api/auto-creation", tags=["Auto-Creation"])
 # =============================================================================
 
 
-class CreateAutoCreationRuleRequest(BaseModel):
+class CreateChannelPipelineRuleRequest(BaseModel):
     """Request to create an auto-creation rule."""
     name: str
     description: Optional[str] = None
@@ -76,18 +85,18 @@ class CreateAutoCreationRuleRequest(BaseModel):
     normalization_group_ids: list[int] = []
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
-    # Default True for new rules (bd-p6ko9, GH #226) — see models.AutoCreationRule.
+    # Default True for new rules (bd-p6ko9, GH #226) — see models.ChannelPipelineRule.
     match_scope_target_group: bool = True
     # Explicit rule-level scope group for merge lookups (GH #298, bd-kncun).
     # None = "Auto" (create_channel falls back to the action's target group;
-    # merge_streams stays group-agnostic) — see models.AutoCreationRule.
+    # merge_streams stays group-agnostic) — see models.ChannelPipelineRule.
     match_scope_group_id: Optional[int] = None
     # Manual-channel isolation (enhancedchannelmanager-orzck / W1). Default False
     # protects hand-built manual channels from being adopted as merge targets.
     allow_manual_channel_merge: bool = False
 
 
-class UpdateAutoCreationRuleRequest(BaseModel):
+class UpdateChannelPipelineRuleRequest(BaseModel):
     """Request to update an auto-creation rule."""
     name: Optional[str] = None
     description: Optional[str] = None
@@ -120,7 +129,7 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     allow_manual_channel_merge: Optional[bool] = None
 
 
-class BulkUpdateAutoCreationRulesRequest(UpdateAutoCreationRuleRequest):
+class BulkUpdateChannelPipelineRulesRequest(UpdateChannelPipelineRuleRequest):
     """Bulk-update multiple rules. Only include fields to change (omit others)."""
 
     rule_ids: List[int] = Field(..., min_length=1, max_length=500)
@@ -170,7 +179,7 @@ def _apply_merge_streams_remove_non_matching(actions: list, value: bool) -> list
 
 
 def _apply_rule_scalar_updates(
-    rule, request: UpdateAutoCreationRuleRequest
+    rule, request: UpdateChannelPipelineRuleRequest
 ) -> dict:
     """Apply scalar columns from an update request (excluding conditions/actions body).
 
@@ -331,11 +340,11 @@ async def get_auto_creation_rules():
     """Get all auto-creation rules sorted by priority."""
     logger.debug("[AUTO-CREATE] GET /rules")
     try:
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         session = get_session()
         try:
-            rules = session.query(AutoCreationRule).order_by(
-                AutoCreationRule.priority
+            rules = session.query(ChannelPipelineRule).order_by(
+                ChannelPipelineRule.priority
             ).all()
             logger.debug("[AUTO-CREATE] Returning %s rules to UI", len(rules))
             for r in rules:
@@ -370,7 +379,7 @@ async def get_auto_creation_rules():
 async def analyze_auto_creation_rules():
     """Analyze all rules currently in the DB; return advisory findings.
 
-    Response shape (see auto_creation_rule_analyzer.analyze_rules)::
+    Response shape (see channel_pipeline_rule_analyzer.analyze_rules)::
 
         {
           "rules": [{"rule_id", "rule_name", "findings": [...]}],
@@ -379,12 +388,12 @@ async def analyze_auto_creation_rules():
     """
     logger.debug("[AUTO-CREATE] POST /rules/analyze")
     try:
-        from auto_creation_rule_analyzer import analyze_rules
-        from models import AutoCreationRule, NormalizationRuleGroup
+        from channel_pipeline_rule_analyzer import analyze_rules
+        from models import ChannelPipelineRule, NormalizationRuleGroup
         session = get_session()
         try:
-            rules = session.query(AutoCreationRule).order_by(
-                AutoCreationRule.priority
+            rules = session.query(ChannelPipelineRule).order_by(
+                ChannelPipelineRule.priority
             ).all()
             rule_dicts = [r.to_dict() for r in rules]
             # Group enabled-state so the analyzer can flag rules that reference
@@ -424,7 +433,7 @@ async def analyze_auto_creation_rules_from_bundle(
     ``MERGE_STREAMS_NO_TARGET_CHANNELS`` finding becomes available.
     """
     import yaml
-    from auto_creation_rule_analyzer import analyze_rules
+    from channel_pipeline_rule_analyzer import analyze_rules
 
     logger.debug(
         "[AUTO-CREATE] POST /rules/analyze/from-bundle filename=%s",
@@ -515,11 +524,11 @@ async def get_auto_creation_rule(rule_id: int):
     """Get a specific auto-creation rule by ID."""
     logger.debug("[AUTO-CREATE] GET /rules/%s", rule_id)
     try:
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         session = get_session()
         try:
-            rule = session.query(AutoCreationRule).filter(
-                AutoCreationRule.id == rule_id
+            rule = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.id == rule_id
             ).first()
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
@@ -566,11 +575,11 @@ def _lint_auto_creation_rule_request(
 
 
 @router.post("/rules")
-async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest, _admin=RequireAdminIfEnabled):
+async def create_auto_creation_rule(request: CreateChannelPipelineRuleRequest, _admin=RequireAdminIfEnabled):
     """Create a new auto-creation rule. Admin only."""
     try:
-        from models import AutoCreationRule
-        from auto_creation_schema import validate_rule
+        from models import ChannelPipelineRule
+        from channel_pipeline_schema import validate_rule
 
         # Validate conditions and actions
         logger.debug("[AUTO-CREATE] Creating rule '%s' with %s actions", request.name, len(request.actions))
@@ -599,13 +608,13 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest, _adm
             )
 
             # Auto-assign priority: if requested priority already taken, append at end
-            existing_priorities = [r.priority for r in session.query(AutoCreationRule).all()]
+            existing_priorities = [r.priority for r in session.query(ChannelPipelineRule).all()]
             if existing_priorities and request.priority in existing_priorities:
                 priority = max(existing_priorities) + 1
             else:
                 priority = request.priority
 
-            rule = AutoCreationRule(
+            rule = ChannelPipelineRule(
                 name=request.name,
                 description=request.description,
                 enabled=request.enabled,
@@ -656,16 +665,16 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest, _adm
 
 
 @router.put("/rules/{rule_id}")
-async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRuleRequest, _admin=RequireAdminIfEnabled):
+async def update_auto_creation_rule(rule_id: int, request: UpdateChannelPipelineRuleRequest, _admin=RequireAdminIfEnabled):
     """Update an auto-creation rule. Admin only."""
     try:
-        from models import AutoCreationRule
-        from auto_creation_schema import validate_rule
+        from models import ChannelPipelineRule
+        from channel_pipeline_schema import validate_rule
 
         session = get_session()
         try:
-            rule = session.query(AutoCreationRule).filter(
-                AutoCreationRule.id == rule_id
+            rule = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.id == rule_id
             ).first()
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
@@ -734,10 +743,10 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
 
 
 @router.post("/rules/bulk-update")
-async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRequest, _admin=RequireAdminIfEnabled):
+async def bulk_update_auto_creation_rules(request: BulkUpdateChannelPipelineRulesRequest, _admin=RequireAdminIfEnabled):
     """Apply the same field changes to many rules. Omitted fields are left unchanged. Admin only."""
-    from models import AutoCreationRule
-    from auto_creation_schema import validate_rule
+    from models import ChannelPipelineRule
+    from channel_pipeline_schema import validate_rule
 
     payload = request.model_dump(exclude_unset=True)
     rule_ids = payload.pop("rule_ids", None) or []
@@ -750,7 +759,7 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
     if not payload and merge_streams_remove_non_matching is None:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    scalar_update = UpdateAutoCreationRuleRequest(**payload) if payload else UpdateAutoCreationRuleRequest()
+    scalar_update = UpdateChannelPipelineRuleRequest(**payload) if payload else UpdateChannelPipelineRuleRequest()
 
     # Lint sort_regex (bd-eio04.7) before any DB work. Bulk-update does not
     # accept conditions/actions, so only sort_regex can carry a pattern.
@@ -769,8 +778,8 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
         # (bd-bh1hh: avoid N+1 — at max_length=500 this collapses 500 round
         # trips into 1).
         rules_by_id = {
-            r.id: r for r in session.query(AutoCreationRule)
-            .filter(AutoCreationRule.id.in_(rule_ids)).all()
+            r.id: r for r in session.query(ChannelPipelineRule)
+            .filter(ChannelPipelineRule.id.in_(rule_ids)).all()
         }
         missing = [rid for rid in rule_ids if rid not in rules_by_id]
         if missing:
@@ -827,7 +836,7 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
 
         session.commit()
         # No per-rule session.refresh() — attached instances already reflect
-        # the committed values. AutoCreationRule has no server_default or DB
+        # the committed values. ChannelPipelineRule has no server_default or DB
         # triggers on the columns written here; updated_at uses a Python-side
         # onupdate callable which SQLAlchemy applies during flush, so it is
         # populated on the in-memory instance before to_dict() reads it.
@@ -893,11 +902,11 @@ async def delete_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnabled):
     """Delete an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] DELETE /rules/%s", rule_id)
     try:
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         session = get_session()
         try:
-            rule = session.query(AutoCreationRule).filter(
-                AutoCreationRule.id == rule_id
+            rule = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.id == rule_id
             ).first()
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
@@ -931,12 +940,12 @@ async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...), _admin=Re
     """Reorder auto-creation rules by setting priorities based on array order. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/reorder - %d rules", len(rule_ids))
     try:
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         session = get_session()
         try:
             for priority, rule_id in enumerate(rule_ids):
-                rule = session.query(AutoCreationRule).filter(
-                    AutoCreationRule.id == rule_id
+                rule = session.query(ChannelPipelineRule).filter(
+                    ChannelPipelineRule.id == rule_id
                 ).first()
                 if rule:
                     rule.priority = priority
@@ -954,11 +963,11 @@ async def toggle_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnabled):
     """Toggle the enabled state of an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/%s/toggle", rule_id)
     try:
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         session = get_session()
         try:
-            rule = session.query(AutoCreationRule).filter(
-                AutoCreationRule.id == rule_id
+            rule = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.id == rule_id
             ).first()
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
@@ -982,17 +991,17 @@ async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnable
     """Duplicate an auto-creation rule. Admin only."""
     logger.debug("[AUTO-CREATE] POST /rules/%s/duplicate", rule_id)
     try:
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         session = get_session()
         try:
-            rule = session.query(AutoCreationRule).filter(
-                AutoCreationRule.id == rule_id
+            rule = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.id == rule_id
             ).first()
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
 
             # Create a copy with a new name
-            new_rule = AutoCreationRule(
+            new_rule = ChannelPipelineRule(
                 name=f"{rule.name} (Copy)",
                 description=rule.description,
                 enabled=False,  # Disabled by default
@@ -1039,12 +1048,12 @@ async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnable
 
 async def _ensure_engine():
     """Get the auto-creation engine, initializing it if necessary."""
-    from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+    from channel_pipeline_engine import get_channel_pipeline_engine, init_channel_pipeline_engine
 
-    engine = get_auto_creation_engine()
+    engine = get_channel_pipeline_engine()
     if not engine:
         client = get_client()
-        engine = await init_auto_creation_engine(client)
+        engine = await init_channel_pipeline_engine(client)
     return engine
 
 
@@ -1061,11 +1070,11 @@ def _create_pending_execution(
     response and the background task can finalize the same row when work
     completes.
     """
-    from models import AutoCreationExecution
+    from models import ChannelPipelineExecution
 
     session = get_session()
     try:
-        execution = AutoCreationExecution(
+        execution = ChannelPipelineExecution(
             mode=mode,
             triggered_by=triggered_by,
             started_at=datetime.utcnow(),
@@ -1083,12 +1092,12 @@ def _create_pending_execution(
 
 def _mark_execution_failed(execution_id: int, error: BaseException) -> None:
     """Mark a pre-created execution as failed and capture the error message."""
-    from models import AutoCreationExecution
+    from models import ChannelPipelineExecution
 
     session = get_session()
     try:
-        execution = session.query(AutoCreationExecution).filter(
-            AutoCreationExecution.id == execution_id
+        execution = session.query(ChannelPipelineExecution).filter(
+            ChannelPipelineExecution.id == execution_id
         ).first()
         if execution is None:
             logger.warning(
@@ -1199,11 +1208,11 @@ async def run_auto_creation_rule(rule_id: int, dry_run: bool = False, _admin=Req
         # see a 500 instead of a clean 404. Capture the name so the execution
         # row keeps it for display even if the rule is later deleted (matches
         # the engine's pre-existing behavior).
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         session = get_session()
         try:
-            rule = session.query(AutoCreationRule).filter(
-                AutoCreationRule.id == rule_id
+            rule = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.id == rule_id
             ).first()
             if rule is None:
                 raise HTTPException(status_code=404, detail="Rule not found")
@@ -1304,23 +1313,23 @@ async def get_auto_creation_executions(
     """Get auto-creation execution history."""
     logger.debug("[AUTO-CREATE] GET /executions - limit=%s offset=%s rule_id=%s status=%s", limit, offset, rule_id, status)
     try:
-        from models import AutoCreationExecution, AutoCreationSnapshot
+        from models import ChannelPipelineExecution, ChannelPipelineSnapshot
         session = get_session()
         try:
-            query = session.query(AutoCreationExecution)
+            query = session.query(ChannelPipelineExecution)
 
             if rule_id is not None:
-                query = query.filter(AutoCreationExecution.rule_id == rule_id)
+                query = query.filter(ChannelPipelineExecution.rule_id == rule_id)
             if status is not None:
-                query = query.filter(AutoCreationExecution.status == status)
+                query = query.filter(ChannelPipelineExecution.status == status)
 
             total = query.count()
             executions = query.order_by(
-                AutoCreationExecution.started_at.desc()
+                ChannelPipelineExecution.started_at.desc()
             ).offset(offset).limit(limit).all()
 
             # Derive has_snapshot (ADR-010 §D6) — a boolean from the existence
-            # of an AutoCreationSnapshot row, NOT a denormalized column (which
+            # of an ChannelPipelineSnapshot row, NOT a denormalized column (which
             # could drift from the FK truth). uc51o.6 (MCP) and uc51o.7 (UI)
             # gate the snapshot-restore affordance on this flag. Resolve it with
             # ONE query over the page's execution ids (an IN over the snapshot
@@ -1331,9 +1340,9 @@ async def get_auto_creation_executions(
                 snapshotted_ids = {
                     row[0]
                     for row in session.query(
-                        AutoCreationSnapshot.execution_id
+                        ChannelPipelineSnapshot.execution_id
                     ).filter(
-                        AutoCreationSnapshot.execution_id.in_(page_ids)
+                        ChannelPipelineSnapshot.execution_id.in_(page_ids)
                     ).all()
                 }
 
@@ -1361,11 +1370,11 @@ async def get_auto_creation_execution(execution_id: int, include_entities: bool 
     """Get details of a specific execution."""
     logger.debug("[AUTO-CREATE] GET /executions/%s", execution_id)
     try:
-        from models import AutoCreationExecution, AutoCreationConflict
+        from models import ChannelPipelineExecution, ChannelPipelineConflict
         session = get_session()
         try:
-            execution = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            execution = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             if not execution:
                 raise HTTPException(status_code=404, detail="Execution not found")
@@ -1373,8 +1382,8 @@ async def get_auto_creation_execution(execution_id: int, include_entities: bool 
             result = execution.to_dict(include_entities=include_entities, include_log=include_log)
 
             # Include conflicts
-            conflicts = session.query(AutoCreationConflict).filter(
-                AutoCreationConflict.execution_id == execution_id
+            conflicts = session.query(ChannelPipelineConflict).filter(
+                ChannelPipelineConflict.execution_id == execution_id
             ).all()
             result["conflicts"] = [c.to_dict() for c in conflicts]
 
@@ -1404,11 +1413,11 @@ async def get_auto_creation_execution_snapshot(execution_id: int):
     """
     logger.debug("[AUTO-CREATE] GET /executions/%s/snapshot", execution_id)
     try:
-        from models import AutoCreationSnapshot
+        from models import ChannelPipelineSnapshot
         session = get_session()
         try:
-            snapshot = session.query(AutoCreationSnapshot).filter(
-                AutoCreationSnapshot.execution_id == execution_id
+            snapshot = session.query(ChannelPipelineSnapshot).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
             ).first()
             if not snapshot:
                 raise HTTPException(
@@ -1473,13 +1482,13 @@ async def rollback_auto_creation_execution(
         execution_id, confirm,
     )
     try:
-        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+        from channel_pipeline_engine import get_channel_pipeline_engine, init_channel_pipeline_engine
 
         # Get or initialize engine
-        engine = get_auto_creation_engine()
+        engine = get_channel_pipeline_engine()
         if not engine:
             client = get_client()
-            engine = await init_auto_creation_engine(client)
+            engine = await init_channel_pipeline_engine(client)
 
         result = await engine.rollback_execution(
             execution_id, rolled_back_by="api", confirm=confirm,
@@ -1600,12 +1609,12 @@ async def restore_auto_creation_snapshot(
         )
 
     try:
-        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+        from channel_pipeline_engine import get_channel_pipeline_engine, init_channel_pipeline_engine
 
-        engine = get_auto_creation_engine()
+        engine = get_channel_pipeline_engine()
         if not engine:
             client = get_client()
-            engine = await init_auto_creation_engine(client)
+            engine = await init_channel_pipeline_engine(client)
 
         result = await engine.restore_snapshot(execution_id, restored_by="api")
 
@@ -1669,11 +1678,11 @@ async def export_auto_creation_rules_yaml():
     logger.debug("[AUTO-CREATE-YAML] GET /export/yaml")
     try:
         import yaml
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         session = get_session()
         try:
-            rules = session.query(AutoCreationRule).order_by(
-                AutoCreationRule.priority
+            rules = session.query(ChannelPipelineRule).order_by(
+                ChannelPipelineRule.priority
             ).all()
 
             # Build id→name lookup maps for portable export
@@ -1781,8 +1790,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
     logger.debug("[AUTO-CREATE-YAML] POST /import/yaml - overwrite=%s", request.overwrite)
     try:
         import yaml
-        from models import AutoCreationRule
-        from auto_creation_schema import validate_rule
+        from models import ChannelPipelineRule
+        from channel_pipeline_schema import validate_rule
 
         # Parse YAML
         try:
@@ -1883,8 +1892,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                     continue
 
                 # Check if rule with same name exists
-                existing = session.query(AutoCreationRule).filter(
-                    AutoCreationRule.name == rule_data.get("name")
+                existing = session.query(ChannelPipelineRule).filter(
+                    ChannelPipelineRule.name == rule_data.get("name")
                 ).first()
 
                 if existing:
@@ -1927,7 +1936,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         continue
                 else:
                     # Create new rule
-                    rule = AutoCreationRule(
+                    rule = ChannelPipelineRule(
                         name=rule_data.get("name", f"Imported Rule {i}"),
                         description=rule_data.get("description"),
                         enabled=rule_data.get("enabled", True),
@@ -1961,8 +1970,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
 
             # De-duplicate priorities: if any rules share the same priority,
             # re-assign sequential priorities preserving relative order (by id)
-            all_rules = session.query(AutoCreationRule).order_by(
-                AutoCreationRule.priority, AutoCreationRule.id
+            all_rules = session.query(ChannelPipelineRule).order_by(
+                ChannelPipelineRule.priority, ChannelPipelineRule.id
             ).all()
             priorities = [r.priority for r in all_rules]
             if len(priorities) != len(set(priorities)):
@@ -2237,7 +2246,7 @@ async def validate_auto_creation_rule(
     """Validate conditions and actions without creating a rule."""
     logger.debug("[AUTO-CREATE] POST /validate")
     try:
-        from auto_creation_schema import validate_rule
+        from channel_pipeline_schema import validate_rule
         # Offload regex compile/validation off event loop (bd-w3z4h)
         result = await run_cpu_bound(validate_rule, conditions, actions)
         return result
@@ -2249,7 +2258,7 @@ async def validate_auto_creation_rule(
 @router.get("/schema/conditions")
 async def get_auto_creation_condition_schema():
     """Get the schema for available condition types."""
-    from auto_creation_schema import ConditionType
+    from channel_pipeline_schema import ConditionType
 
     conditions = []
     for ct in list(ConditionType):
@@ -2308,7 +2317,7 @@ async def get_auto_creation_condition_schema():
 @router.get("/schema/actions")
 async def get_auto_creation_action_schema():
     """Get the schema for available action types."""
-    from auto_creation_schema import ActionType
+    from channel_pipeline_schema import ActionType
 
     actions = [
         {
@@ -2400,7 +2409,7 @@ async def get_auto_creation_action_schema():
 @router.get("/schema/template-variables")
 async def get_auto_creation_template_variables():
     """Get available template variables for name templates."""
-    from auto_creation_schema import TemplateVariables
+    from channel_pipeline_schema import TemplateVariables
 
     return {
         "variables": [
@@ -2669,7 +2678,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
 
     from csv_handler import generate_csv
     from log_utils import get_recent_logs
-    from models import AutoCreationRule
+    from models import ChannelPipelineRule
     from obfuscate import obfuscate_text, obfuscate_url
     from routers.backup import APP_VERSION
 
@@ -2765,8 +2774,8 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     import yaml
     session = get_session()
     try:
-        rules = session.query(AutoCreationRule).order_by(
-            AutoCreationRule.priority
+        rules = session.query(ChannelPipelineRule).order_by(
+            ChannelPipelineRule.priority
         ).all()
 
         m3u_id_to_name = {}

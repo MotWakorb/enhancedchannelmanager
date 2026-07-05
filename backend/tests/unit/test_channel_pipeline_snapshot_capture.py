@@ -17,7 +17,7 @@ Pins the capture-hook contract:
   dry_run``); a dry run writes NO snapshot.
 
 Capture tests use a real in-memory SQLite session (so the persisted row is
-read back and asserted), bound by patching ``auto_creation_engine.get_session``.
+read back and asserted), bound by patching ``channel_pipeline_engine.get_session``.
 The dry-run gating test stubs the pipeline helpers and spies on
 ``_capture_snapshot`` so the gate is asserted without exercising the full
 mutation path.
@@ -34,8 +34,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import database
-from auto_creation_engine import AutoCreationEngine
-from models import AutoCreationExecution, AutoCreationSnapshot
+from channel_pipeline_engine import ChannelPipelineEngine
+from models import ChannelPipelineExecution, ChannelPipelineSnapshot
 
 
 @pytest.fixture()
@@ -64,12 +64,12 @@ def db_session_factory():
 
 
 def _make_execution(session_factory, mode: str = "execute") -> int:
-    """Create an AutoCreationExecution row and return its id (FK target)."""
+    """Create an ChannelPipelineExecution row and return its id (FK target)."""
     from datetime import datetime
 
     session = session_factory()
     try:
-        execution = AutoCreationExecution(
+        execution = ChannelPipelineExecution(
             mode=mode,
             triggered_by="manual",
             started_at=datetime.utcnow(),
@@ -96,7 +96,7 @@ class TestCaptureSerialization:
         execution_id = _make_execution(db_session_factory)
 
         client = MagicMock()
-        engine = AutoCreationEngine(client)
+        engine = ChannelPipelineEngine(client)
         engine._existing_channels = [
             {
                 "id": 10, "name": "ESPN", "channel_group_id": 1,
@@ -111,15 +111,15 @@ class TestCaptureSerialization:
             },
         ]
 
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             asyncio.get_event_loop().run_until_complete(
                 engine._capture_snapshot(execution_id)
             )
 
         session = db_session_factory()
         try:
-            row = session.query(AutoCreationSnapshot).filter(
-                AutoCreationSnapshot.execution_id == execution_id
+            row = session.query(ChannelPipelineSnapshot).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
             ).first()
             assert row is not None, "no snapshot row was written"
             assert row.channel_count == 2
@@ -147,7 +147,7 @@ class TestCaptureSerialization:
         execution_id = _make_execution(db_session_factory)
 
         client = MagicMock()
-        engine = AutoCreationEngine(client)
+        engine = ChannelPipelineEngine(client)
         engine._existing_channels = [
             # Manual — kept.
             {"id": 1, "name": "Manual A", "streams": [100, 101]},
@@ -159,15 +159,15 @@ class TestCaptureSerialization:
             {"id": 4, "name": "Manual D", "streams": [400]},
         ]
 
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             asyncio.get_event_loop().run_until_complete(
                 engine._capture_snapshot(execution_id)
             )
 
         session = db_session_factory()
         try:
-            row = session.query(AutoCreationSnapshot).filter(
-                AutoCreationSnapshot.execution_id == execution_id
+            row = session.query(ChannelPipelineSnapshot).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
             ).first()
             channels = row.get_channels_data()["channels"]
             ids = {c["id"] for c in channels}
@@ -186,20 +186,20 @@ class TestCaptureSerialization:
         execution_id = _make_execution(db_session_factory)
 
         client = MagicMock()
-        engine = AutoCreationEngine(client)
+        engine = ChannelPipelineEngine(client)
         engine._existing_channels = [
             {"id": 2, "name": "Auto", "auto_created": True, "streams": [200]},
         ]
 
-        with patch("auto_creation_engine.get_session", side_effect=db_session_factory):
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
             asyncio.get_event_loop().run_until_complete(
                 engine._capture_snapshot(execution_id)
             )
 
         session = db_session_factory()
         try:
-            row = session.query(AutoCreationSnapshot).filter(
-                AutoCreationSnapshot.execution_id == execution_id
+            row = session.query(ChannelPipelineSnapshot).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
             ).first()
             assert row is not None
             assert row.channel_count == 0
@@ -217,7 +217,7 @@ class TestCaptureFailureLogsAndProceeds:
         execution_id = _make_execution(db_session_factory)
 
         client = MagicMock()
-        engine = AutoCreationEngine(client)
+        engine = ChannelPipelineEngine(client)
         engine._existing_channels = [
             {"id": 1, "name": "Manual A", "streams": [100]},
         ]
@@ -227,8 +227,8 @@ class TestCaptureFailureLogsAndProceeds:
         failing_session = MagicMock()
         failing_session.commit.side_effect = RuntimeError("disk full")
 
-        with patch("auto_creation_engine.get_session", return_value=failing_session), \
-             caplog.at_level(logging.WARNING, logger="auto_creation_engine"):
+        with patch("channel_pipeline_engine.get_session", return_value=failing_session), \
+             caplog.at_level(logging.WARNING, logger="channel_pipeline_engine"):
             # Must NOT raise.
             asyncio.get_event_loop().run_until_complete(
                 engine._capture_snapshot(execution_id)
@@ -242,8 +242,8 @@ class TestCaptureFailureLogsAndProceeds:
 
         session = db_session_factory()
         try:
-            row = session.query(AutoCreationSnapshot).filter(
-                AutoCreationSnapshot.execution_id == execution_id
+            row = session.query(ChannelPipelineSnapshot).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
             ).first()
             assert row is None, "no snapshot should exist after a capture failure"
         finally:
@@ -257,7 +257,7 @@ class TestRunPipelineDryRunGate:
         """An engine with the pipeline helpers stubbed so run_pipeline reaches
         (or skips) the capture call without touching Dispatcharr or the DB."""
         client = MagicMock()
-        engine = AutoCreationEngine(client)
+        engine = ChannelPipelineEngine(client)
 
         engine._load_existing_data = AsyncMock()
         engine._load_rules = AsyncMock(return_value=[MagicMock(id=1)])

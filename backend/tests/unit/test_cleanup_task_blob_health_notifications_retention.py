@@ -41,7 +41,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from models import AutoCreationExecution, Base, Notification
+from models import ChannelPipelineExecution, Base, Notification
 from tasks.cleanup import CleanupTask
 
 
@@ -134,7 +134,7 @@ class TestAutoCreationBlobPrune:
         session, task = _make_session_and_task(engine)
 
         old = datetime.utcnow() - timedelta(days=31)
-        row = AutoCreationExecution(
+        row = ChannelPipelineExecution(
             rule_id=None,
             rule_name="old-rule",
             mode="execute",
@@ -162,7 +162,7 @@ class TestAutoCreationBlobPrune:
         SessionLocal = sessionmaker(bind=engine)
         verify = SessionLocal()
         try:
-            persisted = verify.get(AutoCreationExecution, row_id)
+            persisted = verify.get(ChannelPipelineExecution, row_id)
             assert persisted is not None, "summary row must NOT have been deleted"
             # Summary fields preserved for audit history.
             assert persisted.rule_name == "old-rule"
@@ -191,7 +191,7 @@ class TestAutoCreationBlobPrune:
 
         recent = datetime.utcnow() - timedelta(days=5)
         log_payload = json.dumps([{"stream": "s1"}] * 100)
-        row = AutoCreationExecution(
+        row = ChannelPipelineExecution(
             rule_name="recent-rule",
             mode="execute",
             triggered_by="manual",
@@ -212,7 +212,7 @@ class TestAutoCreationBlobPrune:
         SessionLocal = sessionmaker(bind=engine)
         verify = SessionLocal()
         try:
-            persisted = verify.get(AutoCreationExecution, row_id)
+            persisted = verify.get(ChannelPipelineExecution, row_id)
             assert persisted.execution_log == log_payload
             assert persisted.dry_run_results is not None
             assert persisted.created_entities is not None
@@ -239,7 +239,7 @@ class TestAutoCreationBlobPrune:
         session, task = _make_session_and_task(engine)
 
         old = datetime.utcnow() - timedelta(days=31)
-        session.add(AutoCreationExecution(
+        session.add(ChannelPipelineExecution(
             rule_name="r", mode="execute", triggered_by="manual",
             started_at=old, status="completed",
             execution_log=json.dumps([{"x": 1}]),
@@ -261,8 +261,8 @@ class TestAutoCreationBlobPrune:
         """Regression: the gate must catch rows where ``execution_log`` is
         NULL but other BLOB columns are populated.
 
-        ``auto_creation_engine.py`` writes ``execution_log = json.dumps(log)
-        if log else None`` (see ``models.AutoCreationExecution.set_execution_log``).
+        ``channel_pipeline_engine.py`` writes ``execution_log = json.dumps(log)
+        if log else None`` (see ``models.ChannelPipelineExecution.set_execution_log``).
         A real production row with a NON-empty ``created_entities`` payload
         but an empty per-stream ``log`` list is born with
         ``execution_log = NULL`` and ``created_entities = <json>``. The
@@ -280,7 +280,7 @@ class TestAutoCreationBlobPrune:
         session, task = _make_session_and_task(engine)
 
         old = datetime.utcnow() - timedelta(days=31)
-        row = AutoCreationExecution(
+        row = ChannelPipelineExecution(
             rule_name="empty-log-but-created-entities",
             mode="execute",
             triggered_by="manual",
@@ -305,7 +305,7 @@ class TestAutoCreationBlobPrune:
         SessionLocal = sessionmaker(bind=engine)
         verify = SessionLocal()
         try:
-            persisted = verify.get(AutoCreationExecution, row_id)
+            persisted = verify.get(ChannelPipelineExecution, row_id)
             assert persisted is not None, "summary row must NOT be deleted"
             # The bug-shape column must have been NULLed.
             assert persisted.created_entities is None, (
@@ -596,7 +596,7 @@ class TestCleanupTaskFullExecuteWithAllBlocks:
 
         SessionLocal = sessionmaker(bind=engine)
         session = SessionLocal()
-        session.add(AutoCreationExecution(
+        session.add(ChannelPipelineExecution(
             rule_name="r", mode="execute", triggered_by="manual",
             started_at=old, status="completed",
             execution_log=json.dumps([{"x": 1}]),

@@ -6,7 +6,7 @@ Endpoints: /api/auto-creation/*, /api/normalization/*, /api/tags/*, /api/ffmpeg/
 from tests.e2e.conftest import skip_if_not_api
 
 
-class TestAutoCreationRules:
+class TestChannelPipelineRules:
     """Tests for /api/auto-creation endpoints."""
 
     def test_list_rules(self, e2e_client):

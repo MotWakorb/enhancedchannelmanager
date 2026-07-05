@@ -390,8 +390,8 @@ class TestAutoCreationMergeJournalRoundTrip:
     def _run_live_merge(self, execution_id, stream_id, channel):
         import asyncio
         from unittest.mock import MagicMock, AsyncMock
-        from auto_creation_executor import ActionExecutor, ExecutionContext
-        from auto_creation_evaluator import StreamContext
+        from channel_pipeline_executor import ActionExecutor, ExecutionContext
+        from channel_pipeline_evaluator import StreamContext
 
         client = MagicMock()
         client.update_channel = AsyncMock()

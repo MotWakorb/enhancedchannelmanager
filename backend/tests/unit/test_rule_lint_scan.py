@@ -17,7 +17,7 @@ import json
 import pytest
 
 from models import (
-    AutoCreationRule,
+    ChannelPipelineRule,
     DummyEPGProfile,
     NormalizationRule,
     NormalizationRuleGroup,
@@ -105,7 +105,7 @@ def _seed_norm_rule_too_long(session, group_id: int) -> NormalizationRule:
     return rule
 
 
-def _seed_auto_creation_rule_evil(session) -> AutoCreationRule:
+def _seed_auto_creation_rule_evil(session) -> ChannelPipelineRule:
     """Evil regex in both sort_regex and a set_variable action pattern."""
     conditions = [{"type": "stream_name_matches", "value": "(.*)*X"}]
     actions = [
@@ -117,7 +117,7 @@ def _seed_auto_creation_rule_evil(session) -> AutoCreationRule:
             "pattern": "(a+)+b",
         }
     ]
-    rule = AutoCreationRule(
+    rule = ChannelPipelineRule(
         name="Evil AC rule",
         enabled=True,
         priority=0,
@@ -140,12 +140,12 @@ def _seed_auto_creation_rule_evil(session) -> AutoCreationRule:
     return rule
 
 
-def _seed_auto_creation_rule_benign(session) -> AutoCreationRule:
+def _seed_auto_creation_rule_benign(session) -> ChannelPipelineRule:
     conditions = [{"type": "stream_name_contains", "value": "Sports"}]
     actions = [
         {"type": "create_channel", "name_template": "{stream_name}"}
     ]
-    rule = AutoCreationRule(
+    rule = ChannelPipelineRule(
         name="Benign AC rule",
         enabled=True,
         priority=1,

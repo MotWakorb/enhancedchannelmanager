@@ -4,16 +4,16 @@ safe_regex migration in the auto_creation_* modules.
 
 Covers the eight migrated call sites:
 
-- auto_creation_evaluator.py:
+- channel_pipeline_evaluator.py:
   - ``_expand_date_placeholders`` (sub)
   - ``_evaluate_regex`` (search)
   - ``_evaluate_channel_exists_regex`` (compile + per-channel search)
-- auto_creation_executor.py:
+- channel_pipeline_executor.py:
   - ``_apply_name_transform`` (sub)
   - ``_execute_set_variable`` regex_extract (search)
   - ``_execute_set_variable`` regex_replace (sub)
   - ``_find_channel_by_regex`` (compile + per-channel search)
-- auto_creation_engine.py:
+- channel_pipeline_engine.py:
   - ``_sort_key`` for ``stream_name_regex`` (hot-path search)
 
 Each site has:
@@ -41,9 +41,9 @@ from hypothesis import given, settings as hyp_settings, HealthCheck
 from hypothesis import strategies as st
 
 import safe_regex
-from auto_creation_evaluator import ConditionEvaluator, StreamContext
-from auto_creation_executor import ActionExecutor
-from auto_creation_engine import _sort_key
+from channel_pipeline_evaluator import ConditionEvaluator, StreamContext
+from channel_pipeline_executor import ActionExecutor
+from channel_pipeline_engine import _sort_key
 
 
 # =========================================================================
@@ -108,7 +108,7 @@ def _minimal_stream_context(name: str = "Example HD") -> StreamContext:
 
 
 # =========================================================================
-# Site 1 — auto_creation_evaluator._expand_date_placeholders (sub)
+# Site 1 — channel_pipeline_evaluator._expand_date_placeholders (sub)
 # =========================================================================
 
 
@@ -159,7 +159,7 @@ class TestExpandDatePlaceholders:
 
 
 # =========================================================================
-# Site 2 — auto_creation_evaluator._evaluate_regex (search)
+# Site 2 — channel_pipeline_evaluator._evaluate_regex (search)
 # =========================================================================
 
 
@@ -216,7 +216,7 @@ class TestEvaluateRegex:
 
 
 # =========================================================================
-# Site 3 — auto_creation_evaluator._evaluate_channel_exists_regex (compile + search)
+# Site 3 — channel_pipeline_evaluator._evaluate_channel_exists_regex (compile + search)
 # =========================================================================
 
 
@@ -272,7 +272,7 @@ class TestEvaluateChannelExistsRegex:
 
 
 # =========================================================================
-# Site 4 — auto_creation_executor._apply_name_transform (sub)
+# Site 4 — channel_pipeline_executor._apply_name_transform (sub)
 # =========================================================================
 
 
@@ -330,7 +330,7 @@ class TestApplyNameTransform:
 
 
 # =========================================================================
-# Site 5 & 6 — auto_creation_executor._execute_set_variable (search + sub)
+# Site 5 & 6 — channel_pipeline_executor._execute_set_variable (search + sub)
 # =========================================================================
 
 
@@ -339,8 +339,8 @@ class TestExecuteSetVariableRegexExtract:
 
     @pytest.mark.asyncio
     async def test_happy_path_extract_group(self):
-        from auto_creation_schema import Action
-        from auto_creation_executor import ExecutionContext
+        from channel_pipeline_schema import Action
+        from channel_pipeline_executor import ExecutionContext
         exe = _executor_with_channels()
         action = Action(type="set_variable", params={
             "variable_name": "v",
@@ -357,8 +357,8 @@ class TestExecuteSetVariableRegexExtract:
 
     @pytest.mark.asyncio
     async def test_adversarial_pattern_sets_empty_string(self, caplog):
-        from auto_creation_schema import Action
-        from auto_creation_executor import ExecutionContext
+        from channel_pipeline_schema import Action
+        from channel_pipeline_executor import ExecutionContext
         exe = _executor_with_channels()
         action = Action(type="set_variable", params={
             "variable_name": "v",
@@ -384,8 +384,8 @@ class TestExecuteSetVariableRegexReplace:
 
     @pytest.mark.asyncio
     async def test_happy_path_replace(self):
-        from auto_creation_schema import Action
-        from auto_creation_executor import ExecutionContext
+        from channel_pipeline_schema import Action
+        from channel_pipeline_executor import ExecutionContext
         exe = _executor_with_channels()
         action = Action(type="set_variable", params={
             "variable_name": "v",
@@ -403,8 +403,8 @@ class TestExecuteSetVariableRegexReplace:
 
     @pytest.mark.asyncio
     async def test_adversarial_pattern_returns_source_unchanged(self, caplog):
-        from auto_creation_schema import Action
-        from auto_creation_executor import ExecutionContext
+        from channel_pipeline_schema import Action
+        from channel_pipeline_executor import ExecutionContext
         exe = _executor_with_channels()
         action = Action(type="set_variable", params={
             "variable_name": "v",
@@ -428,7 +428,7 @@ class TestExecuteSetVariableRegexReplace:
 
 
 # =========================================================================
-# Site 7 — auto_creation_executor._find_channel_by_regex (compile + search)
+# Site 7 — channel_pipeline_executor._find_channel_by_regex (compile + search)
 # =========================================================================
 
 
@@ -464,7 +464,7 @@ class TestFindChannelByRegex:
 
 
 # =========================================================================
-# Site 8 — auto_creation_engine._sort_key hot path (search)
+# Site 8 — channel_pipeline_engine._sort_key hot path (search)
 # =========================================================================
 
 
@@ -536,7 +536,7 @@ class TestSmokeAutoCreationEvaluator:
     """Smoke: user-supplied regex flows through Condition + Evaluator."""
 
     def test_stream_name_matches_benign(self):
-        from auto_creation_schema import Condition, ConditionType
+        from channel_pipeline_schema import Condition, ConditionType
         ev = _evaluator_with_channels()
         ctx = _minimal_stream_context("ESPN HD 1080p")
         cond = Condition(type=ConditionType.STREAM_NAME_MATCHES,
@@ -545,7 +545,7 @@ class TestSmokeAutoCreationEvaluator:
         assert result.matched is True
 
     def test_stream_name_matches_adversarial_does_not_crash(self, caplog):
-        from auto_creation_schema import Condition, ConditionType
+        from channel_pipeline_schema import Condition, ConditionType
         ev = _evaluator_with_channels()
         ctx = _minimal_stream_context(_EVIL_INPUT_ALT)
         cond = Condition(type=ConditionType.STREAM_NAME_MATCHES,
@@ -559,7 +559,7 @@ class TestSmokeAutoCreationEvaluator:
         assert result.matched is False
 
     def test_channel_exists_matching_adversarial_does_not_crash(self, caplog):
-        from auto_creation_schema import Condition, ConditionType
+        from channel_pipeline_schema import Condition, ConditionType
         ev = _evaluator_with_channels([
             {"id": 1, "name": _EVIL_INPUT_ALT},
         ])
@@ -613,7 +613,7 @@ class TestSmokeAutoCreationExecutor:
         assert got is None
 
 
-class TestSmokeAutoCreationEngineSortKey:
+class TestSmokeChannelPipelineEngineSortKey:
     """Smoke: full-list sort with adversarial sort_regex does not hang."""
 
     def test_sort_list_with_adversarial_regex(self, caplog):
@@ -654,5 +654,5 @@ class TestSmokeAutoCreationEngineSortKey:
         elapsed = time.perf_counter() - start
         assert elapsed < 0.050, (
             f"1000-stream sort exceeded 50ms budget: {elapsed * 1000:.2f}ms — "
-            f"the hot-path mitigation in auto_creation_engine may have regressed."
+            f"the hot-path mitigation in channel_pipeline_engine may have regressed."
         )

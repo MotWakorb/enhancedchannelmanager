@@ -166,7 +166,7 @@ class Condition:
                 # safe_regex.compile. SafeRegexError covers both
                 # PatternTooLongError (length cap) and wrapped regex
                 # syntax errors, mirroring the runtime path used by
-                # auto_creation_evaluator (bd-eio04.15).
+                # channel_pipeline_evaluator (bd-eio04.15).
                 try:
                     safe_regex.compile(self.value)
                 except safe_regex.SafeRegexError as e:
@@ -596,7 +596,7 @@ class Action:
                         # bd-ltjyx: route through safe_regex.compile so the
                         # length cap and compile-error surface match the
                         # runtime path that actually executes this pattern
-                        # (auto_creation_executor._execute_set_variable).
+                        # (channel_pipeline_executor._execute_set_variable).
                         try:
                             safe_regex.compile(pattern)
                         except safe_regex.SafeRegexError as e:
@@ -626,7 +626,7 @@ class Action:
             else:
                 # bd-ltjyx: route through safe_regex.compile so the length
                 # cap and compile-error surface match the runtime path
-                # (auto_creation_executor._apply_name_transform).
+                # (channel_pipeline_executor._apply_name_transform).
                 try:
                     safe_regex.compile(pattern)
                 except safe_regex.SafeRegexError as e:

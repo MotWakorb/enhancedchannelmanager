@@ -1928,14 +1928,14 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
             await prober.stop()
             logger.info("[SETTINGS] Stopped existing stream prober")
 
-        # bd-snryv: AutoCreationEngine has the identical stale-client bug —
+        # bd-snryv: ChannelPipelineEngine has the identical stale-client bug —
         # it captures ``self.client`` once at construction and never re-fetches
-        # get_client(). routers/auto_creation.py's _ensure_engine() only builds
-        # a fresh engine when get_auto_creation_engine() returns None, so
+        # get_client(). routers/channel_pipeline.py's _ensure_engine() only builds
+        # a fresh engine when get_channel_pipeline_engine() returns None, so
         # clearing the singleton here is sufficient: the next _ensure_engine()
         # call naturally rebuilds it against the current (fresh) get_client().
-        from auto_creation_engine import reset_auto_creation_engine
-        reset_auto_creation_engine()
+        from channel_pipeline_engine import reset_channel_pipeline_engine
+        reset_channel_pipeline_engine()
 
         # Start new tracker and prober with current settings
         if not settings.is_configured():
@@ -1943,7 +1943,7 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
             # later probe entry points reset it back to False — so the
             # just-stopped prober object stays truthy and reusable. Without
             # clearing the singletons here, callers like
-            # auto_creation_engine's ``prober = get_prober(); if not prober:
+            # channel_pipeline_engine's ``prober = get_prober(); if not prober:
             # skip`` guard would pass and proceed against a client for
             # settings that are no longer configured.
             set_tracker(None)

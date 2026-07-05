@@ -5,7 +5,7 @@ hard-chains auto-creation as a side-effect; instead:
 
   - A SUCCESSFUL M3U refresh advances the ``last_m3u_refresh_completed_at``
     watermark in settings (Q1: on EVERY successful refresh, change-gated NO).
-  - The interval-scheduled ``AutoCreationTask`` decides FOR ITSELF whether to
+  - The interval-scheduled ``ChannelPipelineTask`` decides FOR ITSELF whether to
     run via a top-of-run AUTO-FIRE GUARD: enabled AND breaker clear AND
     >=1 enabled+run_on_refresh rule AND refresh watermark newer than the
     consumed watermark. On run it advances the consumed watermark and runs
@@ -90,8 +90,8 @@ async def test_refresh_does_not_invoke_auto_creation():
     assert "run_auto_creation_after_refresh" not in src, (
         "m3u_refresh must not reference run_auto_creation_after_refresh"
     )
-    assert "from tasks.auto_creation import" not in src, (
-        "m3u_refresh must not import from tasks.auto_creation"
+    assert "from tasks.channel_pipeline import" not in src, (
+        "m3u_refresh must not import from tasks.channel_pipeline"
     )
 
     with patch("tasks.m3u_refresh.get_client", return_value=client), \
@@ -133,15 +133,15 @@ async def test_refresh_with_failures_does_not_advance_watermark():
 
 
 # ---------------------------------------------------------------------------
-# Step 2 — AutoCreationTask interval schedule + auto-fire guard
+# Step 2 — ChannelPipelineTask interval schedule + auto-fire guard
 # ---------------------------------------------------------------------------
 def test_auto_creation_task_has_interval_schedule():
-    """The default AutoCreationTask schedule is INTERVAL ~60s so the engine
+    """The default ChannelPipelineTask schedule is INTERVAL ~60s so the engine
     ticks it (the guard then decides whether to actually run)."""
-    from tasks.auto_creation import AutoCreationTask
+    from tasks.channel_pipeline import ChannelPipelineTask
     from task_engine import DEFAULT_CHECK_INTERVAL
 
-    task = AutoCreationTask()
+    task = ChannelPipelineTask()
     assert task.schedule_config.schedule_type == ScheduleType.INTERVAL
     assert task.schedule_config.interval_seconds == DEFAULT_CHECK_INTERVAL
 
@@ -157,11 +157,11 @@ def _patch_settings(**kwargs):
 
 
 async def _run_autofire(settings, rules, engine_result=None, env=None):
-    """Run AutoCreationTask.execute() with the given settings + run_on_refresh rules.
+    """Run ChannelPipelineTask.execute() with the given settings + run_on_refresh rules.
 
     Returns (result, engine_mock, save_settings_mock).
     """
-    from tasks.auto_creation import AutoCreationTask
+    from tasks.channel_pipeline import ChannelPipelineTask
 
     fake_engine = MagicMock()
     fake_engine.run_pipeline = AsyncMock(
@@ -177,18 +177,18 @@ async def _run_autofire(settings, rules, engine_result=None, env=None):
 
     env = env or {}
     with patch.dict(os.environ, env, clear=False), \
-         patch("tasks.auto_creation.get_settings", return_value=settings), \
-         patch("tasks.auto_creation.save_settings") as mock_save, \
+         patch("tasks.channel_pipeline.get_settings", return_value=settings), \
+         patch("tasks.channel_pipeline.save_settings") as mock_save, \
          patch("services.notification_service.create_notification_internal", new=AsyncMock()), \
-         patch("auto_creation_engine.get_auto_creation_engine", return_value=fake_engine), \
-         patch("auto_creation_engine.init_auto_creation_engine", new=AsyncMock(return_value=fake_engine)), \
+         patch("channel_pipeline_engine.get_channel_pipeline_engine", return_value=fake_engine), \
+         patch("channel_pipeline_engine.init_channel_pipeline_engine", new=AsyncMock(return_value=fake_engine)), \
          patch("dispatcharr_client.get_client", return_value=MagicMock()), \
-         patch("tasks.auto_creation.get_client", return_value=MagicMock()), \
+         patch("tasks.channel_pipeline.get_client", return_value=MagicMock()), \
          patch("database.get_session", return_value=session), \
          patch("journal.log_entry"):
         if "ECM_DISABLE_RUN_ON_REFRESH" not in env:
             os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
-        task = AutoCreationTask()
+        task = ChannelPipelineTask()
         # i2xad: scheduled auto-creation is opt-in (default_enabled=False). These
         # tests exercise AUTO-FIRE GUARD conditions (b)/(c)/(d), which only apply
         # once condition (a) "enabled" holds — i.e. after an operator opts in.

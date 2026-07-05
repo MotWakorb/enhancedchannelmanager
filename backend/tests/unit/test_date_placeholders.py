@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from auto_creation_evaluator import ConditionEvaluator
+from channel_pipeline_evaluator import ConditionEvaluator
 
 def test_expand_date_placeholders_basic():
     evaluator = ConditionEvaluator()

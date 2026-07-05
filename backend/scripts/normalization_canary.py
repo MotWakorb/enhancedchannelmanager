@@ -17,7 +17,7 @@ Path 1 — HTTP preview (Test Rules):
 
 Path 2 — direct executor call:
     ``NormalizationEngine.normalize(input)`` invoked in-process, mirroring
-    exactly what ``auto_creation_executor.ActionExecutor`` does when
+    exactly what ``channel_pipeline_executor.ActionExecutor`` does when
     creating channels.
 
 Both paths share the same ``NormalizationPolicy`` by construction

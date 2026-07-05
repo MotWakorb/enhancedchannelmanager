@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from auto_creation_engine import AutoCreationEngine
+from channel_pipeline_engine import ChannelPipelineEngine
 
 
 def _run(coro):
@@ -18,19 +18,19 @@ def _run(coro):
 
 
 def _route_rollback_queries(mock_session, mock_execution):
-    """Route the uc51o.5 AutoCreationSnapshot-existence probe to None so these
+    """Route the uc51o.5 ChannelPipelineSnapshot-existence probe to None so these
     LEGACY (no-snapshot) rollback tests stay on the entity-rollback /
     surgical-unmerge path.
 
     NOTE: "snapshot restore" in these test names refers to the legacy
     ``_rollback_modified_entity`` modified-entity fallback, NOT the ADR-010
-    AutoCreationSnapshot table. ``rollback_execution`` now first probes the
-    AutoCreationSnapshot table; a flat ``mock_session.query.return_value``
+    ChannelPipelineSnapshot table. ``rollback_execution`` now first probes the
+    ChannelPipelineSnapshot table; a flat ``mock_session.query.return_value``
     returns the same chain for every query, which would make that probe see the
     execution mock and divert to the FULL restore. These runs have no
-    AutoCreationSnapshot, so route that probe to None.
+    ChannelPipelineSnapshot, so route that probe to None.
     """
-    from models import AutoCreationSnapshot
+    from models import ChannelPipelineSnapshot
 
     exec_chain = MagicMock()
     exec_chain.filter.return_value.first.return_value = mock_execution
@@ -38,7 +38,7 @@ def _route_rollback_queries(mock_session, mock_execution):
     none_chain.filter.return_value.first.return_value = None
 
     def _is_snapshot_arg(a):
-        return a is AutoCreationSnapshot or getattr(a, "class_", None) is AutoCreationSnapshot
+        return a is ChannelPipelineSnapshot or getattr(a, "class_", None) is ChannelPipelineSnapshot
 
     def _query(*args, **kwargs):
         if any(_is_snapshot_arg(a) for a in args):
@@ -50,14 +50,14 @@ def _route_rollback_queries(mock_session, mock_execution):
 
 class TestAddedStreamIds:
     def test_after_minus_before(self):
-        added = AutoCreationEngine._added_stream_ids(
+        added = ChannelPipelineEngine._added_stream_ids(
             {"stream_ids": [10]}, {"stream_ids": [10, 11]}
         )
         assert added == [11]
 
     def test_empty_when_malformed(self):
-        assert AutoCreationEngine._added_stream_ids(None, None) == []
-        assert AutoCreationEngine._added_stream_ids({}, {}) == []
+        assert ChannelPipelineEngine._added_stream_ids(None, None) == []
+        assert ChannelPipelineEngine._added_stream_ids({}, {}) == []
 
 
 class TestSurgicalUnmerge:
@@ -66,10 +66,10 @@ class TestSurgicalUnmerge:
         self.client.delete_channel = AsyncMock()
         self.client.delete_channel_group = AsyncMock()
         self.client.update_channel = AsyncMock()
-        self.engine = AutoCreationEngine(self.client)
+        self.engine = ChannelPipelineEngine(self.client)
 
-    @patch("auto_creation_engine.journal.get_entries")
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.journal.get_entries")
+    @patch("channel_pipeline_engine.get_session")
     def test_removes_only_added_streams_and_preserves_later_add(
         self, mock_get_session, mock_get_entries
     ):
@@ -111,8 +111,8 @@ class TestSurgicalUnmerge:
         self.client.update_channel.assert_called_once_with(3, {"streams": [10, 12]})
         assert mock_execution.status == "rolled_back"
 
-    @patch("auto_creation_engine.journal.get_entries")
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.journal.get_entries")
+    @patch("channel_pipeline_engine.get_session")
     def test_falls_back_to_snapshot_when_no_journal_entries(
         self, mock_get_session, mock_get_entries
     ):
@@ -138,8 +138,8 @@ class TestSurgicalUnmerge:
         # Snapshot restore path: full pre-run list restored.
         self.client.update_channel.assert_called_once_with(3, {"streams": [10]})
 
-    @patch("auto_creation_engine.journal.get_entries")
-    @patch("auto_creation_engine.get_session")
+    @patch("channel_pipeline_engine.journal.get_entries")
+    @patch("channel_pipeline_engine.get_session")
     def test_surgical_skips_snapshot_restore(
         self, mock_get_session, mock_get_entries
     ):

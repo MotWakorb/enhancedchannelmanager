@@ -27,21 +27,21 @@ from config import (
 )
 from database import get_session
 from models import (
-    AutoCreationRule,
-    AutoCreationExecution,
-    AutoCreationConflict,
-    AutoCreationSnapshot,
+    ChannelPipelineRule,
+    ChannelPipelineExecution,
+    ChannelPipelineConflict,
+    ChannelPipelineSnapshot,
     StreamStats
 )
-from auto_creation_schema import (
+from channel_pipeline_schema import (
     Action,
     ActionType,
 )
-from auto_creation_evaluator import (
+from channel_pipeline_evaluator import (
     ConditionEvaluator,
     StreamContext,
 )
-from auto_creation_executor import (
+from channel_pipeline_executor import (
     ActionExecutor,
     ExecutionContext,
 )
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 # retained entry on non-dry-run so peak RSS does not scale with
 # streams×rules×conditions (bd-sjdsq). The Rule Analyzer re-evaluates rules
 # itself and does NOT read the persisted execution_log; rollback uses
-# AutoCreationSnapshot/created_entities, not the log — so dropping these is
+# ChannelPipelineSnapshot/created_entities, not the log — so dropping these is
 # safe. The retained entry still carries stream_id / stream_name and the
 # actions_executed list (which holds created channel entity_ids), so rollback
 # and the per-channel audit trail are intact.
@@ -148,12 +148,12 @@ class BoundedExecutionLog(list):
             })
 
 
-class AutoCreationEngine:
+class ChannelPipelineEngine:
     """
     Main orchestrator for the auto-creation pipeline.
 
     Usage:
-        engine = AutoCreationEngine(dispatcharr_client)
+        engine = ChannelPipelineEngine(dispatcharr_client)
 
         # Dry run to preview changes
         result = await engine.run_pipeline(dry_run=True)
@@ -199,7 +199,7 @@ class AutoCreationEngine:
             rule_ids: Optional list of rule IDs to run (None = all enabled)
             execution_id: Optional pre-created execution record id. When the
                 router enqueues a background task (bd-enfsy 202+poll pattern)
-                it creates an AutoCreationExecution(status="running") up front
+                it creates an ChannelPipelineExecution(status="running") up front
                 so it can return the id to the caller immediately. Passing the
                 id here lets the engine reuse that record instead of creating a
                 second one — the row stays in "running" while work proceeds and
@@ -453,8 +453,8 @@ class AutoCreationEngine:
         """
         session = get_session()
         try:
-            execution = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            execution = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
 
             if not execution:
@@ -474,8 +474,8 @@ class AutoCreationEngine:
             # SAME confirm acknowledgement as /restore-snapshot. Refuse without
             # it rather than silently widening the blast radius; the no-snapshot
             # path below is untouched and keeps its no-confirm semantics.
-            has_snapshot = session.query(AutoCreationSnapshot.id).filter(
-                AutoCreationSnapshot.execution_id == execution_id
+            has_snapshot = session.query(ChannelPipelineSnapshot.id).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
             ).first() is not None
 
             if has_snapshot:
@@ -595,7 +595,7 @@ class AutoCreationEngine:
             session.close()
 
     async def restore_snapshot(self, execution_id: int, restored_by: str = "manual") -> dict:
-        """Whole-run revert via the pre-run AutoCreationSnapshot (ADR-010 §D8).
+        """Whole-run revert via the pre-run ChannelPipelineSnapshot (ADR-010 §D8).
 
         SAFETY-CRITICAL: this mutates live Dispatcharr channels. It performs an
         OPTIMISTIC OVERWRITE (ADR-010 §D5) — it unconditionally writes the
@@ -644,8 +644,8 @@ class AutoCreationEngine:
         """
         session = get_session()
         try:
-            execution = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            execution = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
 
             if not execution:
@@ -664,8 +664,8 @@ class AutoCreationEngine:
                     "error": "Execution already reverted",
                 }
 
-            snapshot = session.query(AutoCreationSnapshot).filter(
-                AutoCreationSnapshot.execution_id == execution_id
+            snapshot = session.query(ChannelPipelineSnapshot).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
             ).first()
 
             if not snapshot:
@@ -810,18 +810,18 @@ class AutoCreationEngine:
             self._existing_channels = []
             self._existing_groups = []
 
-    async def _load_rules(self, rule_ids: list[int] = None) -> list[AutoCreationRule]:
+    async def _load_rules(self, rule_ids: list[int] = None) -> list[ChannelPipelineRule]:
         """Load enabled rules sorted by priority."""
         session = get_session()
         try:
-            query = session.query(AutoCreationRule).filter(
-                AutoCreationRule.enabled == True
+            query = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.enabled == True
             )
 
             if rule_ids:
-                query = query.filter(AutoCreationRule.id.in_(rule_ids))
+                query = query.filter(ChannelPipelineRule.id.in_(rule_ids))
 
-            rules = query.order_by(AutoCreationRule.priority).all()
+            rules = query.order_by(ChannelPipelineRule.priority).all()
             for r in rules:
                 logger.debug(
                     "[AUTO-CREATE-ENGINE] Rule id=%s name=%r priority=%s "
@@ -837,7 +837,7 @@ class AutoCreationEngine:
             session.close()
 
     async def _detect_disabled_normalization_group_warnings(
-        self, rules: list[AutoCreationRule]
+        self, rules: list[ChannelPipelineRule]
     ) -> list[dict]:
         """Detect rules whose ``normalization_group_ids`` reference DISABLED or
         missing normalization groups (enhancedchannelmanager-e8p1h).
@@ -909,7 +909,7 @@ class AutoCreationEngine:
     async def _fetch_streams(
         self,
         m3u_account_ids: list[int] = None,
-        rules: list[AutoCreationRule] = None
+        rules: list[ChannelPipelineRule] = None
     ) -> list[StreamContext]:
         """
         Fetch streams from M3U accounts.
@@ -1123,7 +1123,7 @@ class AutoCreationEngine:
     async def _probe_unprobed_streams(
         self,
         matched_entries: list,
-        rules: list[AutoCreationRule],
+        rules: list[ChannelPipelineRule],
         results: dict,
         dry_run: bool
     ):
@@ -1225,7 +1225,7 @@ class AutoCreationEngine:
 
     async def _reorder_channel_streams(
         self,
-        rules: list[AutoCreationRule],
+        rules: list[ChannelPipelineRule],
         rule_channel_order: dict,
         results: dict,
         dry_run: bool,
@@ -1414,8 +1414,8 @@ class AutoCreationEngine:
     async def _process_streams(
         self,
         streams: list[StreamContext],
-        rules: list[AutoCreationRule],
-        execution: AutoCreationExecution,
+        rules: list[ChannelPipelineRule],
+        execution: ChannelPipelineExecution,
         dry_run: bool,
         triggered_by: str = "manual",
     ) -> dict:
@@ -2587,7 +2587,7 @@ class AutoCreationEngine:
 
         retry_success = 0
         retry_failed = 0
-        from auto_creation_schema import Action
+        from channel_pipeline_schema import Action
         for channel_id, action, stream_ctx, exec_ctx in deferred_snapshot:
             epg_source_id = action.params.get("epg_id")
             src = source_by_id.get(epg_source_id)
@@ -2697,10 +2697,10 @@ class AutoCreationEngine:
 
     async def _reconcile_orphans(
         self,
-        rules: list[AutoCreationRule],
+        rules: list[ChannelPipelineRule],
         rule_channel_order: dict,
         executor,
-        execution: AutoCreationExecution,
+        execution: ChannelPipelineExecution,
         results: dict,
         dry_run: bool,
         settings=None
@@ -2923,11 +2923,11 @@ class AutoCreationEngine:
     # Execution Tracking
     # =========================================================================
 
-    async def _create_execution(self, mode: str, triggered_by: str) -> AutoCreationExecution:
+    async def _create_execution(self, mode: str, triggered_by: str) -> ChannelPipelineExecution:
         """Create a new execution record."""
         session = get_session()
         try:
-            execution = AutoCreationExecution(
+            execution = ChannelPipelineExecution(
                 mode=mode,
                 triggered_by=triggered_by,
                 started_at=datetime.utcnow(),
@@ -2940,13 +2940,13 @@ class AutoCreationEngine:
         finally:
             session.close()
 
-    async def _load_execution(self, execution_id: int) -> AutoCreationExecution | None:
+    async def _load_execution(self, execution_id: int) -> ChannelPipelineExecution | None:
         """Load an existing execution record by id (bd-enfsy: reuses the row
         the router pre-created when enqueuing background work)."""
         session = get_session()
         try:
-            execution = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            execution = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             if execution is not None:
                 # Detach so it can be mutated outside this session and saved
@@ -2962,8 +2962,8 @@ class AutoCreationEngine:
         ``status="running"`` forever and the frontend poller would spin."""
         session = get_session()
         try:
-            execution = session.query(AutoCreationExecution).filter(
-                AutoCreationExecution.id == execution_id
+            execution = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
             ).first()
             if execution is None:
                 return
@@ -2975,7 +2975,7 @@ class AutoCreationEngine:
         finally:
             session.close()
 
-    async def _save_execution(self, execution: AutoCreationExecution):
+    async def _save_execution(self, execution: ChannelPipelineExecution):
         """Save execution record."""
         session = get_session()
         try:
@@ -2985,7 +2985,7 @@ class AutoCreationEngine:
             session.close()
 
     async def _capture_snapshot(self, execution_id: int) -> None:
-        """Persist a pre-run AutoCreationSnapshot for ``execution_id`` (ADR-010).
+        """Persist a pre-run ChannelPipelineSnapshot for ``execution_id`` (ADR-010).
 
         Serializes the manual (non-Dispatcharr-auto-created) channel<->stream
         state from the already-loaded in-memory ``self._existing_channels`` —
@@ -3030,7 +3030,7 @@ class AutoCreationEngine:
 
             session = get_session()
             try:
-                snapshot = AutoCreationSnapshot(
+                snapshot = ChannelPipelineSnapshot(
                     execution_id=execution_id,
                     snapshot_time=datetime.utcnow(),
                     channel_count=len(channels),
@@ -3058,16 +3058,16 @@ class AutoCreationEngine:
 
     async def _record_conflict(
         self,
-        execution: AutoCreationExecution,
+        execution: ChannelPipelineExecution,
         stream: StreamContext,
-        winning_rule: AutoCreationRule,
-        losing_rules: list[AutoCreationRule],
+        winning_rule: ChannelPipelineRule,
+        losing_rules: list[ChannelPipelineRule],
         conflict_type: str
     ):
         """Record a conflict in the database."""
         session = get_session()
         try:
-            conflict = AutoCreationConflict(
+            conflict = ChannelPipelineConflict(
                 execution_id=execution.id,
                 stream_id=stream.stream_id,
                 stream_name=stream.stream_name,
@@ -3083,7 +3083,7 @@ class AutoCreationEngine:
         finally:
             session.close()
 
-    async def _update_rule_stats(self, rules: list[AutoCreationRule], results: dict):
+    async def _update_rule_stats(self, rules: list[ChannelPipelineRule], results: dict):
         """Update rule statistics after execution."""
         rule_match_counts = results.get("rule_match_counts", {})
         session = get_session()
@@ -3879,29 +3879,29 @@ async def _auto_rename_after_renumber(
 # Singleton Instance
 # =============================================================================
 
-_engine_instance: Optional[AutoCreationEngine] = None
+_engine_instance: Optional[ChannelPipelineEngine] = None
 
 
-def get_auto_creation_engine() -> Optional[AutoCreationEngine]:
+def get_channel_pipeline_engine() -> Optional[ChannelPipelineEngine]:
     """Get the auto-creation engine instance."""
     return _engine_instance
 
 
-def set_auto_creation_engine(engine: AutoCreationEngine):
+def set_channel_pipeline_engine(engine: ChannelPipelineEngine):
     """Set the auto-creation engine instance."""
     global _engine_instance
     _engine_instance = engine
 
 
-def reset_auto_creation_engine() -> None:
+def reset_channel_pipeline_engine() -> None:
     """Clear the auto-creation engine singleton (bd-snryv).
 
-    ``AutoCreationEngine.__init__`` captures ``self.client`` once and uses it
+    ``ChannelPipelineEngine.__init__`` captures ``self.client`` once and uses it
     for every live Dispatcharr call the pipeline makes thereafter (get_channels,
     update_channel, delete_channel, assign_channel_numbers, etc.) — it never
-    re-fetches ``get_client()``. ``routers/auto_creation.py``'s
+    re-fetches ``get_client()``. ``routers/channel_pipeline.py``'s
     ``_ensure_engine()`` helper only builds a fresh engine via
-    ``init_auto_creation_engine(get_client())`` when ``get_auto_creation_engine()``
+    ``init_channel_pipeline_engine(get_client())`` when ``get_channel_pipeline_engine()``
     returns ``None``; it never rebuilds an existing engine. Without this,
     a Dispatcharr credential rotation leaves auto-creation rule runs hitting
     Dispatcharr with stale credentials indefinitely — same bug class as the
@@ -3915,8 +3915,8 @@ def reset_auto_creation_engine() -> None:
     _engine_instance = None
 
 
-async def init_auto_creation_engine(client) -> AutoCreationEngine:
+async def init_channel_pipeline_engine(client) -> ChannelPipelineEngine:
     """Initialize the auto-creation engine with a Dispatcharr client."""
-    engine = AutoCreationEngine(client)
-    set_auto_creation_engine(engine)
+    engine = ChannelPipelineEngine(client)
+    set_channel_pipeline_engine(engine)
     return engine

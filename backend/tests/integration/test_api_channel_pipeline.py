@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def mock_db_session():
     """Mock database session."""
-    with patch("routers.auto_creation.get_session") as mock:
+    with patch("routers.channel_pipeline.get_session") as mock:
         session = MagicMock()
         mock.return_value = session
         yield session
@@ -25,12 +25,12 @@ def test_client():
     The mutating auto-creation endpoints now carry RequireAdminIfEnabled
     (bd-757hc). Its underlying dependency declares ``session=Depends(get_session)``,
     which FastAPI resolves against the REAL database — these integration tests
-    only patch ``routers.auto_creation.get_session`` for the handler body, not
+    only patch ``routers.channel_pipeline.get_session`` for the handler body, not
     the auth subsystem's session, and they never call init_db(). Override the
     admin dependency with an auth-disabled passthrough (returns None, exactly
     what RequireAdminIfEnabled does when auth is off) so the gate doesn't touch
     the uninitialized DB. Admin-enforcement itself is covered by
-    tests/routers/test_auto_creation.py::TestAutoCreationAdminGating.
+    tests/routers/test_channel_pipeline.py::TestAutoCreationAdminGating.
     """
     from main import app
     from auth import RequireAdminIfEnabled as _prebuilt
@@ -45,7 +45,7 @@ def test_client():
         app.dependency_overrides.pop(_prebuilt.dependency, None)
 
 
-class TestAutoCreationRulesAPI:
+class TestChannelPipelineRulesAPI:
     """Tests for auto-creation rules CRUD endpoints."""
 
     def test_get_rules_empty(self, test_client, mock_db_session):
@@ -121,7 +121,7 @@ class TestAutoCreationRulesAPI:
         mock_db_session.commit = MagicMock()
         mock_db_session.refresh = MagicMock(side_effect=lambda x: setattr(x, 'id', 1))
 
-        with patch("routers.auto_creation.journal.log_entry"):
+        with patch("routers.channel_pipeline.journal.log_entry"):
             response = test_client.post(
                 "/api/auto-creation/rules",
                 json={
@@ -175,7 +175,7 @@ class TestAutoCreationRulesAPI:
         mock_rule.name = "Test Rule"
         mock_db_session.query.return_value.filter.return_value.first.return_value = mock_rule
 
-        with patch("routers.auto_creation.journal.log_entry"):
+        with patch("routers.channel_pipeline.journal.log_entry"):
             response = test_client.delete("/api/auto-creation/rules/1")
 
         assert response.status_code == 200
@@ -289,7 +289,7 @@ class TestAutoCreationValidationAPI:
         assert data["valid"] is False
 
 
-class TestAutoCreationExecutionsAPI:
+class TestChannelPipelineExecutionsAPI:
     """Tests for execution history endpoints."""
 
     def test_get_executions_empty(self, test_client, mock_db_session):
@@ -380,7 +380,7 @@ rules:
 """
         mock_db_session.query.return_value.filter.return_value.first.return_value = None
 
-        with patch("routers.auto_creation.journal.log_entry"):
+        with patch("routers.channel_pipeline.journal.log_entry"):
             response = test_client.post(
                 "/api/auto-creation/import/yaml",
                 json={
@@ -423,8 +423,8 @@ rules:
 # Bulk-update integration coverage with REAL DB + REAL journal (bd-d23zy).
 #
 # QA's standup finding: every bulk-update test in
-# backend/tests/routers/test_auto_creation.py mocks the journal via
-# patch("routers.auto_creation.journal"). The batch_id assertions verify call
+# backend/tests/routers/test_channel_pipeline.py mocks the journal via
+# patch("routers.channel_pipeline.journal"). The batch_id assertions verify call
 # kwargs, not real DB rows. Three bulk-related PRs landed in 24h
 # (bd-bh1hh single-fetch + bd-gjoe5 reject conditions/actions +
 # bd-91mcq per-entity audit) — they share the _apply_rule_scalar_updates code
@@ -440,17 +440,17 @@ rules:
 import json as _json_d23zy
 from datetime import datetime as _datetime_d23zy
 
-from models import AutoCreationRule as _AutoCreationRule_d23zy, JournalEntry as _JournalEntry_d23zy
+from models import ChannelPipelineRule as _ChannelPipelineRule_d23zy, JournalEntry as _JournalEntry_d23zy
 
 
 def _seed_bulk_rule(session, *, name: str, enabled: bool = False, priority: int = 0):
-    """Seed an AutoCreationRule directly via the test session.
+    """Seed an ChannelPipelineRule directly via the test session.
 
-    Mirrors the helper in backend/tests/routers/test_auto_creation.py:_create_rule
+    Mirrors the helper in backend/tests/routers/test_channel_pipeline.py:_create_rule
     but exposed at module scope here so the bd-d23zy integration tests are
     self-contained.
     """
-    rule = _AutoCreationRule_d23zy(
+    rule = _ChannelPipelineRule_d23zy(
         name=name,
         enabled=enabled,
         priority=priority,
@@ -603,7 +603,7 @@ class TestBulkUpdateRealDBJournal:
         )
 
         # Rule scalar must be unchanged (rollback).
-        refreshed = test_session.query(_AutoCreationRule_d23zy).get(rule.id)
+        refreshed = test_session.query(_ChannelPipelineRule_d23zy).get(rule.id)
         assert refreshed.enabled is True
         assert refreshed.priority == 42
 
@@ -617,7 +617,7 @@ class TestBulkUpdateRealDBJournal:
 # wall-clock budget — never hang and never 5xx.
 #
 # Modeled on the adversarial pattern strategy in
-# backend/tests/unit/test_auto_creation_safe_regex_migration.py:40-71.
+# backend/tests/unit/test_channel_pipeline_safe_regex_migration.py:40-71.
 # =============================================================================
 
 
@@ -675,7 +675,7 @@ async def test_bulk_update_sort_regex_rejects_redos_patterns_fast(
     """bd-d23zy + bd-k41e0: bulk-update sort_regex lint must reject ReDoS
     patterns with HTTP 422 within a hard wall-clock budget.
 
-    Builds on bd-ltjyx (auto_creation_schema write-time safe_regex) and
+    Builds on bd-ltjyx (channel_pipeline_schema write-time safe_regex) and
     bd-3u6p0 (m3u_digest write-time safe_regex). The bulk-update path
     does NOT accept conditions/actions, so sort_regex is the only
     pattern field a caller can supply through this endpoint.
