@@ -106,8 +106,12 @@ class SyncCounts(NamedTuple):
     * ``total_items`` — success_count + skipped_count + failed_count.
     * ``success_count`` — dry-run: would_create + would_update; apply:
       created + updated.
-    * ``failed_count`` — dry-run: always 0 (a plan cannot fail); apply: sum
-      of ``category.failed``.
+    * ``failed_count`` — sum of ``category.failed`` on BOTH dry-run and apply.
+      A dry-run plan cannot FAIL an apply attempt, but ``cat.failed`` also
+      carries per-item CONFLICTs the sync engine surfaces unconditionally (a
+      source-side duplicate name, an ambiguous null-channel-number collision)
+      — those are facts about the source data, populated on a dry-run preview
+      too, so this bucket is identical in both branches.
     * ``skipped_count`` — dry-run: would_skip; apply: skipped.
     """
 
@@ -378,24 +382,31 @@ class DbasSyncTask(TaskScheduler):
         human-readable message and the numeric badges never disagree).
 
         - **Dry-run**: success = would_create + would_update (items that WOULD
-          change), skipped = would_skip, failed = 0. ``EntityCategoryReport``
-          has no ``would_fail`` field — a plan cannot fail, only apply can.
+          change), skipped = would_skip. ``EntityCategoryReport`` has no
+          ``would_fail`` field, but ``failed`` (the apply-flavour field) is NOT
+          exclusively an apply-time signal here: the sync engine's per-item
+          name-conflict tolerance (``dbas_sync_engine._split_name_conflicts`` /
+          ``_apply_name_conflict_details``) and the channels importer's
+          ambiguous-null-key collision (``dbas/importers/channels.py``) both
+          populate ``cat.failed`` UNCONDITIONALLY — including on a dry-run
+          preview — because a conflict is a fact about the source data, not
+          about whether the run applied. So failed = sum of ``category.failed``
+          on BOTH branches.
         - **Apply**: success = created + updated, skipped = skipped,
-          failed = failed.
+          failed = failed (same sum as dry-run for that one bucket).
 
         Returns a :class:`SyncCounts` (named fields, not a positional tuple —
         see its docstring for why).
         """
+        failed_count = sum(c.failed for c in report.categories)
         if is_dry_run:
             success_count = sum(
                 c.would_create + c.would_update for c in report.categories
             )
             skipped_count = sum(c.would_skip for c in report.categories)
-            failed_count = 0
         else:
             success_count = sum(c.created + c.updated for c in report.categories)
             skipped_count = sum(c.skipped for c in report.categories)
-            failed_count = sum(c.failed for c in report.categories)
         total_items = success_count + skipped_count + failed_count
         return SyncCounts(
             total_items=total_items,
@@ -410,10 +421,16 @@ class DbasSyncTask(TaskScheduler):
             total_create = sum(c.would_create for c in report.categories)
             total_update = sum(c.would_update for c in report.categories)
             total_skip = sum(c.would_skip for c in report.categories)
+            # `failed` is populated on a dry-run preview by the per-item
+            # conflict paths (source-side duplicate name, ambiguous
+            # null-channel-number collision) — surface it here too so this
+            # message never disagrees with the numeric failed_count badge.
+            total_conflict = sum(c.failed for c in report.categories)
             return (
-                "Sync dry-run complete: would create %d, update %d, skip %d "
-                "across %d categories" % (
-                    total_create, total_update, total_skip, len(report.categories),
+                "Sync dry-run complete: would create %d, update %d, skip %d, "
+                "%d conflict(s) across %d categories" % (
+                    total_create, total_update, total_skip, total_conflict,
+                    len(report.categories),
                 )
             )
         total_created = sum(c.created for c in report.categories)

@@ -127,6 +127,31 @@ def _dry_run_report_with_categories() -> RestoreReport:
     return report
 
 
+def _dry_run_report_with_conflict() -> RestoreReport:
+    """A dry-run plan where ONE category surfaces a per-item CONFLICT.
+
+    The sync engine's name-conflict tolerance (``dbas_sync_engine.
+    _split_name_conflicts`` / ``_apply_name_conflict_details``) and the
+    channels importer's ambiguous-null-key collision both populate
+    ``cat.failed`` UNCONDITIONALLY — including on a dry-run preview, since a
+    conflict is a fact about the source data, not about whether the run
+    applied. This fixture proves a dry-run report CAN carry a nonzero
+    ``failed`` alongside normal ``would_create`` counts elsewhere.
+    """
+    report = RestoreReport(is_dry_run=True)
+    report.categories = [
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL_GROUP,
+            would_create=1, would_update=0, would_skip=0, failed=1,
+        ),
+        EntityCategoryReport(
+            entity_type=EntityType.M3U_ACCOUNT,
+            would_create=1, would_update=0, would_skip=0,
+        ),
+    ]
+    return report
+
+
 def _apply_success_report_with_categories() -> RestoreReport:
     """A clean SUCCESS apply across 2 categories with created/updated/skipped
     (no failures — a clean success has zero failed entities)."""
@@ -534,10 +559,46 @@ async def test_dry_run_counts_reflect_real_category_sums(_wire_db):
     assert result.success_count == 19
     # would_skip (2+1) = 3
     assert result.skipped_count == 3
-    # A dry-run plan cannot fail (no would_fail field) — always 0.
+    # This fixture's categories have no per-item conflicts, so failed sums to 0
+    # here — but 0 is NOT hardcoded; see test_dry_run_counts_surface_conflict_
+    # failed_count for a dry-run report that DOES carry cat.failed > 0.
     assert result.failed_count == 0
     # total_items is the sum of every counted bucket: 19 + 3 + 0 = 22
     assert result.total_items == 22
+
+
+@pytest.mark.asyncio
+async def test_dry_run_counts_surface_conflict_failed_count(_wire_db):
+    """Closes the secondary bug: a dry-run report whose category carries
+    ``cat.failed > 0`` (a per-item name-conflict/ambiguous-collision, surfaced
+    unconditionally even on a preview) must produce ``TaskResult.failed_count``
+    > 0 — NOT the old hardcoded 0 ('a dry-run plan cannot fail, only apply
+    can'), which is false: the channels importer and the sync engine's
+    name-conflict tolerance both prove a dry-run CAN carry a failed entity."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        return _dry_run_report_with_conflict()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id})
+        result = await task.execute()
+
+    assert result.failed_count == 1
+    # would_create (1+1) = 2; would_skip = 0.
+    assert result.success_count == 2
+    assert result.skipped_count == 0
+    # total_items: 2 + 0 + 1 = 3
+    assert result.total_items == 3
+    # The human-readable message must not silently disagree with the badge.
+    assert "1 conflict(s)" in result.message
 
 
 @pytest.mark.asyncio
