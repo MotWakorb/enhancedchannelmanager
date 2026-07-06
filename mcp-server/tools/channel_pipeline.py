@@ -1,4 +1,12 @@
-"""Auto-creation pipeline tools."""
+"""Channel pipeline (formerly "auto-creation") tools.
+
+The 13 primary tools were renamed from ``*_auto_creation*`` to
+``*_channel_pipeline*`` (enhancedchannelmanager-3udrl Phase 3). The old names
+stay registered as thin deprecated aliases that forward to the new
+implementations — see each alias's docstring for its ``[DEPRECATED — use ...
+instead]`` pointer. Remove the aliases in a later dated release once callers
+have migrated (tracking bead to be filed after this phase ships).
+"""
 import asyncio
 import logging
 
@@ -10,7 +18,7 @@ from ecm_client import get_ecm_client
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Polling constants for run_auto_creation (bd-1wq7z.8).
+# Polling constants for run_channel_pipeline (bd-1wq7z.8).
 # Extracted as module-level names so tests can patch them cheaply.
 # ---------------------------------------------------------------------------
 _POLL_INTERVAL_SECONDS: float = 5.0   # seconds between status checks
@@ -113,7 +121,7 @@ def _format_analyze_result(result: dict, source: str) -> str:
 
 def register(mcp: FastMCP):
     @mcp.tool()
-    async def list_auto_creation_rules() -> str:
+    async def list_channel_pipeline_rules() -> str:
         """List all auto-creation rules that automatically create channels from streams."""
         try:
             client = get_ecm_client()
@@ -136,11 +144,16 @@ def register(mcp: FastMCP):
 
             return "\n".join(lines)
         except Exception as e:
-            logger.error("[MCP] list_auto_creation_rules failed: %s", e)
+            logger.error("[MCP] list_channel_pipeline_rules failed: %s", e)
             return f"Error listing auto-creation rules: {e}"
 
     @mcp.tool()
-    async def run_auto_creation(dry_run: bool = True) -> str:
+    async def list_auto_creation_rules() -> str:
+        """[DEPRECATED — use list_channel_pipeline_rules instead] List all auto-creation rules that automatically create channels from streams."""
+        return await list_channel_pipeline_rules()
+
+    @mcp.tool()
+    async def run_channel_pipeline(dry_run: bool = True) -> str:
         """Run the auto-creation pipeline to create channels from matching streams.
 
         The backend returns 202 immediately and runs the pipeline in the
@@ -160,10 +173,10 @@ def register(mcp: FastMCP):
             )
             execution_id = kickoff.get("execution_id")
             if execution_id is None:
-                logger.error("[MCP] run_auto_creation: no execution_id in 202 response: %s", kickoff)
+                logger.error("[MCP] run_channel_pipeline: no execution_id in 202 response: %s", kickoff)
                 return "Error running auto-creation: backend did not return an execution_id"
 
-            logger.info("[MCP] run_auto_creation started execution_id=%s dry_run=%s", execution_id, dry_run)
+            logger.info("[MCP] run_channel_pipeline started execution_id=%s dry_run=%s", execution_id, dry_run)
 
             # Poll until the execution reaches a terminal status.
             result = None
@@ -176,14 +189,14 @@ def register(mcp: FastMCP):
                     )
                 except Exception as poll_err:
                     logger.warning(
-                        "[MCP] run_auto_creation poll attempt %d failed: %s",
+                        "[MCP] run_channel_pipeline poll attempt %d failed: %s",
                         attempt + 1, poll_err,
                     )
                     continue
 
                 status = result.get("status", "")
                 logger.debug(
-                    "[MCP] run_auto_creation poll attempt=%d status=%s",
+                    "[MCP] run_channel_pipeline poll attempt=%d status=%s",
                     attempt + 1, status,
                 )
                 if status in _TERMINAL_STATUSES:
@@ -193,7 +206,7 @@ def register(mcp: FastMCP):
                 return (
                     f"Auto-creation run is still running after {_POLL_MAX_ATTEMPTS} polls "
                     f"(execution_id={execution_id}). "
-                    "Check status with list_auto_creation_executions."
+                    "Check status with list_channel_pipeline_executions."
                 )
 
             # result is now the final execution row.
@@ -264,11 +277,21 @@ def register(mcp: FastMCP):
 
             return "\n".join(lines)
         except Exception as e:
-            logger.error("[MCP] run_auto_creation failed: %s", e)
+            logger.error("[MCP] run_channel_pipeline failed: %s", e)
             return f"Error running auto-creation: {e}"
 
     @mcp.tool()
-    async def get_auto_creation_rule(rule_id: int) -> str:
+    async def run_auto_creation(dry_run: bool = True) -> str:
+        """[DEPRECATED — use run_channel_pipeline instead] Run the auto-creation pipeline to create channels from matching streams.
+
+        Args:
+            dry_run: If true (default), preview what would be created without making changes.
+                     Set to false to actually create the channels.
+        """
+        return await run_channel_pipeline(dry_run=dry_run)
+
+    @mcp.tool()
+    async def get_channel_pipeline_rule(rule_id: int) -> str:
         """Get detailed information about a specific auto-creation rule.
 
         Args:
@@ -322,11 +345,20 @@ def register(mcp: FastMCP):
 
             return "\n".join(lines)
         except Exception as e:
-            logger.error("[MCP] get_auto_creation_rule failed: %s", e)
+            logger.error("[MCP] get_channel_pipeline_rule failed: %s", e)
             return f"Error getting rule {rule_id}: {e}"
 
     @mcp.tool()
-    async def toggle_auto_creation_rule(rule_id: int) -> str:
+    async def get_auto_creation_rule(rule_id: int) -> str:
+        """[DEPRECATED — use get_channel_pipeline_rule instead] Get detailed information about a specific auto-creation rule.
+
+        Args:
+            rule_id: The rule ID to look up
+        """
+        return await get_channel_pipeline_rule(rule_id)
+
+    @mcp.tool()
+    async def toggle_channel_pipeline_rule(rule_id: int) -> str:
         """Enable or disable an auto-creation rule (toggles current state).
 
         Args:
@@ -338,11 +370,20 @@ def register(mcp: FastMCP):
             enabled = result.get("enabled", "unknown")
             return f"Rule {rule_id} is now {'enabled' if enabled else 'disabled'}."
         except Exception as e:
-            logger.error("[MCP] toggle_auto_creation_rule failed: %s", e)
+            logger.error("[MCP] toggle_channel_pipeline_rule failed: %s", e)
             return f"Error toggling rule {rule_id}: {e}"
 
     @mcp.tool()
-    async def bulk_toggle_auto_creation_rules(rule_ids: list[int]) -> str:
+    async def toggle_auto_creation_rule(rule_id: int) -> str:
+        """[DEPRECATED — use toggle_channel_pipeline_rule instead] Enable or disable an auto-creation rule (toggles current state).
+
+        Args:
+            rule_id: The rule ID to toggle
+        """
+        return await toggle_channel_pipeline_rule(rule_id)
+
+    @mcp.tool()
+    async def bulk_toggle_channel_pipeline_rules(rule_ids: list[int]) -> str:
         """Toggle multiple auto-creation rules at once (enable/disable).
 
         Args:
@@ -370,11 +411,20 @@ def register(mcp: FastMCP):
                     lines.append(f"  - {err}")
             return "\n".join(lines)
         except Exception as e:
-            logger.error("[MCP] bulk_toggle_auto_creation_rules failed: %s", e)
+            logger.error("[MCP] bulk_toggle_channel_pipeline_rules failed: %s", e)
             return f"Error toggling rules: {e}"
 
     @mcp.tool()
-    async def duplicate_auto_creation_rule(rule_id: int) -> str:
+    async def bulk_toggle_auto_creation_rules(rule_ids: list[int]) -> str:
+        """[DEPRECATED — use bulk_toggle_channel_pipeline_rules instead] Toggle multiple auto-creation rules at once (enable/disable).
+
+        Args:
+            rule_ids: List of rule IDs to toggle
+        """
+        return await bulk_toggle_channel_pipeline_rules(rule_ids)
+
+    @mcp.tool()
+    async def duplicate_channel_pipeline_rule(rule_id: int) -> str:
         """Duplicate an auto-creation rule.
 
         Args:
@@ -386,11 +436,20 @@ def register(mcp: FastMCP):
             new_id = result.get("id", "?")
             return f"Rule {rule_id} duplicated. New rule ID: {new_id}"
         except Exception as e:
-            logger.error("[MCP] duplicate_auto_creation_rule failed: %s", e)
+            logger.error("[MCP] duplicate_channel_pipeline_rule failed: %s", e)
             return f"Error duplicating rule {rule_id}: {e}"
 
     @mcp.tool()
-    async def delete_auto_creation_rule(rule_id: int, confirm: bool = False) -> str:
+    async def duplicate_auto_creation_rule(rule_id: int) -> str:
+        """[DEPRECATED — use duplicate_channel_pipeline_rule instead] Duplicate an auto-creation rule.
+
+        Args:
+            rule_id: The rule ID to duplicate
+        """
+        return await duplicate_channel_pipeline_rule(rule_id)
+
+    @mcp.tool()
+    async def delete_channel_pipeline_rule(rule_id: int, confirm: bool = False) -> str:
         """Delete an auto-creation rule.
 
         CONFIRM GATING (bd-onazy): this is a two-call operation. The first call
@@ -416,11 +475,25 @@ def register(mcp: FastMCP):
             await client.call_endpoint(ENDPOINTS["ac_delete_rule"], path_args={"rule_id": rule_id})
             return f"Rule {rule_id} deleted."
         except Exception as e:
-            logger.error("[MCP] delete_auto_creation_rule failed: %s", e)
+            logger.error("[MCP] delete_channel_pipeline_rule failed: %s", e)
             return f"Error deleting rule {rule_id}: {e}"
 
     @mcp.tool()
-    async def create_auto_creation_rule(
+    async def delete_auto_creation_rule(rule_id: int, confirm: bool = False) -> str:
+        """[DEPRECATED — use delete_channel_pipeline_rule instead] Delete an auto-creation rule.
+
+        This alias forwards every argument through unchanged — see
+        delete_channel_pipeline_rule for the full confirm-gating contract
+        (confirm=False previews, confirm=True actually deletes).
+
+        Args:
+            rule_id: The rule ID to delete
+            confirm: Set True on the second call to perform the deletion.
+        """
+        return await delete_channel_pipeline_rule(rule_id, confirm=confirm)
+
+    @mcp.tool()
+    async def create_channel_pipeline_rule(
         name: str,
         conditions: list[dict],
         actions: list[dict],
@@ -595,11 +668,65 @@ def register(mcp: FastMCP):
             new_id = rule.get("id", "?")
             return f"Created auto-creation rule '{name}' (id={new_id})."
         except Exception as e:
-            logger.error("[MCP] create_auto_creation_rule failed: %s", e)
+            logger.error("[MCP] create_channel_pipeline_rule failed: %s", e)
             return f"Error creating rule: {e}"
 
     @mcp.tool()
-    async def update_auto_creation_rule(
+    async def create_auto_creation_rule(
+        name: str,
+        conditions: list[dict],
+        actions: list[dict],
+        description: str | None = None,
+        enabled: bool = True,
+        priority: int = 0,
+        m3u_account_id: int | None = None,
+        target_group_id: int | None = None,
+        run_on_refresh: bool = False,
+        stop_on_first_match: bool = True,
+        sort_field: str | None = None,
+        sort_order: str = "asc",
+        probe_on_sort: bool = False,
+        sort_regex: str | None = None,
+        stream_sort_field: str | None = None,
+        stream_sort_order: str = "asc",
+        normalization_group_ids: list[int] | None = None,
+        skip_struck_streams: bool = False,
+        orphan_action: str = "delete",
+        quality_tie_break_order: str | None = None,
+        match_scope_target_group: bool | None = None,
+    ) -> str:
+        """[DEPRECATED — use create_channel_pipeline_rule instead] Create a new auto-creation rule.
+
+        See create_channel_pipeline_rule for the full parameter documentation
+        (conditions/actions schema, sort options, etc.) — this alias forwards
+        every argument through unchanged.
+        """
+        return await create_channel_pipeline_rule(
+            name=name,
+            conditions=conditions,
+            actions=actions,
+            description=description,
+            enabled=enabled,
+            priority=priority,
+            m3u_account_id=m3u_account_id,
+            target_group_id=target_group_id,
+            run_on_refresh=run_on_refresh,
+            stop_on_first_match=stop_on_first_match,
+            sort_field=sort_field,
+            sort_order=sort_order,
+            probe_on_sort=probe_on_sort,
+            sort_regex=sort_regex,
+            stream_sort_field=stream_sort_field,
+            stream_sort_order=stream_sort_order,
+            normalization_group_ids=normalization_group_ids,
+            skip_struck_streams=skip_struck_streams,
+            orphan_action=orphan_action,
+            quality_tie_break_order=quality_tie_break_order,
+            match_scope_target_group=match_scope_target_group,
+        )
+
+    @mcp.tool()
+    async def update_channel_pipeline_rule(
         rule_id: int,
         name: str | None = None,
         description: str | None = None,
@@ -631,8 +758,8 @@ def register(mcp: FastMCP):
             priority: Execution priority (lower = first)
             m3u_account_id: M3U account filter
             target_group_id: Target channel group ID
-            conditions: Replacement conditions list (see create_auto_creation_rule for types)
-            actions: Replacement actions list (see create_auto_creation_rule for types,
+            conditions: Replacement conditions list (see create_channel_pipeline_rule for types)
+            actions: Replacement actions list (see create_channel_pipeline_rule for types,
                 including the merge_streams scored-fuzzy path: loose_name_match + min_score
                 + required target_channel_in_group allowlist + optional allow_no_callsign)
             run_on_refresh: Run automatically when M3U refreshes
@@ -674,20 +801,71 @@ def register(mcp: FastMCP):
             rule = result.get("rule", result)
             return f"Updated rule '{rule.get('name', rule_id)}' (id={rule_id}). Changed: {', '.join(payload.keys())}"
         except Exception as e:
-            logger.error("[MCP] update_auto_creation_rule failed: %s", e)
+            logger.error("[MCP] update_channel_pipeline_rule failed: %s", e)
             return f"Error updating rule {rule_id}: {e}"
 
     @mcp.tool()
-    async def list_auto_creation_executions(limit: int = 10) -> str:
+    async def update_auto_creation_rule(
+        rule_id: int,
+        name: str | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+        priority: int | None = None,
+        m3u_account_id: int | None = None,
+        target_group_id: int | None = None,
+        conditions: list[dict] | None = None,
+        actions: list[dict] | None = None,
+        run_on_refresh: bool | None = None,
+        stop_on_first_match: bool | None = None,
+        sort_field: str | None = None,
+        sort_order: str | None = None,
+        probe_on_sort: bool | None = None,
+        sort_regex: str | None = None,
+        stream_sort_field: str | None = None,
+        stream_sort_order: str | None = None,
+        normalization_group_ids: list[int] | None = None,
+        skip_struck_streams: bool | None = None,
+        orphan_action: str | None = None,
+    ) -> str:
+        """[DEPRECATED — use update_channel_pipeline_rule instead] Update an existing auto-creation rule. Only provided fields are changed.
+
+        See update_channel_pipeline_rule for the full parameter documentation —
+        this alias forwards every argument through unchanged.
+        """
+        return await update_channel_pipeline_rule(
+            rule_id,
+            name=name,
+            description=description,
+            enabled=enabled,
+            priority=priority,
+            m3u_account_id=m3u_account_id,
+            target_group_id=target_group_id,
+            conditions=conditions,
+            actions=actions,
+            run_on_refresh=run_on_refresh,
+            stop_on_first_match=stop_on_first_match,
+            sort_field=sort_field,
+            sort_order=sort_order,
+            probe_on_sort=probe_on_sort,
+            sort_regex=sort_regex,
+            stream_sort_field=stream_sort_field,
+            stream_sort_order=stream_sort_order,
+            normalization_group_ids=normalization_group_ids,
+            skip_struck_streams=skip_struck_streams,
+            orphan_action=orphan_action,
+        )
+
+    @mcp.tool()
+    async def list_channel_pipeline_executions(limit: int = 10) -> str:
         """List recent auto-creation pipeline executions.
 
         Each line ends with a snapshot marker (ADR-010):
           - ``[snapshot]`` — the run captured a pre-run channel/stream snapshot,
-            so it is FULLY revertible via restore_auto_creation_snapshot (the
+            so it is FULLY revertible via restore_channel_pipeline_snapshot (the
             whole-run revert re-adds removed streams + restores drifted
-            metadata). rollback_auto_creation also uses the snapshot for these.
+            metadata). rollback_channel_pipeline also uses the snapshot for these.
           - ``[no snapshot]`` — a dry-run, a legacy run, or a run whose snapshot
-            capture failed. Only the narrower rollback_auto_creation applies
+            capture failed. Only the narrower rollback_channel_pipeline applies
             (deletes created channels, un-merges run-added streams).
 
         Args:
@@ -710,7 +888,7 @@ def register(mcp: FastMCP):
                 channels = ex.get("channels_created", ex.get("created", 0))
                 dry = " (dry run)" if ex.get("dry_run") else ""
                 # has_snapshot (ADR-010 §D6) tells the operator/agent which runs
-                # are fully revertible via restore_auto_creation_snapshot.
+                # are fully revertible via restore_channel_pipeline_snapshot.
                 snap = "[snapshot]" if ex.get("has_snapshot") else "[no snapshot]"
                 lines.append(
                     f"  #{eid}: {status} — {channels} channels{dry} {snap} ({created})"
@@ -718,11 +896,20 @@ def register(mcp: FastMCP):
 
             return "\n".join(lines)
         except Exception as e:
-            logger.error("[MCP] list_auto_creation_executions failed: %s", e)
+            logger.error("[MCP] list_channel_pipeline_executions failed: %s", e)
             return f"Error listing executions: {e}"
 
     @mcp.tool()
-    async def rollback_auto_creation(execution_id: int) -> str:
+    async def list_auto_creation_executions(limit: int = 10) -> str:
+        """[DEPRECATED — use list_channel_pipeline_executions instead] List recent auto-creation pipeline executions.
+
+        Args:
+            limit: Number of executions to return (default 10)
+        """
+        return await list_channel_pipeline_executions(limit)
+
+    @mcp.tool()
+    async def rollback_channel_pipeline(execution_id: int) -> str:
         """Rollback an auto-creation execution.
 
         Undoes everything the run did:
@@ -780,23 +967,37 @@ def register(mcp: FastMCP):
             # The backend converts the engine's no-restore-data refusal into an
             # HTTP 400 whose detail is the refusal message; call_endpoint raises
             # it here. Surface it clearly so the user sees WHY nothing changed.
-            logger.error("[MCP] rollback_auto_creation failed: %s", e)
+            logger.error("[MCP] rollback_channel_pipeline failed: %s", e)
             return f"Error rolling back execution {execution_id}: {e}"
 
     @mcp.tool()
-    async def restore_auto_creation_snapshot(
+    async def rollback_auto_creation(execution_id: int) -> str:
+        """[DEPRECATED — use rollback_channel_pipeline instead] Rollback an auto-creation execution.
+
+        This alias forwards every argument through unchanged — see
+        rollback_channel_pipeline for the full contract (deletes channels/groups
+        the run created, un-merges streams via reverse-replay, and the
+        legacy-run no-restore-data refusal caveat).
+
+        Args:
+            execution_id: The execution ID to rollback
+        """
+        return await rollback_channel_pipeline(execution_id)
+
+    @mcp.tool()
+    async def restore_channel_pipeline_snapshot(
         execution_id: int, confirm: bool = False
     ) -> str:
         """Full WHOLE-RUN revert of an auto-creation run from its pre-run snapshot (ADR-010 §D8).
 
-        This is the FULLER revert (vs rollback_auto_creation). It restores the
+        This is the FULLER revert (vs rollback_channel_pipeline). It restores the
         entire snapshotted channel<->stream state captured BEFORE the run mutated
         anything: re-adds streams the run REMOVED, removes streams it added,
         restores drifted metadata (channel group / EPG link / tvg id). Only runs
-        that captured a snapshot are eligible — check list_auto_creation_executions
+        that captured a snapshot are eligible — check list_channel_pipeline_executions
         for the ``[snapshot]`` marker first. Runs without a snapshot (dry-runs,
         legacy runs, capture-failure runs) are NOT restorable this way; use
-        rollback_auto_creation for those (this tool returns guidance to do so).
+        rollback_channel_pipeline for those (this tool returns guidance to do so).
 
         SAFETY — OPTIMISTIC OVERWRITE, NOT UNDOABLE (ADR-010 §D5):
         A restore spans EVERY channel in the snapshot (often hundreds). It
@@ -838,17 +1039,17 @@ def register(mcp: FastMCP):
                     snapshot_time = snap.get("snapshot_time")
             except Exception as e:
                 # No snapshot (404) is the common case here — tell the caller to
-                # use rollback_auto_creation instead, and do NOT pretend a
+                # use rollback_channel_pipeline instead, and do NOT pretend a
                 # restore is pending.
                 if "404" in str(e) or "no snapshot" in str(e).lower():
                     return (
                         f"Execution {execution_id} has NO pre-run snapshot, so it "
                         f"cannot be restored with this tool. Use "
-                        f"rollback_auto_creation({execution_id}) instead (it deletes "
+                        f"rollback_channel_pipeline({execution_id}) instead (it deletes "
                         f"channels the run created and un-merges streams it added)."
                     )
                 logger.warning(
-                    "[MCP] restore_auto_creation_snapshot: could not read snapshot "
+                    "[MCP] restore_channel_pipeline_snapshot: could not read snapshot "
                     "metadata for execution %s: %s", execution_id, e,
                 )
 
@@ -866,7 +1067,7 @@ def register(mcp: FastMCP):
                 f"optimistic overwrite with no conflict detection and CANNOT be "
                 f"undone.\n\n"
                 f"To proceed, re-invoke with confirm=true: "
-                f"restore_auto_creation_snapshot(execution_id={execution_id}, confirm=true)"
+                f"restore_channel_pipeline_snapshot(execution_id={execution_id}, confirm=true)"
             )
 
         # confirm=True: perform the restore. ``confirm`` is a query param on the
@@ -883,10 +1084,10 @@ def register(mcp: FastMCP):
             if "404" in str(e) or "no snapshot" in str(e).lower():
                 return (
                     f"Execution {execution_id} has NO pre-run snapshot, so it "
-                    f"cannot be restored. Use rollback_auto_creation({execution_id}) "
+                    f"cannot be restored. Use rollback_channel_pipeline({execution_id}) "
                     f"instead."
                 )
-            logger.error("[MCP] restore_auto_creation_snapshot failed: %s", e)
+            logger.error("[MCP] restore_channel_pipeline_snapshot failed: %s", e)
             return f"Error restoring snapshot for execution {execution_id}: {e}"
 
         if not isinstance(result, dict):
@@ -897,7 +1098,7 @@ def register(mcp: FastMCP):
         if result.get("no_snapshot"):
             return (
                 f"Execution {execution_id} has NO pre-run snapshot, so it cannot "
-                f"be restored. Use rollback_auto_creation({execution_id}) instead."
+                f"be restored. Use rollback_channel_pipeline({execution_id}) instead."
             )
 
         removed = result.get("removed_channels", 0)
@@ -923,7 +1124,21 @@ def register(mcp: FastMCP):
         return msg
 
     @mcp.tool()
-    async def analyze_auto_creation_rules(bundle_path: str | None = None) -> str:
+    async def restore_auto_creation_snapshot(
+        execution_id: int, confirm: bool = False
+    ) -> str:
+        """[DEPRECATED — use restore_channel_pipeline_snapshot instead] Full WHOLE-RUN revert of an auto-creation run from its pre-run snapshot (ADR-010 §D8).
+
+        Args:
+            execution_id: The execution whose pre-run snapshot to restore.
+            confirm: Must be true to actually perform the (destructive,
+                non-undoable) restore. Defaults to false, which only returns the
+                warning and does NOT touch any channel.
+        """
+        return await restore_channel_pipeline_snapshot(execution_id, confirm=confirm)
+
+    @mcp.tool()
+    async def analyze_channel_pipeline_rules(bundle_path: str | None = None) -> str:
         """Lint and structurally analyze auto-creation rules (bd-0gntx).
 
         Returns a markdown report of advisory findings: regex shapes that
@@ -950,7 +1165,7 @@ def register(mcp: FastMCP):
                 # contract-exempt: multipart/form-data upload, not a JSON body —
                 # call_endpoint only models JSON-body endpoints.
                 result = await client.post_multipart(
-                    "/api/auto-creation/rules/analyze/from-bundle",
+                    "/api/channel-pipeline/rules/analyze/from-bundle",
                     files={"file": (filename, content, "application/gzip")},
                 )
                 source = f"bundle {filename}"
@@ -960,20 +1175,32 @@ def register(mcp: FastMCP):
 
             return _format_analyze_result(result, source)
         except Exception as e:
-            logger.error("[MCP] analyze_auto_creation_rules failed: %s", e)
+            logger.error("[MCP] analyze_channel_pipeline_rules failed: %s", e)
             return f"Error analyzing auto-creation rules: {e}"
 
     @mcp.tool()
-    async def get_auto_creation_debug_bundle() -> str:
+    async def analyze_auto_creation_rules(bundle_path: str | None = None) -> str:
+        """[DEPRECATED — use analyze_channel_pipeline_rules instead] Lint and structurally analyze auto-creation rules (bd-0gntx).
+
+        Args:
+            bundle_path: Optional. If set, analyze rules.yaml from a
+                debug-bundle tar.gz at that filesystem path (the file
+                must exist on the MCP host). If unset, analyze the live
+                rules in the connected ECM instance.
+        """
+        return await analyze_channel_pipeline_rules(bundle_path=bundle_path)
+
+    @mcp.tool()
+    async def get_channel_pipeline_debug_bundle() -> str:
         """Get info about the auto-creation debug bundle for troubleshooting.
 
         The debug bundle is a tar.gz file that must be downloaded from the ECM UI.
         This tool describes what it contains and how to get it.
         """
         return ("Debug bundle endpoints (bd-cns7j 202+poll):\n"
-                "  POST /api/auto-creation/debug-bundle           -> 202 + {job_id}\n"
-                "  GET  /api/auto-creation/debug-bundle/{job_id}  -> JSON status, or tar.gz when ready\n"
-                "Or download it from the ECM UI: Auto-Creation page > Debug Bundle button.\n\n"
+                "  POST /api/channel-pipeline/debug-bundle           -> 202 + {job_id}\n"
+                "  GET  /api/channel-pipeline/debug-bundle/{job_id}  -> JSON status, or tar.gz when ready\n"
+                "Or download it from the ECM UI: Auto-Creation / Channel Pipeline page > Debug Bundle button.\n\n"
                 "Bundle contains (all data obfuscated for safe sharing):\n"
                 "  - channels.json — channel data with stream details and stats\n"
                 "  - rules.yaml — auto-creation rules configuration\n"
@@ -984,3 +1211,8 @@ def register(mcp: FastMCP):
                 "  - channel_groups_diagnostic.json — Channel Manager group/membership diagnostic\n"
                 "  - logs.txt — recent application logs\n"
                 "  - manifest.json — bundle metadata + counts")
+
+    @mcp.tool()
+    async def get_auto_creation_debug_bundle() -> str:
+        """[DEPRECATED — use get_channel_pipeline_debug_bundle instead] Get info about the auto-creation debug bundle for troubleshooting."""
+        return await get_channel_pipeline_debug_bundle()

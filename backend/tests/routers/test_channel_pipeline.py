@@ -2920,3 +2920,31 @@ class TestDebugBundleFetchResilience:
         assert report["expected_batches"] == 3
         # The two surviving batches still populated the lookup.
         assert len(lookup) == 150
+
+
+class TestChannelPipelineCanonicalPrefixMount:
+    """Smoke coverage for the NEW canonical /api/channel-pipeline mount
+    (enhancedchannelmanager-dl0kk, Phase 3). The router is now mounted TWICE
+    in main.py — once at /api/channel-pipeline (canonical, schema-visible)
+    and once at /api/auto-creation (deprecated alias, hidden from schema) —
+    so both prefixes must serve identical, fully-functional route tables.
+    The rest of this file's ~3000 lines exercise the legacy /api/auto-creation
+    alias path exhaustively; these two tests just confirm the canonical path
+    is wired up the same way, not a duplicate of the full suite above.
+    """
+
+    @pytest.mark.asyncio
+    async def test_list_rules_via_canonical_prefix(self, async_client):
+        """GET /api/channel-pipeline/rules works identically to the legacy alias."""
+        response = await async_client.get("/api/channel-pipeline/rules")
+        assert response.status_code == 200
+        assert response.json()["rules"] == []
+
+    @pytest.mark.asyncio
+    async def test_get_rule_via_canonical_prefix(self, async_client, test_session):
+        """GET /api/channel-pipeline/rules/{rule_id} works identically to the legacy alias."""
+        rule = _create_rule(test_session, name="Canonical Prefix Rule")
+
+        response = await async_client.get(f"/api/channel-pipeline/rules/{rule.id}")
+        assert response.status_code == 200
+        assert response.json()["name"] == "Canonical Prefix Rule"

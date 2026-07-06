@@ -14,7 +14,6 @@ from routers.notifications import router as notifications_router
 from routers.stats import router as stats_router
 from routers.stream_stats import router as stream_stats_router
 from routers.stream_preview import router as stream_preview_router
-from routers.channel_pipeline import router as auto_creation_router
 from routers.tasks import router as tasks_router
 from routers.settings import router as settings_router
 from routers.epg import router as epg_router
@@ -45,7 +44,6 @@ all_routers = [
     stats_router,
     stream_stats_router,
     stream_preview_router,
-    auto_creation_router,
     settings_router,
     epg_router,
     m3u_router,
