@@ -20,6 +20,8 @@
   - `docs/architecture.md` — system overview; the auto-creation trigger model
     section is updated on acceptance.
 
+> **Terminology note (post-decision):** the "Auto-Creation" feature this ADR governs was later renamed **Channel Pipeline** (`enhancedchannelmanager-3udrl`). This ADR is a historical decision record and is left as originally written — module paths, task names, config keys, and function names quoted below reflect the code as it existed at the time this ADR was accepted/amended. Where current docs and code refer to the feature by name, they now say "Channel Pipeline"; the persisted identifiers this ADR references (the `auto_creation` task id, `auto_creation_run_on_refresh_disabled` setting, etc.) remain unchanged in the codebase today.
+
 ## Context
 
 Before this ADR, scheduled M3U refresh **hard-chained** auto-creation as a

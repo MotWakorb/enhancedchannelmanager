@@ -38,7 +38,7 @@
 ## Diagnosis by failing sub-check
 
 ### `database` fails
-- SQLite file lock: `/config/journal.db` may be write-locked by a long-running transaction. Check for stuck auto-creation runs.
+- SQLite file lock: `/config/journal.db` may be write-locked by a long-running transaction. Check for stuck Channel Pipeline runs.
 - Disk full: `docker exec ecm-ecm-1 df -h /config`.
 - Schema drift: compare `/api/health/schema` output to expected Alembic head.
 

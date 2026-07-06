@@ -47,7 +47,7 @@ The first decision after any of these alerts: is the size in the body, the WAL, 
 | Large | Small | A contributor table is large. Run the table-attribution query below. |
 | Small | Large | Checkpointing is stalled. Run the manual checkpoint below. |
 | Large | Large | Both — start with the manual checkpoint (cheap), then re-evaluate body size. |
-| Healthy | Spiking | Transient writer activity (an auto-creation run, a backup restore). Wait for the next scrape; if it persists, treat as "large WAL." |
+| Healthy | Spiking | Transient writer activity (a Channel Pipeline run, a backup restore). Wait for the next scrape; if it persists, treat as "large WAL." |
 
 ## First 10 minutes
 

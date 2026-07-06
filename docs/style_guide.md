@@ -41,9 +41,9 @@ container names) in nature.
 
 ### Python
 
-- **Modules / packages**: `snake_case` (`auto_creation_engine.py`, `safe_regex.py`).
+- **Modules / packages**: `snake_case` (`channel_pipeline_engine.py`, `safe_regex.py`).
 - **Functions / methods / variables**: `snake_case`.
-- **Classes**: `PascalCase` (`StreamNormalizer`, `AutoCreationRule`).
+- **Classes**: `PascalCase` (`StreamNormalizer`, `ChannelPipelineRule`).
 - **Constants**: `UPPER_SNAKE_CASE` at module top-of-file.
 - **Module-private symbols**: leading underscore (`_DISCORD_WEBHOOK_RE`,
   `_compile_pattern`). Underscore prefix is the project's signal that the
@@ -71,7 +71,7 @@ container names) in nature.
 - **Exports**: prefer named exports over default exports — they survive
   refactors better and surface in autocomplete consistently.
 - **Tab IDs**: kebab-case string literals on the `TabId` union
-  (`'channel-manager'`, `'auto-creation'`).
+  (`'channel-manager'`, `'channel-pipeline'`).
 
 ### CSS
 
@@ -119,7 +119,7 @@ backend/
 │   ├── channels.py
 │   ├── epg.py
 │   └── ...
-├── auto_creation/             # Domain package — engine, schema, types
+├── channel_pipeline/          # Domain package — engine, schema, types
 ├── safe_regex.py              # Cross-cutting utility
 ├── regex_lint.py              # Cross-cutting utility
 └── tests/                     # mirrored tree under backend/tests/
@@ -243,7 +243,7 @@ module.**
 
 A regex is "user-supplied" if the pattern originates from any of:
 
-- A database column (normalization rules, auto-creation rules, dummy-EPG
+- A database column (normalization rules, Channel Pipeline rules, dummy-EPG
   profiles, user settings)
 - A request body or query parameter
 - A configuration file editable by an operator
@@ -313,7 +313,7 @@ SafeRegexError              # Base — catch this for catch-all handling.
 
 **Pre-compiled patterns are supported.** When the pattern is a compiled
 `regex.Pattern` (e.g. cached on a hot path such as the
-N log N sort comparisons in `auto_creation_engine`), pass the compiled
+N log N sort comparisons in `channel_pipeline_engine`), pass the compiled
 object directly:
 
 ```python
@@ -333,7 +333,7 @@ library (should be none — route through `safe_regex`) must catch both
 Three layers defend against ReDoS, each at a different lifecycle stage:
 
 1. **Write-time lint at persistence (bd-eio04.7 — `backend/regex_lint.py`).**
-   Normalization-rule, auto-creation-rule, and dummy-EPG router endpoints run
+   Normalization-rule, Channel-Pipeline-rule, and dummy-EPG router endpoints run
    `lint_pattern()` before committing a pattern. The lint catches three
    shapes:
    - `REGEX_TOO_LONG` — pattern length over the cap.
@@ -385,7 +385,7 @@ Three layers defend against ReDoS, each at a different lifecycle stage:
   `safe_regex.compile` (which raises `SafeRegexError` / `PatternTooLongError`)
   for consistency with the write-time lint. Using bare `re.compile` for
   syntax validation is a lint violation — see follow-up beads
-  `enhancedchannelmanager-ltjyx` (auto_creation_schema) and
+  `enhancedchannelmanager-ltjyx` (channel_pipeline_schema) and
   `enhancedchannelmanager-3u6p0` (m3u_digest routes).
 
 If an exception is needed that isn't in this list, discuss with the code
@@ -440,7 +440,7 @@ prohibited.
   - `ERROR` — operation failed; the user or upstream caller will see the
     failure.
   - `CRITICAL` — the service is unusable.
-- **Tagged log prefixes** (`[SAFE_REGEX]`, `[AUTO_CREATION]`, etc.) are
+- **Tagged log prefixes** (`[SAFE_REGEX]`, `[AUTO-CREATE]`, etc.) are
   the project's convention for filterable subsystem logs. Use a consistent
   bracketed uppercase prefix when introducing a new subsystem worth
   filtering on; document the prefix in the relevant docs/ guide.

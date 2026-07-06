@@ -1,7 +1,7 @@
-# Auto-Creation Rule Analyzer
+# Channel Pipeline Rule Analyzer
 
 The rule analyzer surfaces structural and regex-style configuration
-bugs in auto-creation rules **without running them**. Findings are
+bugs in Channel Pipeline rules **without running them**. Findings are
 advisory — they are warnings or info, never errors, and saves are
 never blocked. The analyzer is a support tool, not a gate.
 
@@ -12,9 +12,11 @@ Bead: `enhancedchannelmanager-0gntx` (Phase 1).
 Two endpoints, both backend-side:
 
 ```
-POST /api/auto-creation/rules/analyze
-POST /api/auto-creation/rules/analyze/from-bundle   (multipart, file=<tar.gz>)
+POST /api/channel-pipeline/rules/analyze
+POST /api/channel-pipeline/rules/analyze/from-bundle   (multipart, file=<tar.gz>)
 ```
+
+(The deprecated `/api/auto-creation/...` alias still works — see `docs/api.md`.)
 
 The first analyzes the rules currently in the DB. The second analyzes
 `rules.yaml` (and, if present, `channel_groups_diagnostic.json`)
@@ -24,8 +26,8 @@ touches the DB, so it is safe to point at any user's bundle.
 The MCP server exposes both via one tool:
 
 ```python
-analyze_auto_creation_rules()                       # live mode
-analyze_auto_creation_rules(bundle_path="/path/to/debug-bundle.tar.gz")
+analyze_channel_pipeline_rules()                       # live mode
+analyze_channel_pipeline_rules(bundle_path="/path/to/debug-bundle.tar.gz")
 ```
 
 The tool returns a markdown report with one section per rule.
@@ -117,7 +119,7 @@ if you genuinely want the regex shape.
 
 **Why it matters.** The condition list `A AND B OR C` reads as
 `(A AND B) OR C` because AND binds tighter than OR (per
-`auto_creation_evaluator.evaluate_conditions`). If `A` is the guard
+`channel_pipeline_evaluator.evaluate_conditions`). If `A` is the guard
 and `C` doesn't include it, then any stream matched by `C` fires the
 rule regardless of whether it would have passed the guard.
 
@@ -215,14 +217,14 @@ Phase 2 candidates, not in this build:
 | Component | Location |
 |---|---|
 | Lint codes | `backend/regex_lint.py` (`lint_pattern_advisory`, `lint_conditions_json_advisory`) |
-| Structural analyzer | `backend/auto_creation_rule_analyzer.py` |
-| Endpoints | `backend/routers/auto_creation.py` (search for `/rules/analyze`) |
-| MCP tool | `mcp-server/tools/auto_creation.py` (`analyze_auto_creation_rules`) |
+| Structural analyzer | `backend/channel_pipeline_rule_analyzer.py` |
+| Endpoints | `backend/routers/channel_pipeline.py` (search for `/rules/analyze`) |
+| MCP tool | `mcp-server/tools/channel_pipeline.py` (`analyze_channel_pipeline_rules`) |
 | Acceptance fixture | `backend/tests/fixtures/bd_0gntx/user_2026_04_28_rules.yaml` |
 | Acceptance tests | `backend/tests/unit/test_bd_0gntx_user_bundle.py` |
 
 The analyzer's OR-grouping logic is duplicated from
-`auto_creation_evaluator.evaluate_conditions` (lines 828–834). The
+`channel_pipeline_evaluator.evaluate_conditions` (lines 828–834). The
 duplication is intentional: the evaluator is performance-critical
 and we don't want a runtime import dependency in the analyzer.
 `split_or_groups` and the test
@@ -313,8 +315,8 @@ could not prevent it, because it only checked whether the name
 existed, not whether the merge itself would land there.
 
 > **Cross-reference.** Both parameters are also documented in the
-> `create_auto_creation_rule` MCP tool docstring
-> (`mcp-server/tools/auto_creation.py`, conditions block and
+> `create_channel_pipeline_rule` MCP tool docstring
+> (`mcp-server/tools/channel_pipeline.py`, conditions block and
 > `merge_streams` actions block).
 
 ---
@@ -376,7 +378,7 @@ This lets you audit exactly why a merge fired — accessible in the ECM journal 
 
 ### Rollback
 
-Auto-creation executions are rollback-able via `POST /api/auto-creation/executions/{id}/rollback` regardless of whether the run used the scored-fuzzy path or the exact path.
+Channel Pipeline executions are rollback-able via `POST /api/channel-pipeline/executions/{id}/rollback` regardless of whether the run used the scored-fuzzy path or the exact path.
 
 ### What is unchanged
 
@@ -386,7 +388,7 @@ Auto-creation executions are rollback-able via `POST /api/auto-creation/executio
 
 ### Previewing before committing
 
-Use the `GET /api/auto-creation/fuzzy-preview` endpoint (or the `preview_fuzzy_matches` MCP tool) to inspect scored triples before enabling a rule. The preview applies the identical scoring core and admission policy, so it shows exactly what the rule would do. See [`docs/api.md`](api.md) for the endpoint reference.
+Use the `GET /api/channel-pipeline/fuzzy-preview` endpoint (or the `preview_fuzzy_matches` MCP tool) to inspect scored triples before enabling a rule. The preview applies the identical scoring core and admission policy, so it shows exactly what the rule would do. See [`docs/api.md`](api.md) for the endpoint reference.
 
 ---
 
@@ -433,7 +435,7 @@ change matching behavior. Use `loose_name_match` to control fuzzy
 vs exact matching.
 
 > **Cross-reference.** Both parameters are documented in the
-> `create_auto_creation_rule` MCP tool docstring
-> (`mcp-server/tools/auto_creation.py`, `merge_streams` actions
+> `create_channel_pipeline_rule` MCP tool docstring
+> (`mcp-server/tools/channel_pipeline.py`, `merge_streams` actions
 > block, including the explicit `NOTE: match_by is a DEPRECATED
 > no-op` callout).

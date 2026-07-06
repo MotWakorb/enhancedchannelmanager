@@ -18,7 +18,7 @@ Install ECM, connect it to Dispatcharr, and verify the connection is healthy. St
 
 The day-to-day surface: managing channels, assigning streams, working with the journal of changes. The model that everything else operates on.
 
-### 3. [Auto Creation](auto-creation/index.md) — Stub
+### 3. [Channel Pipeline](channel-pipeline/index.md) — Stub
 
 Define rules that automatically create channels from incoming streams. Conditions, actions, bulk operations, and how to debug a rule that isn't firing.
 

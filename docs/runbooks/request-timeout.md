@@ -36,7 +36,7 @@ runtime. No image rebuild required.
 - Several user-reachable endpoints call sync CPU code: `/api/normalization/*`,
   `/api/channels` (with `normalize=true`), `/api/dummy-epg/preview*`,
   `/api/dummy-epg/xmltv*`, `/api/dummy-epg/generate`, and
-  `/api/auto-creation/validate`.
+  `/api/channel-pipeline/validate`.
 - These endpoints are now wrapped in `backend/concurrency.py::run_cpu_bound`,
   which dispatches the sync call to a bounded thread-pool executor so the
   loop stays free.

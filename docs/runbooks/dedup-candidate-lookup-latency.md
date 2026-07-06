@@ -65,7 +65,7 @@ A regression class where a caller forgets the "one matcher call per trigger" con
 
 ### Branch C: SQLite is under bulk-write contention
 
-The matcher shares the database with auto-creation, bulk-merge, and M3U import paths. A long-running bulk operation can starve the matcher.
+The matcher shares the database with the Channel Pipeline, bulk-merge, and M3U import paths. A long-running bulk operation can starve the matcher.
 
 - TODO: command to identify the bulk operation in flight.
 - Cross-reference: same root cause class as [stats-v2-write-failures.md](./stats-v2-write-failures.md) Branch B.

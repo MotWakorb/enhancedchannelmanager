@@ -8,7 +8,7 @@
 
 ## What it is
 
-ECM's auto-creation engine defaults to **exact normalized-name equality** when
+ECM's Channel Pipeline engine defaults to **exact normalized-name equality** when
 merging streams into existing channels. That default is intentional — it ended
 a 1,341-false-positive merge incident caused by over-broad word-prefix matching.
 
@@ -90,7 +90,7 @@ preview_fuzzy_matches(group_ids=[14, 22], min_score=0.75)
 **Via API:**
 
 ```
-GET /api/auto-creation/fuzzy-preview
+GET /api/channel-pipeline/fuzzy-preview
   ?group_ids=14&group_ids=22&min_score=0.75
 ```
 
@@ -130,7 +130,7 @@ Add a `merge_streams` action to your rule with these fields:
 Run the pipeline in dry-run mode before enabling the rule:
 
 ```
-POST /api/auto-creation/run
+POST /api/channel-pipeline/run
 { "dry_run": true, "rule_ids": [<your rule id>] }
 ```
 
@@ -151,7 +151,7 @@ signal, and the callsigns that were parsed — so you can audit exactly why each
 merge fired.
 
 If a run produces unexpected matches, use
-`POST /api/auto-creation/executions/{id}/rollback` to undo it.
+`POST /api/channel-pipeline/executions/{id}/rollback` to undo it.
 
 ## No-callsign opt-in
 
@@ -170,13 +170,13 @@ callsigns — `allow_no_callsign` does not affect that case.
 ## Safety guarantees
 
 - **Dry-run by default.** Both `match_streams_to_channels` (MCP) and
-  `POST /api/auto-creation/run` support `dry_run: true`. The `preview_fuzzy_matches`
-  MCP tool and `GET /api/auto-creation/fuzzy-preview` endpoint never write under
+  `POST /api/channel-pipeline/run` support `dry_run: true`. The `preview_fuzzy_matches`
+  MCP tool and `GET /api/channel-pipeline/fuzzy-preview` endpoint never write under
   any circumstances.
 - **Admin-gated.** The `fuzzy-preview` endpoint requires admin authentication
   when auth is enabled.
-- **Rollback-able.** Auto-creation executions are recorded and reversible via
-  `POST /api/auto-creation/executions/{id}/rollback`.
+- **Rollback-able.** Channel Pipeline executions are recorded and reversible via
+  `POST /api/channel-pipeline/executions/{id}/rollback`.
 - **Scoping required.** The schema refuses to save a scored-fuzzy rule without
   a non-empty `target_channel_in_group` allowlist.
 - **Callsign hard-reject.** Pairs with conflicting callsigns on both sides are
@@ -198,7 +198,7 @@ Set `apply=true` to actually assign the best-scoring stream per channel. The
 `backfill` flag extends matching to channels that already have streams (default
 is channels with zero streams only).
 
-Both tools call `GET /api/auto-creation/fuzzy-preview` under the hood and
+Both tools call `GET /api/channel-pipeline/fuzzy-preview` under the hood and
 inherit M1/M2 admission from the shared policy — they cannot see or assign
 non-admissible pairs.
 
@@ -207,7 +207,7 @@ non-admissible pairs.
 | Topic | Where |
 |-|-|
 | Scoring core internals | `backend/services/dedup_matcher.py` — `score_one`, `score_all`, `is_admissible`, `_normalize(mode=LOCALS)` |
-| Rule schema validation | `backend/auto_creation_schema.py` — `min_score` / `target_channel_in_group` constraints |
-| Preview endpoint | [`docs/api.md`](../../api.md) — `GET /api/auto-creation/fuzzy-preview` |
-| Scored-fuzzy rule path (dev reference) | [`docs/auto_creation_rule_analyzer.md`](../../auto_creation_rule_analyzer.md) — "Scored-fuzzy rule path" section |
+| Rule schema validation | `backend/channel_pipeline_schema.py` — `min_score` / `target_channel_in_group` constraints |
+| Preview endpoint | [`docs/api.md`](../../api.md) — `GET /api/channel-pipeline/fuzzy-preview` |
+| Scored-fuzzy rule path (dev reference) | [`docs/channel_pipeline_rule_analyzer.md`](../../channel_pipeline_rule_analyzer.md) — "Scored-fuzzy rule path" section |
 | Confidence floor (ADR-008 §D2) | `CONFIDENCE_FLOOR = 0.60` in `services.dedup_matcher` — same constant used by interactive stream dedup |

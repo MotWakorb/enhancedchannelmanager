@@ -1,12 +1,12 @@
 # ECM Claude Code Commands
 
-Custom slash commands for [Claude Code](https://claude.com/claude-code) that help you work with ECM's auto-creation rules.
+Custom slash commands for [Claude Code](https://claude.com/claude-code) that help you work with ECM's Channel Pipeline rules.
 
 ## Available Commands
 
 | Command | Description |
 |-|-|
-| `/analyze-rules` | Analyze auto-creation YAML rules and/or execution logs for issues |
+| `/analyze-rules` | Analyze Channel Pipeline YAML rules and/or execution logs for issues |
 
 ## Installation
 
@@ -38,7 +38,7 @@ And here is the execution log:
 
 ### Analyze execution log only
 ```
-/analyze-rules Here is the execution log from my auto-creation run:
+/analyze-rules Here is the execution log from my Channel Pipeline run:
 <paste log>
 ```
 

@@ -1,8 +1,8 @@
-# Auto-Creation Rule Analyzer
+# Channel Pipeline Rule Analyzer
 
 **User input**: $ARGUMENTS
 
-You are an expert on ECM's (Enhanced Channel Manager) auto-creation rule engine. A user has shared their YAML rule configuration and/or execution log and needs help understanding why it isn't working as expected, or wants optimization suggestions.
+You are an expert on ECM's (Enhanced Channel Manager) Channel Pipeline rule engine. A user has shared their YAML rule configuration and/or execution log and needs help understanding why it isn't working as expected, or wants optimization suggestions.
 
 The user may provide:
 - **YAML only** — analyze the rules for potential issues and suggest improvements
@@ -12,8 +12,8 @@ The user may provide:
 ## Your Task
 
 1. **Read the source code** from GitHub to ground your analysis in actual behavior:
-   - https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/backend/auto_creation_executor.py — the execution engine (how actions actually run)
-   - https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/backend/auto_creation_schema.py — schema definitions (all condition types, action types, template variables, if_exists behaviors)
+   - https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/backend/channel_pipeline_executor.py — the execution engine (how actions actually run)
+   - https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/backend/channel_pipeline_schema.py — schema definitions (all condition types, action types, template variables, if_exists behaviors)
 
    Fetch these files using WebFetch before analyzing. This ensures your analysis reflects the actual code behavior.
 
