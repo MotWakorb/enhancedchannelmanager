@@ -24,7 +24,7 @@ from _endpoint_contracts import ENDPOINTS
 
 
 def _register():
-    from tools.auto_creation import register
+    from tools.channel_pipeline import register
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP("test")
@@ -66,7 +66,7 @@ class TestConfirmGate:
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = fake_call_endpoint
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "restore_auto_creation_snapshot", {"execution_id": 3}
             )
@@ -95,7 +95,7 @@ class TestConfirmGate:
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = fake_call_endpoint
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "restore_auto_creation_snapshot", {"execution_id": 8}
             )
@@ -127,7 +127,7 @@ class TestConfirmGate:
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = fake_call_endpoint
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "restore_auto_creation_snapshot",
                 {"execution_id": 5, "confirm": True},
@@ -169,7 +169,7 @@ class TestPartialFailureSurfaced:
             ],
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "restore_auto_creation_snapshot",
                 {"execution_id": 9, "confirm": True},
@@ -199,18 +199,18 @@ class TestNoSnapshotGuidance:
 
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = RuntimeError(
-            "POST /api/auto-creation/executions/4/restore-snapshot -> HTTP 404 "
+            "POST /api/channel-pipeline/executions/4/restore-snapshot -> HTTP 404 "
             "Not Found: No snapshot for execution 4; use /rollback instead."
         )
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "restore_auto_creation_snapshot",
                 {"execution_id": 4, "confirm": True},
             )
 
         text = _text(result)
-        assert "rollback_auto_creation" in text
+        assert "rollback_channel_pipeline" in text
         assert "no" in text.lower() and "snapshot" in text.lower()
 
     @pytest.mark.asyncio
@@ -223,7 +223,7 @@ class TestNoSnapshotGuidance:
             assert ep is not ENDPOINTS["ac_restore_snapshot"]
             if ep is ENDPOINTS["ac_get_execution_snapshot"]:
                 raise RuntimeError(
-                    "GET /api/auto-creation/executions/4/snapshot -> HTTP 404 "
+                    "GET /api/channel-pipeline/executions/4/snapshot -> HTTP 404 "
                     "Not Found: No snapshot for this execution"
                 )
             raise AssertionError(f"unexpected endpoint {ep.name}")
@@ -231,13 +231,13 @@ class TestNoSnapshotGuidance:
         mock_client = AsyncMock()
         mock_client.call_endpoint.side_effect = fake_call_endpoint
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "restore_auto_creation_snapshot", {"execution_id": 4}
             )
 
         text = _text(result)
-        assert "rollback_auto_creation" in text
+        assert "rollback_channel_pipeline" in text
 
     @pytest.mark.asyncio
     async def test_confirm_true_no_snapshot_dict_signal(self):
@@ -252,14 +252,14 @@ class TestNoSnapshotGuidance:
             "error": "No snapshot for execution 6; use /rollback instead.",
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "restore_auto_creation_snapshot",
                 {"execution_id": 6, "confirm": True},
             )
 
         text = _text(result)
-        assert "rollback_auto_creation" in text
+        assert "rollback_channel_pipeline" in text
         assert "restored" not in text.lower() or "no" in text.lower()
 
 
@@ -285,7 +285,7 @@ class TestCallEndpointQueryOnPost:
                 timeout=300.0,
             )
         post_mock.assert_awaited_once_with(
-            "/api/auto-creation/executions/5/restore-snapshot",
+            "/api/channel-pipeline/executions/5/restore-snapshot",
             json_data=None,
             timeout=300.0,
             params={"confirm": True},
@@ -326,7 +326,7 @@ class TestListExecutionsHasSnapshot:
             "total": 2,
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "list_auto_creation_executions", {"limit": 10}
             )
@@ -354,7 +354,7 @@ class TestListExecutionsHasSnapshot:
             "total": 1,
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
                 "list_auto_creation_executions", {"limit": 10}
             )
