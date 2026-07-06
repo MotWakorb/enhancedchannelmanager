@@ -110,7 +110,7 @@ Not applicable — this is a pre-merge gate, not an incident response. After eve
 | `auth_setup_required` | `GET /api/auth/setup-required` | 200 + `required=true` | Auth stack alive on a fresh (no-users) container |
 | `channels_list` | `GET /api/channels?limit=1` | 200 OR 500 | Channels CRUD route registered + handler runs (500 = Dispatcharr unreachable, expected) |
 | `epg_sources_list` | `GET /api/epg/sources?limit=1` | 200 OR 500 | EPG sources route registered + handler runs |
-| `auto_creation_rules_list` | `GET /api/auto-creation/rules?limit=1` | 200 | Auto-creation router + local DB |
+| `auto_creation_rules_list` | `GET /api/auto-creation/rules?limit=1` | 200 | Channel Pipeline router + local DB (check name and path match `scripts/smoke_test_dev_container.sh`, which still uses the deprecated `/api/auto-creation` alias) |
 | `journal_list` | `GET /api/journal?page_size=1` | 200 | Journal router + local DB |
 | `journal_batch_id_filter` | `GET /api/journal?page_size=1&batch_id=00000000` | 200 | `bd-s4sph` batch_id filter still accepts the documented shape |
 

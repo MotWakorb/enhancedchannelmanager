@@ -56,7 +56,7 @@ frontend/src/
 ├── index.css                  # CSS variables & theme
 ├── components/                # ~60+ components
 │   ├── tabs/                  # Tab content (M3UManagerTab, EPGManagerTab, etc.)
-│   ├── autoCreation/          # Rule builder (ActionEditor, ConditionEditor, RuleBuilder)
+│   ├── channelPipeline/       # Rule builder (ActionEditor, ConditionEditor, RuleBuilder)
 │   ├── ffmpegBuilder/         # FFmpeg configuration
 │   ├── settings/              # Settings subsections
 │   ├── CustomSelect.tsx/.css  # Custom dropdown (replaces native <select>)
@@ -73,10 +73,10 @@ frontend/src/
 ├── services/                  # API layer
 │   ├── api.ts                 # Main API client (~2600 lines)
 │   ├── httpClient.ts          # fetchJson(), buildQuery()
-│   └── autoCreationApi.ts     # Auto-creation endpoints
+│   └── channelPipelineApi.ts  # Channel Pipeline endpoints
 ├── types/                     # TypeScript definitions
 │   ├── index.ts               # All shared types (~37KB)
-│   └── autoCreation.ts        # Auto-creation types
+│   └── channelPipeline.ts     # Channel Pipeline types
 └── utils/                     # Utility functions
 ```
 
@@ -108,7 +108,7 @@ file (no CSS modules, no styled-components).
 
 ```typescript
 type TabId = 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'guide' |
-             'logo-manager' | 'm3u-changes' | 'auto-creation' | 'journal' | 'stats' | 'settings'
+             'logo-manager' | 'm3u-changes' | 'channel-pipeline' | 'journal' | 'stats' | 'settings'
 ```
 
 - Tabs have `data-tab={tab.id}` attribute on buttons
@@ -119,7 +119,7 @@ type TabId = 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'guide' |
 ## Types
 
 - Main types in `src/types/index.ts`: `Channel`, `Stream`, `EPGSource`, `ChannelGroup`, etc.
-- Auto-creation types in `src/types/autoCreation.ts`: `Action`, `Condition`, `Rule`
+- Channel Pipeline types in `src/types/channelPipeline.ts`: `Action`, `Condition`, `Rule`
 - Request types: `*CreateRequest`, `*UpdateRequest`
 - Response types: `*Response`
 

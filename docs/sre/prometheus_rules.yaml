@@ -391,7 +391,7 @@ groups:
           description: |
             session_telemetry write failure ratio has exceeded 5% for at
             least 30 minutes. Likely causes (in order of frequency):
-            SQLite WAL contention from bulk auto-creation, database file
+            SQLite WAL contention from bulk Channel Pipeline runs, database file
             locked by a long transaction, disk full on /config, or a
             migration mismatch after a botched upgrade. Search the logs
             for `[STATS_V2]` error lines:
@@ -903,7 +903,7 @@ groups:
             The M3U change monitor has not completed in over 30
             minutes (5-min cadence, 30-min staleness budget = 6
             missed runs). New / changed streams from upstream M3U
-            providers are not being detected — auto-creation rules
+            providers are not being detected — Channel Pipeline rules
             may appear stuck. Check task execution history for the
             underlying error.
           runbook_url: docs/runbooks/task_scheduler_stalled.md

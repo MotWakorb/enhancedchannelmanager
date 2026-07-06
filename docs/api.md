@@ -545,7 +545,7 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `GET /api/journal/stats` | Get journal statistics |
 | `DELETE /api/journal/purge` | Purge old journal entries |
 
-`GET /api/journal` accepts `page`, `page_size` (capped at 200), `category`, `action_type`, `date_from`, `date_to`, `search`, `user_initiated`, and `batch_id`. Each result row carries `batch_id` in the response body — bulk operations (e.g. `POST /api/auto-creation/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. The `batch_id` query parameter (added in bd-s4sph) is an exact-match filter that hits `idx_journal_batch_id` directly — pass the 8-character `batch_id` returned by a bulk handler to retrieve only that batch's rows. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter. See the auto-creation `bulk-update` notes above for a worked example.
+`GET /api/journal` accepts `page`, `page_size` (capped at 200), `category`, `action_type`, `date_from`, `date_to`, `search`, `user_initiated`, and `batch_id`. Each result row carries `batch_id` in the response body — bulk operations (e.g. `POST /api/channel-pipeline/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. The `batch_id` query parameter (added in bd-s4sph) is an exact-match filter that hits `idx_journal_batch_id` directly — pass the 8-character `batch_id` returned by a bulk handler to retrieve only that batch's rows. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter. See the Channel Pipeline `bulk-update` notes above for a worked example.
 
 ## Notifications
 
@@ -656,40 +656,42 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `PATCH /api/tasks/{id}/schedules/{sid}` | Update schedule |
 | `DELETE /api/tasks/{id}/schedules/{sid}` | Delete schedule |
 
-## Auto-Creation
+## Channel Pipeline
+
+> **Deprecated alias:** every endpoint below is also reachable at the old `/api/auto-creation/...` prefix. The alias forwards to the same handler and continues to work, but is hidden from the OpenAPI schema and should not be used in new integrations — use the canonical `/api/channel-pipeline/...` paths shown here.
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/auto-creation/rules` | List all rules sorted by priority |
-| `GET /api/auto-creation/rules/{id}` | Get rule details |
-| `POST /api/auto-creation/rules` | Create rule |
-| `PUT /api/auto-creation/rules/{id}` | Update rule |
-| `DELETE /api/auto-creation/rules/{id}` | Delete rule |
-| `POST /api/auto-creation/rules/bulk-update` | Apply the same scalar field changes to multiple rules; rejects `conditions`/`actions` (see notes below) |
-| `POST /api/auto-creation/rules/reorder` | Reorder rules by priority |
-| `POST /api/auto-creation/rules/{id}/toggle` | Toggle rule enabled state |
-| `POST /api/auto-creation/rules/{id}/duplicate` | Duplicate a rule |
-| `POST /api/auto-creation/rules/{id}/run` | Run a single rule (supports dry_run) |
-| `POST /api/auto-creation/run` | Run the full pipeline (execute or dry_run) |
-| `GET /api/auto-creation/executions` | Get execution history (paginated) |
-| `GET /api/auto-creation/executions/{id}` | Get execution details (optional log/entities) |
-| `POST /api/auto-creation/executions/{id}/rollback` | Rollback an execution |
-| `POST /api/auto-creation/validate` | Validate a rule definition |
-| `GET /api/auto-creation/export/yaml` | Export all rules as YAML |
-| `POST /api/auto-creation/import/yaml` | Import rules from YAML |
-| `GET /api/auto-creation/schema/conditions` | Get available condition types |
-| `GET /api/auto-creation/schema/actions` | Get available action types |
-| `GET /api/auto-creation/schema/template-variables` | Get available template variables |
-| `GET /api/auto-creation/lint-findings` | Read-only view of saved auto-creation rules that fail the current write-time linter (bd-eio04.7) |
-| `POST /api/auto-creation/rules/analyze` | Run the advisory rule analyzer over the rules currently in the DB; returns warnings only (saves are never blocked) |
-| `POST /api/auto-creation/rules/analyze/from-bundle` | Run the analyzer over `rules.yaml` inside an uploaded debug-bundle `tar.gz`; never touches the DB, so it is safe for support diagnosis of any user's bundle. See `docs/auto_creation_rule_analyzer.md` |
-| `POST /api/auto-creation/debug-bundle` | Start a diagnostic-bundle build; returns `{job_id, status: "running"}` immediately and dispatches a supervised background task |
-| `GET /api/auto-creation/debug-bundle/{job_id}` | Poll a bundle build: JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). Job is evicted on successful read; abandoned jobs pruned after 30 min |
-| `GET /api/auto-creation/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
+| `GET /api/channel-pipeline/rules` | List all rules sorted by priority |
+| `GET /api/channel-pipeline/rules/{id}` | Get rule details |
+| `POST /api/channel-pipeline/rules` | Create rule |
+| `PUT /api/channel-pipeline/rules/{id}` | Update rule |
+| `DELETE /api/channel-pipeline/rules/{id}` | Delete rule |
+| `POST /api/channel-pipeline/rules/bulk-update` | Apply the same scalar field changes to multiple rules; rejects `conditions`/`actions` (see notes below) |
+| `POST /api/channel-pipeline/rules/reorder` | Reorder rules by priority |
+| `POST /api/channel-pipeline/rules/{id}/toggle` | Toggle rule enabled state |
+| `POST /api/channel-pipeline/rules/{id}/duplicate` | Duplicate a rule |
+| `POST /api/channel-pipeline/rules/{id}/run` | Run a single rule (supports dry_run) |
+| `POST /api/channel-pipeline/run` | Run the full pipeline (execute or dry_run) |
+| `GET /api/channel-pipeline/executions` | Get execution history (paginated) |
+| `GET /api/channel-pipeline/executions/{id}` | Get execution details (optional log/entities) |
+| `POST /api/channel-pipeline/executions/{id}/rollback` | Rollback an execution |
+| `POST /api/channel-pipeline/validate` | Validate a rule definition |
+| `GET /api/channel-pipeline/export/yaml` | Export all rules as YAML |
+| `POST /api/channel-pipeline/import/yaml` | Import rules from YAML |
+| `GET /api/channel-pipeline/schema/conditions` | Get available condition types |
+| `GET /api/channel-pipeline/schema/actions` | Get available action types |
+| `GET /api/channel-pipeline/schema/template-variables` | Get available template variables |
+| `GET /api/channel-pipeline/lint-findings` | Read-only view of saved Channel Pipeline rules that fail the current write-time linter (bd-eio04.7) |
+| `POST /api/channel-pipeline/rules/analyze` | Run the advisory rule analyzer over the rules currently in the DB; returns warnings only (saves are never blocked) |
+| `POST /api/channel-pipeline/rules/analyze/from-bundle` | Run the analyzer over `rules.yaml` inside an uploaded debug-bundle `tar.gz`; never touches the DB, so it is safe for support diagnosis of any user's bundle. See `docs/channel_pipeline_rule_analyzer.md` |
+| `POST /api/channel-pipeline/debug-bundle` | Start a diagnostic-bundle build; returns `{job_id, status: "running"}` immediately and dispatches a supervised background task |
+| `GET /api/channel-pipeline/debug-bundle/{job_id}` | Poll a bundle build: JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). Job is evicted on successful read; abandoned jobs pruned after 30 min |
+| `GET /api/channel-pipeline/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
 
 ---
 
-### `GET /api/auto-creation/fuzzy-preview`
+### `GET /api/channel-pipeline/fuzzy-preview`
 
 Returns scored `(stream, channel)` pairs for the given channel groups using the same backend scoring core and admission policy used by `merge_streams` rules with `loose_name_match + min_score`. Zero writes — inspection only.
 
@@ -757,13 +759,13 @@ This is the same policy the `merge_streams` rule executor applies, so the previe
 
 ```bash
 curl -X GET \
-  "http://localhost:6100/api/auto-creation/fuzzy-preview?group_ids=14&group_ids=22&min_score=0.7&allow_no_callsign=false&page=1&page_size=50" \
+  "http://localhost:6100/api/channel-pipeline/fuzzy-preview?group_ids=14&group_ids=22&min_score=0.7&allow_no_callsign=false&page=1&page_size=50" \
   -H "Authorization: Bearer TOKEN"
 ```
 
 ---
 
-`POST /api/auto-creation/rules/bulk-update` applies the same partial update to every rule in `rule_ids` in a single transaction. Send only the fields you want to change; omitted fields are left as-is per rule.
+`POST /api/channel-pipeline/rules/bulk-update` applies the same partial update to every rule in `rule_ids` in a single transaction. Send only the fields you want to change; omitted fields are left as-is per rule.
 
 **Request body:**
 
@@ -779,10 +781,10 @@ curl -X GET \
 - `rule_ids` (required) — `1..500` distinct rule IDs. Empty list, missing list, or duplicates return `400`.
 - Scalar fields accepted (any subset): `name`, `description`, `enabled`, `priority`, `m3u_account_id`, `target_group_id`, `run_on_refresh`, `stop_on_first_match`, `sort_field`, `sort_order`, `probe_on_sort`, `sort_regex`, `stream_sort_field`, `stream_sort_order`, `quality_tie_break_order`, `quality_m3u_tie_break_enabled`, `normalization_group_ids`, `skip_struck_streams`, `orphan_action`, `match_scope_target_group`.
 - `merge_streams_remove_non_matching` (bulk-only convenience field) — when set, every `merge_streams` action on every targeted rule is rewritten with this `remove_non_matching` flag. Rules with no `merge_streams` action are unaffected.
-- **Rejected fields (`422 Unprocessable Entity`):** `conditions`, `actions`. Per-rule logic edits must go through `PUT /api/auto-creation/rules/{id}` so silent payload drops can't lose intent at scale (bd-gjoe5). The error message names the offending field.
+- **Rejected fields (`422 Unprocessable Entity`):** `conditions`, `actions`. Per-rule logic edits must go through `PUT /api/channel-pipeline/rules/{id}` so silent payload drops can't lose intent at scale (bd-gjoe5). The error message names the offending field.
 - At least one mutating field is required alongside `rule_ids`; otherwise `400 "No fields to update"`.
 - If any `rule_ids` entry doesn't exist, the entire batch aborts with `404 "Rules not found: [...]"` and no rows are written.
-- `sort_regex` is run through the auto-creation regex linter before any DB work (bd-eio04.7); a failing pattern returns `400` with the linter findings.
+- `sort_regex` is run through the Channel Pipeline regex linter before any DB work (bd-eio04.7); a failing pattern returns `400` with the linter findings.
 
 **Response: `200 OK`**
 
@@ -816,7 +818,7 @@ To reconstruct one batch:
 - Every journal row returned by `GET /api/journal` already includes `batch_id` in its body, so client-side grouping by `batch_id` from a broader query is also supported (pagination caveats apply on large windows).
 - The `search` parameter does an `ILIKE %term%` on `entity_name` and `description` and can complement `batch_id` (e.g., narrow a batch to rules whose name matches a substring) — the two filters compose with `AND` semantics.
 
-**Normalization interaction:** `normalization_group_ids` is an accepted scalar field, so bulk-update can reassign normalization groups across many rules in one call. The list is stored as-is (deduplicated and sorted) — IDs are **not** verified against `NormalizationRuleGroup` at write time, matching the behavior of `PUT /api/auto-creation/rules/{id}`. See [`docs/normalization.md`](normalization.md) for the full normalization model and how groups feed the auto-creation pipeline.
+**Normalization interaction:** `normalization_group_ids` is an accepted scalar field, so bulk-update can reassign normalization groups across many rules in one call. The list is stored as-is (deduplicated and sorted) — IDs are **not** verified against `NormalizationRuleGroup` at write time, matching the behavior of `PUT /api/channel-pipeline/rules/{id}`. See [`docs/normalization.md`](normalization.md) for the full normalization model and how groups feed the Channel Pipeline.
 
 ## Cache
 

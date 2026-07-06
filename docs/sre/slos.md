@@ -101,7 +101,7 @@ Re-tune after 30 days of production data. If we sustain 99.9% comfortably, tight
 
 **What breaks this SLO:**
 
-- Database file lock contention (`/config/journal.db` under heavy auto-creation load).
+- Database file lock contention (`/config/journal.db` under heavy Channel Pipeline load).
 - Dispatcharr unreachable (network partition, Dispatcharr restart, bad credentials).
 - ffprobe binary missing or permissions broken (degrades but does not fail readiness — see `routers/health.py` skip-vs-fail semantics).
 
@@ -133,7 +133,7 @@ Tighten to p95 < 250ms once we have baseline data showing we comfortably beat 50
 
 **What breaks this SLO:**
 
-- SQLite write amplification during bulk auto-creation (lots of small transactions).
+- SQLite write amplification during bulk Channel Pipeline runs (lots of small transactions).
 - Dispatcharr API slowness (ECM proxies many requests).
 - N+1 query patterns in frontends (often the real culprit — a single user view hitting `/api/channels/*` 500 times serially).
 
@@ -159,7 +159,7 @@ sum(rate(ecm_http_requests_total[5m]))
 **Why this target (initial):** 1% is intentionally loose for a scaffold. A mature SLO would target 0.1% or tighter, but:
 
 1. Some ECM endpoints wrap Dispatcharr (not our failure mode, but our status code).
-2. Auto-creation rules with bad upstream streams will 5xx as designed until the user fixes the rule.
+2. Channel Pipeline rules with bad upstream streams will 5xx as designed until the user fixes the rule.
 3. We don't yet separate "our bug" 5xxs from "integration partner down" 5xxs.
 
 A follow-up bead should split this SLO by `path` label once we've observed which routes dominate the error budget, and introduce per-route sub-objectives (e.g., `/api/auth/login` should be far stricter than `/api/stream/probe`).
@@ -204,7 +204,7 @@ histogram_quantile(
 
 ## SLO-5: Normalization Correctness
 
-**SLI:** Fraction of nightly canary runs where the Test Rules preview path (`engine.test_rule` / `engine.test_rules_batch`) and the auto-creation executor path (`engine.normalize`) produce byte-identical output — **including identical `matched_rule_ids`** — across the full shared Unicode fixture bank (`backend/tests/fixtures/unicode_fixtures.py`). A single fixture diverging in a single run counts as a full-run failure for the purpose of this SLI.
+**SLI:** Fraction of nightly canary runs where the Test Rules preview path (`engine.test_rule` / `engine.test_rules_batch`) and the Channel Pipeline executor path (`engine.normalize`) produce byte-identical output — **including identical `matched_rule_ids`** — across the full shared Unicode fixture bank (`backend/tests/fixtures/unicode_fixtures.py`). A single fixture diverging in a single run counts as a full-run failure for the purpose of this SLI.
 
 **Prometheus expression (SLI numerator over denominator):**
 ```promql
@@ -230,7 +230,7 @@ human-readable number of SLO-5 breaches in the last 7 days.
 
 **Error budget:** **Zero.** There is no tolerable rate of Test-Rules vs. Auto-Create divergence. The error budget policy below is punitive because a single divergence reproduces the exact failure mode behind GH #104.
 
-**Why this target:** The entire point of bd-eio04 (epic: "Normalization parity") was to eliminate the divergence class that made Settings → Normalization Test and the auto-creation executor produce different outputs. A non-zero SLI means the unification regressed. 99.9% is not an acceptable answer — it means one bad deploy per thousand canary cycles silently slips through. Correctness is binary.
+**Why this target:** The entire point of bd-eio04 (epic: "Normalization parity") was to eliminate the divergence class that made Settings → Normalization Test and the Channel Pipeline executor produce different outputs. A non-zero SLI means the unification regressed. 99.9% is not an acceptable answer — it means one bad deploy per thousand canary cycles silently slips through. Correctness is binary.
 
 **Why this uses SLO-5 (not SLO-4):** SLO-4 is already claimed by Readiness Sub-check Latency above — renaming bd-eio04.9 to the next free slot was called out in the grooming comment on the bead.
 
@@ -254,7 +254,7 @@ The "block release cut" rule overrides the normal 25%/50%/75%/100% budget bands 
 
 **Supplementary diagnostic signal (not the SLI):**
 
-A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creations_30d)` — is tracked on the normalization dashboard for trend analysis. This is **not** part of the SLI because bug reports lag the incident by days and are subject to reporter self-selection; it's useful as a leading indicator of user-perceived correctness but cannot be the thing we page on.
+A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (channel_pipeline_runs_30d)` — is tracked on the normalization dashboard for trend analysis. This is **not** part of the SLI because bug reports lag the incident by days and are subject to reporter self-selection; it's useful as a leading indicator of user-perceived correctness but cannot be the thing we page on.
 
 ---
 
@@ -338,7 +338,7 @@ The single alert in `prometheus_rules.yaml` uses the simpler form "failure rate 
 
 **What breaks this SLO:**
 
-- SQLite WAL contention from concurrent writes (auto-creation bulk operations during a poll cycle).
+- SQLite WAL contention from concurrent writes (Channel Pipeline bulk operations during a poll cycle).
 - Migration mismatch (a poll runs against a database schema that doesn't yet have the columns the writer expects).
 - Disk full (`/config/journal.db` partition).
 - Dispatcharr unreachable mid-resolver call — the resolver returns unresolved and the writer still completes, so this does NOT increment `result="failure"`; it shows up in SLO-8 instead.
@@ -628,7 +628,7 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 - **No traffic-weighted availability.** SLO-1 treats every 15-second scrape of `ecm_health_ready_ok` as equal weight, regardless of how many user requests landed during that interval. A future refinement: weight by `ecm_http_requests_total` rate.
 - **No per-tenant SLO.** ECM is single-tenant by deployment, but the SLOs above are global — they don't distinguish a power user from a casual one. Fine for v1; revisit if we ship multi-tenant.
 - **No Dispatcharr-upstream vs ECM-self attribution.** When `ecm_http_requests_total{status="502"}` fires because Dispatcharr returned 502, it still counts against our SLO. The fix is a separate label or metric, tracked as a follow-up.
-- **No SLO for long-running tasks.** Task success rate matters (restore jobs, auto-creation runs) but has no metric today. Separate bead.
+- **No SLO for long-running tasks.** Task success rate matters (restore jobs, Channel Pipeline runs) but has no metric today. Separate bead.
 
 ## Changelog
 

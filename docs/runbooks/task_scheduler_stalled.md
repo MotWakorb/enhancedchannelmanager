@@ -32,7 +32,7 @@ The original bd-p5b8i disease silently disabled every scheduled task on every op
 
 - Stats v2 Users / Providers panels were missing the most recent day's data → `stats_v2_rollup` not running.
 - Journal entries and task-execution history were growing unbounded → `cleanup` not running.
-- Auto-creation rules weren't picking up new M3U streams → `m3u_change_monitor` not running.
+- Channel Pipeline rules weren't picking up new M3U streams → `m3u_change_monitor` not running.
 
 No alert fired. No journal entry surfaced the disease. The signal was "absence of expected work" — historically the hardest class of failure to detect.
 

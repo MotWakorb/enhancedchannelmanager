@@ -12,7 +12,7 @@
 This runbook is **manually triggered**. There is no Prometheus alert on duplicate channels directly — dedupe is a correctness property, not a latency/error budget. Expect to reach this runbook via one of:
 
 - **User report** — "two copies of ESPN appeared after a refresh," "the channel list shows `RTL` and `RTL ᴿᴬᵂ` as separate entries," "we merged these last week, they came back."
-- **Auto-creation audit** — `ecm_auto_creation_channels_created_total{normalized="false"}` incremented unexpectedly for a rule that has a normalization group configured. Sampled INFO log under the same rule_id shows the raw names.
+- **Channel Pipeline audit** — `ecm_auto_creation_channels_created_total{normalized="false"}` incremented unexpectedly for a rule that has a normalization group configured. Sampled INFO log under the same rule_id shows the raw names.
 - **Post-incident sweep** — after a normalization rule change lands, operator wants to know if any now-collapsible duplicates exist.
 - **Canary fired first** — if `ecm_normalization_canary_divergence_total` went non-zero, stop here and follow [`normalization-canary-divergence.md`](./normalization-canary-divergence.md) instead. The canary is the leading indicator; duplicates on disk are the lagging symptom.
 

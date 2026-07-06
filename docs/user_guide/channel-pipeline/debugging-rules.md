@@ -1,6 +1,6 @@
 # Debugging Rules
 
-> **Audience:** Operator investigating why an auto-creation rule is not firing
+> **Audience:** Operator investigating why a Channel Pipeline rule is not firing
 > as expected, or auditing a large rule set for silent misconfigurations.
 
 ## What the rule analyzer is
@@ -299,8 +299,10 @@ separately. The three current ways to run it are:
 ### 1. Call the API directly (live mode)
 
 ```
-POST /api/auto-creation/rules/analyze
+POST /api/channel-pipeline/rules/analyze
 ```
+
+(The deprecated `/api/auto-creation/...` alias still works — see `docs/api.md`.)
 
 No request body needed. ECM reads all rules from the database and returns the
 analysis immediately.
@@ -338,7 +340,7 @@ Rules with no findings appear in the list with an empty `findings` array. The
 ### 2. Upload a debug bundle (from-bundle mode)
 
 ```
-POST /api/auto-creation/rules/analyze/from-bundle
+POST /api/channel-pipeline/rules/analyze/from-bundle
 ```
 
 Upload a debug bundle (`tar.gz`) as a multipart file field named `file`. ECM
@@ -353,9 +355,9 @@ you provided.
 
 To generate a debug bundle from your ECM installation:
 
-1. `POST /api/auto-creation/debug-bundle` — starts the bundle build and returns
+1. `POST /api/channel-pipeline/debug-bundle` — starts the bundle build and returns
    a `job_id`.
-2. `GET /api/auto-creation/debug-bundle/{job_id}` — poll until `status` is no
+2. `GET /api/channel-pipeline/debug-bundle/{job_id}` — poll until `status` is no
    longer `"running"`. When ready, the response is the `tar.gz` file itself
    (download it).
 
@@ -417,12 +419,12 @@ For the per-rule dry-run, see [test-a-rule.md](test-a-rule.md) (planned).
 
 ## Going deeper
 
-- [`docs/auto_creation_rule_analyzer.md`](../../auto_creation_rule_analyzer.md)
+- [`docs/channel_pipeline_rule_analyzer.md`](../../channel_pipeline_rule_analyzer.md)
   — the full technical reference: all finding codes with the exact trigger
   logic, the response JSON schema, implementation notes, and what Phase 2 will
   add.
-- [`docs/api.md`](../../api.md) — the `/api/auto-creation/rules/analyze` and
-  `/api/auto-creation/rules/analyze/from-bundle` endpoints.
+- [`docs/api.md`](../../api.md) — the `/api/channel-pipeline/rules/analyze` and
+  `/api/channel-pipeline/rules/analyze/from-bundle` endpoints.
 - [`docs/commands/analyze-rules.md`](../../commands/analyze-rules.md) — the
   `/analyze-rules` agent command.
 - [`docs/normalization.md`](../../normalization.md) — normalization concepts,
