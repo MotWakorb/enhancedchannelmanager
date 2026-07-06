@@ -23,7 +23,7 @@ Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 - `test_tasks.py` - Task engine, cron, schedules
 - `test_stream_stats.py` - Stream probing/health
 - `test_stream_preview.py` - Stream/channel preview
-- `test_auto_creation.py` - Auto-creation pipeline
+- `test_channel_pipeline.py` - Channel Pipeline
 - `test_notifications.py` - Notification system
 - `test_alert_methods.py` - Alert methods
 - `test_stats.py` - Stats and monitoring
@@ -40,10 +40,10 @@ Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 - `test_schedule_calculator.py` - Schedule calculations
 - `test_cron_parser.py` - Cron expression parsing
 - `test_alert_methods.py` - Alert method logic
-- `test_auto_creation_engine.py` - Auto-creation engine
-- `test_auto_creation_evaluator.py` - Auto-creation evaluator
-- `test_auto_creation_executor.py` - Auto-creation executor
-- `test_auto_creation_schema.py` - Auto-creation schema
+- `test_channel_pipeline_engine.py` - Channel Pipeline engine
+- `test_channel_pipeline_evaluator.py` - Channel Pipeline evaluator
+- `test_channel_pipeline_executor.py` - Channel Pipeline executor
+- `test_channel_pipeline_schema.py` - Channel Pipeline schema
 - `test_compute_sort_endpoint.py` - Stream sort computation
 
 **Integration Tests** (`backend/tests/integration/`):
@@ -51,7 +51,7 @@ Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 - `test_api_tasks.py` - Task scheduler API endpoints
 - `test_api_notifications.py` - Notification API endpoints
 - `test_api_alert_methods.py` - Alert methods API endpoints
-- `test_api_auto_creation.py` - Auto-creation API endpoints
+- `test_api_channel_pipeline.py` - Channel Pipeline API endpoints
 - `test_api_stream_preview.py` - Stream preview API
 - `test_api_csv.py` - CSV import/export API
 - `test_normalize_channel_create.py` - Normalization on create
@@ -104,18 +104,18 @@ Located in `frontend/src/`, run with `cd frontend && npm test`
 - `hooks/useChangeHistory.test.ts` - Change history tracking hook
 - `hooks/useAsyncOperation.test.ts` - Async operation management hook
 - `hooks/useSelection.test.ts` - Selection state management hook
-- `hooks/useAutoCreationRules.test.ts` - Auto-creation rules hook
-- `hooks/useAutoCreationExecution.test.ts` - Auto-creation execution hook
+- `hooks/useChannelPipelineRules.test.ts` - Channel Pipeline rules hook
+- `hooks/useChannelPipelineExecution.test.ts` - Channel Pipeline execution hook
 
 **Service Tests:**
 - `services/api.test.ts` - API service layer
-- `services/autoCreationApi.test.ts` - Auto-creation API service
+- `services/channelPipelineApi.test.ts` - Channel Pipeline API service
 
 **Component Tests:**
-- `components/autoCreation/AutoCreationTab.test.tsx` - Auto-creation tab
-- `components/autoCreation/RuleBuilder.test.tsx` - Rule builder
-- `components/autoCreation/ConditionEditor.test.tsx` - Condition editor
-- `components/autoCreation/ActionEditor.test.tsx` - Action editor
+- `components/channelPipeline/ChannelPipelineTab.test.tsx` - Channel Pipeline tab
+- `components/channelPipeline/RuleBuilder.test.tsx` - Rule builder
+- `components/channelPipeline/ConditionEditor.test.tsx` - Condition editor
+- `components/channelPipeline/ActionEditor.test.tsx` - Action editor
 - `components/tabs/BandwidthPanel.test.tsx` - Bandwidth panel
 - `components/tabs/EnhancedStatsPanel.test.tsx` - Enhanced stats panel
 - `components/tabs/PopularityPanel.test.tsx` - Popularity panel
@@ -138,7 +138,7 @@ Located in `e2e/`, run with `npm run test:e2e` from root
 - `journal.spec.ts` - Journal/logging
 - `stats.spec.ts` - Statistics and analytics
 - `alert-methods.spec.ts` - Alert notification methods
-- `auto-creation.spec.ts` - Auto-creation pipeline
+- `auto-creation.spec.ts` - Channel Pipeline (spec filename predates the Channel Pipeline rename; not renamed yet — enhancedchannelmanager-3udrl follow-up)
 
 **Running E2E Tests:**
 ```bash

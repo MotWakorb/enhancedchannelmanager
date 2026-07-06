@@ -94,7 +94,7 @@ Exception — governance cadence rules from ADRs (e.g., ADR-005's monthly-then-q
 | DBAS Import Threat Model | `docs/security/threat_model_dbas_import.md` |
 | CodeQL Configuration | `docs/security/codeql-config.md` |
 | Normalization (user + dev guide) | `docs/normalization.md` |
-| Auto-Creation Rule Analyzer | `docs/auto_creation_rule_analyzer.md` |
+| Channel Pipeline Rule Analyzer | `docs/channel_pipeline_rule_analyzer.md` |
 | Versioning Scheme | `docs/versioning.md` |
 | API Reference | `docs/api.md` |
 | SLOs | `docs/sre/slos.md` |
@@ -106,7 +106,7 @@ Exception — governance cadence rules from ADRs (e.g., ADR-005's monthly-then-q
 
 For codebase-architecture questions (how X connects to Y, what a component's role is, where the hot path runs), the order of precedence is:
 
-1. **`docs/architecture.md`** — the hand-curated system overview + auto-creation pipeline internals + MCP + external API contract.
+1. **`docs/architecture.md`** — the hand-curated system overview + Channel Pipeline internals + MCP + external API contract.
 2. **`graphify-out/memory/*.md`** — saved Q&A from past graph traces. Each file is one question + answer. Greppable. Cheap to read.
 3. **Rebuild the graph** only if (1) and (2) don't cover it: `/graphify backend frontend docs`. Then query via `graphify query "..."` / `graphify explain "NodeName"` / `graphify path "A" "B"`.
 

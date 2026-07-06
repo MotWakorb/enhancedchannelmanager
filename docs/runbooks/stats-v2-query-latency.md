@@ -79,7 +79,7 @@ Look for `SCAN` (no index) vs `SEARCH` (index used). A `SCAN` on a large table i
 
 ### Branch B: SQLite WAL checkpoint stalling
 
-**When:** Latency spikes are transient (episodic, not sustained), and correlate with the nightly rollup task or a bulk auto-creation run.
+**When:** Latency spikes are transient (episodic, not sustained), and correlate with the nightly rollup task or a bulk Channel Pipeline run.
 
 **Verify:**
 ```bash

@@ -14,7 +14,7 @@ The feature fires on three trigger paths:
 |-|-|
 | Drag-drop | You drag a stream from the Streams pane onto a channel group |
 | Add Stream button | You right-click a channel-less stream and choose "Create channel(s) in group" |
-| Bulk M3U refresh | ECM's auto-creation pipeline processes an M3U import and finds candidate matches |
+| Bulk M3U refresh | ECM's Channel Pipeline processes an M3U import and finds candidate matches |
 
 Each trigger path routes to the same dedup decision surface: the **StreamDedupModal** (for interactive triggers) or the **Pending Merges queue** (for the bulk M3U path).
 
@@ -55,7 +55,7 @@ ECM only shows a candidate when the confidence score is at or above your configu
 
 ### How pending merges are created
 
-When an M3U refresh runs and the auto-creation pipeline encounters a stream whose name matches an existing channel at or above the dedup threshold, ECM **does not** create a new channel immediately. Instead, it places a **pending merge** row in a queue for you to review.
+When an M3U refresh runs and the Channel Pipeline encounters a stream whose name matches an existing channel at or above the dedup threshold, ECM **does not** create a new channel immediately. Instead, it places a **pending merge** row in a queue for you to review.
 
 Each pending merge row records:
 
@@ -91,7 +91,7 @@ If the candidate channel was deleted in Dispatcharr between when the row was que
 
 **Create New**
 
-Clicking **Create New** dismisses the dedup candidate and signals that you want a new channel created for this stream. The row transitions to `dismissed`. You can then run auto-creation again or create the channel manually.
+Clicking **Create New** dismisses the dedup candidate and signals that you want a new channel created for this stream. The row transitions to `dismissed`. You can then run the Channel Pipeline again or create the channel manually.
 
 ### Inline error handling
 
@@ -161,9 +161,9 @@ Not in v0.17.1. The threshold is a single global setting. Per-group overrides ar
 
 They are retained indefinitely in ECM's database as an audit trail. You can view them via the API (`GET /api/channel-merges?status=merged` or `?status=dismissed`). No automatic pruning occurs in v0.17.1.
 
-**Does the dedup feature affect the auto-creation pipeline's own collision detection?**
+**Does the dedup feature affect the Channel Pipeline feature's own collision detection?**
 
-No. The auto-creation pipeline has its own unattended collision detection (`match_scope_target_group` / separate-not-merge). The dedup feature described in this guide is the *attended* (operator-driven) path. The two systems are independent and do not share a matcher.
+No. The Channel Pipeline feature has its own unattended collision detection (`match_scope_target_group` / separate-not-merge). The dedup feature described in this guide is the *attended* (operator-driven) path. The two systems are independent and do not share a matcher.
 
 **What does the confidence score represent?**
 

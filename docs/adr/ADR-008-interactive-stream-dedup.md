@@ -22,7 +22,7 @@
   - `enhancedchannelmanager-70ylc` — BD-O: MCP dedup tools (`mcp-server/tools/dedup.py`); names in §D7 are the contract
   - `enhancedchannelmanager-7u8ms` — BD-P: Extend `add_stream` MCP tool with `dedup_action`
   - `enhancedchannelmanager-5w6jz` — Alembic 0006-0010 idempotency + smart-bootstrap fast-path pattern (BD-C inherits this)
-  - `enhancedchannelmanager-r9mtd` — Auto-creation separate-not-merge collision detection (migration 0002); the **unattended** path, distinct from this ADR
+  - `enhancedchannelmanager-r9mtd` — Channel Pipeline separate-not-merge collision detection (migration 0002); the **unattended** path, distinct from this ADR
   - `enhancedchannelmanager-qpgsx` (P3, backlog) — Bulk "Resolve All" actions (deferred from v0.17.1)
   - `enhancedchannelmanager-5136e` (P3, backlog) — `pending_merges` retention reaper (deferred; depends on SLO-10 alert firing)
   - `enhancedchannelmanager-bfbk8` (P3, backlog) — Systemic `ModalOverlay` focus trap (BD-G ships bespoke)
@@ -43,9 +43,9 @@ The Channel Manager today has no mechanical defense against an operator (or an A
 2. **'Add Stream' button** on a channel-less stream.
 3. **Bulk M3U import / refresh** — the highest-volume path, where an operator can produce dozens to hundreds of latent duplicates in a single refresh.
 
-Each path silently creates a new channel today. The operator only notices later, while reconciling the channel list, and the recovery is manual (find the dupes, decide which to keep, merge with the existing `MergeChannelsModal` editing surface). At low channel counts this is annoyance; at the bulk-M3U scale it is a quality-of-data problem that compounds over time and degrades the EPG-matching and auto-creation hot paths downstream.
+Each path silently creates a new channel today. The operator only notices later, while reconciling the channel list, and the recovery is manual (find the dupes, decide which to keep, merge with the existing `MergeChannelsModal` editing surface). At low channel counts this is annoyance; at the bulk-M3U scale it is a quality-of-data problem that compounds over time and degrades the EPG-matching and Channel Pipeline hot paths downstream.
 
-The companion **auto-creation pipeline** (migration 0002 / bd-r9mtd) already has its own unattended collision detection (`match_scope_target_group` + separate-not-merge option). That path is in scope for the operator's pre-configured rules and is deliberately **not** sharing a matcher with the interactive dedup work this ADR governs — see §D8 boundary note.
+The companion **Channel Pipeline** feature (migration 0002 / bd-r9mtd) already has its own unattended collision detection (`match_scope_target_group` + separate-not-merge option). That path is in scope for the operator's pre-configured rules and is deliberately **not** sharing a matcher with the interactive dedup work this ADR governs — see §D8 boundary note.
 
 ### Why this ADR must land before BD-A through BD-P start
 
@@ -271,7 +271,7 @@ Explicitly deferred. Each is filed as a backlog candidate so it surfaces in groo
 - **Audit is real, not nominal.** Every accept / dismiss / queue is attributable to a specific token id, a specific surface, and a specific confidence-at-decision-time. The MCP-vs-operator distinction the epic asks for (was an AI agent driving the merges, or a human?) is answerable from the `pending_merge_journal` table (§D6 / §D8) without inferring from log timing. Every audit field is a queryable column — no JSON blobs.
 - **Retention is deferrable, not ignored.** The terminal-state rows are kept indefinitely in v0.17.1; the reaper bead (`5136e`) is the additive lever if and when SLO-10 (BD-M) shows a real growth problem.
 - **MCP and REST cannot drift.** §D7 names the MCP tools by their final identifiers so BD-O / BD-P land matching the REST surface; future MCP additions go through the same naming convention.
-- **The auto-creation pipeline and the interactive dedup pipeline have a documented boundary.** Migration 0002 / bd-r9mtd is the unattended path; this ADR is the attended path. They do **not** share a matcher in v0.17.1 (epic decision; the architect's case for shared matcher is a backlog candidate but blocked by the auto-creation collision detection's stricter "separate not merge" semantics).
+- **The Channel Pipeline feature and the interactive dedup pipeline have a documented boundary.** Migration 0002 / bd-r9mtd is the unattended path; this ADR is the attended path. They do **not** share a matcher in v0.17.1 (epic decision; the architect's case for shared matcher is a backlog candidate but blocked by the Channel Pipeline collision detection's stricter "separate not merge" semantics).
 
 ### Negative
 
@@ -285,7 +285,7 @@ Explicitly deferred. Each is filed as a backlog candidate so it surfaces in groo
 ### Neutral / Out of Scope
 
 - **The matcher's RapidFuzz dependency** is BD-A's deliverable; the dep-bump cadence and license review are governed by ADR-001's dep-bump path, not this ADR. Pinned version per BD-A.
-- **The auto-creation pipeline's collision detection** (migration 0002, `match_scope_target_group`) is unchanged by this ADR. The interactive dedup work is **attended**; auto-creation is **unattended** and uses its own logic. The "shared matcher service" architect-recommended refactor is a backlog candidate, not v0.17.1 work.
+- **The Channel Pipeline feature's collision detection** (migration 0002, `match_scope_target_group`) is unchanged by this ADR. The interactive dedup work is **attended**; the Channel Pipeline feature is **unattended** and uses its own logic. The "shared matcher service" architect-recommended refactor is a backlog candidate, not v0.17.1 work.
 - **Frontend lint rules, CSS conventions, modal patterns** — BD-G / BD-H / BD-I / BD-J inherit `docs/style_guide.md` and `docs/css_guidelines.md`; this ADR does not re-state them.
 - **CodeQL exposure of the new router** — `backend/routers/channel_merges.py` is subject to ADR-005's delta-zero gating at PR time. No special carve-out.
 - **SLO-10 specifics (warn-at-50 queue depth, p95 latency budgets)** are BD-M's deliverable; the epic body carries the PO-ratified numbers, this ADR encodes only the boundary (operator-paced queue, no page-class alert in v1).
@@ -335,7 +335,7 @@ No vendor relationship to unwind; no external dependency introduced by this ADR 
 - Beads `enhancedchannelmanager-70ylc` (BD-O), `enhancedchannelmanager-7u8ms` (BD-P) — MCP sub-beads
 - Beads `enhancedchannelmanager-qpgsx`, `enhancedchannelmanager-5136e`, `enhancedchannelmanager-bfbk8`, `enhancedchannelmanager-s7lxd` — Deferred backlog candidates (§D10)
 - Bead `enhancedchannelmanager-5w6jz` — Alembic 0006-0010 idempotency + smart-bootstrap fast-path (BD-C inherits)
-- Bead `enhancedchannelmanager-r9mtd` — Auto-creation separate-not-merge collision detection (migration 0002); the unattended counterpart to this ADR's attended path
+- Bead `enhancedchannelmanager-r9mtd` — Channel Pipeline separate-not-merge collision detection (migration 0002); the unattended counterpart to this ADR's attended path
 - `backend/routers/channels.py:1961` — `merge_channels` endpoint; the flat-outcome response-envelope precedent §D1 mirrors
 - `backend/alembic/versions/20260515_2000_0013_session_telemetry_channel_event_counters.py` — current Alembic head; BD-C's migration 0014 lands on top
 - `docs/database_migrations.md` — Alembic authoring guide

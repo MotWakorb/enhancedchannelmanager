@@ -1,6 +1,6 @@
 # Runbook: Normalization Canary Divergence
 
-> The nightly canary detected that the Test Rules preview path and the auto-creation executor path produce different output for at least one fixture. This is an **SLO-5 (Normalization Correctness) breach** — zero error budget.
+> The nightly canary detected that the Test Rules preview path and the Channel Pipeline executor path produce different output for at least one fixture. This is an **SLO-5 (Normalization Correctness) breach** — zero error budget.
 
 - **Severity**: P2
 - **Owner**: Project Engineer (primary) + SRE (support)
@@ -55,7 +55,7 @@ Work the JSON report top-down. Each `divergences[].reason` is one of two classes
 3. **Diagnose an output byte-mismatch:**
 
    ```bash
-   git log --oneline -20 backend/normalization_engine.py backend/observability.py backend/routers/normalization.py backend/auto_creation_executor.py
+   git log --oneline -20 backend/normalization_engine.py backend/observability.py backend/routers/normalization.py backend/channel_pipeline_executor.py
    ```
 
    - Anything touched since the last green canary is a candidate.

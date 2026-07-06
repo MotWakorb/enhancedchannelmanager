@@ -67,13 +67,13 @@ If present: Dispatcharr is the upstream root cause. The resolver call inside `_w
 ```bash
 docker logs ecm-ecm-1 --since 15m | grep -iE 'database is locked|database locked|OperationalError.*locked'
 ```
-If present: SQLite WAL contention. Most common cause is a concurrent bulk operation (auto-creation, M3U digest, channel-group batch update) holding a long transaction.
+If present: SQLite WAL contention. Most common cause is a concurrent bulk operation (the Channel Pipeline, M3U digest, channel-group batch update) holding a long transaction.
 
 **Recovery:**
 1. Identify the offending bulk operation in logs (the heavy writer will be in the same time window):
    ```bash
    docker logs ecm-ecm-1 --since 30m \
-     | grep -iE '\[(AUTO-CREATION|M3U|CHANNELS)\]' \
+     | grep -iE '\[(AUTO-CREATE|M3U|CHANNELS)\]' \
      | tail -50
    ```
 2. If a long-running task is mid-flight, let it finish — interrupting it makes things worse. The session_telemetry writer self-heals once the lock clears.
