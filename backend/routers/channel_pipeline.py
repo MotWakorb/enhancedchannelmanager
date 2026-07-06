@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 # contract ahead of schedule. The handler rename is coordinated with the
 # API route path + MCP tool alias rename in a later phase — do not rename
 # these in isolation.
-router = APIRouter(prefix="/api/auto-creation", tags=["Auto-Creation"])
+router = APIRouter(tags=["Channel Pipeline"])
 
 
 # =============================================================================
@@ -1184,7 +1184,7 @@ async def run_auto_creation_pipeline(request: RunPipelineRequest, _admin=Require
             content={
                 "execution_id": execution_id,
                 "status": "running",
-                "message": "Pipeline started; poll /api/auto-creation/executions/{id} for status",
+                "message": "Pipeline started; poll /api/channel-pipeline/executions/{id} for status",
             },
         )
     except HTTPException:
@@ -1242,7 +1242,7 @@ async def run_auto_creation_rule(rule_id: int, dry_run: bool = False, _admin=Req
                 "execution_id": execution_id,
                 "status": "running",
                 "rule_id": rule_id,
-                "message": "Rule run started; poll /api/auto-creation/executions/{id} for status",
+                "message": "Rule run started; poll /api/channel-pipeline/executions/{id} for status",
             },
         )
     except HTTPException:
@@ -3081,7 +3081,7 @@ async def start_debug_bundle():
         content={
             "job_id": job_id,
             "status": "running",
-            "message": "Debug bundle generation started; poll /api/auto-creation/debug-bundle/{job_id} for status",
+            "message": "Debug bundle generation started; poll /api/channel-pipeline/debug-bundle/{job_id} for status",
         },
     )
 

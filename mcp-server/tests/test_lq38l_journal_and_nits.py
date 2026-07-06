@@ -48,7 +48,7 @@ def _register(module_name: str) -> FastMCP:
     elif module_name == "epg":
         from tools.epg import register
     elif module_name == "auto_creation":
-        from tools.auto_creation import register
+        from tools.channel_pipeline import register
     elif module_name == "stats":
         from tools.stats import register
     elif module_name == "export":
@@ -396,7 +396,7 @@ class TestAutoCreationRuleActionDescriptor:
             ],
         }
         mock_client = _client(return_value=rule)
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("get_auto_creation_rule", {"rule_id": 1})
         text = result[0][0].text
         assert "create_channel: {stream_name}" in text
@@ -428,8 +428,8 @@ class TestRunAutoCreationDryRunSample:
         }
         mock_client = _client(side_effect=[kickoff, final])
         with (
-            patch("tools.auto_creation.get_ecm_client", return_value=mock_client),
-            patch("tools.auto_creation._poll_sleep", new=AsyncMock(return_value=None)),
+            patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client),
+            patch("tools.channel_pipeline._poll_sleep", new=AsyncMock(return_value=None)),
         ):
             result = await mcp.call_tool("run_auto_creation", {"dry_run": True})
         text = result[0][0].text
@@ -458,8 +458,8 @@ class TestRunAutoCreationDryRunSample:
         }
         mock_client = _client(side_effect=[kickoff, final])
         with (
-            patch("tools.auto_creation.get_ecm_client", return_value=mock_client),
-            patch("tools.auto_creation._poll_sleep", new=AsyncMock(return_value=None)),
+            patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client),
+            patch("tools.channel_pipeline._poll_sleep", new=AsyncMock(return_value=None)),
         ):
             result = await mcp.call_tool("run_auto_creation", {"dry_run": True})
         text = result[0][0].text
@@ -614,7 +614,7 @@ class TestCreateRuleNewParams:
     async def test_quality_tie_break_and_match_scope_passed_through(self):
         mcp = _register("auto_creation")
         mock_client = _client(return_value={"id": 11, "name": "R"})
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool("create_auto_creation_rule", {
                 "name": "R",
                 "conditions": [],
@@ -632,7 +632,7 @@ class TestCreateRuleNewParams:
         """Defaults stay None → fields absent from the body (backend keeps its defaults)."""
         mcp = _register("auto_creation")
         mock_client = _client(return_value={"id": 12, "name": "R"})
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool("create_auto_creation_rule", {
                 "name": "R", "conditions": [], "actions": [],
             })

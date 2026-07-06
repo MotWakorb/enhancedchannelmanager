@@ -30,7 +30,7 @@ def _register(module_name: str) -> FastMCP:
     elif module_name == "m3u":
         from tools.m3u import register
     elif module_name == "auto_creation":
-        from tools.auto_creation import register
+        from tools.channel_pipeline import register
     else:  # pragma: no cover
         raise ValueError(module_name)
     register(mcp)
@@ -131,7 +131,7 @@ class TestDeleteRuleConfirm:
         mcp = _register("auto_creation")
         mock_client = AsyncMock()
         mock_client.call_endpoint.return_value = {"id": 9, "name": "Sports Rule"}
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("delete_auto_creation_rule", {"rule_id": 9})
         text = _text(result)
         assert "Sports Rule" in text
@@ -143,7 +143,7 @@ class TestDeleteRuleConfirm:
         mcp = _register("auto_creation")
         mock_client = AsyncMock()
         mock_client.call_endpoint.return_value = None
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool(
                 "delete_auto_creation_rule", {"rule_id": 9, "confirm": True}
             )
