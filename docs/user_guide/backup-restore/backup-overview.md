@@ -111,7 +111,7 @@ See [Restore a backup](restore-a-backup.md) for the full restore flow.
 ## Recommended backup cadence
 
 - **Daily scheduled backup** — sufficient for most operators. Configure a `dbas_backup` task schedule in **Settings → Task Schedules**.
-- **Before any major change** — take a manual backup before reconfiguring M3U sources, bulk-editing channels, or running a major auto-creation rule change.
+- **Before any major change** — take a manual backup before reconfiguring M3U sources, bulk-editing channels, or running a major Channel Pipeline rule change.
 - **Before a restore** — always take a fresh backup of the current state before restoring an older artifact, so you can roll back if the restore does not produce the result you expected.
 
 ---

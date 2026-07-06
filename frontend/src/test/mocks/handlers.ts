@@ -548,7 +548,7 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/providers`, () => {
-    // Auto-creation condition UI fetches provider list for dropdowns.
+    // Channel Pipeline condition UI fetches provider list for dropdowns.
     const providers: MockProvider[] = [
       { id: 1, name: 'Test Provider 1' },
       { id: 2, name: 'Test Provider 2' },
@@ -902,7 +902,7 @@ export const handlers = [
   }),
 
   // -------------------------------------------------------------------------
-  // Auto-Creation Rules
+  // Channel Pipeline Rules
   // -------------------------------------------------------------------------
 
   http.get(`${API_BASE}/channel-pipeline/rules`, () => {
@@ -986,7 +986,7 @@ export const handlers = [
   }),
 
   // -------------------------------------------------------------------------
-  // Auto-Creation Validation & Schema
+  // Channel Pipeline Validation & Schema
   // -------------------------------------------------------------------------
 
   http.post(`${API_BASE}/channel-pipeline/validate`, async ({ request }) => {
@@ -1046,7 +1046,7 @@ export const handlers = [
   }),
 
   // -------------------------------------------------------------------------
-  // Auto-Creation Executions
+  // Channel Pipeline Executions
   // -------------------------------------------------------------------------
 
   http.get(`${API_BASE}/channel-pipeline/executions`, ({ request }) => {

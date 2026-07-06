@@ -5,7 +5,7 @@ Owner: SRE. Source: bd-eio04.1 (absorbs bd-eio04.4), under epic bd-eio04.
 ## What this runbook covers
 
 Starting with bd-eio04.1 (release that closes GH #104), the normalization
-engine's Test Rules preview path and its auto-creation execution path
+engine's Test Rules preview path and its Channel Pipeline execution path
 share a single `NormalizationPolicy`. Both paths apply identical Unicode
 preprocessing to every input:
 
@@ -25,7 +25,7 @@ preprocessing to every input:
 
 This is a **one-way-door** change for existing channel names: any
 channel created before the fix that carried `²`, `³`, or other numeric
-superscripts through auto-creation retains those glyphs. New channels
+superscripts through the Channel Pipeline retains those glyphs. New channels
 created after the fix will have ASCII digits instead.
 
 ## Configuration
@@ -43,7 +43,7 @@ restarting the container. No image rebuild required.
 **This is a rollback switch, not a feature toggle.** Flip it only if
 you hit one of the following:
 
-- A report that auto-creation is producing channel names that diverge
+- A report that the Channel Pipeline is producing channel names that diverge
   from what operators expect *because* of the new preprocessing (e.g. a
   downstream system that indexed `ESPN²` as the primary key).
 - A Unicode edge case you did not anticipate (the engineer's best
@@ -102,7 +102,7 @@ was started before the flag was set. Restart the container.
 If the "characters" are superscripts, BOM/ZWSP/ZWNJ/ZWJ, or NFD-form
 accents, this is the intended behavior — the fix corrected a
 long-running divergence. Explain to the user that Test Rules now
-matches what auto-creation produces, and their stored names will
+matches what the Channel Pipeline produces, and their stored names will
 converge on the canonical form as channels are recreated.
 
 If the characters are **bidi marks** (U+200F, U+202E), **ligatures**

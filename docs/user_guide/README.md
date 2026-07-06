@@ -27,7 +27,7 @@ Today the user guide is **operator-first**. End-user content is rare and clearly
 
 | If the content is… | It belongs in… |
 |-|-|
-| "How do I do X in the UI?" / "What does this rule type do?" / "Why did the auto-creation skip this stream?" | `docs/user_guide/` |
+| "How do I do X in the UI?" / "What does this rule type do?" / "Why did the Channel Pipeline skip this stream?" | `docs/user_guide/` |
 | HTTP method, path, request/response schema, error codes for an API endpoint | `docs/api.md` (the API reference, generated/maintained alongside the OpenAPI spec) |
 | "How do I deploy ECM in a container?" / "How does the request flow work?" | `docs/architecture.md`, `docs/project_architecture.md`, `docs/backend_architecture.md` |
 | "I got paged at 3 AM, what do I do?" | `docs/runbooks/` (operator-adjacent but written for the on-call responder under pressure, not the configuring operator) |
@@ -40,7 +40,7 @@ The rule of thumb: if the audience is "someone trying to **use** ECM to manage t
 
 - **Task-oriented titles.** "Connect ECM to Dispatcharr" beats "Dispatcharr Connection Settings." Verb-first. The reader is trying to do something.
 - **Open with the audience and the outcome.** First sentence: who this article is for and what they will be able to do when they finish it.
-- **Use the in-UI label, exactly.** If the tab is "Auto Creation" in the navigation, write *Auto Creation*, not *auto-creation* or *Auto-Create*. Terminology drift between docs and UI is a usability bug — the Tech Writer and UX Designer own consistency jointly. The DBAS feature is labelled **Backup & Restore** in the UI, per UX grooming, and should be called Backup & Restore in user-facing docs (the acronym DBAS only appears in dev docs and the threat model).
+- **Use the in-UI label, exactly.** If the tab is "Channel Pipeline" in the navigation, write *Channel Pipeline*, not *auto-creation* or *Auto-Create*. Terminology drift between docs and UI is a usability bug — the Tech Writer and UX Designer own consistency jointly. The DBAS feature is labelled **Backup & Restore** in the UI, per UX grooming, and should be called Backup & Restore in user-facing docs (the acronym DBAS only appears in dev docs and the threat model).
 - **Cross-link, don't duplicate.** If the developer reference for a feature already exists (e.g., `docs/normalization.md#developer-reference`, `docs/template_engine.md`), link to it from a "Going deeper" section rather than copying material.
 - **Screenshots live in `docs/images/user_guide/<section>/`.** Match the existing convention used by `docs/images/normalization/`. Refer to `docs/css_guidelines.md` if you need to take screenshots of UI surfaces with custom theming.
 - **Show the result.** Where a workflow has a verifiable end state (a new channel exists, a backup file appears, a setting takes effect), say what the user will see. "It works" is not a verification step — see `docs/_shared/engineering-discipline.md` style "Verification of Completion."
@@ -56,7 +56,7 @@ docs/user_guide/
 ├── index.md                      ← landing page + nav for users
 ├── getting-started/              ← first-run, install, Dispatcharr connect
 ├── channels-streams/             ← day-to-day channel & stream management
-├── auto-creation/                ← rule authoring, conditions/actions, bulk ops
+├── channel-pipeline/             ← rule authoring, conditions/actions, bulk ops
 ├── normalization/                ← naming patterns, apply-to-channels flow
 ├── epg/                          ← EPG sources, dummy EPG templates
 ├── stats/                        ← Stats tab (placeholder; bd-skqln.9)
@@ -70,8 +70,8 @@ Each subdirectory has its own `index.md` (section landing) and will accumulate p
 
 1. **Getting started** — nobody can do anything else until ECM can talk to Dispatcharr.
 2. **Channels & streams** — the core entity model. Everything else mutates these.
-3. **Auto-creation** — the first power feature an operator graduates into.
-4. **Normalization** — typically discovered when auto-creation produces names you don't like.
+3. **Channel Pipeline** — the first power feature an operator graduates into.
+4. **Normalization** — typically discovered when the Channel Pipeline produces names you don't like.
 5. **EPG** — needed once channels exist, but not blocking initial setup.
 6. **Stats** — observability of what ECM is doing. Useful but not on the critical path.
 7. **Backup & Restore** — disaster recovery. Critical, but read once and rarely.
@@ -79,8 +79,8 @@ Each subdirectory has its own `index.md` (section landing) and will accumulate p
 
 ## Adding a new article
 
-1. Create or claim a bead with a clear, task-oriented title (e.g., "Document how to clone an auto-creation rule").
-2. Drop the new file under the relevant section directory. Filename matches the article title in kebab-case: `clone-an-auto-creation-rule.md`.
+1. Create or claim a bead with a clear, task-oriented title (e.g., "Document how to clone a Channel Pipeline rule").
+2. Drop the new file under the relevant section directory. Filename matches the article title in kebab-case: `clone-a-channel-pipeline-rule.md`.
 3. Update that section's `index.md` to link the new article and place it in the appropriate sub-section of the section TOC.
 4. If the article introduces a new screenshot, save it under `docs/images/user_guide/<section>/` and reference with a relative path.
 5. Open a PR. Request review from both the Tech Writer (clarity, structure, terminology consistency) and the UX Designer (does the article match the user's mental model and the in-UI labels?).
@@ -94,7 +94,7 @@ Existing docs that complement (and are linked from) the user guide:
 |-|-|
 | getting-started | `README.md` (project root), `docs/architecture.md` (system overview, optional reading) |
 | channels-streams | `docs/api.md` (when an operator wants the API behind a UI action) |
-| auto-creation | `docs/api.md` (auto-creation router), eventual `analyze-rules` skill output |
+| channel-pipeline | `docs/api.md` (Channel Pipeline router), eventual `analyze-rules` skill output |
 | normalization | `docs/normalization.md` (the existing dual-audience guide — user guide section is a thinner, task-first wrapper that defers to the deep reference) |
 | epg | `docs/template_engine.md` (dummy EPG template syntax) |
 | stats | `docs/sre/slos.md` (operators curious about the SLO framing of what they see) |

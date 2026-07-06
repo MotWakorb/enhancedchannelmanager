@@ -118,7 +118,7 @@ Configure multiple XMLTV and Schedules Direct EPG sources with drag-and-drop pri
 ### TV Guide
 EPG grid view with now-playing highlights, date/time navigation, channel profile filtering, and click-to-edit channel metadata.
 
-### Auto-Creation Pipeline
+### Channel Pipeline
 A rules-based automation engine for channel creation, stream merging, and lifecycle management. Build complex conditions (stream name, group, quality, codec, normalized matching, etc.) with AND/OR logic, then define actions (create channel/group, merge streams, assign metadata, set variables, name transforms). Per-rule normalization group selection lets each rule apply specific normalization groups. Supports dry-run preview, execution rollback, YAML import/export, orphan reconciliation, and a diagnostic debug bundle for troubleshooting.
 
 ### Stream Health & Probing
@@ -144,7 +144,7 @@ In-app notification bell with history, active task pinning, and external alert m
 
 ## MCP Server (Claude Integration)
 
-ECM includes an MCP (Model Context Protocol) server: an optional sidecar container that exposes ECM's functionality to Claude — **Claude Desktop**, **Claude Code**, or any MCP-capable client — so you can manage your install in plain language instead of clicking through the UI. **130 tools across 14 domains** (channels, channel groups, streams, M3U accounts, EPG sources, auto-creation, scheduled tasks, stats, system/backup, notifications, profiles, normalization, deduplication, Emby integration), plus an `overview` resource that gives Claude a one-shot snapshot of your install.
+ECM includes an MCP (Model Context Protocol) server: an optional sidecar container that exposes ECM's functionality to Claude — **Claude Desktop**, **Claude Code**, or any MCP-capable client — so you can manage your install in plain language instead of clicking through the UI. **130 tools across 14 domains** (channels, channel groups, streams, M3U accounts, EPG sources, channel pipeline, scheduled tasks, stats, system/backup, notifications, profiles, normalization, deduplication, Emby integration), plus an `overview` resource that gives Claude a one-shot snapshot of your install.
 
 Everything Claude does runs against your live ECM through the API — it's the same operations the UI performs, just driven by conversation. Mutating actions report the resulting state back (e.g. the new channel's group and number) so you can confirm the change took effect.
 
@@ -159,12 +159,12 @@ Things you can ask Claude to do:
 - "Renumber the News group starting at 200"
 - "Build a channel lineup from this list of names and fuzzy-match streams to each"
 
-**Auto-creation**
-- "Run the auto-creation pipeline and tell me what it created"
-- "Analyze my auto-creation rules and flag anything misconfigured" — the Rule Analyzer catches regex/structural mistakes (`UK|` that matches everything, `^4K` typed under *Contains* that matches nothing, double-escape typos, OR-arms missing a group guard, merges into empty groups) without running the rule
+**Channel Pipeline**
+- "Run the Channel Pipeline and tell me what it created"
+- "Analyze my Channel Pipeline rules and flag anything misconfigured" — the Rule Analyzer catches regex/structural mistakes (`UK|` that matches everything, `^4K` typed under *Contains* that matches nothing, double-escape typos, OR-arms missing a group guard, merges into empty groups) without running the rule
 - "Create a rule that auto-creates channels for any stream whose name contains 'PPV', into the Events group"
 - "Why didn't the 4K Sports rule match anything?" — Claude can pull a debug bundle and analyze it
-- "Clear all the channels that auto-creation made in the Test group"
+- "Clear all the channels that the Channel Pipeline made in the Test group"
 
 **M3U & EPG**
 - "Refresh all my M3U accounts and report any failures"
@@ -272,7 +272,7 @@ To connect:
 1. Create the `.mcp.json` file above in your project root (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`)
 2. Start Claude Code in that directory — it auto-detects `.mcp.json` on launch
 3. Run `/mcp` to reconnect if the MCP server restarts
-4. Ask Claude to manage your channels — e.g. "list my channels", "create an auto-creation rule for sports", "probe all streams"
+4. Ask Claude to manage your channels — e.g. "list my channels", "create a Channel Pipeline rule for sports", "probe all streams"
 
 If running ECM locally, use `localhost` as your host. If the MCP container is on the same Docker network as Claude Code, use the container name (`ecm-mcp`).
 
@@ -363,21 +363,22 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `remove_sd_lineup` | Remove a Schedules Direct lineup from the account |
 | `list_dummy_epg_profiles` | List dummy EPG profiles |
 | `generate_dummy_epg` | Regenerate dummy EPG XMLTV data |
-| **Auto-Creation (14)** | |
-| `list_auto_creation_rules` | List all rules |
-| `get_auto_creation_rule` | Get rule details (conditions, actions, normalization groups, sort config) |
-| `create_auto_creation_rule` | Create a rule with conditions, actions, and per-rule normalization groups |
-| `update_auto_creation_rule` | Update an existing rule (supports normalization_group_ids) |
-| `delete_auto_creation_rule` | Delete a rule |
-| `toggle_auto_creation_rule` | Enable/disable a rule |
-| `duplicate_auto_creation_rule` | Duplicate a rule |
-| `run_auto_creation` | Run pipeline (dry_run=true by default) |
-| `list_auto_creation_executions` | View execution history |
-| `rollback_auto_creation` | Undo an execution |
-| `restore_auto_creation_snapshot` | Full whole-run revert of an auto-creation run from its pre-run snapshot |
-| `analyze_auto_creation_rules` | Lint and structurally analyze auto-creation rules |
-| `get_auto_creation_debug_bundle` | Info about the diagnostic debug bundle for troubleshooting |
-| `bulk_toggle_auto_creation_rules` | Toggle multiple rules at once |
+| **Channel Pipeline (14)** | |
+| | *Deprecated alias: every tool below is also callable under its old `*_auto_creation_*` name (e.g. `run_auto_creation`, `list_auto_creation_rules`). The alias forwards to the same handler and continues to work, but is hidden from new-tool listings — use the canonical `channel_pipeline`-named tools shown here.* |
+| `list_channel_pipeline_rules` | List all rules |
+| `get_channel_pipeline_rule` | Get rule details (conditions, actions, normalization groups, sort config) |
+| `create_channel_pipeline_rule` | Create a rule with conditions, actions, and per-rule normalization groups |
+| `update_channel_pipeline_rule` | Update an existing rule (supports normalization_group_ids) |
+| `delete_channel_pipeline_rule` | Delete a rule |
+| `toggle_channel_pipeline_rule` | Enable/disable a rule |
+| `duplicate_channel_pipeline_rule` | Duplicate a rule |
+| `run_channel_pipeline` | Run pipeline (dry_run=true by default) |
+| `list_channel_pipeline_executions` | View execution history |
+| `rollback_channel_pipeline` | Undo an execution |
+| `restore_channel_pipeline_snapshot` | Full whole-run revert of a Channel Pipeline run from its pre-run snapshot |
+| `analyze_channel_pipeline_rules` | Lint and structurally analyze Channel Pipeline rules |
+| `get_channel_pipeline_debug_bundle` | Info about the diagnostic debug bundle for troubleshooting |
+| `bulk_toggle_channel_pipeline_rules` | Toggle multiple rules at once |
 | **Tasks (7)** | |
 | `list_tasks` | List scheduled tasks and status |
 | `run_task` | Run a task immediately |

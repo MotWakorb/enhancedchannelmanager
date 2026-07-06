@@ -24,7 +24,7 @@ The version literal is hand-edited in **three** files. All three must move in lo
 | File | Line shape | Read by | Why it exists |
 | --- | --- | --- | --- |
 | [`frontend/package.json`](../frontend/package.json) | `"version": "X.Y.Z-NNNN"` | `build.yml` (`jq -r .version` → `ECM_VERSION` build-arg → `/api/version` env, UI footer, Docker label) | Canonical source. Baked into the image. |
-| [`backend/routers/backup.py`](../backend/routers/backup.py) | `APP_VERSION = "X.Y.Z-NNNN"` | Backup-export manifest (`version` field); also re-imported by `routers/auto_creation.py` for the rule-export `ecm_version` field | Stamps backups with the version that produced them so DBAS restore can gate on the source version. |
+| [`backend/routers/backup.py`](../backend/routers/backup.py) | `APP_VERSION = "X.Y.Z-NNNN"` | Backup-export manifest (`version` field); also re-imported by `routers/channel_pipeline.py` for the rule-export `ecm_version` field | Stamps backups with the version that produced them so DBAS restore can gate on the source version. |
 | [`backend/main.py`](../backend/main.py) | `version="X.Y.Z-NNNN"` (kwarg to `FastAPI(...)`) | OpenAPI schema (`/api/openapi.json` → `info.version`) | Surfaces in the auto-generated docs at `/api/docs`. Picked up by API-contract tests that diff the schema. |
 
 When you add a fourth touchpoint:
@@ -44,7 +44,7 @@ An initial `0.16.0` build was tagged and pushed to GHCR on 2026-04-20 and then *
 
 **0.16.0 was successfully re-cut and shipped on 2026-05-12.** The shipping release incorporates everything that was intended for the first attempt plus the blocking bug fixes; see the `## [0.16.0]` entry in [`CHANGELOG.md`](../CHANGELOG.md). The `v0.16.0` tag and GHCR image from that date are the canonical promoted release — the 2026-04-20 rollback was the first attempt only, not a permanent yank of the 0.16.x line.
 
-Three further releases have since been promoted: **0.17.0** (2026-05-16), **0.17.1** (2026-05-22), and **0.17.2** (2026-05-23). `dev` now increments `BUILD` toward the next planned release as `0.17.3-NNNN` (tip is `0.17.3-0000`) — a 0.17.x patch line carrying auto-creation stability fixes ahead of the larger 0.18.0 work. External users running `0.17.3-NNNN` images are on dev builds, not a promoted release; the `[Unreleased]` section of [`CHANGELOG.md`](../CHANGELOG.md) is the canonical list of fixes awaiting the next cut.
+Three further releases have since been promoted: **0.17.0** (2026-05-16), **0.17.1** (2026-05-22), and **0.17.2** (2026-05-23). `dev` now increments `BUILD` toward the next planned release as `0.17.3-NNNN` (tip is `0.17.3-0000`) — a 0.17.x patch line carrying Channel Pipeline stability fixes ahead of the larger 0.18.0 work. External users running `0.17.3-NNNN` images are on dev builds, not a promoted release; the `[Unreleased]` section of [`CHANGELOG.md`](../CHANGELOG.md) is the canonical list of fixes awaiting the next cut.
 
 ## Where to read the version
 
