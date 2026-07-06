@@ -1,20 +1,34 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { TabId } from '../components/TabNavigation';
 
-export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'integrations' | 'scheduled-tasks' | 'auto-creation' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'security' | 'backup-restore';
+export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'integrations' | 'scheduled-tasks' | 'channel-pipeline' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'security' | 'backup-restore';
 
 const VALID_TABS: Set<string> = new Set([
   'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
-  'logo-manager', 'm3u-changes', 'auto-creation', 'journal',
+  'logo-manager', 'm3u-changes', 'channel-pipeline', 'journal',
   'stats', 'settings',
 ]);
 
 const VALID_SETTINGS_PAGES: Set<string> = new Set([
   'general', 'channel-defaults', 'normalization', 'tag-engine', 'lookup-tables',
-  'appearance', 'email', 'integrations', 'scheduled-tasks', 'auto-creation',
+  'appearance', 'email', 'integrations', 'scheduled-tasks', 'channel-pipeline',
   'm3u-digest', 'maintenance', 'linked-accounts', 'auth-settings',
   'user-management', 'tls-settings', 'mcp-settings', 'backup-restore',
 ]);
+
+/**
+ * Legacy hash values from before the Auto-Creation → Channel Pipeline rename
+ * (enhancedchannelmanager-3udrl phase 4). Bookmarked/shared URLs using the old
+ * tab id or settings sub-page must keep resolving to the renamed destination
+ * instead of silently falling back to the default tab.
+ */
+const LEGACY_TAB_ALIASES: Record<string, TabId> = {
+  'auto-creation': 'channel-pipeline',
+};
+
+const LEGACY_SETTINGS_PAGE_ALIASES: Record<string, SettingsPage> = {
+  'auto-creation': 'channel-pipeline',
+};
 
 const DEFAULT_TAB: TabId = 'channel-manager';
 
@@ -31,6 +45,9 @@ function parseHash(hash: string): HashRoute {
   // Check for settings/sub-page format
   if (raw.startsWith('settings/')) {
     const subPage = raw.slice('settings/'.length);
+    if (subPage in LEGACY_SETTINGS_PAGE_ALIASES) {
+      return { tab: 'settings', settingsPage: LEGACY_SETTINGS_PAGE_ALIASES[subPage] };
+    }
     if (VALID_SETTINGS_PAGES.has(subPage)) {
       return { tab: 'settings', settingsPage: subPage as SettingsPage };
     }
@@ -40,6 +57,10 @@ function parseHash(hash: string): HashRoute {
 
   if (raw === 'settings') {
     return { tab: 'settings', settingsPage: null };
+  }
+
+  if (raw in LEGACY_TAB_ALIASES) {
+    return { tab: LEGACY_TAB_ALIASES[raw], settingsPage: null };
   }
 
   if (VALID_TABS.has(raw)) {

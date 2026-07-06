@@ -78,7 +78,7 @@ export function NotificationCenter({
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [restartingFromNotification, setRestartingFromNotification] = useState<number | null>(null);
-  // Ticking "now" timestamp used by hasActiveAutoCreation freshness check.
+  // Ticking "now" timestamp used by hasActiveChannelPipeline freshness check.
   // Kept in state (not Date.now() in render) so the memo remains pure --
   // satisfies react-hooks/purity. Updated on a 10s interval below.
   const [now, setNow] = useState(() => Date.now());
@@ -187,11 +187,11 @@ export function NotificationCenter({
     });
   }, [notifications]);
 
-  // Check if auto-creation is in progress (has "Starting" but no completion yet within 2 minutes)
-  const hasActiveAutoCreation = useMemo(() => {
-    const autoCreationNotifs = notifications.filter(n => n.source === 'auto_creation');
-    if (autoCreationNotifs.length === 0) return false;
-    const latest = autoCreationNotifs[0]; // sorted by newest first from API
+  // Check if the channel pipeline is in progress (has "Starting" but no completion yet within 2 minutes)
+  const hasActiveChannelPipeline = useMemo(() => {
+    const channelPipelineNotifs = notifications.filter(n => n.source === 'auto_creation');
+    if (channelPipelineNotifs.length === 0) return false;
+    const latest = channelPipelineNotifs[0]; // sorted by newest first from API
     const isStarting = latest.title?.includes('Starting');
     if (!isStarting) return false;
     // Only consider active if within last 2 minutes. `now` is state that
@@ -202,7 +202,7 @@ export function NotificationCenter({
   }, [notifications, now]);
 
   // Tick `now` every 10s so the 2-minute freshness window in
-  // hasActiveAutoCreation re-evaluates without violating render purity.
+  // hasActiveChannelPipeline re-evaluates without violating render purity.
   // 10s is well below the 2-minute window and the slowest poll interval,
   // so no perceptible lag.
   useEffect(() => {
@@ -210,14 +210,14 @@ export function NotificationCenter({
     return () => clearInterval(tick);
   }, []);
 
-  // Load on mount and periodically - faster when probe or auto-creation is running
+  // Load on mount and periodically - faster when probe or the channel pipeline is running
   useEffect(() => {
     loadNotifications(true); // Show loading spinner on initial load only
-    // Poll every 2 seconds when probe is running, 5s for auto-creation, otherwise every 30 seconds
-    const pollInterval = hasActiveProbe ? 2000 : hasActiveAutoCreation ? 5000 : 30000;
+    // Poll every 2 seconds when probe is running, 5s for the channel pipeline, otherwise every 30 seconds
+    const pollInterval = hasActiveProbe ? 2000 : hasActiveChannelPipeline ? 5000 : 30000;
     const interval = setInterval(() => loadNotifications(false), pollInterval);
     return () => clearInterval(interval);
-  }, [loadNotifications, hasActiveProbe, hasActiveAutoCreation]);
+  }, [loadNotifications, hasActiveProbe, hasActiveChannelPipeline]);
 
   // Close panel when clicking outside
   useEffect(() => {

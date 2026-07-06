@@ -1,33 +1,33 @@
 /**
- * Hook for managing auto-creation pipeline execution state.
+ * Hook for managing channel pipeline execution state.
  *
  * Provides run, rollback, and execution history operations.
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type {
-  AutoCreationExecution,
+  ChannelPipelineExecution,
   ExecutionStatus,
   RunPipelineResponse,
   RollbackResponse,
-} from '../types/autoCreation';
-import * as api from '../services/autoCreationApi';
+} from '../types/channelPipeline';
+import * as api from '../services/channelPipelineApi';
 
 // ExecutionStatus is referenced both at value-position (the TERMINAL list
 // inside pollExecutionUntilTerminal) and at type-position; keeping a single
 // type-only import is fine because TS erases the array element type at runtime.
 
-export interface UseAutoCreationExecutionOptions {
+export interface UseChannelPipelineExecutionOptions {
   /** Auto-refresh interval in milliseconds (0 to disable) */
   autoRefreshInterval?: number;
 }
 
-export interface UseAutoCreationExecutionResult {
+export interface UseChannelPipelineExecutionResult {
   /** List of executions */
-  executions: AutoCreationExecution[];
+  executions: ChannelPipelineExecution[];
   /** Total number of executions (for pagination) */
   total: number;
   /** Currently selected execution */
-  currentExecution: AutoCreationExecution | null;
+  currentExecution: ChannelPipelineExecution | null;
   /** Loading state */
   loading: boolean;
   /** Error message */
@@ -37,15 +37,15 @@ export interface UseAutoCreationExecutionResult {
   /** Fetch execution history */
   fetchExecutions: (params?: { limit?: number; offset?: number; status?: string }) => Promise<void>;
   /** Get a single execution by ID */
-  getExecution: (id: number) => Promise<AutoCreationExecution | undefined>;
+  getExecution: (id: number) => Promise<ChannelPipelineExecution | undefined>;
   /** Run the pipeline */
   runPipeline: (options?: { dryRun?: boolean; ruleIds?: number[] }) => Promise<RunPipelineResponse | undefined>;
   /** Rollback an execution */
   rollback: (id: number) => Promise<RollbackResponse | undefined>;
   /** Get the most recent execution */
-  getLatestExecution: () => AutoCreationExecution | undefined;
+  getLatestExecution: () => ChannelPipelineExecution | undefined;
   /** Get executions filtered by status */
-  getExecutionsByStatus: (status: ExecutionStatus) => AutoCreationExecution[];
+  getExecutionsByStatus: (status: ExecutionStatus) => ChannelPipelineExecution[];
   /** Clear the current execution selection */
   clearCurrentExecution: () => void;
   /** Check if an execution can be rolled back */
@@ -64,14 +64,14 @@ export interface UseAutoCreationExecutionResult {
   stopAutoRefresh: () => void;
 }
 
-export function useAutoCreationExecution(
-  options: UseAutoCreationExecutionOptions = {}
-): UseAutoCreationExecutionResult {
+export function useChannelPipelineExecution(
+  options: UseChannelPipelineExecutionOptions = {}
+): UseChannelPipelineExecutionResult {
   const { autoRefreshInterval = 0 } = options;
 
-  const [executions, setExecutions] = useState<AutoCreationExecution[]>([]);
+  const [executions, setExecutions] = useState<ChannelPipelineExecution[]>([]);
   const [total, setTotal] = useState(0);
-  const [currentExecution, setCurrentExecution] = useState<AutoCreationExecution | null>(null);
+  const [currentExecution, setCurrentExecution] = useState<ChannelPipelineExecution | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -92,7 +92,7 @@ export function useAutoCreationExecution(
     }
     setError(null);
     try {
-      const response = await api.getAutoCreationExecutions(params);
+      const response = await api.getChannelPipelineExecutions(params);
       setExecutions(response.executions);
       setTotal(response.total);
       hasFetchedRef.current = true;
@@ -103,11 +103,11 @@ export function useAutoCreationExecution(
     }
   }, []);
 
-  const getExecution = useCallback(async (id: number): Promise<AutoCreationExecution | undefined> => {
+  const getExecution = useCallback(async (id: number): Promise<ChannelPipelineExecution | undefined> => {
     setLoading(true);
     setError(null);
     try {
-      const execution = await api.getAutoCreationExecution(id);
+      const execution = await api.getChannelPipelineExecution(id);
       setCurrentExecution(execution);
       return execution;
     } catch (err) {
@@ -131,7 +131,7 @@ export function useAutoCreationExecution(
   const pollExecutionUntilTerminal = useCallback(async (
     executionId: number,
     signal?: AbortSignal,
-  ): Promise<AutoCreationExecution | undefined> => {
+  ): Promise<ChannelPipelineExecution | undefined> => {
     // Tunables — small and steady; backend status writes are cheap GETs.
     const POLL_INTERVAL_MS = 1000;
     const MAX_POLL_DURATION_MS = 30 * 60 * 1000; // 30 minutes safety cap
@@ -140,9 +140,9 @@ export function useAutoCreationExecution(
 
     while (true) {
       if (signal?.aborted) return undefined;
-      let snapshot: AutoCreationExecution | undefined;
+      let snapshot: ChannelPipelineExecution | undefined;
       try {
-        snapshot = await api.getAutoCreationExecution(executionId);
+        snapshot = await api.getChannelPipelineExecution(executionId);
       } catch {
         // Transient fetch failure — fall through to retry until cap.
         snapshot = undefined;
@@ -186,7 +186,7 @@ export function useAutoCreationExecution(
       // bd-enfsy: backend returns 202 with execution_id and runs the pipeline
       // in a supervised background task. Poll until terminal so the caller
       // (and the existing isRunning UI flag) still sees a "done" signal.
-      const enqueued = await api.runAutoCreationPipeline({
+      const enqueued = await api.runChannelPipeline({
         dryRun: options?.dryRun,
         ruleIds: options?.ruleIds,
       });
@@ -219,7 +219,7 @@ export function useAutoCreationExecution(
   const rollback = useCallback(async (id: number): Promise<RollbackResponse | undefined> => {
     setError(null);
     try {
-      const response = await api.rollbackAutoCreationExecution(id);
+      const response = await api.rollbackChannelPipelineExecution(id);
       // Refresh executions to update status
       await fetchExecutions();
       return response;
@@ -229,14 +229,14 @@ export function useAutoCreationExecution(
     }
   }, [fetchExecutions]);
 
-  const getLatestExecution = useCallback((): AutoCreationExecution | undefined => {
+  const getLatestExecution = useCallback((): ChannelPipelineExecution | undefined => {
     if (executions.length === 0) return undefined;
     return [...executions].sort((a, b) =>
       new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
     )[0];
   }, [executions]);
 
-  const getExecutionsByStatus = useCallback((status: ExecutionStatus): AutoCreationExecution[] => {
+  const getExecutionsByStatus = useCallback((status: ExecutionStatus): ChannelPipelineExecution[] => {
     return executions.filter(e => e.status === status);
   }, [executions]);
 

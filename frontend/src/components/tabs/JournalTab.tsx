@@ -66,7 +66,7 @@ function formatCategory(category: JournalCategory): string {
     case 'task':
       return 'Task';
     case 'auto_creation':
-      return 'Auto-Creation';
+      return 'Channel Pipeline';
     default:
       return category;
   }
@@ -82,7 +82,7 @@ function formatMutationSource(source: MutationSource | null | undefined): string
     case 'scheduler':
       return 'Scheduler';
     case 'auto_creation':
-      return 'Auto-creation';
+      return 'Channel Pipeline';
     default:
       return '—';
   }
@@ -221,7 +221,7 @@ export function JournalTab() {
                 <span className="material-icons">stop_circle</span>
                 {stats.by_action_type.stop || 0}
               </span>
-              <span className="header-stat" title="Auto-Creation entries">
+              <span className="header-stat" title="Channel Pipeline entries">
                 <span className="material-icons">auto_fix_high</span>
                 {stats.by_category.auto_creation || 0}
               </span>
@@ -269,7 +269,7 @@ export function JournalTab() {
             { value: 'm3u', label: 'M3U' },
             { value: 'task', label: 'Task' },
             { value: 'watch', label: 'Watch' },
-            { value: 'auto_creation', label: 'Auto-Creation' },
+            { value: 'auto_creation', label: 'Channel Pipeline' },
           ]}
         />
         <CustomSelect
@@ -299,7 +299,7 @@ export function JournalTab() {
             { value: 'ui', label: 'UI' },
             { value: 'mcp_ai', label: 'AI' },
             { value: 'scheduler', label: 'Scheduler' },
-            { value: 'auto_creation', label: 'Auto-creation' },
+            { value: 'auto_creation', label: 'Channel Pipeline' },
           ]}
         />
       </div>

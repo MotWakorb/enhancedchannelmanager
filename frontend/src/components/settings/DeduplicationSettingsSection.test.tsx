@@ -28,9 +28,9 @@ vi.mock('../../services/api', () => ({
   listSavedBackups: vi.fn(),
 }));
 
-vi.mock('../../services/autoCreationApi', () => ({
-  getAutoCreationRules: vi.fn(),
-  getAutoCreationGroups: vi.fn(),
+vi.mock('../../services/channelPipelineApi', () => ({
+  getChannelPipelineRules: vi.fn(),
+  getChannelPipelineGroups: vi.fn(),
   generateAndFetchDebugBundle: vi.fn(),
 }));
 

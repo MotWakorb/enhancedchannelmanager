@@ -135,7 +135,7 @@ describe('JournalTab', () => {
       expect(texts).toContain('Scheduler');
     });
 
-    it('renders Auto-creation label for source=auto_creation', async () => {
+    it('renders Channel Pipeline label for source=auto_creation', async () => {
       vi.mocked(api.getJournalEntries).mockResolvedValue(
         mockResponse([makeEntry({ mutation_source: 'auto_creation' })])
       );
@@ -148,7 +148,7 @@ describe('JournalTab', () => {
 
       const badges = document.querySelectorAll('.source-badge');
       const texts = Array.from(badges).map((b) => b.textContent);
-      expect(texts).toContain('Auto-creation');
+      expect(texts).toContain('Channel Pipeline');
     });
 
     it('renders — for null mutation_source (legacy entries)', async () => {

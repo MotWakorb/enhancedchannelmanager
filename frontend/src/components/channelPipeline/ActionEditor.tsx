@@ -1,8 +1,8 @@
 /**
- * Component for editing individual actions in auto-creation rules.
+ * Component for editing individual actions in channel pipeline rules.
  */
 import { useState, useId, useEffect } from 'react';
-import type { Action, ActionType, IfExistsBehavior } from '../../types/autoCreation';
+import type { Action, ActionType, IfExistsBehavior } from '../../types/channelPipeline';
 import { getChannelGroups, getEPGSources, getStreamProfiles, getChannelProfiles } from '../../services/api';
 import type { EPGSource, StreamProfile, ChannelProfile } from '../../types';
 import { CustomSelect } from '../CustomSelect';

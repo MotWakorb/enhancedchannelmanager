@@ -1,7 +1,7 @@
 /**
- * TDD Tests for AutoCreationTab component.
+ * TDD Tests for ChannelPipelineTab component.
  *
- * These tests define the expected behavior of the main auto-creation tab BEFORE implementation.
+ * These tests define the expected behavior of the main channel pipeline tab BEFORE implementation.
  */
 import type * as React from 'react';
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
@@ -12,10 +12,10 @@ import {
   server,
   mockDataStore,
   resetMockDataStore,
-  createMockAutoCreationRule,
-  createMockAutoCreationExecution,
+  createMockChannelPipelineRule,
+  createMockChannelPipelineExecution,
 } from '../../test/mocks/server';
-import { AutoCreationTab } from './AutoCreationTab';
+import { ChannelPipelineTab } from './ChannelPipelineTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import { AuthProvider } from '../../hooks/useAuth';
 
@@ -34,29 +34,29 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-describe('AutoCreationTab', () => {
+describe('ChannelPipelineTab', () => {
   describe('rendering', () => {
-    it('renders the auto-creation tab container', () => {
-      renderWithProviders(<AutoCreationTab />);
+    it('renders the channel pipeline tab container', () => {
+      renderWithProviders(<ChannelPipelineTab />);
 
-      expect(screen.getByTestId('auto-creation-tab')).toBeInTheDocument();
+      expect(screen.getByTestId('channel-pipeline-tab')).toBeInTheDocument();
     });
 
     it('renders tab header with title', () => {
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
-      expect(screen.getByRole('heading', { name: /auto.*creation/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Channel Pipeline' })).toBeInTheDocument();
     });
 
     it('renders rules section and execution section', () => {
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       expect(screen.getByRole('heading', { name: /^rules$/i })).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: /execution/i })).toBeInTheDocument();
     });
 
     it('renders action buttons', () => {
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       expect(screen.getByRole('button', { name: /create rule/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^run$/i })).toBeInTheDocument();
@@ -66,13 +66,13 @@ describe('AutoCreationTab', () => {
 
   describe('rules list', () => {
     it('displays list of rules', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Rule 1' }),
-        createMockAutoCreationRule({ name: 'Rule 2' }),
-        createMockAutoCreationRule({ name: 'Rule 3' })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Rule 1' }),
+        createMockChannelPipelineRule({ name: 'Rule 2' }),
+        createMockChannelPipelineRule({ name: 'Rule 3' })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Rule 1')).toBeInTheDocument();
@@ -82,7 +82,7 @@ describe('AutoCreationTab', () => {
     });
 
     it('shows empty state when no rules exist', async () => {
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText(/no rules/i)).toBeInTheDocument();
@@ -90,12 +90,12 @@ describe('AutoCreationTab', () => {
     });
 
     it('shows rule enabled/disabled status', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Enabled Rule', enabled: true }),
-        createMockAutoCreationRule({ name: 'Disabled Rule', enabled: false })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Enabled Rule', enabled: true }),
+        createMockChannelPipelineRule({ name: 'Disabled Rule', enabled: false })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         const enabledRow = screen.getByText('Enabled Rule').closest('tr');
@@ -111,12 +111,12 @@ describe('AutoCreationTab', () => {
     });
 
     it('shows rule priority', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'High Priority', priority: 1 }),
-        createMockAutoCreationRule({ name: 'Low Priority', priority: 100 })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'High Priority', priority: 1 }),
+        createMockChannelPipelineRule({ name: 'Low Priority', priority: 100 })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         const highRow = screen.getByText('High Priority').closest('tr');
@@ -125,11 +125,11 @@ describe('AutoCreationTab', () => {
     });
 
     it('shows rule match count', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Popular Rule', match_count: 150 })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Popular Rule', match_count: 150 })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         // Match count appears in multiple places; just verify at least one exists
@@ -139,13 +139,13 @@ describe('AutoCreationTab', () => {
     });
 
     it('sorts rules by priority by default', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Third', priority: 30 }),
-        createMockAutoCreationRule({ name: 'First', priority: 10 }),
-        createMockAutoCreationRule({ name: 'Second', priority: 20 })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Third', priority: 30 }),
+        createMockChannelPipelineRule({ name: 'First', priority: 10 }),
+        createMockChannelPipelineRule({ name: 'Second', priority: 20 })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         const rows = screen.getAllByRole('row').slice(1); // Skip header row
@@ -159,10 +159,10 @@ describe('AutoCreationTab', () => {
   describe('rule actions', () => {
     it('allows toggling rule enabled state', async () => {
       const user = userEvent.setup();
-      const rule = createMockAutoCreationRule({ name: 'Test Rule', enabled: true });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ name: 'Test Rule', enabled: true });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Test Rule')).toBeInTheDocument();
@@ -178,10 +178,10 @@ describe('AutoCreationTab', () => {
 
     it('allows editing a rule', async () => {
       const user = userEvent.setup();
-      const rule = createMockAutoCreationRule({ name: 'Editable Rule' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ name: 'Editable Rule' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Editable Rule')).toBeInTheDocument();
@@ -199,10 +199,10 @@ describe('AutoCreationTab', () => {
 
     it('allows deleting a rule', async () => {
       const user = userEvent.setup();
-      const rule = createMockAutoCreationRule({ name: 'Deletable Rule' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ name: 'Deletable Rule' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Deletable Rule')).toBeInTheDocument();
@@ -224,10 +224,10 @@ describe('AutoCreationTab', () => {
 
     it('allows duplicating a rule', async () => {
       const user = userEvent.setup();
-      const rule = createMockAutoCreationRule({ name: 'Original Rule' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ name: 'Original Rule' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Original Rule')).toBeInTheDocument();
@@ -244,7 +244,7 @@ describe('AutoCreationTab', () => {
   describe('create rule', () => {
     it('opens rule builder when create button clicked', async () => {
       const user = userEvent.setup();
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await user.click(screen.getByRole('button', { name: /create rule/i }));
 
@@ -256,7 +256,7 @@ describe('AutoCreationTab', () => {
 
     it('adds new rule to list after creation', async () => {
       const user = userEvent.setup();
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await user.click(screen.getByRole('button', { name: /create rule/i }));
 
@@ -285,11 +285,11 @@ describe('AutoCreationTab', () => {
   describe('run pipeline', () => {
     it('runs pipeline in execute mode', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Active Rule', enabled: true })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Active Rule', enabled: true })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Active Rule')).toBeInTheDocument();
@@ -306,11 +306,11 @@ describe('AutoCreationTab', () => {
 
     it('runs pipeline in dry-run mode', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Active Rule', enabled: true })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Active Rule', enabled: true })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Active Rule')).toBeInTheDocument();
@@ -326,13 +326,13 @@ describe('AutoCreationTab', () => {
 
     it('shows loading state during execution', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ enabled: true })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ enabled: true })
       );
 
       // Override the run handler to delay the response long enough for the test to observe
       server.use(
-        http.post('/api/auto-creation/run', async () => {
+        http.post('/api/channel-pipeline/run', async () => {
           await new Promise(resolve => setTimeout(resolve, 1000));
           return HttpResponse.json({
             success: true,
@@ -352,7 +352,7 @@ describe('AutoCreationTab', () => {
         })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /^run$/i })).toBeInTheDocument();
@@ -368,11 +368,11 @@ describe('AutoCreationTab', () => {
     });
 
     it('disables run buttons when no enabled rules exist', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ enabled: false })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ enabled: false })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /^run$/i })).toBeDisabled();
@@ -386,12 +386,12 @@ describe('AutoCreationTab', () => {
 
   describe('execution history', () => {
     it('displays execution history', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', channels_created: 5 }),
-        createMockAutoCreationExecution({ status: 'completed', channels_created: 3 })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', channels_created: 5 }),
+        createMockChannelPipelineExecution({ status: 'completed', channels_created: 3 })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       // Click to show history
       await waitFor(() => {
@@ -401,13 +401,13 @@ describe('AutoCreationTab', () => {
     });
 
     it('shows execution status badges', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed' }),
-        createMockAutoCreationExecution({ status: 'failed' }),
-        createMockAutoCreationExecution({ status: 'rolled_back' })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed' }),
+        createMockChannelPipelineExecution({ status: 'failed' }),
+        createMockChannelPipelineExecution({ status: 'rolled_back' })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText(/completed/i)).toBeInTheDocument();
@@ -418,11 +418,11 @@ describe('AutoCreationTab', () => {
 
     it('allows viewing execution details', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ streams_matched: 25, channels_created: 10 })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ streams_matched: 25, channels_created: 10 })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
@@ -444,8 +444,8 @@ describe('AutoCreationTab', () => {
       // normalization group must show a prominent, actionable warning so the
       // operator knows normalization silently applied nothing.
       const user = userEvent.setup();
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
           streams_matched: 25,
           channels_created: 0,
           warnings: [
@@ -460,7 +460,7 @@ describe('AutoCreationTab', () => {
         }),
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
@@ -478,11 +478,11 @@ describe('AutoCreationTab', () => {
 
     it('does not show the normalization warning when there are no warnings', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ streams_matched: 25, channels_created: 10 }),
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ streams_matched: 25, channels_created: 10 }),
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
@@ -497,11 +497,11 @@ describe('AutoCreationTab', () => {
 
     it('allows rolling back an execution', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', mode: 'execute' })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute' })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /rollback/i })).toBeInTheDocument();
@@ -522,11 +522,11 @@ describe('AutoCreationTab', () => {
     });
 
     it('disables rollback for dry-run executions', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', mode: 'dry_run' })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'dry_run' })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         const rollbackBtn = screen.queryByRole('button', { name: /rollback/i });
@@ -537,11 +537,11 @@ describe('AutoCreationTab', () => {
 
   describe('snapshot revert affordance (ADR-010 uc51o.7)', () => {
     it('shows the revert button when has_snapshot is true', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
@@ -549,11 +549,11 @@ describe('AutoCreationTab', () => {
     });
 
     it('hides the revert button when has_snapshot is false', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: false })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: false })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         // Execution item should appear
@@ -566,11 +566,11 @@ describe('AutoCreationTab', () => {
     it('hides the revert button for dry-run executions even with a snapshot', async () => {
       // dry-run executions never get a snapshot (ADR-010 §D2), so this combo
       // should not arise in production — but the UI must still be safe.
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', mode: 'dry_run', has_snapshot: true })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'dry_run', has_snapshot: true })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.queryByRole('button', { name: /undo this run/i })).toBeNull();
@@ -579,11 +579,11 @@ describe('AutoCreationTab', () => {
 
     it('opens the confirm dialog with the overwrite warning when revert is clicked', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
@@ -603,17 +603,17 @@ describe('AutoCreationTab', () => {
       const user = userEvent.setup();
       let restoreCalled = false;
       server.use(
-        http.post('/api/auto-creation/executions/:id/restore-snapshot', () => {
+        http.post('/api/channel-pipeline/executions/:id/restore-snapshot', () => {
           restoreCalled = true;
           return HttpResponse.json({ success: true, removed_channels: 0, restored_channels: 0, failed_channels: [] });
         })
       );
 
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
@@ -636,8 +636,8 @@ describe('AutoCreationTab', () => {
 
     it('calls restore-snapshot with confirm=true and shows result summary on confirm', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
           status: 'completed',
           mode: 'execute',
           has_snapshot: true,
@@ -645,7 +645,7 @@ describe('AutoCreationTab', () => {
         })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
@@ -669,7 +669,7 @@ describe('AutoCreationTab', () => {
     it('surfaces partial failures in the result summary — never shows as plain success', async () => {
       const user = userEvent.setup();
       server.use(
-        http.post('/api/auto-creation/executions/:id/restore-snapshot', () => {
+        http.post('/api/channel-pipeline/executions/:id/restore-snapshot', () => {
           return HttpResponse.json({
             success: false,
             removed_channels: 2,
@@ -682,11 +682,11 @@ describe('AutoCreationTab', () => {
         })
       );
 
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
@@ -713,7 +713,7 @@ describe('AutoCreationTab', () => {
 
   describe('import/export', () => {
     it('shows import/export buttons', () => {
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       expect(screen.getByRole('button', { name: /import/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /export/i })).toBeInTheDocument();
@@ -721,11 +721,11 @@ describe('AutoCreationTab', () => {
 
     it('exports rules as YAML', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Export Me' })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Export Me' })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await user.click(screen.getByRole('button', { name: /export/i }));
 
@@ -737,7 +737,7 @@ describe('AutoCreationTab', () => {
 
     it('opens import dialog', async () => {
       const user = userEvent.setup();
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await user.click(screen.getByRole('button', { name: /import/i }));
 
@@ -749,7 +749,7 @@ describe('AutoCreationTab', () => {
 
     it('imports rules from YAML', async () => {
       const user = userEvent.setup();
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       // Open import dialog
       await user.click(screen.getByRole('button', { name: /^import$/i }));
@@ -776,12 +776,12 @@ describe('AutoCreationTab', () => {
   describe('error handling', () => {
     it('shows error message when fetch fails', async () => {
       server.use(
-        http.get('/api/auto-creation/rules', () => {
+        http.get('/api/channel-pipeline/rules', () => {
           return new HttpResponse(null, { status: 500 });
         })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
@@ -790,12 +790,12 @@ describe('AutoCreationTab', () => {
 
     it('shows retry button on error', async () => {
       server.use(
-        http.get('/api/auto-creation/rules', () => {
+        http.get('/api/channel-pipeline/rules', () => {
           return new HttpResponse(null, { status: 500 });
         })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
@@ -803,12 +803,12 @@ describe('AutoCreationTab', () => {
     });
 
     it('shows error toast when run fails', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ enabled: true })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ enabled: true })
       );
 
       server.use(
-        http.post('/api/auto-creation/run', () => {
+        http.post('/api/channel-pipeline/run', () => {
           return new HttpResponse(
             JSON.stringify({ detail: 'Pipeline failed' }),
             { status: 500 }
@@ -817,7 +817,7 @@ describe('AutoCreationTab', () => {
       );
 
       const user = userEvent.setup();
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /^run$/i })).toBeInTheDocument();
@@ -833,7 +833,7 @@ describe('AutoCreationTab', () => {
 
   describe('loading states', () => {
     it('shows loading skeleton while fetching rules', async () => {
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       expect(screen.getByTestId('rules-skeleton')).toBeInTheDocument();
 
@@ -846,12 +846,12 @@ describe('AutoCreationTab', () => {
   describe('filters and search', () => {
     it('allows filtering rules by enabled status', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Rule One', enabled: true }),
-        createMockAutoCreationRule({ name: 'Rule Two', enabled: false })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Rule One', enabled: true }),
+        createMockChannelPipelineRule({ name: 'Rule Two', enabled: false })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       // Both rules should be visible initially
       await waitFor(() => {
@@ -871,12 +871,12 @@ describe('AutoCreationTab', () => {
 
     it('allows searching rules by name', async () => {
       const user = userEvent.setup();
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'ESPN Rule' }),
-        createMockAutoCreationRule({ name: 'FOX Rule' })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'ESPN Rule' }),
+        createMockChannelPipelineRule({ name: 'FOX Rule' })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('ESPN Rule')).toBeInTheDocument();
@@ -893,13 +893,13 @@ describe('AutoCreationTab', () => {
 
   describe('drag and drop reordering', () => {
     it('allows reordering rules by drag and drop', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'First', priority: 1 }),
-        createMockAutoCreationRule({ name: 'Second', priority: 2 }),
-        createMockAutoCreationRule({ name: 'Third', priority: 3 })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'First', priority: 1 }),
+        createMockChannelPipelineRule({ name: 'Second', priority: 2 }),
+        createMockChannelPipelineRule({ name: 'Third', priority: 3 })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('First')).toBeInTheDocument();
@@ -913,12 +913,12 @@ describe('AutoCreationTab', () => {
 
   describe('keyboard navigation', () => {
     it('supports keyboard navigation in rules list', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Rule 1' }),
-        createMockAutoCreationRule({ name: 'Rule 2' })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Rule 1' }),
+        createMockChannelPipelineRule({ name: 'Rule 2' })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Rule 1')).toBeInTheDocument();
@@ -941,25 +941,25 @@ describe('AutoCreationTab', () => {
       Object.defineProperty(window, 'innerWidth', { value: 375 });
       window.dispatchEvent(new Event('resize'));
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
-      expect(screen.getByTestId('auto-creation-tab')).toHaveClass('mobile');
+      expect(screen.getByTestId('channel-pipeline-tab')).toHaveClass('mobile');
     });
   });
 
   describe('statistics summary', () => {
     it('shows summary statistics', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ enabled: true, match_count: 50 }),
-        createMockAutoCreationRule({ enabled: true, match_count: 30 }),
-        createMockAutoCreationRule({ enabled: false, match_count: 20 })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ enabled: true, match_count: 50 }),
+        createMockChannelPipelineRule({ enabled: true, match_count: 30 }),
+        createMockChannelPipelineRule({ enabled: false, match_count: 20 })
       );
 
-      renderWithProviders(<AutoCreationTab />);
+      renderWithProviders(<ChannelPipelineTab />);
 
       // Statistics are displayed as value and label in separate elements
       await waitFor(() => {
-        const statsContainer = document.querySelector('.auto-creation-stats');
+        const statsContainer = document.querySelector('.channel-pipeline-stats');
         expect(statsContainer).toBeInTheDocument();
         // Check that stat values exist within the stats container
         const statValues = statsContainer!.querySelectorAll('.stat-value');

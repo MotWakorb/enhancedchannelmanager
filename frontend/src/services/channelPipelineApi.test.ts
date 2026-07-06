@@ -1,64 +1,64 @@
 /**
- * Unit tests for Auto-Creation API service.
+ * Unit tests for Channel Pipeline API service.
  *
  * Tests validate that the API service functions correctly interact with
  * the mock handlers and return properly shaped data.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import { server, mockDataStore, createMockAutoCreationRule, createMockAutoCreationExecution } from '../test/mocks/server';
+import { server, mockDataStore, createMockChannelPipelineRule, createMockChannelPipelineExecution } from '../test/mocks/server';
 import { http, HttpResponse } from 'msw';
 
 // Import the API functions we're testing
 import {
   // Rules CRUD
-  getAutoCreationRules,
-  getAutoCreationRule,
-  createAutoCreationRule,
-  updateAutoCreationRule,
-  deleteAutoCreationRule,
-  toggleAutoCreationRule,
+  getChannelPipelineRules,
+  getChannelPipelineRule,
+  createChannelPipelineRule,
+  updateChannelPipelineRule,
+  deleteChannelPipelineRule,
+  toggleChannelPipelineRule,
   // Validation & Schema
-  validateAutoCreationRule,
+  validateChannelPipelineRule,
   getConditionSchema,
   getActionSchema,
   getTemplateVariables,
   // Execution
-  runAutoCreationPipeline,
-  getAutoCreationExecutions,
-  getAutoCreationExecution,
-  rollbackAutoCreationExecution,
+  runChannelPipeline,
+  getChannelPipelineExecutions,
+  getChannelPipelineExecution,
+  rollbackChannelPipelineExecution,
   // YAML Import/Export
-  exportAutoCreationRulesYAML,
-  importAutoCreationRulesYAML,
+  exportChannelPipelineRulesYAML,
+  importChannelPipelineRulesYAML,
   // Debug bundle
   startDebugBundle,
   pollDebugBundle,
   generateAndFetchDebugBundle,
-} from './autoCreationApi';
+} from './channelPipelineApi';
 
 // Start/stop the mock server for these tests
 beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }));
 afterEach(() => {
   server.resetHandlers();
-  mockDataStore.autoCreationRules = [];
-  mockDataStore.autoCreationExecutions = [];
+  mockDataStore.channelPipelineRules = [];
+  mockDataStore.channelPipelineExecutions = [];
 });
 afterAll(() => server.close());
 
-describe('Auto-Creation API Service', () => {
+describe('Channel Pipeline API Service', () => {
   // ===========================================================================
   // Rules CRUD
   // ===========================================================================
 
-  describe('getAutoCreationRules', () => {
+  describe('getChannelPipelineRules', () => {
     it('fetches all rules', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Rule 1' }),
-        createMockAutoCreationRule({ name: 'Rule 2' }),
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Rule 1' }),
+        createMockChannelPipelineRule({ name: 'Rule 2' }),
       );
 
-      // getAutoCreationRules extracts the rules array from { rules: [...] }
-      const result = await getAutoCreationRules();
+      // getChannelPipelineRules extracts the rules array from { rules: [...] }
+      const result = await getChannelPipelineRules();
 
       expect(result).toHaveLength(2);
       expect(result[0].name).toBe('Rule 1');
@@ -66,41 +66,41 @@ describe('Auto-Creation API Service', () => {
     });
 
     it('returns empty array when no rules exist', async () => {
-      const result = await getAutoCreationRules();
+      const result = await getChannelPipelineRules();
 
       expect(result).toHaveLength(0);
     });
 
     it('handles network errors', async () => {
       server.use(
-        http.get('/api/auto-creation/rules', () => {
+        http.get('/api/channel-pipeline/rules', () => {
           return HttpResponse.error();
         })
       );
 
-      await expect(getAutoCreationRules()).rejects.toThrow();
+      await expect(getChannelPipelineRules()).rejects.toThrow();
     });
   });
 
-  describe('getAutoCreationRule', () => {
+  describe('getChannelPipelineRule', () => {
     it('fetches single rule by ID', async () => {
-      const rule = createMockAutoCreationRule({ id: 1, name: 'Test Rule' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ id: 1, name: 'Test Rule' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const result = await getAutoCreationRule(1);
+      const result = await getChannelPipelineRule(1);
 
       expect(result.id).toBe(1);
       expect(result.name).toBe('Test Rule');
     });
 
     it('throws 404 when rule not found', async () => {
-      await expect(getAutoCreationRule(999)).rejects.toThrow('Rule not found');
+      await expect(getChannelPipelineRule(999)).rejects.toThrow('Rule not found');
     });
   });
 
-  describe('createAutoCreationRule', () => {
+  describe('createChannelPipelineRule', () => {
     it('creates a new rule', async () => {
-      const result = await createAutoCreationRule({
+      const result = await createChannelPipelineRule({
         name: 'New Rule',
         conditions: [{ type: 'always' }],
         actions: [{ type: 'skip' }],
@@ -108,11 +108,11 @@ describe('Auto-Creation API Service', () => {
 
       expect(result.name).toBe('New Rule');
       expect(result.id).toBeDefined();
-      expect(mockDataStore.autoCreationRules).toHaveLength(1);
+      expect(mockDataStore.channelPipelineRules).toHaveLength(1);
     });
 
     it('creates rule with all fields', async () => {
-      const result = await createAutoCreationRule({
+      const result = await createChannelPipelineRule({
         name: 'Full Rule',
         description: 'A detailed description',
         enabled: false,
@@ -133,7 +133,7 @@ describe('Auto-Creation API Service', () => {
 
     it('handles validation errors', async () => {
       server.use(
-        http.post('/api/auto-creation/rules', () => {
+        http.post('/api/channel-pipeline/rules', () => {
           return HttpResponse.json(
             { detail: 'Invalid conditions' },
             { status: 400 }
@@ -141,7 +141,7 @@ describe('Auto-Creation API Service', () => {
         })
       );
 
-      await expect(createAutoCreationRule({
+      await expect(createChannelPipelineRule({
         name: 'Bad Rule',
         conditions: [],
         actions: [],
@@ -149,21 +149,21 @@ describe('Auto-Creation API Service', () => {
     });
   });
 
-  describe('updateAutoCreationRule', () => {
+  describe('updateChannelPipelineRule', () => {
     it('updates an existing rule', async () => {
-      const rule = createMockAutoCreationRule({ id: 1, name: 'Old Name' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ id: 1, name: 'Old Name' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const result = await updateAutoCreationRule(1, { name: 'New Name' });
+      const result = await updateChannelPipelineRule(1, { name: 'New Name' });
 
       expect(result.name).toBe('New Name');
     });
 
     it('updates rule conditions', async () => {
-      const rule = createMockAutoCreationRule({ id: 1, conditions: [{ type: 'always' }] });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ id: 1, conditions: [{ type: 'always' }] });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const result = await updateAutoCreationRule(1, {
+      const result = await updateChannelPipelineRule(1, {
         conditions: [{ type: 'stream_name_contains', value: 'ESPN' }],
       });
 
@@ -172,40 +172,40 @@ describe('Auto-Creation API Service', () => {
     });
 
     it('throws 404 when rule not found', async () => {
-      await expect(updateAutoCreationRule(999, { name: 'Test' })).rejects.toThrow('Rule not found');
+      await expect(updateChannelPipelineRule(999, { name: 'Test' })).rejects.toThrow('Rule not found');
     });
   });
 
-  describe('deleteAutoCreationRule', () => {
+  describe('deleteChannelPipelineRule', () => {
     it('deletes a rule', async () => {
-      const rule = createMockAutoCreationRule({ id: 1 });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ id: 1 });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      await deleteAutoCreationRule(1);
+      await deleteChannelPipelineRule(1);
 
-      expect(mockDataStore.autoCreationRules).toHaveLength(0);
+      expect(mockDataStore.channelPipelineRules).toHaveLength(0);
     });
 
     it('throws 404 when rule not found', async () => {
-      await expect(deleteAutoCreationRule(999)).rejects.toThrow('Rule not found');
+      await expect(deleteChannelPipelineRule(999)).rejects.toThrow('Rule not found');
     });
   });
 
-  describe('toggleAutoCreationRule', () => {
+  describe('toggleChannelPipelineRule', () => {
     it('toggles rule enabled state', async () => {
-      const rule = createMockAutoCreationRule({ id: 1, enabled: true });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ id: 1, enabled: true });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const result = await toggleAutoCreationRule(1);
+      const result = await toggleChannelPipelineRule(1);
 
       expect(result.enabled).toBe(false);
     });
 
     it('toggles disabled rule to enabled', async () => {
-      const rule = createMockAutoCreationRule({ id: 1, enabled: false });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ id: 1, enabled: false });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const result = await toggleAutoCreationRule(1);
+      const result = await toggleChannelPipelineRule(1);
 
       expect(result.enabled).toBe(true);
     });
@@ -215,9 +215,9 @@ describe('Auto-Creation API Service', () => {
   // Validation & Schema
   // ===========================================================================
 
-  describe('validateAutoCreationRule', () => {
+  describe('validateChannelPipelineRule', () => {
     it('validates valid rule', async () => {
-      const result = await validateAutoCreationRule({
+      const result = await validateChannelPipelineRule({
         conditions: [{ type: 'always' }],
         actions: [{ type: 'skip' }],
       });
@@ -227,7 +227,7 @@ describe('Auto-Creation API Service', () => {
     });
 
     it('returns errors for invalid rule', async () => {
-      const result = await validateAutoCreationRule({
+      const result = await validateChannelPipelineRule({
         conditions: [],
         actions: [{ type: 'skip' }],
       });
@@ -315,19 +315,19 @@ describe('Auto-Creation API Service', () => {
   // Execution
   // ===========================================================================
 
-  describe('runAutoCreationPipeline', () => {
+  describe('runChannelPipeline', () => {
     // bd-enfsy: POST returns 202 + { execution_id, status: 'running' } now —
     // pipeline runs in a supervised background task and the caller polls
     // GET /executions/{id} until status is terminal.
     it('enqueues pipeline in execute mode and returns execution_id', async () => {
-      const result = await runAutoCreationPipeline({ dryRun: false });
+      const result = await runChannelPipeline({ dryRun: false });
 
       expect(result.execution_id).toBeDefined();
       expect(result.status).toBe('running');
     });
 
     it('enqueues pipeline in dry-run mode', async () => {
-      const result = await runAutoCreationPipeline({ dryRun: true });
+      const result = await runChannelPipeline({ dryRun: true });
 
       expect(result.execution_id).toBeDefined();
       expect(result.status).toBe('running');
@@ -336,7 +336,7 @@ describe('Auto-Creation API Service', () => {
     it('can enqueue specific rules', async () => {
       let capturedBody: { rule_ids?: number[] } = {};
       server.use(
-        http.post('/api/auto-creation/run', async ({ request }) => {
+        http.post('/api/channel-pipeline/run', async ({ request }) => {
           capturedBody = await request.json() as { rule_ids?: number[] };
           return HttpResponse.json(
             { execution_id: 1, status: 'running', message: 'started' },
@@ -345,14 +345,14 @@ describe('Auto-Creation API Service', () => {
         })
       );
 
-      await runAutoCreationPipeline({ ruleIds: [1, 2, 3] });
+      await runChannelPipeline({ ruleIds: [1, 2, 3] });
 
       expect(capturedBody.rule_ids).toEqual([1, 2, 3]);
     });
 
     it('handles pipeline enqueue errors', async () => {
       server.use(
-        http.post('/api/auto-creation/run', () => {
+        http.post('/api/channel-pipeline/run', () => {
           return HttpResponse.json(
             { detail: 'Pipeline failed' },
             { status: 500 }
@@ -360,18 +360,18 @@ describe('Auto-Creation API Service', () => {
         })
       );
 
-      await expect(runAutoCreationPipeline({})).rejects.toThrow('Pipeline failed');
+      await expect(runChannelPipeline({})).rejects.toThrow('Pipeline failed');
     });
   });
 
-  describe('getAutoCreationExecutions', () => {
+  describe('getChannelPipelineExecutions', () => {
     it('fetches execution history', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ id: 1 }),
-        createMockAutoCreationExecution({ id: 2 }),
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ id: 1 }),
+        createMockChannelPipelineExecution({ id: 2 }),
       );
 
-      const result = await getAutoCreationExecutions();
+      const result = await getChannelPipelineExecutions();
 
       expect(result.executions).toHaveLength(2);
       expect(result.total).toBe(2);
@@ -379,29 +379,29 @@ describe('Auto-Creation API Service', () => {
 
     it('supports pagination', async () => {
       for (let i = 0; i < 10; i++) {
-        mockDataStore.autoCreationExecutions.push(createMockAutoCreationExecution());
+        mockDataStore.channelPipelineExecutions.push(createMockChannelPipelineExecution());
       }
 
-      const result = await getAutoCreationExecutions({ limit: 5, offset: 0 });
+      const result = await getChannelPipelineExecutions({ limit: 5, offset: 0 });
 
       expect(result.executions).toHaveLength(5);
       expect(result.total).toBe(10);
     });
 
     it('supports filtering by status', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed' }),
-        createMockAutoCreationExecution({ status: 'failed' }),
-        createMockAutoCreationExecution({ status: 'completed' }),
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed' }),
+        createMockChannelPipelineExecution({ status: 'failed' }),
+        createMockChannelPipelineExecution({ status: 'completed' }),
       );
 
       let capturedUrl = '';
       server.use(
-        http.get('/api/auto-creation/executions', ({ request }) => {
+        http.get('/api/channel-pipeline/executions', ({ request }) => {
           capturedUrl = request.url;
           const url = new URL(request.url);
           const status = url.searchParams.get('status');
-          const executions = mockDataStore.autoCreationExecutions.filter(
+          const executions = mockDataStore.channelPipelineExecutions.filter(
             e => !status || e.status === status
           );
           return HttpResponse.json({
@@ -411,35 +411,35 @@ describe('Auto-Creation API Service', () => {
         })
       );
 
-      const result = await getAutoCreationExecutions({ status: 'completed' });
+      const result = await getChannelPipelineExecutions({ status: 'completed' });
 
       expect(capturedUrl).toContain('status=completed');
       expect(result.executions).toHaveLength(2);
     });
   });
 
-  describe('getAutoCreationExecution', () => {
+  describe('getChannelPipelineExecution', () => {
     it('fetches single execution', async () => {
-      const execution = createMockAutoCreationExecution({ id: 1, streams_evaluated: 100 });
-      mockDataStore.autoCreationExecutions.push(execution);
+      const execution = createMockChannelPipelineExecution({ id: 1, streams_evaluated: 100 });
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const result = await getAutoCreationExecution(1);
+      const result = await getChannelPipelineExecution(1);
 
       expect(result.id).toBe(1);
       expect(result.streams_evaluated).toBe(100);
     });
 
     it('throws 404 when execution not found', async () => {
-      await expect(getAutoCreationExecution(999)).rejects.toThrow('Execution not found');
+      await expect(getChannelPipelineExecution(999)).rejects.toThrow('Execution not found');
     });
   });
 
-  describe('rollbackAutoCreationExecution', () => {
+  describe('rollbackChannelPipelineExecution', () => {
     it('rolls back an execution', async () => {
-      const execution = createMockAutoCreationExecution({ id: 1, mode: 'execute', status: 'completed' });
-      mockDataStore.autoCreationExecutions.push(execution);
+      const execution = createMockChannelPipelineExecution({ id: 1, mode: 'execute', status: 'completed' });
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const result = await rollbackAutoCreationExecution(1);
+      const result = await rollbackChannelPipelineExecution(1);
 
       expect(result.success).toBe(true);
       expect(result.entities_removed).toBeGreaterThanOrEqual(0);
@@ -447,21 +447,21 @@ describe('Auto-Creation API Service', () => {
     });
 
     it('fails for dry-run execution', async () => {
-      const execution = createMockAutoCreationExecution({ id: 1, mode: 'dry_run', status: 'completed' });
-      mockDataStore.autoCreationExecutions.push(execution);
+      const execution = createMockChannelPipelineExecution({ id: 1, mode: 'dry_run', status: 'completed' });
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      await expect(rollbackAutoCreationExecution(1)).rejects.toThrow();
+      await expect(rollbackChannelPipelineExecution(1)).rejects.toThrow();
     });
 
     it('fails for already rolled back execution', async () => {
-      const execution = createMockAutoCreationExecution({ id: 1, mode: 'execute', status: 'rolled_back' });
-      mockDataStore.autoCreationExecutions.push(execution);
+      const execution = createMockChannelPipelineExecution({ id: 1, mode: 'execute', status: 'rolled_back' });
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      await expect(rollbackAutoCreationExecution(1)).rejects.toThrow();
+      await expect(rollbackChannelPipelineExecution(1)).rejects.toThrow();
     });
 
     it('throws 404 when execution not found', async () => {
-      await expect(rollbackAutoCreationExecution(999)).rejects.toThrow('Execution not found');
+      await expect(rollbackChannelPipelineExecution(999)).rejects.toThrow('Execution not found');
     });
   });
 
@@ -469,9 +469,9 @@ describe('Auto-Creation API Service', () => {
   // YAML Import/Export
   // ===========================================================================
 
-  describe('exportAutoCreationRulesYAML', () => {
+  describe('exportChannelPipelineRulesYAML', () => {
     it('exports rules as YAML string', async () => {
-      const result = await exportAutoCreationRulesYAML();
+      const result = await exportChannelPipelineRulesYAML();
 
       expect(typeof result).toBe('string');
       // Mock handler returns plain text YAML with 'rules:' key
@@ -480,7 +480,7 @@ describe('Auto-Creation API Service', () => {
 
     it('handles export errors', async () => {
       server.use(
-        http.get('/api/auto-creation/export/yaml', () => {
+        http.get('/api/channel-pipeline/export/yaml', () => {
           return HttpResponse.json(
             { detail: 'Export failed' },
             { status: 500 }
@@ -488,11 +488,11 @@ describe('Auto-Creation API Service', () => {
         })
       );
 
-      await expect(exportAutoCreationRulesYAML()).rejects.toThrow();
+      await expect(exportChannelPipelineRulesYAML()).rejects.toThrow();
     });
   });
 
-  describe('importAutoCreationRulesYAML', () => {
+  describe('importChannelPipelineRulesYAML', () => {
     it('imports rules from YAML', async () => {
       const yamlContent = `
 version: 1
@@ -505,7 +505,7 @@ rules:
       - type: skip
 `;
 
-      const result = await importAutoCreationRulesYAML(yamlContent);
+      const result = await importChannelPipelineRulesYAML(yamlContent);
 
       expect(result.success).toBe(true);
       expect(result.imported).toHaveLength(1);
@@ -515,7 +515,7 @@ rules:
     it('supports overwrite flag', async () => {
       let capturedBody: { overwrite?: boolean } = {};
       server.use(
-        http.post('/api/auto-creation/import/yaml', async ({ request }) => {
+        http.post('/api/channel-pipeline/import/yaml', async ({ request }) => {
           capturedBody = await request.json() as { overwrite?: boolean };
           return HttpResponse.json({
             success: true,
@@ -526,14 +526,14 @@ rules:
         })
       );
 
-      await importAutoCreationRulesYAML('version: 1\nrules: []', true);
+      await importChannelPipelineRulesYAML('version: 1\nrules: []', true);
 
       expect(capturedBody.overwrite).toBe(true);
     });
 
     it('handles invalid YAML', async () => {
       server.use(
-        http.post('/api/auto-creation/import/yaml', () => {
+        http.post('/api/channel-pipeline/import/yaml', () => {
           return HttpResponse.json(
             { detail: 'Invalid YAML format' },
             { status: 400 }
@@ -541,12 +541,12 @@ rules:
         })
       );
 
-      await expect(importAutoCreationRulesYAML('invalid yaml {')).rejects.toThrow();
+      await expect(importChannelPipelineRulesYAML('invalid yaml {')).rejects.toThrow();
     });
 
     it('returns import errors', async () => {
       server.use(
-        http.post('/api/auto-creation/import/yaml', () => {
+        http.post('/api/channel-pipeline/import/yaml', () => {
           return HttpResponse.json({
             success: false,
             imported: [],
@@ -556,7 +556,7 @@ rules:
         })
       );
 
-      const result = await importAutoCreationRulesYAML('version: 1\nrules:\n  - invalid');
+      const result = await importChannelPipelineRulesYAML('version: 1\nrules:\n  - invalid');
 
       expect(result.success).toBe(false);
       expect(result.errors).toHaveLength(1);
@@ -570,7 +570,7 @@ rules:
   describe('debug bundle', () => {
     it('startDebugBundle POSTs and returns the job_id', async () => {
       server.use(
-        http.post('/api/auto-creation/debug-bundle', () => {
+        http.post('/api/channel-pipeline/debug-bundle', () => {
           return HttpResponse.json(
             { job_id: 'job-abc', status: 'running' },
             { status: 202 }
@@ -586,7 +586,7 @@ rules:
     it('pollDebugBundle returns Blob + filename when the artifact is ready', async () => {
       const tarBytes = new Uint8Array([0x1f, 0x8b, 0x08, 0x00]);
       server.use(
-        http.get('/api/auto-creation/debug-bundle/job-ready', () => {
+        http.get('/api/channel-pipeline/debug-bundle/job-ready', () => {
           return new HttpResponse(tarBytes, {
             status: 200,
             headers: {
@@ -604,7 +604,7 @@ rules:
 
     it('pollDebugBundle surfaces the backend error message on failed status', async () => {
       server.use(
-        http.get('/api/auto-creation/debug-bundle/job-failed', () => {
+        http.get('/api/channel-pipeline/debug-bundle/job-failed', () => {
           return HttpResponse.json({
             job_id: 'job-failed',
             status: 'failed',
@@ -620,7 +620,7 @@ rules:
 
     it('pollDebugBundle throws on 404 unknown job id', async () => {
       server.use(
-        http.get('/api/auto-creation/debug-bundle/missing', () => {
+        http.get('/api/channel-pipeline/debug-bundle/missing', () => {
           return HttpResponse.json({ detail: 'not found' }, { status: 404 });
         })
       );
@@ -631,7 +631,7 @@ rules:
     it('pollDebugBundle polls "running" then resolves on the next ready response', async () => {
       let calls = 0;
       server.use(
-        http.get('/api/auto-creation/debug-bundle/job-flip', () => {
+        http.get('/api/channel-pipeline/debug-bundle/job-flip', () => {
           calls++;
           if (calls === 1) {
             return HttpResponse.json({ job_id: 'job-flip', status: 'running' });
@@ -666,14 +666,14 @@ rules:
     it('generateAndFetchDebugBundle wires enqueue → poll → download', async () => {
       let postCount = 0;
       server.use(
-        http.post('/api/auto-creation/debug-bundle', () => {
+        http.post('/api/channel-pipeline/debug-bundle', () => {
           postCount++;
           return HttpResponse.json(
             { job_id: 'job-flow', status: 'running' },
             { status: 202 }
           );
         }),
-        http.get('/api/auto-creation/debug-bundle/job-flow', () => {
+        http.get('/api/channel-pipeline/debug-bundle/job-flow', () => {
           return new HttpResponse(new Uint8Array([0xff]), {
             status: 200,
             headers: {

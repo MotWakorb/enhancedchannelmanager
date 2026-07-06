@@ -1,5 +1,5 @@
 /**
- * TDD Tests for useAutoCreationRules hook.
+ * TDD Tests for useChannelPipelineRules hook.
  *
  * These tests define the expected behavior of the hook BEFORE implementation.
  */
@@ -10,10 +10,10 @@ import {
   server,
   mockDataStore,
   resetMockDataStore,
-  createMockAutoCreationRule,
+  createMockChannelPipelineRule,
 } from '../test/mocks/server';
-import { useAutoCreationRules } from './useAutoCreationRules';
-import type { AutoCreationRule, CreateRuleData, UpdateRuleData } from '../types/autoCreation';
+import { useChannelPipelineRules } from './useChannelPipelineRules';
+import type { ChannelPipelineRule, CreateRuleData, UpdateRuleData } from '../types/channelPipeline';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
@@ -23,20 +23,20 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-describe('useAutoCreationRules', () => {
+describe('useChannelPipelineRules', () => {
   describe('initial state', () => {
     it('starts with empty rules array', () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
       expect(result.current.rules).toEqual([]);
     });
 
     it('starts with loading false', () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
       expect(result.current.loading).toBe(false);
     });
 
     it('starts with error null', () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
       expect(result.current.error).toBeNull();
     });
   });
@@ -44,11 +44,11 @@ describe('useAutoCreationRules', () => {
   describe('fetchRules', () => {
     it('fetches rules from API', async () => {
       // Setup: Add rules to mock store
-      const rule1 = createMockAutoCreationRule({ name: 'Rule 1' });
-      const rule2 = createMockAutoCreationRule({ name: 'Rule 2' });
-      mockDataStore.autoCreationRules.push(rule1, rule2);
+      const rule1 = createMockChannelPipelineRule({ name: 'Rule 1' });
+      const rule2 = createMockChannelPipelineRule({ name: 'Rule 2' });
+      mockDataStore.channelPipelineRules.push(rule1, rule2);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -60,7 +60,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('sets loading true during fetch', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       // Start fetch and check that loading is eventually set and then cleared
       await act(async () => {
@@ -74,12 +74,12 @@ describe('useAutoCreationRules', () => {
     it('handles fetch error', async () => {
       // Override handler to return error
       server.use(
-        http.get('/api/auto-creation/rules', () => {
+        http.get('/api/channel-pipeline/rules', () => {
           return new HttpResponse(null, { status: 500 });
         })
       );
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -90,7 +90,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('clears previous error on successful fetch', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       // First, set an error state manually
       act(() => {
@@ -99,7 +99,7 @@ describe('useAutoCreationRules', () => {
       expect(result.current.error).toBe('Previous error');
 
       // Add a rule to ensure successful fetch
-      mockDataStore.autoCreationRules.push(createMockAutoCreationRule());
+      mockDataStore.channelPipelineRules.push(createMockChannelPipelineRule());
 
       // Fetch should clear the error
       await act(async () => {
@@ -112,7 +112,7 @@ describe('useAutoCreationRules', () => {
 
   describe('createRule', () => {
     it('creates a new rule and adds it to the list', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       const newRuleData: CreateRuleData = {
         name: 'New Test Rule',
@@ -120,7 +120,7 @@ describe('useAutoCreationRules', () => {
         actions: [{ type: 'skip' }],
       };
 
-      let createdRule: AutoCreationRule | undefined;
+      let createdRule: ChannelPipelineRule | undefined;
       await act(async () => {
         createdRule = await result.current.createRule(newRuleData);
       });
@@ -133,7 +133,7 @@ describe('useAutoCreationRules', () => {
 
     it('returns undefined on create error', async () => {
       server.use(
-        http.post('/api/auto-creation/rules', () => {
+        http.post('/api/channel-pipeline/rules', () => {
           return new HttpResponse(
             JSON.stringify({ detail: 'Validation error' }),
             { status: 400 }
@@ -141,7 +141,7 @@ describe('useAutoCreationRules', () => {
         })
       );
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await expect(result.current.createRule({
@@ -153,7 +153,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('sets loading state during creation', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       // Start create and check that loading is eventually cleared
       await act(async () => {
@@ -171,10 +171,10 @@ describe('useAutoCreationRules', () => {
 
   describe('updateRule', () => {
     it('updates an existing rule', async () => {
-      const existingRule = createMockAutoCreationRule({ name: 'Original Name' });
-      mockDataStore.autoCreationRules.push(existingRule);
+      const existingRule = createMockChannelPipelineRule({ name: 'Original Name' });
+      mockDataStore.channelPipelineRules.push(existingRule);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       // First fetch the rules
       await act(async () => {
@@ -183,7 +183,7 @@ describe('useAutoCreationRules', () => {
 
       const updateData: UpdateRuleData = { name: 'Updated Name' };
 
-      let updatedRule: AutoCreationRule | undefined;
+      let updatedRule: ChannelPipelineRule | undefined;
       await act(async () => {
         updatedRule = await result.current.updateRule(existingRule.id, updateData);
       });
@@ -194,7 +194,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('throws when updating non-existent rule', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await expect(result.current.updateRule(99999, { name: 'Not Found' })).rejects.toThrow();
@@ -202,10 +202,10 @@ describe('useAutoCreationRules', () => {
     });
 
     it('updates rule in local state optimistically', async () => {
-      const existingRule = createMockAutoCreationRule({ name: 'Original', enabled: true });
-      mockDataStore.autoCreationRules.push(existingRule);
+      const existingRule = createMockChannelPipelineRule({ name: 'Original', enabled: true });
+      mockDataStore.channelPipelineRules.push(existingRule);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -223,11 +223,11 @@ describe('useAutoCreationRules', () => {
 
   describe('deleteRule', () => {
     it('deletes a rule and removes it from the list', async () => {
-      const rule1 = createMockAutoCreationRule({ name: 'Rule 1' });
-      const rule2 = createMockAutoCreationRule({ name: 'Rule 2' });
-      mockDataStore.autoCreationRules.push(rule1, rule2);
+      const rule1 = createMockChannelPipelineRule({ name: 'Rule 1' });
+      const rule2 = createMockChannelPipelineRule({ name: 'Rule 2' });
+      mockDataStore.channelPipelineRules.push(rule1, rule2);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -244,7 +244,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('throws when deleting non-existent rule', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await expect(result.current.deleteRule(99999)).rejects.toThrow();
@@ -254,10 +254,10 @@ describe('useAutoCreationRules', () => {
 
   describe('toggleRule', () => {
     it('toggles rule enabled state from true to false', async () => {
-      const rule = createMockAutoCreationRule({ enabled: true });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ enabled: true });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -273,10 +273,10 @@ describe('useAutoCreationRules', () => {
     });
 
     it('toggles rule enabled state from false to true', async () => {
-      const rule = createMockAutoCreationRule({ enabled: false });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ enabled: false });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -292,16 +292,16 @@ describe('useAutoCreationRules', () => {
     });
 
     it('returns the toggled rule', async () => {
-      const rule = createMockAutoCreationRule({ enabled: true, name: 'Toggle Test' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ enabled: true, name: 'Toggle Test' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
       });
 
-      let toggledRule: AutoCreationRule | undefined;
+      let toggledRule: ChannelPipelineRule | undefined;
       await act(async () => {
         toggledRule = await result.current.toggleRule(rule.id);
       });
@@ -314,10 +314,10 @@ describe('useAutoCreationRules', () => {
 
   describe('getRule', () => {
     it('returns a rule by ID from local state', async () => {
-      const rule = createMockAutoCreationRule({ name: 'Find Me' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ name: 'Find Me' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -329,7 +329,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('returns undefined for non-existent rule', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       const found = result.current.getRule(99999);
       expect(found).toBeUndefined();
@@ -338,13 +338,13 @@ describe('useAutoCreationRules', () => {
 
   describe('getRulesByPriority', () => {
     it('returns rules sorted by priority ascending', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Low Priority', priority: 100 }),
-        createMockAutoCreationRule({ name: 'High Priority', priority: 1 }),
-        createMockAutoCreationRule({ name: 'Medium Priority', priority: 50 })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Low Priority', priority: 100 }),
+        createMockChannelPipelineRule({ name: 'High Priority', priority: 1 }),
+        createMockChannelPipelineRule({ name: 'Medium Priority', priority: 50 })
       );
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -359,13 +359,13 @@ describe('useAutoCreationRules', () => {
 
   describe('getEnabledRules', () => {
     it('returns only enabled rules', async () => {
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Enabled 1', enabled: true }),
-        createMockAutoCreationRule({ name: 'Disabled', enabled: false }),
-        createMockAutoCreationRule({ name: 'Enabled 2', enabled: true })
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Enabled 1', enabled: true }),
+        createMockChannelPipelineRule({ name: 'Disabled', enabled: false }),
+        createMockChannelPipelineRule({ name: 'Enabled 2', enabled: true })
       );
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -379,7 +379,7 @@ describe('useAutoCreationRules', () => {
 
   describe('error handling', () => {
     it('provides setError for manual error setting', () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       act(() => {
         result.current.setError('Manual error');
@@ -389,7 +389,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('provides clearError to clear errors', () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       act(() => {
         result.current.setError('Some error');
@@ -405,12 +405,12 @@ describe('useAutoCreationRules', () => {
 
   describe('reorderRules', () => {
     it('updates priorities for multiple rules', async () => {
-      const rule1 = createMockAutoCreationRule({ name: 'Rule 1', priority: 0 });
-      const rule2 = createMockAutoCreationRule({ name: 'Rule 2', priority: 1 });
-      const rule3 = createMockAutoCreationRule({ name: 'Rule 3', priority: 2 });
-      mockDataStore.autoCreationRules.push(rule1, rule2, rule3);
+      const rule1 = createMockChannelPipelineRule({ name: 'Rule 1', priority: 0 });
+      const rule2 = createMockChannelPipelineRule({ name: 'Rule 2', priority: 1 });
+      const rule3 = createMockChannelPipelineRule({ name: 'Rule 3', priority: 2 });
+      mockDataStore.channelPipelineRules.push(rule1, rule2, rule3);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
@@ -431,7 +431,7 @@ describe('useAutoCreationRules', () => {
 
   describe('duplicateRule', () => {
     it('creates a copy of an existing rule with modified name', async () => {
-      const original = createMockAutoCreationRule({
+      const original = createMockChannelPipelineRule({
         name: 'Original Rule',
         conditions: [{ type: 'stream_name_contains', value: 'ESPN' }],
         actions: [{ type: 'create_channel', name_template: '{stream_name}' }],
@@ -447,15 +447,15 @@ describe('useAutoCreationRules', () => {
         skip_struck_streams: true,
         orphan_action: 'delete',
       });
-      mockDataStore.autoCreationRules.push(original);
+      mockDataStore.channelPipelineRules.push(original);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
       });
 
-      let duplicate: AutoCreationRule | undefined;
+      let duplicate: ChannelPipelineRule | undefined;
       await act(async () => {
         duplicate = await result.current.duplicateRule(original.id);
       });
@@ -479,7 +479,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('round-trips nullable/empty sort config fields', async () => {
-      const original = createMockAutoCreationRule({
+      const original = createMockChannelPipelineRule({
         name: 'Nullable Fields Rule',
         enabled: true,
         sort_field: null,
@@ -487,15 +487,15 @@ describe('useAutoCreationRules', () => {
         stream_sort_field: null,
         normalization_group_ids: [],
       });
-      mockDataStore.autoCreationRules.push(original);
+      mockDataStore.channelPipelineRules.push(original);
 
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.fetchRules();
       });
 
-      let duplicate: AutoCreationRule | undefined;
+      let duplicate: ChannelPipelineRule | undefined;
       await act(async () => {
         duplicate = await result.current.duplicateRule(original.id);
       });
@@ -509,7 +509,7 @@ describe('useAutoCreationRules', () => {
     });
 
     it('throws when duplicating non-existent rule', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await expect(result.current.duplicateRule(99999)).rejects.toThrow('Rule not found');
@@ -519,10 +519,10 @@ describe('useAutoCreationRules', () => {
 
   describe('autoFetch option', () => {
     it('automatically fetches rules when autoFetch is true', async () => {
-      const rule = createMockAutoCreationRule({ name: 'Auto Fetched' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ name: 'Auto Fetched' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const { result } = renderHook(() => useAutoCreationRules({ autoFetch: true }));
+      const { result } = renderHook(() => useChannelPipelineRules({ autoFetch: true }));
 
       await waitFor(() => {
         expect(result.current.rules).toHaveLength(1);
@@ -532,10 +532,10 @@ describe('useAutoCreationRules', () => {
     });
 
     it('does not auto-fetch when autoFetch is false', async () => {
-      const rule = createMockAutoCreationRule({ name: 'Should Not Appear' });
-      mockDataStore.autoCreationRules.push(rule);
+      const rule = createMockChannelPipelineRule({ name: 'Should Not Appear' });
+      mockDataStore.channelPipelineRules.push(rule);
 
-      const { result } = renderHook(() => useAutoCreationRules({ autoFetch: false }));
+      const { result } = renderHook(() => useChannelPipelineRules({ autoFetch: false }));
 
       // Wait a bit to ensure no auto-fetch happens
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -546,7 +546,7 @@ describe('useAutoCreationRules', () => {
 
   describe('refetch after mutations', () => {
     it('updates local state after createRule without refetch', async () => {
-      const { result } = renderHook(() => useAutoCreationRules());
+      const { result } = renderHook(() => useChannelPipelineRules());
 
       await act(async () => {
         await result.current.createRule({
