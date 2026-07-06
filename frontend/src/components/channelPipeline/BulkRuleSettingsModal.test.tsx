@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { AutoCreationRule } from '../../types/autoCreation';
+import type { ChannelPipelineRule } from '../../types/channelPipeline';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 
 vi.mock('../ModalOverlay', () => ({
@@ -39,7 +39,7 @@ vi.mock('../../services/api', () => ({
   getNormalizationRules: vi.fn().mockResolvedValue({ groups: [] }),
 }));
 
-function mkRule(overrides: Partial<AutoCreationRule>): AutoCreationRule {
+function mkRule(overrides: Partial<ChannelPipelineRule>): ChannelPipelineRule {
   return {
     id: overrides.id ?? 1,
     name: overrides.name ?? 'Rule',

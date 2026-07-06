@@ -1,9 +1,9 @@
 /**
- * Bulk-edit shared rule settings for multiple auto-creation rules.
+ * Bulk-edit shared rule settings for multiple channel pipeline rules.
  * Only sections marked "Apply" send fields to the server.
  */
 import { useState, useEffect, useId, useRef } from 'react';
-import type { AutoCreationRule, BulkUpdateRulesPatch } from '../../types/autoCreation';
+import type { ChannelPipelineRule, BulkUpdateRulesPatch } from '../../types/channelPipeline';
 import { CustomSelect } from '../CustomSelect';
 import { getNormalizationRules } from '../../services/api';
 import { ModalOverlay } from '../ModalOverlay';
@@ -13,7 +13,7 @@ export interface BulkRuleSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   selectedRuleIds: number[];
-  rules: AutoCreationRule[];
+  rules: ChannelPipelineRule[];
   onApply: (ruleIds: number[], patch: BulkUpdateRulesPatch) => Promise<void>;
 }
 

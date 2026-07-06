@@ -1,6 +1,6 @@
-/* AutoCreationTab Styles */
+/* ChannelPipelineTab Styles */
 
-.auto-creation-tab {
+.channel-pipeline-tab {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -10,18 +10,18 @@
 }
 
 /* .tab-header, .header-actions are defined in shared/common.css */
-.auto-creation-tab .tab-header {
+.channel-pipeline-tab .tab-header {
   align-items: center;
   flex-wrap: wrap;
   gap: 16px;
 }
 
-.auto-creation-tab .tab-header h2 {
+.channel-pipeline-tab .tab-header h2 {
   margin: 0;
 }
 
 /* Statistics Summary */
-.auto-creation-stats {
+.channel-pipeline-stats {
   display: flex;
   gap: 24px;
   margin-bottom: 24px;
@@ -53,7 +53,7 @@
 /* Error state uses .loading-state from shared/common.css */
 
 /* Main Content */
-.auto-creation-content {
+.channel-pipeline-content {
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -89,7 +89,7 @@
 }
 
 /* .search-input is defined in shared/common.css */
-.auto-creation-tab .search-input {
+.channel-pipeline-tab .search-input {
   min-width: 200px;
 }
 
@@ -153,11 +153,11 @@
 }
 
 /* .empty-state is defined in shared/common.css */
-.auto-creation-tab .empty-state.small {
+.channel-pipeline-tab .empty-state.small {
   padding: 24px;
 }
 
-.auto-creation-tab .empty-state.small .material-icons {
+.channel-pipeline-tab .empty-state.small .material-icons {
   font-size: 32px;
 }
 
@@ -477,58 +477,58 @@
 }
 
 /* Responsive Mobile */
-.auto-creation-tab.mobile {
+.channel-pipeline-tab.mobile {
   padding: 16px;
 }
 
-.auto-creation-tab.mobile .tab-header {
+.channel-pipeline-tab.mobile .tab-header {
   flex-direction: column;
   align-items: flex-start;
 }
 
-.auto-creation-tab.mobile .header-actions {
+.channel-pipeline-tab.mobile .header-actions {
   width: 100%;
   justify-content: flex-start;
 }
 
-.auto-creation-tab.mobile .auto-creation-stats {
+.channel-pipeline-tab.mobile .channel-pipeline-stats {
   flex-wrap: wrap;
   justify-content: space-around;
 }
 
-.auto-creation-tab.mobile .search-input {
+.channel-pipeline-tab.mobile .search-input {
   min-width: 100%;
 }
 
-.auto-creation-tab.mobile .rules-list {
+.channel-pipeline-tab.mobile .rules-list {
   overflow-x: auto;
 }
 
-.auto-creation-tab.mobile .rules-list table {
+.channel-pipeline-tab.mobile .rules-list table {
   min-width: 600px;
 }
 
-.auto-creation-tab.mobile .execution-info {
+.channel-pipeline-tab.mobile .execution-info {
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
 }
 
-.auto-creation-tab.mobile .modal-overlay {
+.channel-pipeline-tab.mobile .modal-overlay {
   padding: 16px;
 }
 
 @media (max-width: 480px) {
-  .auto-creation-tab .header-actions {
+  .channel-pipeline-tab .header-actions {
     flex-wrap: wrap;
   }
 
-  .auto-creation-tab .btn {
+  .channel-pipeline-tab .btn {
     padding: 8px 12px;
     font-size: 13px;
   }
 
-  .auto-creation-tab .btn span.material-icons {
+  .channel-pipeline-tab .btn span.material-icons {
     font-size: 18px;
   }
 

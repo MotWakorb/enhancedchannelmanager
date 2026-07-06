@@ -13,7 +13,7 @@ import {
   createMockChannelGroup,
 } from '../../test/mocks/server';
 import { RuleBuilder } from './RuleBuilder';
-import type { AutoCreationRule } from '../../types/autoCreation';
+import type { ChannelPipelineRule } from '../../types/channelPipeline';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
@@ -53,7 +53,7 @@ describe('RuleBuilder', () => {
     });
 
     it('renders with existing rule values when editing', () => {
-      const existingRule: AutoCreationRule = {
+      const existingRule: ChannelPipelineRule = {
         id: 1,
         name: 'Existing Rule',
         description: 'Rule description',
@@ -152,14 +152,14 @@ describe('RuleBuilder', () => {
 
     it('allows removing a condition', async () => {
       const user = userEvent.setup();
-      const ruleWithCondition: Partial<AutoCreationRule> = {
+      const ruleWithCondition: Partial<ChannelPipelineRule> = {
         conditions: [{ type: 'stream_name_contains', value: 'ESPN' }],
         actions: [{ type: 'skip' }],
       };
 
       render(
         <RuleBuilder
-          rule={ruleWithCondition as AutoCreationRule}
+          rule={ruleWithCondition as ChannelPipelineRule}
           onSave={vi.fn()}
           onCancel={vi.fn()}
         />
@@ -218,14 +218,14 @@ describe('RuleBuilder', () => {
 
     it('allows removing an action', async () => {
       const user = userEvent.setup();
-      const ruleWithAction: Partial<AutoCreationRule> = {
+      const ruleWithAction: Partial<ChannelPipelineRule> = {
         conditions: [{ type: 'always' }],
         actions: [{ type: 'create_channel', name_template: '{stream_name}' }],
       };
 
       render(
         <RuleBuilder
-          rule={ruleWithAction as AutoCreationRule}
+          rule={ruleWithAction as ChannelPipelineRule}
           onSave={vi.fn()}
           onCancel={vi.fn()}
         />
@@ -268,12 +268,12 @@ describe('RuleBuilder', () => {
       const user = userEvent.setup();
       const onSave = vi.fn();
 
-      const validRule: Partial<AutoCreationRule> = {
+      const validRule: Partial<ChannelPipelineRule> = {
         conditions: [{ type: 'always' }],
         actions: [{ type: 'skip' }],
       };
 
-      render(<RuleBuilder rule={validRule as AutoCreationRule} onSave={onSave} onCancel={vi.fn()} />);
+      render(<RuleBuilder rule={validRule as ChannelPipelineRule} onSave={onSave} onCancel={vi.fn()} />);
 
       // Fill in the form
       await user.clear(screen.getByLabelText(/rule name/i));
@@ -334,7 +334,7 @@ describe('RuleBuilder', () => {
         });
       });
 
-      const ruleWithData: Partial<AutoCreationRule> = {
+      const ruleWithData: Partial<ChannelPipelineRule> = {
         name: 'Valid Rule',
         conditions: [{ type: 'always' }],
         actions: [{ type: 'skip' }],
@@ -342,7 +342,7 @@ describe('RuleBuilder', () => {
 
       render(
         <RuleBuilder
-          rule={ruleWithData as AutoCreationRule}
+          rule={ruleWithData as ChannelPipelineRule}
           onSave={onSave}
           onCancel={vi.fn()}
         />
@@ -365,14 +365,14 @@ describe('RuleBuilder', () => {
   describe('validation', () => {
     it('shows error when rule name is empty', async () => {
       const user = userEvent.setup();
-      const ruleWithoutName: Partial<AutoCreationRule> = {
+      const ruleWithoutName: Partial<ChannelPipelineRule> = {
         conditions: [{ type: 'always' }],
         actions: [{ type: 'skip' }],
       };
 
       render(
         <RuleBuilder
-          rule={ruleWithoutName as AutoCreationRule}
+          rule={ruleWithoutName as ChannelPipelineRule}
           onSave={vi.fn()}
           onCancel={vi.fn()}
         />
@@ -472,7 +472,7 @@ describe('RuleBuilder', () => {
 
   describe('template preview', () => {
     it('shows template preview when action has name_template', async () => {
-      const ruleWithTemplate: Partial<AutoCreationRule> = {
+      const ruleWithTemplate: Partial<ChannelPipelineRule> = {
         name: 'Template Rule',
         conditions: [{ type: 'always' }],
         actions: [{ type: 'create_channel', name_template: '{stream_name}' }],
@@ -480,7 +480,7 @@ describe('RuleBuilder', () => {
 
       render(
         <RuleBuilder
-          rule={ruleWithTemplate as AutoCreationRule}
+          rule={ruleWithTemplate as ChannelPipelineRule}
           onSave={vi.fn()}
           onCancel={vi.fn()}
         />
@@ -509,7 +509,7 @@ describe('RuleBuilder', () => {
       const user = userEvent.setup();
       const onSave = vi.fn();
 
-      const validRule: Partial<AutoCreationRule> = {
+      const validRule: Partial<ChannelPipelineRule> = {
         name: 'Valid',
         conditions: [{ type: 'always' }],
         actions: [{ type: 'skip' }],
@@ -517,7 +517,7 @@ describe('RuleBuilder', () => {
 
       render(
         <RuleBuilder
-          rule={validRule as AutoCreationRule}
+          rule={validRule as ChannelPipelineRule}
           onSave={onSave}
           onCancel={vi.fn()}
         />
@@ -568,14 +568,14 @@ describe('RuleBuilder', () => {
         createMockChannelGroup({ id: 42, name: 'Sports' }),
       );
 
-      const rule: Partial<AutoCreationRule> = {
+      const rule: Partial<ChannelPipelineRule> = {
         name: 'Scoped',
         conditions: [{ type: 'always' }],
         actions: [{ type: 'merge_streams' }],
         match_scope_target_group: true,
         match_scope_group_id: 42,
       };
-      render(<RuleBuilder rule={rule as AutoCreationRule} onSave={onSave} onCancel={vi.fn()} />);
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={onSave} onCancel={vi.fn()} />);
 
       await user.click(screen.getByRole('button', { name: /save/i }));
 
@@ -593,14 +593,14 @@ describe('RuleBuilder', () => {
         createMockChannelGroup({ id: 42, name: 'Sports' }),
       );
 
-      const rule: Partial<AutoCreationRule> = {
+      const rule: Partial<ChannelPipelineRule> = {
         name: 'Scoped',
         conditions: [{ type: 'always' }],
         actions: [{ type: 'merge_streams' }],
         match_scope_target_group: true,
         match_scope_group_id: 42,
       };
-      render(<RuleBuilder rule={rule as AutoCreationRule} onSave={onSave} onCancel={vi.fn()} />);
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={onSave} onCancel={vi.fn()} />);
 
       // Turn scope OFF — the saved scope group must be cleared to null.
       await user.click(
@@ -621,14 +621,14 @@ describe('RuleBuilder', () => {
       );
       // Merge-Streams-only rule (no create_channel/create_group action),
       // scope ON, no explicit scope group → the all-groups fallback warning.
-      const rule: Partial<AutoCreationRule> = {
+      const rule: Partial<ChannelPipelineRule> = {
         name: 'MergeOnly',
         conditions: [{ type: 'always' }],
         actions: [{ type: 'merge_streams' }],
         match_scope_target_group: true,
         match_scope_group_id: null,
       };
-      render(<RuleBuilder rule={rule as AutoCreationRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
 
       await waitFor(() => {
         expect(screen.getByText(/fall back to ALL channel groups/i)).toBeInTheDocument();
@@ -639,14 +639,14 @@ describe('RuleBuilder', () => {
       mockDataStore.channelGroups.push(
         createMockChannelGroup({ id: 11, name: 'Sports' }),
       );
-      const rule: Partial<AutoCreationRule> = {
+      const rule: Partial<ChannelPipelineRule> = {
         name: 'HasCreateChannel',
         conditions: [{ type: 'always' }],
         actions: [{ type: 'create_channel', name_template: '{stream_name}', group_id: 11 }],
         match_scope_target_group: true,
         match_scope_group_id: null,
       };
-      render(<RuleBuilder rule={rule as AutoCreationRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
 
       // Selector is visible, but the all-groups warning must NOT appear.
       await waitFor(() => {

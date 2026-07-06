@@ -1,13 +1,13 @@
 /**
- * Tests for the Auto Creation "Runaway Safety Cap" control (skg35).
+ * Tests for the Channel Pipeline "Runaway Safety Cap" control (skg35).
  *
  * Surfaces ``max_auto_created_channels_per_run`` (the GH #473 runaway-creation
  * OOM safety valve) and its sibling ``max_auto_creation_log_entries`` in the
- * Settings > Auto Creation page so an operator can view + adjust them instead
+ * Settings > Channel Pipeline page so an operator can view + adjust them instead
  * of hand-editing settings.json.
  *
  * Contracts under test:
- *   - The numeric inputs render on the Auto Creation page and populate from
+ *   - The numeric inputs render on the Channel Pipeline page and populate from
  *     the loaded settings.
  *   - Helper text explains the idempotent-rerun behavior + the 0-disables
  *     semantics (so the operator knows a capped run can simply be re-run).
@@ -42,9 +42,9 @@ vi.mock('../../services/api', () => ({
   getStreamGroups: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('../../services/autoCreationApi', () => ({
-  getAutoCreationRules: vi.fn(),
-  getAutoCreationGroups: vi.fn(),
+vi.mock('../../services/channelPipelineApi', () => ({
+  getChannelPipelineRules: vi.fn(),
+  getChannelPipelineGroups: vi.fn(),
   generateAndFetchDebugBundle: vi.fn(),
 }));
 
@@ -213,16 +213,16 @@ const settingsBase = {
   ssrf_outbound_mode: 'lan_friendly' as const,
 };
 
-function renderOnAutoCreation() {
+function renderOnChannelPipeline() {
   return render(
     <SettingsTab
       onSaved={vi.fn()}
-      initialSettingsPage="auto-creation"
+      initialSettingsPage="channel-pipeline"
     />
   );
 }
 
-describe('Auto Creation Runaway Safety Cap (skg35)', () => {
+describe('Channel Pipeline Runaway Safety Cap (skg35)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUser = { is_admin: true, username: 'admin' };
@@ -235,14 +235,14 @@ describe('Auto Creation Runaway Safety Cap (skg35)', () => {
 
   it('renders the channel-cap input populated from loaded settings', async () => {
     vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ max_auto_created_channels_per_run: 750 }));
-    renderOnAutoCreation();
+    renderOnChannelPipeline();
 
     const input = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
     expect(input.value).toBe('750');
   });
 
   it('explains the idempotent-rerun + 0-disables semantics in helper text', async () => {
-    renderOnAutoCreation();
+    renderOnChannelPipeline();
 
     await screen.findByLabelText(/Max channels created per run/i);
     // The idempotent-rerun hint is the operator's actual escape hatch — it must
@@ -254,7 +254,7 @@ describe('Auto Creation Runaway Safety Cap (skg35)', () => {
   });
 
   it('lets an admin raise the cap and sends the new value on save', async () => {
-    renderOnAutoCreation();
+    renderOnChannelPipeline();
 
     const input = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
     expect(input.disabled).toBe(false);
@@ -269,7 +269,7 @@ describe('Auto Creation Runaway Safety Cap (skg35)', () => {
 
   it('disables the cap inputs for a non-admin (backend gate would 403 a change)', async () => {
     mockUser = { is_admin: false, username: 'viewer' };
-    renderOnAutoCreation();
+    renderOnChannelPipeline();
 
     const channelInput = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
     const logInput = screen.getByLabelText(/Max execution-log entries per run/i) as HTMLInputElement;

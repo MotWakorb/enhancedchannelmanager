@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
-import * as autoCreationApi from '../../services/autoCreationApi';
+import * as channelPipelineApi from '../../services/channelPipelineApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
@@ -449,7 +449,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const handleDownloadDebugBundle = async () => {
     setDebugBundleLoading(true);
     try {
-      const { blob, filename } = await autoCreationApi.generateAndFetchDebugBundle();
+      const { blob, filename } = await channelPipelineApi.generateAndFetchDebugBundle();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -467,16 +467,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   // Auto-creation exclusion settings
-  const [autoCreationExcludedTerms, setAutoCreationExcludedTerms] = useState<string[]>([]);
+  const [channelPipelineExcludedTerms, setChannelPipelineExcludedTerms] = useState<string[]>([]);
   const [newExcludedTermInput, setNewExcludedTermInput] = useState('');
-  const [autoCreationExcludedGroups, setAutoCreationExcludedGroups] = useState<string[]>([]);
+  const [channelPipelineExcludedGroups, setChannelPipelineExcludedGroups] = useState<string[]>([]);
   const [availableStreamGroups, setAvailableStreamGroups] = useState<string[]>([]);
   const [selectedExcludeGroup, setSelectedExcludeGroup] = useState('');
-  const [autoCreationExcludeAutoSyncGroups, setAutoCreationExcludeAutoSyncGroups] = useState(false);
-  // GH #473 auto-creation OOM safety-valve caps (skg35). Admin-only on save;
+  const [channelPipelineExcludeAutoSyncGroups, setChannelPipelineExcludeAutoSyncGroups] = useState(false);
+  // GH #473 channel pipeline OOM safety-valve caps (skg35). Admin-only on save;
   // 0 disables. Default 500 matches the backend.
   const [maxAutoCreatedChannelsPerRun, setMaxAutoCreatedChannelsPerRun] = useState(500);
-  const [maxAutoCreationLogEntries, setMaxAutoCreationLogEntries] = useState(500);
+  const [maxChannelPipelineLogEntries, setMaxChannelPipelineLogEntries] = useState(500);
 
   // M3U Digest settings
   const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
@@ -674,9 +674,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     // eslint-disable-next-line react-hooks/exhaustive-deps -- safe local function reference
   }, [activePage, digestSettings, digestLoading]);
 
-  // Load available stream groups when auto-creation page is activated
+  // Load available stream groups when channel pipeline page is activated
   useEffect(() => {
-    if (activePage === 'auto-creation' && availableStreamGroups.length === 0) {
+    if (activePage === 'channel-pipeline' && availableStreamGroups.length === 0) {
       api.getStreamGroups().then(groups => {
         setAvailableStreamGroups(groups.map(g => g.name).sort((a, b) => a.localeCompare(b)));
       }).catch(() => {});
@@ -845,11 +845,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       const vlcBehavior = settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only';
       setVlcOpenBehavior(vlcBehavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
-      setAutoCreationExcludedTerms(settings.auto_creation_excluded_terms ?? []);
-      setAutoCreationExcludedGroups(settings.auto_creation_excluded_groups ?? []);
-      setAutoCreationExcludeAutoSyncGroups(settings.auto_creation_exclude_auto_sync_groups ?? false);
+      setChannelPipelineExcludedTerms(settings.auto_creation_excluded_terms ?? []);
+      setChannelPipelineExcludedGroups(settings.auto_creation_excluded_groups ?? []);
+      setChannelPipelineExcludeAutoSyncGroups(settings.auto_creation_exclude_auto_sync_groups ?? false);
       setMaxAutoCreatedChannelsPerRun(settings.max_auto_created_channels_per_run ?? 500);
-      setMaxAutoCreationLogEntries(settings.max_auto_creation_log_entries ?? 500);
+      setMaxChannelPipelineLogEntries(settings.max_auto_creation_log_entries ?? 500);
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
@@ -1302,15 +1302,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         stream_preview_mode: streamPreviewMode,
-        auto_creation_excluded_terms: autoCreationExcludedTerms,
-        auto_creation_excluded_groups: autoCreationExcludedGroups,
-        auto_creation_exclude_auto_sync_groups: autoCreationExcludeAutoSyncGroups,
+        auto_creation_excluded_terms: channelPipelineExcludedTerms,
+        auto_creation_excluded_groups: channelPipelineExcludedGroups,
+        auto_creation_exclude_auto_sync_groups: channelPipelineExcludeAutoSyncGroups,
         // skg35: GH #473 safety-valve caps. Always echoed (loaded from the
         // stored value) so a non-admin save sends the unchanged value and the
         // backend field-level admin gate does NOT trip; only an admin who edits
         // the disabled-for-non-admins input sends a real change.
         max_auto_created_channels_per_run: maxAutoCreatedChannelsPerRun,
-        max_auto_creation_log_entries: maxAutoCreationLogEntries,
+        max_auto_creation_log_entries: maxChannelPipelineLogEntries,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_timeout: streamProbeTimeout,
@@ -3041,11 +3041,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const renderAutoCreationPage = () => (
+  const renderChannelPipelinePage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
-        <h2>Auto Creation</h2>
-        <p>Configure global exclusion filters for the auto-creation pipeline. Streams matching these filters will be excluded before any rules are evaluated.</p>
+        <h2>Channel Pipeline</h2>
+        <p>Configure global exclusion filters for the channel pipeline. Streams matching these filters will be excluded before any rules are evaluated.</p>
       </div>
 
       {/* Stream Name Exclusion List */}
@@ -3061,15 +3061,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               Streams whose name contains any of these terms (case-insensitive) will be excluded from the pipeline.
             </span>
             <div className="email-recipients-list">
-              {autoCreationExcludedTerms.length === 0 ? (
+              {channelPipelineExcludedTerms.length === 0 ? (
                 <span className="no-recipients">No excluded terms configured</span>
               ) : (
-                autoCreationExcludedTerms.map((term) => (
+                channelPipelineExcludedTerms.map((term) => (
                   <span key={term} className="email-recipient-tag">
                     {term}
                     <button
                       className="remove-btn"
-                      onClick={() => setAutoCreationExcludedTerms(prev => prev.filter(t => t !== term))}
+                      onClick={() => setChannelPipelineExcludedTerms(prev => prev.filter(t => t !== term))}
                       title="Remove term"
                     >
                       <span className="material-icons">close</span>
@@ -3087,8 +3087,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && newExcludedTermInput.trim()) {
                     const term = newExcludedTermInput.trim();
-                    if (!autoCreationExcludedTerms.includes(term)) {
-                      setAutoCreationExcludedTerms(prev => [...prev, term]);
+                    if (!channelPipelineExcludedTerms.includes(term)) {
+                      setChannelPipelineExcludedTerms(prev => [...prev, term]);
                     }
                     setNewExcludedTermInput('');
                   }
@@ -3098,8 +3098,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 className="btn-secondary"
                 onClick={() => {
                   const term = newExcludedTermInput.trim();
-                  if (term && !autoCreationExcludedTerms.includes(term)) {
-                    setAutoCreationExcludedTerms(prev => [...prev, term]);
+                  if (term && !channelPipelineExcludedTerms.includes(term)) {
+                    setChannelPipelineExcludedTerms(prev => [...prev, term]);
                   }
                   setNewExcludedTermInput('');
                 }}
@@ -3126,15 +3126,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               Streams belonging to any of these M3U groups (case-insensitive exact match) will be excluded.
             </span>
             <div className="email-recipients-list">
-              {autoCreationExcludedGroups.length === 0 ? (
+              {channelPipelineExcludedGroups.length === 0 ? (
                 <span className="no-recipients">No excluded groups configured</span>
               ) : (
-                autoCreationExcludedGroups.map((group) => (
+                channelPipelineExcludedGroups.map((group) => (
                   <span key={group} className="email-recipient-tag">
                     {group}
                     <button
                       className="remove-btn"
-                      onClick={() => setAutoCreationExcludedGroups(prev => prev.filter(g => g !== group))}
+                      onClick={() => setChannelPipelineExcludedGroups(prev => prev.filter(g => g !== group))}
                       title="Remove group"
                     >
                       <span className="material-icons">close</span>
@@ -3151,14 +3151,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 searchPlaceholder="Search groups..."
                 placeholder="Select a group to exclude..."
                 options={availableStreamGroups
-                  .filter(g => !autoCreationExcludedGroups.some(eg => eg.toLowerCase() === g.toLowerCase()))
+                  .filter(g => !channelPipelineExcludedGroups.some(eg => eg.toLowerCase() === g.toLowerCase()))
                   .map(g => ({ value: g, label: g }))}
               />
               <button
                 className="btn-secondary"
                 onClick={() => {
-                  if (selectedExcludeGroup && !autoCreationExcludedGroups.includes(selectedExcludeGroup)) {
-                    setAutoCreationExcludedGroups(prev => [...prev, selectedExcludeGroup]);
+                  if (selectedExcludeGroup && !channelPipelineExcludedGroups.includes(selectedExcludeGroup)) {
+                    setChannelPipelineExcludedGroups(prev => [...prev, selectedExcludeGroup]);
                   }
                   setSelectedExcludeGroup('');
                 }}
@@ -3183,14 +3183,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <label className="checkbox-label">
               <input
                 type="checkbox"
-                checked={autoCreationExcludeAutoSyncGroups}
-                onChange={(e) => setAutoCreationExcludeAutoSyncGroups(e.target.checked)}
+                checked={channelPipelineExcludeAutoSyncGroups}
+                onChange={(e) => setChannelPipelineExcludeAutoSyncGroups(e.target.checked)}
               />
               Exclude streams in Auto Channel Sync groups
             </label>
             <span className="form-description">
               When enabled, streams belonging to Dispatcharr channel groups that have Auto Channel Sync
-              enabled will be excluded from the auto-creation pipeline.
+              enabled will be excluded from the channel pipeline.
             </span>
           </div>
         </div>
@@ -3214,21 +3214,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               disabled={!user?.is_admin}
             />
             <p className="field-hint">
-              The per-run runaway safety cap. If a single auto-creation run would create
+              The per-run runaway safety cap. If a single channel pipeline run would create
               more than this many channels it stops early (status &quot;capped&quot;), leaving the
               channels it already created in place. Default 500. Set to 0 to disable the cap.
-              Auto-creation is idempotent — running it again continues from where a capped run
+              The channel pipeline is idempotent — running it again continues from where a capped run
               stopped, so you can leave the cap in place and re-run rather than raising it.
               {!user?.is_admin && ' Only an administrator can change this safety setting.'}
             </p>
           </div>
           <div className="form-group-vertical">
-            <label htmlFor="maxAutoCreationLogEntries">Max execution-log entries per run</label>
+            <label htmlFor="maxChannelPipelineLogEntries">Max execution-log entries per run</label>
             <input
               type="number"
-              id="maxAutoCreationLogEntries"
-              value={maxAutoCreationLogEntries}
-              onChange={(e) => setMaxAutoCreationLogEntries(parseInt(e.target.value, 10) || 0)}
+              id="maxChannelPipelineLogEntries"
+              value={maxChannelPipelineLogEntries}
+              onChange={(e) => setMaxChannelPipelineLogEntries(parseInt(e.target.value, 10) || 0)}
               min={0}
               disabled={!user?.is_admin}
             />
@@ -5559,11 +5559,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Scheduled Tasks
           </li>
           <li
-            className={`settings-nav-item ${activePage === 'auto-creation' ? 'active' : ''}`}
-            onClick={() => setActivePage('auto-creation')}
+            className={`settings-nav-item ${activePage === 'channel-pipeline' ? 'active' : ''}`}
+            onClick={() => setActivePage('channel-pipeline')}
           >
             <span className="material-icons">auto_awesome</span>
-            Auto Creation
+            Channel Pipeline
           </li>
           <li
             className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
@@ -5646,7 +5646,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'integrations' && renderIntegrationsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
-        {activePage === 'auto-creation' && renderAutoCreationPage()}
+        {activePage === 'channel-pipeline' && renderChannelPipelinePage()}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
         {activePage === 'linked-accounts' && <LinkedAccountsSection />}
