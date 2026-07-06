@@ -1,26 +1,26 @@
 /**
- * Hook for managing auto-creation rules state.
+ * Hook for managing channel pipeline rules state.
  *
  * Provides CRUD operations, toggling, and helper methods for rules.
  */
 import { useState, useCallback, useEffect } from 'react';
 import type {
-  AutoCreationRule,
+  ChannelPipelineRule,
   CreateRuleData,
   UpdateRuleData,
   BulkUpdateRulesPatch,
   BulkUpdateRulesResponse,
-} from '../types/autoCreation';
-import * as api from '../services/autoCreationApi';
+} from '../types/channelPipeline';
+import * as api from '../services/channelPipelineApi';
 
-export interface UseAutoCreationRulesOptions {
+export interface UseChannelPipelineRulesOptions {
   /** Automatically fetch rules on mount */
   autoFetch?: boolean;
 }
 
-export interface UseAutoCreationRulesResult {
+export interface UseChannelPipelineRulesResult {
   /** List of rules */
-  rules: AutoCreationRule[];
+  rules: ChannelPipelineRule[];
   /** Loading state */
   loading: boolean;
   /** Error message */
@@ -28,23 +28,23 @@ export interface UseAutoCreationRulesResult {
   /** Fetch all rules */
   fetchRules: () => Promise<void>;
   /** Create a new rule */
-  createRule: (data: CreateRuleData) => Promise<AutoCreationRule>;
+  createRule: (data: CreateRuleData) => Promise<ChannelPipelineRule>;
   /** Update an existing rule */
-  updateRule: (id: number, data: UpdateRuleData) => Promise<AutoCreationRule>;
+  updateRule: (id: number, data: UpdateRuleData) => Promise<ChannelPipelineRule>;
   /** Delete a rule */
   deleteRule: (id: number) => Promise<void>;
   /** Toggle rule enabled state */
-  toggleRule: (id: number) => Promise<AutoCreationRule>;
+  toggleRule: (id: number) => Promise<ChannelPipelineRule>;
   /** Get a rule by ID from local state */
-  getRule: (id: number) => AutoCreationRule | undefined;
+  getRule: (id: number) => ChannelPipelineRule | undefined;
   /** Get rules sorted by priority */
-  getRulesByPriority: () => AutoCreationRule[];
+  getRulesByPriority: () => ChannelPipelineRule[];
   /** Get only enabled rules */
-  getEnabledRules: () => AutoCreationRule[];
+  getEnabledRules: () => ChannelPipelineRule[];
   /** Reorder rules (update priorities) */
   reorderRules: (orderedIds: number[]) => Promise<void>;
   /** Duplicate a rule */
-  duplicateRule: (id: number) => Promise<AutoCreationRule>;
+  duplicateRule: (id: number) => Promise<ChannelPipelineRule>;
   /** Apply the same settings to multiple rules */
   bulkUpdateRules: (ruleIds: number[], patch: BulkUpdateRulesPatch) => Promise<BulkUpdateRulesResponse>;
   /** Set error manually */
@@ -53,12 +53,12 @@ export interface UseAutoCreationRulesResult {
   clearError: () => void;
 }
 
-export function useAutoCreationRules(
-  options: UseAutoCreationRulesOptions = {}
-): UseAutoCreationRulesResult {
+export function useChannelPipelineRules(
+  options: UseChannelPipelineRulesOptions = {}
+): UseChannelPipelineRulesResult {
   const { autoFetch = false } = options;
 
-  const [rules, setRules] = useState<AutoCreationRule[]>([]);
+  const [rules, setRules] = useState<ChannelPipelineRule[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,7 +66,7 @@ export function useAutoCreationRules(
     setLoading(true);
     setError(null);
     try {
-      const fetchedRules = await api.getAutoCreationRules();
+      const fetchedRules = await api.getChannelPipelineRules();
       setRules(fetchedRules);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch rules');
@@ -75,10 +75,10 @@ export function useAutoCreationRules(
     }
   }, []);
 
-  const createRule = useCallback(async (data: CreateRuleData): Promise<AutoCreationRule> => {
+  const createRule = useCallback(async (data: CreateRuleData): Promise<ChannelPipelineRule> => {
     setLoading(true);
     try {
-      const newRule = await api.createAutoCreationRule(data);
+      const newRule = await api.createChannelPipelineRule(data);
       setRules(prev => [...prev, newRule]);
       return newRule;
     } catch (err) {
@@ -89,10 +89,10 @@ export function useAutoCreationRules(
     }
   }, []);
 
-  const updateRule = useCallback(async (id: number, data: UpdateRuleData): Promise<AutoCreationRule> => {
+  const updateRule = useCallback(async (id: number, data: UpdateRuleData): Promise<ChannelPipelineRule> => {
     setLoading(true);
     try {
-      const updatedRule = await api.updateAutoCreationRule(id, data);
+      const updatedRule = await api.updateChannelPipelineRule(id, data);
       setRules(prev => prev.map(r => r.id === id ? updatedRule : r));
       return updatedRule;
     } catch (err) {
@@ -106,7 +106,7 @@ export function useAutoCreationRules(
   const deleteRule = useCallback(async (id: number): Promise<void> => {
     setLoading(true);
     try {
-      await api.deleteAutoCreationRule(id);
+      await api.deleteChannelPipelineRule(id);
       setRules(prev => prev.filter(r => r.id !== id));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete rule';
@@ -116,10 +116,10 @@ export function useAutoCreationRules(
     }
   }, []);
 
-  const toggleRule = useCallback(async (id: number): Promise<AutoCreationRule> => {
+  const toggleRule = useCallback(async (id: number): Promise<ChannelPipelineRule> => {
     setLoading(true);
     try {
-      const toggledRule = await api.toggleAutoCreationRule(id);
+      const toggledRule = await api.toggleChannelPipelineRule(id);
       setRules(prev => prev.map(r => r.id === id ? toggledRule : r));
       return toggledRule;
     } catch (err) {
@@ -130,15 +130,15 @@ export function useAutoCreationRules(
     }
   }, []);
 
-  const getRule = useCallback((id: number): AutoCreationRule | undefined => {
+  const getRule = useCallback((id: number): ChannelPipelineRule | undefined => {
     return rules.find(r => r.id === id);
   }, [rules]);
 
-  const getRulesByPriority = useCallback((): AutoCreationRule[] => {
+  const getRulesByPriority = useCallback((): ChannelPipelineRule[] => {
     return [...rules].sort((a, b) => a.priority - b.priority);
   }, [rules]);
 
-  const getEnabledRules = useCallback((): AutoCreationRule[] => {
+  const getEnabledRules = useCallback((): ChannelPipelineRule[] => {
     return rules.filter(r => r.enabled);
   }, [rules]);
 
@@ -147,7 +147,7 @@ export function useAutoCreationRules(
     try {
       // Update each rule's priority based on position in orderedIds
       const updates = orderedIds.map((id, index) =>
-        api.updateAutoCreationRule(id, { priority: index })
+        api.updateChannelPipelineRule(id, { priority: index })
       );
       await Promise.all(updates);
 
@@ -162,7 +162,7 @@ export function useAutoCreationRules(
             }
             return null;
           })
-          .filter((r): r is AutoCreationRule => r !== null);
+          .filter((r): r is ChannelPipelineRule => r !== null);
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to reorder rules';
@@ -172,7 +172,7 @@ export function useAutoCreationRules(
     }
   }, []);
 
-  const duplicateRule = useCallback(async (id: number): Promise<AutoCreationRule> => {
+  const duplicateRule = useCallback(async (id: number): Promise<ChannelPipelineRule> => {
     const originalRule = rules.find(r => r.id === id);
     if (!originalRule) {
       throw new Error('Rule not found');
@@ -226,7 +226,7 @@ export function useAutoCreationRules(
   ): Promise<BulkUpdateRulesResponse> => {
     setLoading(true);
     try {
-      const result = await api.bulkUpdateAutoCreationRules(ruleIds, patch);
+      const result = await api.bulkUpdateChannelPipelineRules(ruleIds, patch);
       setRules(prev => {
         const byId = new Map(result.rules.map(r => [r.id, r]));
         return prev.map(r => byId.get(r.id) ?? r);

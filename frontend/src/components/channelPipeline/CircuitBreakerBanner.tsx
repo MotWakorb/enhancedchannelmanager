@@ -1,5 +1,5 @@
 /**
- * Circuit-breaker banner for the Auto-Creation Pipeline tab.
+ * Circuit-breaker banner for the Channel Pipeline tab.
  *
  * Shown when the run-on-refresh circuit breaker is tripped. Distinguishes two
  * cases:
@@ -14,12 +14,12 @@
  */
 import { useState } from 'react';
 import { useNotifications } from '../../contexts/NotificationContext';
-import type { CircuitBreakerState } from '../../services/autoCreationApi';
-import * as autoCreationApi from '../../services/autoCreationApi';
+import type { CircuitBreakerState } from '../../services/channelPipelineApi';
+import * as channelPipelineApi from '../../services/channelPipelineApi';
 import './CircuitBreakerBanner.css';
 
 export interface CircuitBreakerBannerProps {
-  /** Current state from GET /api/auto-creation/circuit-breaker */
+  /** Current state from GET /api/channel-pipeline/circuit-breaker */
   state: CircuitBreakerState;
   /** Whether the current user is an admin (and can reset the breaker) */
   isAdmin: boolean;
@@ -41,17 +41,17 @@ export function CircuitBreakerBanner({ state, isAdmin, onReset }: CircuitBreaker
   const handleConfirmReset = async () => {
     setResetting(true);
     try {
-      await autoCreationApi.resetCircuitBreaker();
+      await channelPipelineApi.resetCircuitBreaker();
       notifications.success(
-        'Circuit breaker cleared — auto-creation will run after M3U refresh again.',
-        'Auto-Creation',
+        'Circuit breaker cleared — the channel pipeline will run after M3U refresh again.',
+        'Channel Pipeline',
       );
       setConfirmOpen(false);
       onReset();
     } catch (err) {
       notifications.error(
         err instanceof Error ? err.message : 'Failed to reset circuit breaker',
-        'Auto-Creation',
+        'Channel Pipeline',
       );
     } finally {
       setResetting(false);
@@ -71,13 +71,13 @@ export function CircuitBreakerBanner({ state, isAdmin, onReset }: CircuitBreaker
         <div className="circuit-breaker-text">
           {isAbandonedRun ? (
             <>
-              <strong>Auto-creation suspended</strong> — the previous run was abandoned
+              <strong>Channel pipeline suspended</strong> — the previous run was abandoned
               (likely an OOM crash). Run-on-refresh is disabled until an operator resets
               the circuit breaker. Manual &quot;Run Now&quot; is unaffected.
             </>
           ) : (
             <>
-              <strong>Run-on-refresh is disabled</strong> — auto-creation will not fire
+              <strong>Run-on-refresh is disabled</strong> — the channel pipeline will not fire
               automatically after M3U refresh. Manual &quot;Run Now&quot; is unaffected.
             </>
           )}
@@ -107,7 +107,7 @@ export function CircuitBreakerBanner({ state, isAdmin, onReset }: CircuitBreaker
           <div className="circuit-breaker-confirm-dialog">
             <h3 id="cb-confirm-title">Reset Circuit Breaker</h3>
             <p>
-              This will re-enable automatic auto-creation after every M3U refresh.
+              This will re-enable the automatic channel pipeline after every M3U refresh.
               Only reset if the previous abandoned run has been investigated.
             </p>
             <div className="circuit-breaker-confirm-footer">

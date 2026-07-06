@@ -1,8 +1,8 @@
 /**
- * Component for building and editing auto-creation rules.
+ * Component for building and editing channel pipeline rules.
  */
 import { useState, useEffect, useId, useCallback } from 'react';
-import type { AutoCreationRule, CreateRuleData, Condition, Action, ConditionType, ActionType } from '../../types/autoCreation';
+import type { ChannelPipelineRule, CreateRuleData, Condition, Action, ConditionType, ActionType } from '../../types/channelPipeline';
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
 import { CustomSelect } from '../CustomSelect';
@@ -10,7 +10,7 @@ import { getNormalizationRules, getChannelGroups } from '../../services/api';
 import './RuleBuilder.css';
 
 export interface RuleBuilderProps {
-  rule?: Partial<AutoCreationRule>;
+  rule?: Partial<ChannelPipelineRule>;
   onSave: (data: CreateRuleData) => Promise<void> | void;
   onCancel: () => void;
   isLoading?: boolean;

@@ -73,7 +73,7 @@ const M3UChangesTab = lazy(() => withImportTelemetry(import('./components/tabs/M
 const JournalTab = lazy(() => withImportTelemetry(import('./components/tabs/JournalTab')).then(m => ({ default: m.JournalTab })));
 const StatsTab = lazy(() => withImportTelemetry(import('./components/tabs/StatsTab')).then(m => ({ default: m.StatsTab })));
 const SettingsTab = lazy(() => withImportTelemetry(import('./components/tabs/SettingsTab')).then(m => ({ default: m.SettingsTab })));
-const AutoCreationTab = lazy(() => withImportTelemetry(import('./components/autoCreation/AutoCreationTab')).then(m => ({ default: m.AutoCreationTab })));
+const ChannelPipelineTab = lazy(() => withImportTelemetry(import('./components/channelPipeline/ChannelPipelineTab')).then(m => ({ default: m.ChannelPipelineTab })));
 
 // Self-contained timer component — updates only itself every second,
 // not the entire App tree (which was the previous behavior)
@@ -1149,7 +1149,7 @@ function App() {
     };
   }, [channelFilters.search]);
 
-  // Refresh channels/groups when auto-creation pipeline modifies them
+  // Refresh channels/groups when the channel pipeline modifies them
   // Uses api.* directly and channelGroupsRef to avoid stale closures (empty [] deps)
   useEffect(() => {
     const handleChannelsChanged = async () => {
@@ -2527,9 +2527,9 @@ function App() {
               <M3UChangesTab />
             </ErrorBoundary>
           )}
-          {activeTab === 'auto-creation' && (
-            <ErrorBoundary key="tab-auto-creation" scopeLabel="Auto-Creation tab" reloadMode="reset">
-              <AutoCreationTab />
+          {activeTab === 'channel-pipeline' && (
+            <ErrorBoundary key="tab-channel-pipeline" scopeLabel="Channel Pipeline tab" reloadMode="reset">
+              <ChannelPipelineTab />
             </ErrorBoundary>
           )}
           {activeTab === 'journal' && (

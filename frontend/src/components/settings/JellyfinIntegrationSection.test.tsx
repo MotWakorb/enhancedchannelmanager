@@ -31,9 +31,9 @@ vi.mock('../../services/api', () => ({
   testJellyfinConnection: vi.fn(),
 }));
 
-vi.mock('../../services/autoCreationApi', () => ({
-  getAutoCreationRules: vi.fn(),
-  getAutoCreationGroups: vi.fn(),
+vi.mock('../../services/channelPipelineApi', () => ({
+  getChannelPipelineRules: vi.fn(),
+  getChannelPipelineGroups: vi.fn(),
   generateAndFetchDebugBundle: vi.fn(),
 }));
 

@@ -395,7 +395,7 @@ const SECTION_LABELS: Record<string, string> = {
   task_schedules: 'Task Schedules',
   normalization_rule_groups: 'Normalization Rules',
   tag_groups: 'Tag Groups',
-  auto_creation_rules: 'Auto-Creation Rules',
+  auto_creation_rules: 'Channel Pipeline Rules',
   ffmpeg_profiles: 'FFmpeg Profiles',
   dummy_epg_profiles: 'Dummy EPG Profiles',
 };

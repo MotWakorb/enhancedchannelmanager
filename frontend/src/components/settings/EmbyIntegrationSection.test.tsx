@@ -42,9 +42,9 @@ vi.mock('../../services/api', () => ({
   EMBY_LOGO_TYPES: ['Primary', 'LogoLight', 'LogoLightColor'],
 }));
 
-vi.mock('../../services/autoCreationApi', () => ({
-  getAutoCreationRules: vi.fn(),
-  getAutoCreationGroups: vi.fn(),
+vi.mock('../../services/channelPipelineApi', () => ({
+  getChannelPipelineRules: vi.fn(),
+  getChannelPipelineGroups: vi.fn(),
   generateAndFetchDebugBundle: vi.fn(),
 }));
 

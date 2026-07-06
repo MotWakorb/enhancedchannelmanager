@@ -25,8 +25,8 @@ vi.mock('../services/api', () => ({
   saveSecurityMode: vi.fn().mockResolvedValue({ ssrf_outbound_mode: 'lan_friendly' }),
 }));
 
-vi.mock('../services/autoCreationApi', () => ({
-  getAutoCreationRules: vi.fn().mockResolvedValue([]),
+vi.mock('../services/channelPipelineApi', () => ({
+  getChannelPipelineRules: vi.fn().mockResolvedValue([]),
 }));
 
 const notify = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() };

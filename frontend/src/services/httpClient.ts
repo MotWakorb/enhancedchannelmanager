@@ -1,7 +1,7 @@
 /**
  * Shared HTTP client utilities.
  *
- * Provides fetchJson, fetchText, and buildQuery used by api.ts and autoCreationApi.ts.
+ * Provides fetchJson, fetchText, and buildQuery used by api.ts and channelPipelineApi.ts.
  * Includes automatic 401 token refresh retry logic.
  */
 import { logger } from '../utils/logger';

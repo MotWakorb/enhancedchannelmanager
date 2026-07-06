@@ -36,8 +36,8 @@ export {
   createMockScheduledTask,
   createMockAlertMethod,
   createMockNotification,
-  createMockAutoCreationRule,
-  createMockAutoCreationExecution,
+  createMockChannelPipelineRule,
+  createMockChannelPipelineExecution,
   resetIdCounter,
 } from './handlers'
 

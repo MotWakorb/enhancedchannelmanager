@@ -1,8 +1,8 @@
 /**
- * TypeScript types for the Auto-Creation Pipeline.
+ * TypeScript types for the Channel Pipeline.
  *
  * These types mirror the backend schema and are used throughout the frontend
- * for type safety when working with auto-creation rules, conditions, and actions.
+ * for type safety when working with channel pipeline rules, conditions, and actions.
  */
 
 // =============================================================================
@@ -208,9 +208,9 @@ export interface TemplateVariableSchema {
 // =============================================================================
 
 /**
- * An auto-creation rule.
+ * A channel pipeline rule.
  */
-export interface AutoCreationRule {
+export interface ChannelPipelineRule {
   id: number;
   name: string;
   description?: string;
@@ -295,9 +295,9 @@ export type BulkUpdateRulesPatch = UpdateRuleData & {
   merge_streams_remove_non_matching?: boolean;
 };
 
-/** Response from POST /auto-creation/rules/bulk-update */
+/** Response from POST /channel-pipeline/rules/bulk-update */
 export interface BulkUpdateRulesResponse {
-  rules: AutoCreationRule[];
+  rules: ChannelPipelineRule[];
   updated_count: number;
 }
 
@@ -328,7 +328,7 @@ export type ExecutionMode = 'execute' | 'dry_run';
 /**
  * A record of a pipeline execution.
  */
-export interface AutoCreationExecution {
+export interface ChannelPipelineExecution {
   id: number;
   mode: ExecutionMode;
   triggered_by: ExecutionTrigger;
@@ -353,7 +353,7 @@ export interface AutoCreationExecution {
   rolled_back_by?: string;
   /**
    * True when a pre-run snapshot exists for this execution (ADR-010 §D6).
-   * Derived by the backend from the existence of an AutoCreationSnapshot row;
+   * Derived by the backend from the existence of a ChannelPipelineSnapshot row;
    * gates the snapshot-restore affordance in the UI. False / absent for
    * dry-run executions, legacy runs, and runs where snapshot capture failed.
    */
@@ -452,7 +452,7 @@ export interface ActionLogEntry {
 /**
  * A conflict detected during execution.
  */
-export interface AutoCreationConflict {
+export interface ChannelPipelineConflict {
   id: number;
   execution_id: number;
   stream_id: number;
@@ -470,18 +470,18 @@ export interface AutoCreationConflict {
 // =============================================================================
 
 export interface RulesListResponse {
-  rules: AutoCreationRule[];
+  rules: ChannelPipelineRule[];
 }
 
 export interface ExecutionsListResponse {
-  executions: AutoCreationExecution[];
+  executions: ChannelPipelineExecution[];
   total: number;
   page: number;
   page_size: number;
 }
 
 export interface ConflictsListResponse {
-  conflicts: AutoCreationConflict[];
+  conflicts: ChannelPipelineConflict[];
   total: number;
 }
 
@@ -492,11 +492,11 @@ export interface ValidationResult {
 }
 
 /**
- * 202-Accepted response from POST /api/auto-creation/run and
- * POST /api/auto-creation/rules/{id}/run (bd-enfsy: background-task pattern).
+ * 202-Accepted response from POST /api/channel-pipeline/run and
+ * POST /api/channel-pipeline/rules/{id}/run (bd-enfsy: background-task pattern).
  *
  * Pipeline runs are now enqueued and the caller polls
- * GET /api/auto-creation/executions/{id} until status is terminal.
+ * GET /api/channel-pipeline/executions/{id} until status is terminal.
  */
 export interface RunPipelineEnqueuedResponse {
   execution_id: number;
@@ -507,10 +507,10 @@ export interface RunPipelineEnqueuedResponse {
 
 /**
  * Result returned by the polling-based ``runPipeline`` hook helper —
- * the terminal AutoCreationExecution row once polling resolves, or
+ * the terminal ChannelPipelineExecution row once polling resolves, or
  * ``undefined`` if the request errored out before completion.
  */
-export type RunPipelineResponse = AutoCreationExecution;
+export type RunPipelineResponse = ChannelPipelineExecution;
 
 export interface RollbackResponse {
   success: boolean;
@@ -531,7 +531,7 @@ export interface FailedChannel {
 }
 
 /**
- * Response from POST /auto-creation/executions/{id}/restore-snapshot (ADR-010 §D8).
+ * Response from POST /channel-pipeline/executions/{id}/restore-snapshot (ADR-010 §D8).
  *
  * ``success`` is false when any channel failed (partial failures are surfaced
  * in ``failed_channels``). A 200 with ``success: false`` is a partial-failure
