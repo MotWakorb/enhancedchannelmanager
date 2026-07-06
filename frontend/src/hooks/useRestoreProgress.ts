@@ -2,7 +2,7 @@
  * Polling hook for a DBAS Phase-2 restore / dry-run progress surface.
  *
  * Mirrors the poll / abort / cleanup conventions of
- * `useAutoCreationExecution.ts` (`pollExecutionUntilTerminal`): a steady
+ * `useChannelPipelineExecution.ts` (`pollExecutionUntilTerminal`): a steady
  * interval of cheap GETs against the task status endpoint, stop on a terminal
  * status, honor an AbortSignal both before each fetch and inside the inter-poll
  * sleep, and clear the interval on unmount so no timer leaks (there is a known
@@ -37,7 +37,7 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
 /** Default poll cadence — small and steady; status reads are cheap GETs. */
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
-/** Safety cap so a stuck task never polls forever (matches auto-creation hook). */
+/** Safety cap so a stuck task never polls forever (matches channel pipeline hook). */
 const MAX_POLL_DURATION_MS = 30 * 60 * 1000;
 
 export interface UseRestoreProgressOptions {
@@ -166,7 +166,7 @@ export function useRestoreProgress(
         } catch (err) {
           if (signal.aborted) return;
           // Transient fetch failure — surface the message but keep polling
-          // until the safety cap, mirroring the auto-creation hook's retry.
+          // until the safety cap, mirroring the channel pipeline hook's retry.
           setView((prev) => ({
             ...prev,
             error: err instanceof Error ? err.message : 'Failed to fetch restore progress',

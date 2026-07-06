@@ -1,31 +1,31 @@
 /**
- * Main Auto-Creation tab component for managing auto-creation rules and executions.
+ * Main Channel Pipeline tab component for managing channel pipeline rules and executions.
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type {
-  AutoCreationRule,
-  AutoCreationExecution,
+  ChannelPipelineRule,
+  ChannelPipelineExecution,
   CreateRuleData,
   ExecutionLogEntry,
   ActionLogEntry,
   BulkUpdateRulesPatch,
   RestoreSnapshotResponse,
   FailedChannel,
-} from '../../types/autoCreation';
-import type { CircuitBreakerState } from '../../services/autoCreationApi';
+} from '../../types/channelPipeline';
+import type { CircuitBreakerState } from '../../services/channelPipelineApi';
 import { useAuth } from '../../hooks/useAuth';
-import { useAutoCreationRules } from '../../hooks/useAutoCreationRules';
-import { useAutoCreationExecution } from '../../hooks/useAutoCreationExecution';
+import { useChannelPipelineRules } from '../../hooks/useChannelPipelineRules';
+import { useChannelPipelineExecution } from '../../hooks/useChannelPipelineExecution';
 import { RuleBuilder } from './RuleBuilder';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 import { CircuitBreakerBanner } from './CircuitBreakerBanner';
-import * as autoCreationApi from '../../services/autoCreationApi';
+import * as channelPipelineApi from '../../services/channelPipelineApi';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getDateLocale } from '../../utils/formatting';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
 import '../ModalBase.css';
-import './AutoCreationTab.css';
+import './ChannelPipelineTab.css';
 
 type FilterMode = 'all' | 'enabled' | 'disabled';
 
@@ -70,7 +70,7 @@ function getActionCategory(action: ActionLogEntry): string | null {
   return null;
 }
 
-export function AutoCreationTab() {
+export function ChannelPipelineTab() {
   const { user } = useAuth();
   const isAdmin = Boolean(user?.is_admin);
 
@@ -88,7 +88,7 @@ export function AutoCreationTab() {
     reorderRules,
     getEnabledRules,
     bulkUpdateRules,
-  } = useAutoCreationRules();
+  } = useChannelPipelineRules();
 
   const {
     executions,
@@ -98,7 +98,7 @@ export function AutoCreationTab() {
     fetchExecutions,
     runPipeline: runPipelineApi,
     rollback,
-  } = useAutoCreationExecution();
+  } = useChannelPipelineExecution();
 
   // Circuit-breaker state (bd-fqur1: abandoned/capped run surfacing)
   const [circuitBreaker, setCircuitBreaker] = useState<CircuitBreakerState | null>(null);
@@ -111,17 +111,17 @@ export function AutoCreationTab() {
 
   // Modal states
   const [showRuleBuilder, setShowRuleBuilder] = useState(false);
-  const [editingRule, setEditingRule] = useState<AutoCreationRule | null>(null);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState<AutoCreationRule | null>(null);
-  const [showRollbackConfirm, setShowRollbackConfirm] = useState<AutoCreationExecution | null>(null);
+  const [editingRule, setEditingRule] = useState<ChannelPipelineRule | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<ChannelPipelineRule | null>(null);
+  const [showRollbackConfirm, setShowRollbackConfirm] = useState<ChannelPipelineExecution | null>(null);
   // Snapshot-restore state (ADR-010 §D5 / uc51o.7)
-  const [showRevertConfirm, setShowRevertConfirm] = useState<AutoCreationExecution | null>(null);
+  const [showRevertConfirm, setShowRevertConfirm] = useState<ChannelPipelineExecution | null>(null);
   const [revertLoading, setRevertLoading] = useState(false);
   const [revertResult, setRevertResult] = useState<RestoreSnapshotResponse | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
-  const [showExecutionDetails, setShowExecutionDetails] = useState<AutoCreationExecution | null>(null);
-  const [executionDetails, setExecutionDetails] = useState<AutoCreationExecution | null>(null);
+  const [showExecutionDetails, setShowExecutionDetails] = useState<ChannelPipelineExecution | null>(null);
+  const [executionDetails, setExecutionDetails] = useState<ChannelPipelineExecution | null>(null);
   const [executionDetailsLoading, setExecutionDetailsLoading] = useState(false);
   const [logSearch, setLogSearch] = useState('');
   const [logFilters, setLogFilters] = useState<Set<string>>(new Set());
@@ -151,7 +151,7 @@ export function AutoCreationTab() {
 
   const fetchCircuitBreaker = useCallback(async () => {
     try {
-      const state = await autoCreationApi.getCircuitBreakerState();
+      const state = await channelPipelineApi.getCircuitBreakerState();
       setCircuitBreaker(state);
     } catch {
       // Non-fatal — banner is informational only; don't surface a toast
@@ -223,7 +223,7 @@ export function AutoCreationTab() {
     setShowRuleBuilder(true);
   }, []);
 
-  const handleEditRule = useCallback((rule: AutoCreationRule) => {
+  const handleEditRule = useCallback((rule: ChannelPipelineRule) => {
     setEditingRule(rule);
     setShowRuleBuilder(true);
   }, []);
@@ -240,7 +240,7 @@ export function AutoCreationTab() {
       setShowRuleBuilder(false);
       setEditingRule(null);
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Auto-Creation');
+      notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Channel Pipeline');
     }
   }, [editingRule, updateRule, createRule, rules, notifications]);
 
@@ -249,7 +249,7 @@ export function AutoCreationTab() {
     setEditingRule(null);
   }, []);
 
-  const handleDeleteClick = useCallback((rule: AutoCreationRule) => {
+  const handleDeleteClick = useCallback((rule: ChannelPipelineRule) => {
     setShowDeleteConfirm(rule);
   }, []);
 
@@ -265,24 +265,24 @@ export function AutoCreationTab() {
         });
         setShowDeleteConfirm(null);
       } catch (err) {
-        notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Auto-Creation');
+        notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Channel Pipeline');
       }
     }
   }, [showDeleteConfirm, deleteRule, notifications]);
 
-  const handleToggleEnabled = useCallback(async (rule: AutoCreationRule) => {
+  const handleToggleEnabled = useCallback(async (rule: ChannelPipelineRule) => {
     try {
       await toggleRule(rule.id);
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to toggle rule', 'Auto-Creation');
+      notifications.error(err instanceof Error ? err.message : 'Failed to toggle rule', 'Channel Pipeline');
     }
   }, [toggleRule, notifications]);
 
-  const handleDuplicate = useCallback(async (rule: AutoCreationRule) => {
+  const handleDuplicate = useCallback(async (rule: ChannelPipelineRule) => {
     try {
       await duplicateRule(rule.id);
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to duplicate rule', 'Auto-Creation');
+      notifications.error(err instanceof Error ? err.message : 'Failed to duplicate rule', 'Channel Pipeline');
     }
   }, [duplicateRule, notifications]);
 
@@ -330,11 +330,11 @@ export function AutoCreationTab() {
       try {
         await bulkUpdateRules(ids, patch);
         setSelectedRuleIds(new Set());
-        notifications.success(`Updated ${n} rule${n !== 1 ? 's' : ''}`, 'Auto-Creation');
+        notifications.success(`Updated ${n} rule${n !== 1 ? 's' : ''}`, 'Channel Pipeline');
       } catch (err) {
         notifications.error(
           err instanceof Error ? err.message : 'Bulk update failed',
-          'Auto-Creation',
+          'Channel Pipeline',
         );
         throw err;
       }
@@ -385,14 +385,14 @@ export function AutoCreationTab() {
     try {
       await reorderRules(currentOrder);
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to reorder rules', 'Auto-Creation');
+      notifications.error(err instanceof Error ? err.message : 'Failed to reorder rules', 'Channel Pipeline');
     }
   }, [filteredRules, reorderRules, notifications]);
 
   const handleRun = useCallback(async (dryRun: boolean = false, ruleIds?: number[]) => {
     try {
       // bd-enfsy: runPipelineApi now polls the backend until the execution
-      // reaches a terminal status, then resolves with the AutoCreationExecution
+      // reaches a terminal status, then resolves with the ChannelPipelineExecution
       // row. Orphan-reconciliation counters (channels_removed / channels_moved)
       // are derived from results during the run but not persisted on the row,
       // so the success message only quotes the persisted channels_created
@@ -410,7 +410,7 @@ export function AutoCreationTab() {
             : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}`)
           : `Pipeline ${status}`;
         if (succeeded) {
-          notifications.success(msg, 'Auto-Creation');
+          notifications.success(msg, 'Channel Pipeline');
           // Surface disabled-normalization-group warnings so the operator
           // notices that normalization silently applied nothing, even on an
           // otherwise-clean run (enhancedchannelmanager-e8p1h).
@@ -420,13 +420,13 @@ export function AutoCreationTab() {
               `Normalization applied no changes: ${ruleNames} ` +
                 `reference disabled normalization groups. Enable them under ` +
                 `Settings > Normalization, then re-run.`,
-              'Auto-Creation',
+              'Channel Pipeline',
             );
           }
         } else {
           notifications.error(
             response.error_message || msg,
-            'Auto-Creation',
+            'Channel Pipeline',
           );
         }
         // Refresh executions list and rule stats (match counts). The hook
@@ -441,7 +441,7 @@ export function AutoCreationTab() {
       }
       // If response is undefined, the hook caught an error and set executionsError
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Pipeline failed', 'Auto-Creation');
+      notifications.error(err instanceof Error ? err.message : 'Pipeline failed', 'Channel Pipeline');
     }
   }, [runPipelineApi, fetchExecutions, fetchRules, notifications]);
 
@@ -454,7 +454,7 @@ export function AutoCreationTab() {
     }
   }, [handleRun]);
 
-  const handleRollbackClick = useCallback((execution: AutoCreationExecution) => {
+  const handleRollbackClick = useCallback((execution: ChannelPipelineExecution) => {
     setShowRollbackConfirm(execution);
   }, []);
 
@@ -465,13 +465,13 @@ export function AutoCreationTab() {
         setShowRollbackConfirm(null);
         await fetchExecutions();
       } catch (err) {
-        notifications.error(err instanceof Error ? err.message : 'Failed to rollback', 'Auto-Creation');
+        notifications.error(err instanceof Error ? err.message : 'Failed to rollback', 'Channel Pipeline');
       }
     }
   }, [showRollbackConfirm, rollback, fetchExecutions, notifications]);
 
   // Snapshot-restore handlers (ADR-010 §D5/§D8, uc51o.7)
-  const handleRevertClick = useCallback((execution: AutoCreationExecution) => {
+  const handleRevertClick = useCallback((execution: ChannelPipelineExecution) => {
     setRevertResult(null);
     setShowRevertConfirm(execution);
   }, []);
@@ -480,13 +480,13 @@ export function AutoCreationTab() {
     if (!showRevertConfirm) return;
     setRevertLoading(true);
     try {
-      const result = await autoCreationApi.restoreAutoCreationSnapshot(showRevertConfirm.id);
+      const result = await channelPipelineApi.restoreChannelPipelineSnapshot(showRevertConfirm.id);
       setRevertResult(result);
       await fetchExecutions();
     } catch (err) {
       notifications.error(
         err instanceof Error ? err.message : 'Failed to restore snapshot',
-        'Auto-Creation',
+        'Channel Pipeline',
       );
       setShowRevertConfirm(null);
     } finally {
@@ -494,7 +494,7 @@ export function AutoCreationTab() {
     }
   }, [showRevertConfirm, fetchExecutions, notifications]);
 
-  const handleViewDetails = useCallback(async (execution: AutoCreationExecution) => {
+  const handleViewDetails = useCallback(async (execution: ChannelPipelineExecution) => {
     setShowExecutionDetails(execution);
     setExecutionDetails(null);
     setLogSearch('');
@@ -502,7 +502,7 @@ export function AutoCreationTab() {
     setExpandedLogEntries(new Set());
     setExecutionDetailsLoading(true);
     try {
-      const details = await autoCreationApi.getExecutionDetails(execution.id);
+      const details = await channelPipelineApi.getExecutionDetails(execution.id);
       setExecutionDetails(details);
       // Pre-select all filter categories so user clicks to *remove*
       const allCats = new Set<string>();
@@ -524,11 +524,11 @@ export function AutoCreationTab() {
 
   const handleExport = useCallback(async () => {
     try {
-      const yaml = await autoCreationApi.exportAutoCreationRulesYAML();
+      const yaml = await channelPipelineApi.exportChannelPipelineRulesYAML();
       setExportYaml(yaml);
       setShowExportDialog(true);
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to export rules', 'Auto-Creation');
+      notifications.error(err instanceof Error ? err.message : 'Failed to export rules', 'Channel Pipeline');
     }
   }, [notifications]);
 
@@ -536,7 +536,7 @@ export function AutoCreationTab() {
   const handleDebugBundle = useCallback(async () => {
     setDebugBundleLoading(true);
     try {
-      const { blob, filename } = await autoCreationApi.generateAndFetchDebugBundle();
+      const { blob, filename } = await channelPipelineApi.generateAndFetchDebugBundle();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -545,9 +545,9 @@ export function AutoCreationTab() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      notifications.success('Debug bundle downloaded', 'Auto-Creation');
+      notifications.success('Debug bundle downloaded', 'Channel Pipeline');
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to generate debug bundle', 'Auto-Creation');
+      notifications.error(err instanceof Error ? err.message : 'Failed to generate debug bundle', 'Channel Pipeline');
     } finally {
       setDebugBundleLoading(false);
     }
@@ -559,7 +559,7 @@ export function AutoCreationTab() {
     if (!overwrite) setImportConflicts([]);
 
     try {
-      const result = await autoCreationApi.importAutoCreationRulesYAML(importYaml, overwrite);
+      const result = await channelPipelineApi.importChannelPipelineRulesYAML(importYaml, overwrite);
 
       // Check for "already exists" conflicts when not overwriting
       const conflictErrors = result.errors.filter(e =>
@@ -594,9 +594,9 @@ export function AutoCreationTab() {
       setShowImportDialog(false);
 
       if (otherErrors.length > 0) {
-        notifications.warning(`${summary}. ${otherErrors.length} rule(s) had errors.`, 'Auto-Creation');
+        notifications.warning(`${summary}. ${otherErrors.length} rule(s) had errors.`, 'Channel Pipeline');
       } else {
-        notifications.success(`Imported rules: ${summary}`, 'Auto-Creation');
+        notifications.success(`Imported rules: ${summary}`, 'Channel Pipeline');
       }
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Failed to import rules');
@@ -613,7 +613,7 @@ export function AutoCreationTab() {
   // Propagate hook errors to the toast
   useEffect(() => {
     if (executionsError) {
-      notifications.error(executionsError, 'Auto-Creation');
+      notifications.error(executionsError, 'Channel Pipeline');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [executionsError]);
@@ -621,10 +621,10 @@ export function AutoCreationTab() {
   // Error state
   if (rulesError && !rulesLoading) {
     return (
-      <div className={`auto-creation-tab ${isMobile ? 'mobile' : ''}`} data-testid="auto-creation-tab">
+      <div className={`channel-pipeline-tab ${isMobile ? 'mobile' : ''}`} data-testid="channel-pipeline-tab">
         <div className="loading-state">
           <span className="material-icons">error</span>
-          <p>Failed to load auto-creation rules</p>
+          <p>Failed to load channel pipeline rules</p>
           <button className="btn-primary" onClick={handleRetry} aria-label="Retry">
             <span className="material-icons">refresh</span>
             Retry
@@ -635,10 +635,10 @@ export function AutoCreationTab() {
   }
 
   return (
-    <div className={`auto-creation-tab ${isMobile ? 'mobile' : ''}`} data-testid="auto-creation-tab">
+    <div className={`channel-pipeline-tab ${isMobile ? 'mobile' : ''}`} data-testid="channel-pipeline-tab">
       {/* Header */}
       <header className="tab-header">
-        <h2>Auto-Creation Pipeline</h2>
+        <h2>Channel Pipeline</h2>
         <div className="header-actions">
           <button
             className="btn-primary"
@@ -713,7 +713,7 @@ export function AutoCreationTab() {
       )}
 
       {/* Statistics Summary */}
-      <div className="auto-creation-stats">
+      <div className="channel-pipeline-stats">
         <div className="stat-item">
           <span className="stat-value">{stats.totalRules}</span>
           <span className="stat-label">{stats.totalRules === 1 ? 'Rule' : 'Rules'}</span>
@@ -729,7 +729,7 @@ export function AutoCreationTab() {
       </div>
 
       {/* Main Content */}
-      <div className="auto-creation-content">
+      <div className="channel-pipeline-content">
         {/* Rules Section */}
         <section className="rules-section">
           <div className="section-header">
@@ -1748,9 +1748,9 @@ export function AutoCreationTab() {
                 onClick={async () => {
                   const success = await copyToClipboard(exportYaml, 'YAML rules');
                   if (success) {
-                    notifications.success('Copied YAML to clipboard', 'Auto-Creation');
+                    notifications.success('Copied YAML to clipboard', 'Channel Pipeline');
                   } else {
-                    notifications.error('Failed to copy to clipboard. Please check browser permissions.', 'Auto-Creation');
+                    notifications.error('Failed to copy to clipboard. Please check browser permissions.', 'Channel Pipeline');
                   }
                 }}
               >

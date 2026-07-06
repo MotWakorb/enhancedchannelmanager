@@ -1,9 +1,9 @@
 /**
- * Component for editing individual conditions in auto-creation rules.
+ * Component for editing individual conditions in channel pipeline rules.
  * Uses a three-part layout: Field + Operator + Value
  */
 import { useState, useEffect, useId } from 'react';
-import type { Condition, ConditionType } from '../../types/autoCreation';
+import type { Condition, ConditionType } from '../../types/channelPipeline';
 import { CustomSelect } from '../CustomSelect';
 import type { SelectOption } from '../CustomSelect';
 import { getM3UAccounts, getChannelGroups } from '../../services/api';

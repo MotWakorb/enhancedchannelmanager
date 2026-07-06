@@ -1,17 +1,17 @@
 /**
- * API service for Auto-Creation Pipeline.
+ * API service for the Channel Pipeline.
  *
- * Provides functions for managing auto-creation rules, executions, and YAML import/export.
+ * Provides functions for managing channel pipeline rules, executions, and YAML import/export.
  */
 import type {
-  AutoCreationRule,
+  ChannelPipelineRule,
   CreateRuleData,
   UpdateRuleData,
   BulkUpdateRulesPatch,
   BulkUpdateRulesResponse,
   RulesListResponse,
   ExecutionsListResponse,
-  AutoCreationExecution,
+  ChannelPipelineExecution,
   ValidationResult,
   RunPipelineEnqueuedResponse,
   RollbackResponse,
@@ -21,18 +21,18 @@ import type {
   ActionSchema,
   TemplateVariableSchema,
   YAMLImportResponse,
-} from '../types/autoCreation';
+} from '../types/channelPipeline';
 import { fetchJson as _fetchJson, fetchText as _fetchText, buildQuery } from './httpClient';
 
 const API_BASE = '/api';
 
-// Wrap shared utilities with auto-creation log prefix
+// Wrap shared utilities with channel pipeline log prefix
 function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  return _fetchJson<T>(url, options, 'Auto-Creation API');
+  return _fetchJson<T>(url, options, 'Channel Pipeline API');
 }
 
 function fetchText(url: string, options?: RequestInit): Promise<string> {
-  return _fetchText(url, options, 'Auto-Creation API');
+  return _fetchText(url, options, 'Channel Pipeline API');
 }
 
 // =============================================================================
@@ -40,45 +40,45 @@ function fetchText(url: string, options?: RequestInit): Promise<string> {
 // =============================================================================
 
 /**
- * Get all auto-creation rules.
+ * Get all channel pipeline rules.
  */
-export async function getAutoCreationRules(): Promise<AutoCreationRule[]> {
-  const response = await fetchJson<RulesListResponse>(`${API_BASE}/auto-creation/rules`);
+export async function getChannelPipelineRules(): Promise<ChannelPipelineRule[]> {
+  const response = await fetchJson<RulesListResponse>(`${API_BASE}/channel-pipeline/rules`);
   return response.rules;
 }
 
 /**
- * Get a single auto-creation rule by ID.
+ * Get a single channel pipeline rule by ID.
  */
-export async function getAutoCreationRule(id: number): Promise<AutoCreationRule> {
-  return fetchJson<AutoCreationRule>(`${API_BASE}/auto-creation/rules/${id}`);
+export async function getChannelPipelineRule(id: number): Promise<ChannelPipelineRule> {
+  return fetchJson<ChannelPipelineRule>(`${API_BASE}/channel-pipeline/rules/${id}`);
 }
 
 /**
- * Create a new auto-creation rule.
+ * Create a new channel pipeline rule.
  */
-export async function createAutoCreationRule(data: CreateRuleData): Promise<AutoCreationRule> {
-  return fetchJson<AutoCreationRule>(`${API_BASE}/auto-creation/rules`, {
+export async function createChannelPipelineRule(data: CreateRuleData): Promise<ChannelPipelineRule> {
+  return fetchJson<ChannelPipelineRule>(`${API_BASE}/channel-pipeline/rules`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
 /**
- * Update an existing auto-creation rule.
+ * Update an existing channel pipeline rule.
  */
-export async function updateAutoCreationRule(id: number, data: UpdateRuleData): Promise<AutoCreationRule> {
-  return fetchJson<AutoCreationRule>(`${API_BASE}/auto-creation/rules/${id}`, {
+export async function updateChannelPipelineRule(id: number, data: UpdateRuleData): Promise<ChannelPipelineRule> {
+  return fetchJson<ChannelPipelineRule>(`${API_BASE}/channel-pipeline/rules/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   });
 }
 
 /**
- * Delete an auto-creation rule.
+ * Delete a channel pipeline rule.
  */
-export async function deleteAutoCreationRule(id: number): Promise<void> {
-  await fetchJson<{ status: string }>(`${API_BASE}/auto-creation/rules/${id}`, {
+export async function deleteChannelPipelineRule(id: number): Promise<void> {
+  await fetchJson<{ status: string }>(`${API_BASE}/channel-pipeline/rules/${id}`, {
     method: 'DELETE',
   });
 }
@@ -86,8 +86,8 @@ export async function deleteAutoCreationRule(id: number): Promise<void> {
 /**
  * Toggle the enabled state of a rule.
  */
-export async function toggleAutoCreationRule(id: number): Promise<AutoCreationRule> {
-  return fetchJson<AutoCreationRule>(`${API_BASE}/auto-creation/rules/${id}/toggle`, {
+export async function toggleChannelPipelineRule(id: number): Promise<ChannelPipelineRule> {
+  return fetchJson<ChannelPipelineRule>(`${API_BASE}/channel-pipeline/rules/${id}/toggle`, {
     method: 'POST',
   });
 }
@@ -95,11 +95,11 @@ export async function toggleAutoCreationRule(id: number): Promise<AutoCreationRu
 /**
  * Apply the same settings changes to multiple rules. Only include fields to change.
  */
-export async function bulkUpdateAutoCreationRules(
+export async function bulkUpdateChannelPipelineRules(
   ruleIds: number[],
   patch: BulkUpdateRulesPatch
 ): Promise<BulkUpdateRulesResponse> {
-  return fetchJson<BulkUpdateRulesResponse>(`${API_BASE}/auto-creation/rules/bulk-update`, {
+  return fetchJson<BulkUpdateRulesResponse>(`${API_BASE}/channel-pipeline/rules/bulk-update`, {
     method: 'POST',
     body: JSON.stringify({ rule_ids: ruleIds, ...patch }),
   });
@@ -112,11 +112,11 @@ export async function bulkUpdateAutoCreationRules(
 /**
  * Validate a rule's conditions and actions.
  */
-export async function validateAutoCreationRule(data: {
+export async function validateChannelPipelineRule(data: {
   conditions: object[];
   actions: object[];
 }): Promise<ValidationResult> {
-  return fetchJson<ValidationResult>(`${API_BASE}/auto-creation/validate`, {
+  return fetchJson<ValidationResult>(`${API_BASE}/channel-pipeline/validate`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
@@ -126,7 +126,7 @@ export async function validateAutoCreationRule(data: {
  * Get the condition schema (available condition types and their parameters).
  */
 export async function getConditionSchema(): Promise<ConditionSchema[]> {
-  const response = await fetchJson<SchemaResponse>(`${API_BASE}/auto-creation/schema/conditions`);
+  const response = await fetchJson<SchemaResponse>(`${API_BASE}/channel-pipeline/schema/conditions`);
   return response.conditions || [];
 }
 
@@ -134,7 +134,7 @@ export async function getConditionSchema(): Promise<ConditionSchema[]> {
  * Get the action schema (available action types and their parameters).
  */
 export async function getActionSchema(): Promise<ActionSchema[]> {
-  const response = await fetchJson<SchemaResponse>(`${API_BASE}/auto-creation/schema/actions`);
+  const response = await fetchJson<SchemaResponse>(`${API_BASE}/channel-pipeline/schema/actions`);
   return response.actions || [];
 }
 
@@ -142,7 +142,7 @@ export async function getActionSchema(): Promise<ActionSchema[]> {
  * Get available template variables.
  */
 export async function getTemplateVariables(): Promise<TemplateVariableSchema[]> {
-  const response = await fetchJson<SchemaResponse>(`${API_BASE}/auto-creation/schema/template-variables`);
+  const response = await fetchJson<SchemaResponse>(`${API_BASE}/channel-pipeline/schema/template-variables`);
   return response.variables || [];
 }
 
@@ -151,18 +151,18 @@ export async function getTemplateVariables(): Promise<TemplateVariableSchema[]> 
 // =============================================================================
 
 /**
- * Enqueue an auto-creation pipeline run (bd-enfsy: 202+poll background-task pattern).
+ * Enqueue a channel pipeline run (bd-enfsy: 202+poll background-task pattern).
  *
  * The handler now returns ``202 Accepted`` with ``{ execution_id, status: 'running' }``
- * after queuing the work. Callers (see ``useAutoCreationExecution.runPipeline``)
- * are expected to poll ``getAutoCreationExecution(execution_id)`` until
+ * after queuing the work. Callers (see ``useChannelPipelineExecution.runPipeline``)
+ * are expected to poll ``getChannelPipelineExecution(execution_id)`` until
  * ``status`` is terminal (``completed`` / ``failed`` / ``rolled_back``).
  */
-export async function runAutoCreationPipeline(options?: {
+export async function runChannelPipeline(options?: {
   dryRun?: boolean;
   ruleIds?: number[];
 }): Promise<RunPipelineEnqueuedResponse> {
-  return fetchJson<RunPipelineEnqueuedResponse>(`${API_BASE}/auto-creation/run`, {
+  return fetchJson<RunPipelineEnqueuedResponse>(`${API_BASE}/channel-pipeline/run`, {
     method: 'POST',
     body: JSON.stringify({
       dry_run: options?.dryRun ?? false,
@@ -172,16 +172,16 @@ export async function runAutoCreationPipeline(options?: {
 }
 
 /**
- * Enqueue a single-rule auto-creation run (bd-enfsy 202+poll, see
- * ``runAutoCreationPipeline`` for the contract).
+ * Enqueue a single-rule channel pipeline run (bd-enfsy 202+poll, see
+ * ``runChannelPipeline`` for the contract).
  */
-export async function runAutoCreationRule(
+export async function runChannelPipelineRule(
   ruleId: number,
   options?: { dryRun?: boolean }
 ): Promise<RunPipelineEnqueuedResponse> {
   const query = buildQuery({ dry_run: options?.dryRun });
   return fetchJson<RunPipelineEnqueuedResponse>(
-    `${API_BASE}/auto-creation/rules/${ruleId}/run${query}`,
+    `${API_BASE}/channel-pipeline/rules/${ruleId}/run${query}`,
     { method: 'POST' }
   );
 }
@@ -189,7 +189,7 @@ export async function runAutoCreationRule(
 /**
  * Get execution history.
  */
-export async function getAutoCreationExecutions(params?: {
+export async function getChannelPipelineExecutions(params?: {
   limit?: number;
   offset?: number;
   status?: string;
@@ -199,30 +199,30 @@ export async function getAutoCreationExecutions(params?: {
     offset: params?.offset,
     status: params?.status,
   });
-  return fetchJson<ExecutionsListResponse>(`${API_BASE}/auto-creation/executions${query}`);
+  return fetchJson<ExecutionsListResponse>(`${API_BASE}/channel-pipeline/executions${query}`);
 }
 
 /**
  * Get a single execution by ID.
  */
-export async function getAutoCreationExecution(id: number): Promise<AutoCreationExecution> {
-  return fetchJson<AutoCreationExecution>(`${API_BASE}/auto-creation/executions/${id}`);
+export async function getChannelPipelineExecution(id: number): Promise<ChannelPipelineExecution> {
+  return fetchJson<ChannelPipelineExecution>(`${API_BASE}/channel-pipeline/executions/${id}`);
 }
 
 /**
  * Get full execution details including entities and execution log.
  */
-export async function getExecutionDetails(id: number): Promise<AutoCreationExecution> {
-  return fetchJson<AutoCreationExecution>(
-    `${API_BASE}/auto-creation/executions/${id}?include_entities=true&include_log=true`
+export async function getExecutionDetails(id: number): Promise<ChannelPipelineExecution> {
+  return fetchJson<ChannelPipelineExecution>(
+    `${API_BASE}/channel-pipeline/executions/${id}?include_entities=true&include_log=true`
   );
 }
 
 /**
  * Rollback an execution.
  */
-export async function rollbackAutoCreationExecution(id: number): Promise<RollbackResponse> {
-  return fetchJson<RollbackResponse>(`${API_BASE}/auto-creation/executions/${id}/rollback`, {
+export async function rollbackChannelPipelineExecution(id: number): Promise<RollbackResponse> {
+  return fetchJson<RollbackResponse>(`${API_BASE}/channel-pipeline/executions/${id}/rollback`, {
     method: 'POST',
   });
 }
@@ -246,9 +246,9 @@ export async function rollbackAutoCreationExecution(id: number): Promise<Rollbac
  *   - 400 — ``confirm`` not set, or the execution is a dry-run / already reverted.
  *   - 404 — no snapshot for this execution (use ``/rollback`` instead).
  */
-export async function restoreAutoCreationSnapshot(id: number): Promise<RestoreSnapshotResponse> {
+export async function restoreChannelPipelineSnapshot(id: number): Promise<RestoreSnapshotResponse> {
   return fetchJson<RestoreSnapshotResponse>(
-    `${API_BASE}/auto-creation/executions/${id}/restore-snapshot?confirm=true`,
+    `${API_BASE}/channel-pipeline/executions/${id}/restore-snapshot?confirm=true`,
     { method: 'POST' },
   );
 }
@@ -260,18 +260,18 @@ export async function restoreAutoCreationSnapshot(id: number): Promise<RestoreSn
 /**
  * Export all rules as YAML.
  */
-export async function exportAutoCreationRulesYAML(): Promise<string> {
-  return fetchText(`${API_BASE}/auto-creation/export/yaml`);
+export async function exportChannelPipelineRulesYAML(): Promise<string> {
+  return fetchText(`${API_BASE}/channel-pipeline/export/yaml`);
 }
 
 /**
  * Import rules from YAML.
  */
-export async function importAutoCreationRulesYAML(
+export async function importChannelPipelineRulesYAML(
   yamlContent: string,
   overwrite?: boolean
 ): Promise<YAMLImportResponse> {
-  return fetchJson<YAMLImportResponse>(`${API_BASE}/auto-creation/import/yaml`, {
+  return fetchJson<YAMLImportResponse>(`${API_BASE}/channel-pipeline/import/yaml`, {
     method: 'POST',
     body: JSON.stringify({
       yaml_content: yamlContent,
@@ -287,7 +287,7 @@ export async function importAutoCreationRulesYAML(
 /**
  * State of the run-on-refresh circuit breaker.
  *
- * - disabled: true → auto-creation will NOT fire after M3U refresh.
+ * - disabled: true → the channel pipeline will NOT fire after M3U refresh.
  * - reason: 'abandoned_run' → tripped automatically by startup crash-sentinel;
  *   null → manually disabled by the user (or not disabled at all).
  */
@@ -300,7 +300,7 @@ export interface CircuitBreakerState {
  * Get the current run-on-refresh circuit-breaker state.
  */
 export async function getCircuitBreakerState(): Promise<CircuitBreakerState> {
-  return fetchJson<CircuitBreakerState>(`${API_BASE}/auto-creation/circuit-breaker`);
+  return fetchJson<CircuitBreakerState>(`${API_BASE}/channel-pipeline/circuit-breaker`);
 }
 
 /**
@@ -311,7 +311,7 @@ export async function getCircuitBreakerState(): Promise<CircuitBreakerState> {
  */
 export async function resetCircuitBreaker(): Promise<{ success: boolean; was_disabled: boolean; disabled: boolean }> {
   return fetchJson<{ success: boolean; was_disabled: boolean; disabled: boolean }>(
-    `${API_BASE}/auto-creation/reset-circuit-breaker`,
+    `${API_BASE}/channel-pipeline/reset-circuit-breaker`,
     { method: 'POST' },
   );
 }
@@ -335,7 +335,7 @@ interface DebugBundleStatusJson {
 
 /** Enqueue debug bundle generation; returns the job id. */
 export async function startDebugBundle(): Promise<DebugBundleEnqueuedResponse> {
-  return fetchJson<DebugBundleEnqueuedResponse>(`${API_BASE}/auto-creation/debug-bundle`, {
+  return fetchJson<DebugBundleEnqueuedResponse>(`${API_BASE}/channel-pipeline/debug-bundle`, {
     method: 'POST',
   });
 }
@@ -351,7 +351,7 @@ export async function pollDebugBundle(
   const POLL_INTERVAL_MS = 1000;
   const MAX_POLL_DURATION_MS = 30 * 60 * 1000;
   const startedAt = Date.now();
-  const url = `${API_BASE}/auto-creation/debug-bundle/${encodeURIComponent(jobId)}`;
+  const url = `${API_BASE}/channel-pipeline/debug-bundle/${encodeURIComponent(jobId)}`;
 
   while (true) {
     if (signal?.aborted) throw new Error('Debug bundle download cancelled');

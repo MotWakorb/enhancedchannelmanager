@@ -43,9 +43,9 @@ vi.mock('../../services/api', () => ({
   getProbeProgress: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('../../services/autoCreationApi', () => ({
-  getAutoCreationRules: vi.fn(),
-  getAutoCreationGroups: vi.fn(),
+vi.mock('../../services/channelPipelineApi', () => ({
+  getChannelPipelineRules: vi.fn(),
+  getChannelPipelineGroups: vi.fn(),
   generateAndFetchDebugBundle: vi.fn(),
 }));
 

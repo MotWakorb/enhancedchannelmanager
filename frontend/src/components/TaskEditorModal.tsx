@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
-import * as autoCreationApi from '../services/autoCreationApi';
+import * as channelPipelineApi from '../services/channelPipelineApi';
 import type { TaskStatus, TaskSchedule, TaskScheduleCreate, TaskScheduleUpdate, TaskParameterSchema, SettingsResponse } from '../services/api';
 import type { EPGSource, M3UAccount, ChannelGroup } from '../types';
-import type { AutoCreationRule } from '../types/autoCreation';
+import type { ChannelPipelineRule } from '../types/channelPipeline';
 import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ModalOverlay } from './ModalOverlay';
@@ -47,7 +47,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
-  const [autoCreationRules, setAutoCreationRules] = useState<AutoCreationRule[]>([]);
+  const [channelPipelineRules, setChannelPipelineRules] = useState<ChannelPipelineRule[]>([]);
   const [backupSections, setBackupSections] = useState<{key: string; label: string}[]>([]);
 
   // Settings for default parameter values (stream_probe)
@@ -96,7 +96,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
           loaders.push(api.getM3UAccounts().then(setM3uAccounts));
         }
         if (sources.has('auto_creation_rules')) {
-          loaders.push(autoCreationApi.getAutoCreationRules().then(setAutoCreationRules));
+          loaders.push(channelPipelineApi.getChannelPipelineRules().then(setChannelPipelineRules));
         }
         if (sources.has('backup_sections')) {
           loaders.push(api.getExportSections().then(setBackupSections));
@@ -146,9 +146,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       }));
     }
 
-    // Auto-creation rules (for auto_creation)
-    if (autoCreationRules.length > 0) {
-      options['auto_creation_rules'] = autoCreationRules.map(r => ({
+    // Channel pipeline rules (for auto_creation)
+    if (channelPipelineRules.length > 0) {
+      options['auto_creation_rules'] = channelPipelineRules.map(r => ({
         value: r.id,
         label: r.name,
         badge: r.enabled ? undefined : 'disabled',
@@ -164,7 +164,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     }
 
     return options;
-  }, [channelGroups, m3uAccounts, epgSources, autoCreationRules, backupSections]);
+  }, [channelGroups, m3uAccounts, epgSources, channelPipelineRules, backupSections]);
 
   // Compute default parameters for new schedules
   const defaultParameters = useMemo(() => {
@@ -654,7 +654,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                     per DBA spike), the legacy health_checks table (14% / 53k
                     rows), and the notifications table. */}
                 <div className="retention-item">
-                  <label>Auto-creation execution BLOB retention (days)</label>
+                  <label>Channel Pipeline execution BLOB retention (days)</label>
                   <input
                     type="number"
                     min={1}

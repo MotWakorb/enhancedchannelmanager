@@ -1,5 +1,5 @@
 /**
- * TDD Tests for useAutoCreationExecution hook.
+ * TDD Tests for useChannelPipelineExecution hook.
  *
  * These tests define the expected behavior of the hook BEFORE implementation.
  */
@@ -10,14 +10,14 @@ import {
   server,
   mockDataStore,
   resetMockDataStore,
-  createMockAutoCreationExecution,
+  createMockChannelPipelineExecution,
 } from '../test/mocks/server';
-import { useAutoCreationExecution } from './useAutoCreationExecution';
+import { useChannelPipelineExecution } from './useChannelPipelineExecution';
 import type {
-  AutoCreationExecution,
+  ChannelPipelineExecution,
   RunPipelineResponse,
   RollbackResponse,
-} from '../types/autoCreation';
+} from '../types/channelPipeline';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
@@ -27,41 +27,41 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-describe('useAutoCreationExecution', () => {
+describe('useChannelPipelineExecution', () => {
   describe('initial state', () => {
     it('starts with empty executions array', () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
       expect(result.current.executions).toEqual([]);
     });
 
     it('starts with loading false', () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
       expect(result.current.loading).toBe(false);
     });
 
     it('starts with error null', () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
       expect(result.current.error).toBeNull();
     });
 
     it('starts with no current execution', () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
       expect(result.current.currentExecution).toBeNull();
     });
 
     it('starts with isRunning false', () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
       expect(result.current.isRunning).toBe(false);
     });
   });
 
   describe('fetchExecutions', () => {
     it('fetches execution history from API', async () => {
-      const exec1 = createMockAutoCreationExecution({ status: 'completed' });
-      const exec2 = createMockAutoCreationExecution({ status: 'completed' });
-      mockDataStore.autoCreationExecutions.push(exec1, exec2);
+      const exec1 = createMockChannelPipelineExecution({ status: 'completed' });
+      const exec2 = createMockChannelPipelineExecution({ status: 'completed' });
+      mockDataStore.channelPipelineExecutions.push(exec1, exec2);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -73,10 +73,10 @@ describe('useAutoCreationExecution', () => {
     it('supports pagination parameters', async () => {
       // Add many executions
       for (let i = 0; i < 10; i++) {
-        mockDataStore.autoCreationExecutions.push(createMockAutoCreationExecution());
+        mockDataStore.channelPipelineExecutions.push(createMockChannelPipelineExecution());
       }
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions({ limit: 5, offset: 0 });
@@ -87,13 +87,13 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('supports status filter', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed' }),
-        createMockAutoCreationExecution({ status: 'failed' }),
-        createMockAutoCreationExecution({ status: 'completed' })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed' }),
+        createMockChannelPipelineExecution({ status: 'failed' }),
+        createMockChannelPipelineExecution({ status: 'completed' })
       );
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions({ status: 'completed' });
@@ -103,7 +103,7 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('sets loading state during fetch', async () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -116,12 +116,12 @@ describe('useAutoCreationExecution', () => {
 
   describe('getExecution', () => {
     it('fetches a single execution by ID', async () => {
-      const execution = createMockAutoCreationExecution({ status: 'completed' });
-      mockDataStore.autoCreationExecutions.push(execution);
+      const execution = createMockChannelPipelineExecution({ status: 'completed' });
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
-      let fetched: AutoCreationExecution | undefined;
+      let fetched: ChannelPipelineExecution | undefined;
       await act(async () => {
         fetched = await result.current.getExecution(execution.id);
       });
@@ -131,9 +131,9 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('returns undefined for non-existent execution', async () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
-      let fetched: AutoCreationExecution | undefined;
+      let fetched: ChannelPipelineExecution | undefined;
       await act(async () => {
         fetched = await result.current.getExecution(99999);
       });
@@ -143,10 +143,10 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('sets currentExecution when fetched', async () => {
-      const execution = createMockAutoCreationExecution({ status: 'completed' });
-      mockDataStore.autoCreationExecutions.push(execution);
+      const execution = createMockChannelPipelineExecution({ status: 'completed' });
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.getExecution(execution.id);
@@ -160,9 +160,9 @@ describe('useAutoCreationExecution', () => {
   describe('runPipeline', () => {
     // bd-enfsy: contract is now POST returns 202 + execution_id and the hook
     // polls GET /executions/{id} until terminal. The hook resolves with the
-    // terminal AutoCreationExecution row (or undefined on error/timeout).
+    // terminal ChannelPipelineExecution row (or undefined on error/timeout).
     it('runs the pipeline in execute mode and resolves to terminal execution', async () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RunPipelineResponse | undefined;
       await act(async () => {
@@ -175,7 +175,7 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('runs the pipeline in dry-run mode', async () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RunPipelineResponse | undefined;
       await act(async () => {
@@ -188,7 +188,7 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('supports filtering by rule IDs', async () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RunPipelineResponse | undefined;
       await act(async () => {
@@ -203,7 +203,7 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('sets isRunning true during execution', async () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.runPipeline({ dryRun: false });
@@ -214,7 +214,7 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('adds new execution to list after run', async () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.runPipeline({ dryRun: false });
@@ -226,7 +226,7 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('returns execution stats', async () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RunPipelineResponse | undefined;
       await act(async () => {
@@ -243,11 +243,11 @@ describe('useAutoCreationExecution', () => {
     it('refetches executions in finally block on POST error (bd-enfsy)', async () => {
       // The 202 enqueue itself fails — list should still be refetched so the
       // user sees fresh state without needing to reload the browser.
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed' })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed' })
       );
       server.use(
-        http.post('/api/auto-creation/run', () => {
+        http.post('/api/channel-pipeline/run', () => {
           return new HttpResponse(
             JSON.stringify({ detail: 'enqueue exploded' }),
             { status: 500 }
@@ -255,7 +255,7 @@ describe('useAutoCreationExecution', () => {
         })
       );
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RunPipelineResponse | undefined;
       await act(async () => {
@@ -273,27 +273,27 @@ describe('useAutoCreationExecution', () => {
     it('updates the execution list incrementally during polling (bd-enfsy)', async () => {
       // First execution row starts as 'running' so the poller observes a
       // non-terminal status, then flips to 'completed' on the second poll.
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let pollCount = 0;
       let assignedExecutionId = 0;
       // Override the run handler to enqueue a 'running' execution
       server.use(
-        http.post('/api/auto-creation/run', () => {
-          const exe = createMockAutoCreationExecution({
+        http.post('/api/channel-pipeline/run', () => {
+          const exe = createMockChannelPipelineExecution({
             status: 'running',
             mode: 'execute',
           });
-          mockDataStore.autoCreationExecutions.unshift(exe);
+          mockDataStore.channelPipelineExecutions.unshift(exe);
           assignedExecutionId = exe.id;
           return HttpResponse.json(
             { execution_id: exe.id, status: 'running', message: 'started' },
             { status: 202 }
           );
         }),
-        http.get('/api/auto-creation/executions/:id', ({ params }) => {
+        http.get('/api/channel-pipeline/executions/:id', ({ params }) => {
           const id = parseInt(params.id as string);
-          const exe = mockDataStore.autoCreationExecutions.find(e => e.id === id);
+          const exe = mockDataStore.channelPipelineExecutions.find(e => e.id === id);
           if (!exe) {
             return HttpResponse.json({ detail: 'not found' }, { status: 404 });
           }
@@ -326,13 +326,13 @@ describe('useAutoCreationExecution', () => {
 
   describe('rollback', () => {
     it('rolls back an execution', async () => {
-      const execution = createMockAutoCreationExecution({
+      const execution = createMockChannelPipelineExecution({
         status: 'completed',
         mode: 'execute',
       });
-      mockDataStore.autoCreationExecutions.push(execution);
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RollbackResponse | undefined;
       await act(async () => {
@@ -346,13 +346,13 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('fails to rollback dry-run execution', async () => {
-      const execution = createMockAutoCreationExecution({
+      const execution = createMockChannelPipelineExecution({
         status: 'completed',
         mode: 'dry_run',
       });
-      mockDataStore.autoCreationExecutions.push(execution);
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RollbackResponse | undefined;
       await act(async () => {
@@ -365,13 +365,13 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('fails to rollback already rolled back execution', async () => {
-      const execution = createMockAutoCreationExecution({
+      const execution = createMockChannelPipelineExecution({
         status: 'rolled_back',
         mode: 'execute',
       });
-      mockDataStore.autoCreationExecutions.push(execution);
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RollbackResponse | undefined;
       await act(async () => {
@@ -384,13 +384,13 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('updates execution status after rollback', async () => {
-      const execution = createMockAutoCreationExecution({
+      const execution = createMockChannelPipelineExecution({
         status: 'completed',
         mode: 'execute',
       });
-      mockDataStore.autoCreationExecutions.push(execution);
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -412,15 +412,15 @@ describe('useAutoCreationExecution', () => {
 
   describe('getLatestExecution', () => {
     it('returns the most recent execution', async () => {
-      const older = createMockAutoCreationExecution({
+      const older = createMockChannelPipelineExecution({
         started_at: '2024-01-01T00:00:00Z',
       });
-      const newer = createMockAutoCreationExecution({
+      const newer = createMockChannelPipelineExecution({
         started_at: '2024-01-02T00:00:00Z',
       });
-      mockDataStore.autoCreationExecutions.push(older, newer);
+      mockDataStore.channelPipelineExecutions.push(older, newer);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -435,7 +435,7 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('returns undefined when no executions', () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       const latest = result.current.getLatestExecution();
       expect(latest).toBeUndefined();
@@ -444,14 +444,14 @@ describe('useAutoCreationExecution', () => {
 
   describe('getExecutionsByStatus', () => {
     it('filters executions by status', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'completed' }),
-        createMockAutoCreationExecution({ status: 'failed' }),
-        createMockAutoCreationExecution({ status: 'completed' }),
-        createMockAutoCreationExecution({ status: 'rolled_back' })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed' }),
+        createMockChannelPipelineExecution({ status: 'failed' }),
+        createMockChannelPipelineExecution({ status: 'completed' }),
+        createMockChannelPipelineExecution({ status: 'rolled_back' })
       );
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -470,10 +470,10 @@ describe('useAutoCreationExecution', () => {
 
   describe('clearCurrentExecution', () => {
     it('clears the current execution', async () => {
-      const execution = createMockAutoCreationExecution();
-      mockDataStore.autoCreationExecutions.push(execution);
+      const execution = createMockChannelPipelineExecution();
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.getExecution(execution.id);
@@ -491,7 +491,7 @@ describe('useAutoCreationExecution', () => {
 
   describe('error handling', () => {
     it('provides setError for manual error setting', () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       act(() => {
         result.current.setError('Manual error');
@@ -501,7 +501,7 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('provides clearError to clear errors', () => {
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       act(() => {
         result.current.setError('Some error');
@@ -516,7 +516,7 @@ describe('useAutoCreationExecution', () => {
 
     it('handles API errors gracefully', async () => {
       server.use(
-        http.post('/api/auto-creation/run', () => {
+        http.post('/api/channel-pipeline/run', () => {
           return new HttpResponse(
             JSON.stringify({ detail: 'Pipeline failed' }),
             { status: 500 }
@@ -524,7 +524,7 @@ describe('useAutoCreationExecution', () => {
         })
       );
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       let response: RunPipelineResponse | undefined;
       await act(async () => {
@@ -538,13 +538,13 @@ describe('useAutoCreationExecution', () => {
 
   describe('execution stats helpers', () => {
     it('calculates total channels created across executions', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ channels_created: 5 }),
-        createMockAutoCreationExecution({ channels_created: 3 }),
-        createMockAutoCreationExecution({ channels_created: 7 })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ channels_created: 5 }),
+        createMockChannelPipelineExecution({ channels_created: 3 }),
+        createMockChannelPipelineExecution({ channels_created: 7 })
       );
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -555,12 +555,12 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('calculates total streams matched across executions', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ streams_matched: 10 }),
-        createMockAutoCreationExecution({ streams_matched: 20 })
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ streams_matched: 10 }),
+        createMockChannelPipelineExecution({ streams_matched: 20 })
       );
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -573,13 +573,13 @@ describe('useAutoCreationExecution', () => {
 
   describe('canRollback', () => {
     it('returns true for completed execute mode execution', async () => {
-      const execution = createMockAutoCreationExecution({
+      const execution = createMockChannelPipelineExecution({
         status: 'completed',
         mode: 'execute',
       });
-      mockDataStore.autoCreationExecutions.push(execution);
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -589,13 +589,13 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('returns false for dry_run execution', async () => {
-      const execution = createMockAutoCreationExecution({
+      const execution = createMockChannelPipelineExecution({
         status: 'completed',
         mode: 'dry_run',
       });
-      mockDataStore.autoCreationExecutions.push(execution);
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -605,13 +605,13 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('returns false for already rolled back execution', async () => {
-      const execution = createMockAutoCreationExecution({
+      const execution = createMockChannelPipelineExecution({
         status: 'rolled_back',
         mode: 'execute',
       });
-      mockDataStore.autoCreationExecutions.push(execution);
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -621,13 +621,13 @@ describe('useAutoCreationExecution', () => {
     });
 
     it('returns false for running execution', async () => {
-      const execution = createMockAutoCreationExecution({
+      const execution = createMockChannelPipelineExecution({
         status: 'running',
         mode: 'execute',
       });
-      mockDataStore.autoCreationExecutions.push(execution);
+      mockDataStore.channelPipelineExecutions.push(execution);
 
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
 
       await act(async () => {
         await result.current.fetchExecutions();
@@ -642,16 +642,16 @@ describe('useAutoCreationExecution', () => {
   describe('terminal status set (bd-fqur1)', () => {
     async function verifyStatusIsTerminal(status: 'capped' | 'abandoned') {
       server.use(
-        http.post('/api/auto-creation/run', () => {
-          const exec = createMockAutoCreationExecution({ status, channels_created: 0 });
-          mockDataStore.autoCreationExecutions.unshift(exec);
+        http.post('/api/channel-pipeline/run', () => {
+          const exec = createMockChannelPipelineExecution({ status, channels_created: 0 });
+          mockDataStore.channelPipelineExecutions.unshift(exec);
           return HttpResponse.json(
             { execution_id: exec.id, status: 'running', message: 'started' },
             { status: 202 },
           );
         }),
       );
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
       let resolved: RunPipelineResponse | undefined;
       await act(async () => {
         resolved = await result.current.runPipeline();
@@ -671,22 +671,22 @@ describe('useAutoCreationExecution', () => {
 
   describe('getExecutionsByStatus with capped and abandoned (bd-fqur1)', () => {
     it('filters by capped', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'capped' }),
-        createMockAutoCreationExecution({ status: 'completed' }),
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'capped' }),
+        createMockChannelPipelineExecution({ status: 'completed' }),
       );
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
       await act(async () => { await result.current.fetchExecutions(); });
       const capped = result.current.getExecutionsByStatus('capped');
       expect(capped).toHaveLength(1);
     });
 
     it('filters by abandoned', async () => {
-      mockDataStore.autoCreationExecutions.push(
-        createMockAutoCreationExecution({ status: 'abandoned' }),
-        createMockAutoCreationExecution({ status: 'failed' }),
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'abandoned' }),
+        createMockChannelPipelineExecution({ status: 'failed' }),
       );
-      const { result } = renderHook(() => useAutoCreationExecution());
+      const { result } = renderHook(() => useChannelPipelineExecution());
       await act(async () => { await result.current.fetchExecutions(); });
       const abandoned = result.current.getExecutionsByStatus('abandoned');
       expect(abandoned).toHaveLength(1);
@@ -698,11 +698,11 @@ describe('useAutoCreationExecution', () => {
       vi.useFakeTimers();
 
       // Seed one execution so the first fetch returns data
-      const execution = createMockAutoCreationExecution({ status: 'completed', mode: 'execute' });
-      mockDataStore.autoCreationExecutions.push(execution);
+      const execution = createMockChannelPipelineExecution({ status: 'completed', mode: 'execute' });
+      mockDataStore.channelPipelineExecutions.push(execution);
 
       const { result, unmount } = renderHook(() =>
-        useAutoCreationExecution({ autoRefreshInterval: 1000 })
+        useChannelPipelineExecution({ autoRefreshInterval: 1000 })
       );
 
       // Trigger initial fetch so we have a baseline
@@ -713,8 +713,8 @@ describe('useAutoCreationExecution', () => {
       const countAfterFirstFetch = result.current.executions.length;
 
       // Add a second execution so we can detect a re-fetch
-      const execution2 = createMockAutoCreationExecution({ status: 'running', mode: 'dry_run' });
-      mockDataStore.autoCreationExecutions.push(execution2);
+      const execution2 = createMockChannelPipelineExecution({ status: 'running', mode: 'dry_run' });
+      mockDataStore.channelPipelineExecutions.push(execution2);
 
       // Advance past one interval tick — should trigger fetchExecutions internally
       await act(async () => {

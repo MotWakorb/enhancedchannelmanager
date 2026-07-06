@@ -53,7 +53,7 @@ describe('CircuitBreakerBanner', () => {
 
     it('shows abandoned_run message', () => {
       renderBanner({ state: trippedState, isAdmin: false, onReset: vi.fn() });
-      expect(screen.getByText(/auto-creation suspended/i)).toBeInTheDocument();
+      expect(screen.getByText(/channel pipeline suspended/i)).toBeInTheDocument();
     });
 
     it('shows reset button for admins', () => {
@@ -114,7 +114,7 @@ describe('CircuitBreakerBanner', () => {
     it('shows error toast when reset API fails', async () => {
       const user = userEvent.setup();
       server.use(
-        http.post('/api/auto-creation/reset-circuit-breaker', () =>
+        http.post('/api/channel-pipeline/reset-circuit-breaker', () =>
           // Return a network-level error body with a detail that httpClient surfaces
           HttpResponse.json({ detail: 'Failed to reset circuit breaker' }, { status: 500 }),
         ),
