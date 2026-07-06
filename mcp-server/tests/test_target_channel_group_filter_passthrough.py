@@ -18,7 +18,7 @@ def _make_mock(return_value=None):
 
 
 def _register_and_get_mcp():
-    from tools.auto_creation import register
+    from tools.channel_pipeline import register
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP("test")
@@ -45,7 +45,7 @@ class TestTargetChannelGroupFilterCreate:
             "target_channel_not_in_group": [567],
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool(
                 "create_auto_creation_rule",
                 {
@@ -71,7 +71,7 @@ class TestTargetChannelGroupFilterCreate:
             "target_channel_in_group": [42, 43],
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool(
                 "create_auto_creation_rule",
                 {
@@ -98,7 +98,7 @@ class TestTargetChannelGroupFilterUpdate:
             "target_channel_not_in_group": [567],
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool(
                 "update_auto_creation_rule",
                 {"rule_id": 13, "actions": [action]},

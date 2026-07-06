@@ -131,7 +131,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0045",
+    version="0.17.6-0046",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -599,6 +599,19 @@ app.include_router(tls_router)
 from routers import all_routers
 for _router in all_routers:
     app.include_router(_router)
+
+# Channel Pipeline router: mounted explicitly (not via the generic all_routers
+# loop) because it needs TWO prefixes during the phase 3/4 migration window —
+# the canonical route, and a deprecated alias kept alive until the frontend
+# (phase 4, enhancedchannelmanager-xwwe4) stops calling the old path.
+from routers.channel_pipeline import router as channel_pipeline_router
+app.include_router(channel_pipeline_router, prefix="/api/channel-pipeline", tags=["Channel Pipeline"])
+app.include_router(
+    channel_pipeline_router,
+    prefix="/api/auto-creation",
+    tags=["Channel Pipeline (deprecated alias)"],
+    include_in_schema=False,
+)
 
 
 # Request Timing and Rate Tracking Middleware (for CPU diagnostics)

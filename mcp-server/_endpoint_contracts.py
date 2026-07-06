@@ -226,53 +226,53 @@ ENDPOINTS: dict[str, Endpoint] = {
             {"operations", "groupsToCreate", "validateOnly", "continueOnError", "consolidate"}
         ),
     ),
-    # -- auto_creation domain ----------------------------------------------
+    # -- channel_pipeline domain (formerly "auto_creation") ----------------
     "ac_list_rules": Endpoint(
         name="ac_list_rules",
         method="GET",
-        path="/api/auto-creation/rules",
+        path="/api/channel-pipeline/rules",
     ),
     "ac_get_rule": Endpoint(
         name="ac_get_rule",
         method="GET",
-        path="/api/auto-creation/rules/{rule_id}",
+        path="/api/channel-pipeline/rules/{rule_id}",
     ),
     "ac_create_rule": Endpoint(
         name="ac_create_rule",
         method="POST",
-        path="/api/auto-creation/rules",
+        path="/api/channel-pipeline/rules",
         request_fields=_AC_RULE_CREATE_FIELDS,
     ),
     "ac_update_rule": Endpoint(
         name="ac_update_rule",
         method="PUT",
-        path="/api/auto-creation/rules/{rule_id}",
+        path="/api/channel-pipeline/rules/{rule_id}",
         request_fields=_AC_RULE_UPDATE_FIELDS,
     ),
     "ac_delete_rule": Endpoint(
         name="ac_delete_rule",
         method="DELETE",
-        path="/api/auto-creation/rules/{rule_id}",
+        path="/api/channel-pipeline/rules/{rule_id}",
     ),
     "ac_toggle_rule": Endpoint(
         name="ac_toggle_rule",
         method="POST",
-        path="/api/auto-creation/rules/{rule_id}/toggle",
+        path="/api/channel-pipeline/rules/{rule_id}/toggle",
     ),
     "ac_duplicate_rule": Endpoint(
         name="ac_duplicate_rule",
         method="POST",
-        path="/api/auto-creation/rules/{rule_id}/duplicate",
+        path="/api/channel-pipeline/rules/{rule_id}/duplicate",
     ),
     "ac_analyze_rules": Endpoint(
         name="ac_analyze_rules",
         method="POST",
-        path="/api/auto-creation/rules/analyze",
+        path="/api/channel-pipeline/rules/analyze",
     ),
     "ac_run": Endpoint(
         name="ac_run",
         method="POST",
-        path="/api/auto-creation/run",
+        path="/api/channel-pipeline/run",
         request_fields=frozenset({"dry_run", "m3u_account_ids", "rule_ids"}),
     ),
     # enhancedchannelmanager-jnzst Component B: no-write scored fuzzy preview.
@@ -281,7 +281,7 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_fuzzy_preview": Endpoint(
         name="ac_fuzzy_preview",
         method="GET",
-        path="/api/auto-creation/fuzzy-preview",
+        path="/api/channel-pipeline/fuzzy-preview",
         query_params=frozenset(
             {"group_ids", "min_score", "allow_no_callsign", "page", "page_size"}
         ),
@@ -289,17 +289,17 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_list_executions": Endpoint(
         name="ac_list_executions",
         method="GET",
-        path="/api/auto-creation/executions",
+        path="/api/channel-pipeline/executions",
         query_params=frozenset({"limit", "offset", "rule_id", "status"}),
     ),
     "ac_get_execution": Endpoint(
         name="ac_get_execution",
         method="GET",
-        path="/api/auto-creation/executions/{execution_id}",
+        path="/api/channel-pipeline/executions/{execution_id}",
         # query params the poll uses; include_entities and include_log default
         # to False so we omit them from the poll call (saves DB work).
         query_params=frozenset({"include_entities", "include_log"}),
-        # Fields the run_auto_creation tool reads from the execution row.
+        # Fields the run_channel_pipeline tool reads from the execution row.
         response_fields=frozenset({
             "id", "status", "mode", "streams_evaluated", "streams_matched",
             "channels_created", "channels_updated", "groups_created",
@@ -310,7 +310,7 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_rollback": Endpoint(
         name="ac_rollback",
         method="POST",
-        path="/api/auto-creation/executions/{execution_id}/rollback",
+        path="/api/channel-pipeline/executions/{execution_id}/rollback",
     ),
     # ADR-010 §D8 / uc51o.4 — full whole-run snapshot restore. ``confirm`` is a
     # QUERY param (FastAPI ``Query``), the API-level acknowledgement of the §D5
@@ -319,7 +319,7 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_restore_snapshot": Endpoint(
         name="ac_restore_snapshot",
         method="POST",
-        path="/api/auto-creation/executions/{execution_id}/restore-snapshot",
+        path="/api/channel-pipeline/executions/{execution_id}/restore-snapshot",
         query_params=frozenset({"confirm"}),
     ),
     # ADR-010 §D6 — read-only pre-run snapshot for an execution. The
@@ -329,7 +329,7 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_get_execution_snapshot": Endpoint(
         name="ac_get_execution_snapshot",
         method="GET",
-        path="/api/auto-creation/executions/{execution_id}/snapshot",
+        path="/api/channel-pipeline/executions/{execution_id}/snapshot",
         response_fields=frozenset({
             "id", "execution_id", "snapshot_time", "channel_count", "channels",
         }),
