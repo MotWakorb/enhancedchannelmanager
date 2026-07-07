@@ -3612,9 +3612,14 @@ export function ChannelsPane({
 
     // Empty group checks
     if (!groupHasChannels) {
-      // If showEmptyGroups is off, only show if newly created and showNewlyCreatedGroups is on
+      // If showEmptyGroups is off, only show if newly created and showNewlyCreatedGroups is on,
+      // or if the user explicitly checked this group in the group filter dropdown — an explicit
+      // selection is a deliberate request to see (and drop into) that group.
       if (!channelListFilters.showEmptyGroups) {
-        if (isNewlyCreated && channelListFilters.showNewlyCreatedGroups) {
+        const isExplicitlySelected = selectedGroups.includes(groupId);
+        if (isExplicitlySelected) {
+          // Allow explicitly selected empty groups
+        } else if (isNewlyCreated && channelListFilters.showNewlyCreatedGroups) {
           // Allow newly created empty groups
         } else {
           return false;
@@ -3638,7 +3643,7 @@ export function ChannelsPane({
     }
 
     return true;
-  }, [channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
+  }, [channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap, selectedGroups]);
 
   // Filter sorted channel groups based on filter settings
   const filteredChannelGroups = useMemo(() => {
