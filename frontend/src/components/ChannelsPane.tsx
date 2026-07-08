@@ -1207,6 +1207,35 @@ const DroppableGroupEnd = memo(function DroppableGroupEnd({
   );
 });
 
+/** Capability tiers in display order — highest resolution first. */
+const CAPABILITY_TIER_ORDER = ['4K', 'FHD', 'HD', 'SD'] as const;
+
+/**
+ * Distinct resolution capability tiers among a channel's successfully-probed
+ * streams, ordered highest-first (4K → FHD → HD → SD). Streams without a
+ * successful probe or a parseable resolution contribute nothing; a channel
+ * with no probed streams yields an empty array (no pills). Height buckets
+ * mirror StreamListItem's formatResolution.
+ */
+function channelCapabilityTiers(
+  streamIds: number[],
+  statsMap: Map<number, StreamStats>,
+): string[] {
+  const tiers = new Set<string>();
+  for (const streamId of streamIds) {
+    const stats = statsMap.get(streamId);
+    if (!stats || stats.probe_status !== 'success' || !stats.resolution) continue;
+    const match = stats.resolution.match(/(\d+)x(\d+)/);
+    if (!match) continue;
+    const height = parseInt(match[2], 10);
+    if (height >= 2160) tiers.add('4K');
+    else if (height >= 1080) tiers.add('FHD');
+    else if (height >= 720) tiers.add('HD');
+    else tiers.add('SD');
+  }
+  return CAPABILITY_TIER_ORDER.filter((tier) => tiers.has(tier));
+}
+
 export function ChannelsPane({
   channelGroups,
   channels,
@@ -5382,6 +5411,7 @@ export function ChannelsPane({
                       tvgId={channel.tvg_id || appliedEpg?.tvg_id || null}
                       tvgName={appliedEpg?.name || null}
                       epgSourceName={appliedEpg ? epgSourceById.get(appliedEpg.epg_source)?.name || null : null}
+                      capabilities={channelCapabilityTiers(channel.streams, streamStatsMap)}
                       onProbeChannel={() => handleProbeChannel(channel)}
                       isProbing={probingChannels.has(channel.id)}
                       hasFailedStreams={channel.streams.some(streamId => {
