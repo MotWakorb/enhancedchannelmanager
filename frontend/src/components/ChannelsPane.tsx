@@ -1587,6 +1587,11 @@ export function ChannelsPane({
     [epgData]
   );
 
+  const epgSourceById = useMemo(
+    () => new Map((epgSources || []).map((s) => [s.id, s])),
+    [epgSources]
+  );
+
   // Load streams when a channel is selected
   // In edit mode, staged streams may not exist in the API yet, so we need to
   // look them up from allStreams prop as well as fetching from API
@@ -5376,6 +5381,7 @@ export function ChannelsPane({
                       showStreamUrls={showStreamUrls}
                       tvgId={channel.tvg_id || appliedEpg?.tvg_id || null}
                       tvgName={appliedEpg?.name || null}
+                      epgSourceName={appliedEpg ? epgSourceById.get(appliedEpg.epg_source)?.name || null : null}
                       onProbeChannel={() => handleProbeChannel(channel)}
                       isProbing={probingChannels.has(channel.id)}
                       hasFailedStreams={channel.streams.some(streamId => {
