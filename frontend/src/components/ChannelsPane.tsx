@@ -1582,6 +1582,11 @@ export function ChannelsPane({
     return map;
   }, [logos]);
 
+  const epgDataById = useMemo(
+    () => new Map((epgData || []).map((e) => [e.id, e])),
+    [epgData]
+  );
+
   // Load streams when a channel is selected
   // In edit mode, staged streams may not exist in the API yet, so we need to
   // look them up from allStreams prop as well as fetching from API
@@ -5250,6 +5255,12 @@ export function ChannelsPane({
                     streamInsertIndicator.channelId === channel.id &&
                     streamInsertIndicator.position === 'before' &&
                     streamInsertIndicator.groupId === groupId;
+                  // Applied EPG record for the TVG subtitle. The channel's own
+                  // tvg_id takes precedence over the linked EPG's (same rule as
+                  // EditChannelModal's lookupTvgId).
+                  const appliedEpg = channel.epg_data_id != null
+                    ? epgDataById.get(channel.epg_data_id)
+                    : undefined;
 
                   return (
                   <div key={channel.id} className="channel-wrapper">
@@ -5363,6 +5374,8 @@ export function ChannelsPane({
                       onContextMenu={(e) => handleContextMenu(channel, e)}
                       channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
                       showStreamUrls={showStreamUrls}
+                      tvgId={channel.tvg_id || appliedEpg?.tvg_id || null}
+                      tvgName={appliedEpg?.name || null}
                       onProbeChannel={() => handleProbeChannel(channel)}
                       isProbing={probingChannels.has(channel.id)}
                       hasFailedStreams={channel.streams.some(streamId => {

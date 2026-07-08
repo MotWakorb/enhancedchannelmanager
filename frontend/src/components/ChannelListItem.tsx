@@ -53,6 +53,14 @@ export interface ChannelListItemProps {
   proposedNormalizedName?: string;
   /** Click handler for the would-normalize indicator. */
   onShowNormalizePreview?: () => void;
+  /**
+   * Applied TVG ID shown beneath the channel name — the channel's own
+   * tvg_id, falling back to the linked EPG record's tvg_id (resolved by
+   * the parent). Null/undefined hides it.
+   */
+  tvgId?: string | null;
+  /** Name of the linked EPG record, shown alongside the TVG ID. */
+  tvgName?: string | null;
 }
 
 interface ChannelMenuProps {
@@ -247,6 +255,8 @@ export const ChannelListItem = memo(function ChannelListItem({
   onPreviewChannel,
   proposedNormalizedName,
   onShowNormalizePreview,
+  tvgId,
+  tvgName,
 }: ChannelListItemProps) {
   const {
     attributes,
@@ -365,26 +375,37 @@ export const ChannelListItem = memo(function ChannelListItem({
           {channel.channel_number ?? '-'}
         </span>
       )}
-      {isEditingName ? (
-        <input
-          type="text"
-          className="channel-name-input"
-          value={editingName}
-          onChange={(e) => onEditingNameChange(e.target.value)}
-          onKeyDown={handleNameKeyDown}
-          onBlur={onSaveName}
-          onClick={(e) => e.stopPropagation()}
-          autoFocus
-        />
-      ) : (
-        <span
-          className={`channel-name ${isEditMode ? 'editable' : ''}`}
-          onDoubleClick={onStartEditName}
-          title={isEditMode ? 'Double-click to edit name' : 'Enter Edit Mode to change channel name'}
-        >
-          {channel.name}
-        </span>
-      )}
+      <div className="channel-name-block">
+        {isEditingName ? (
+          <input
+            type="text"
+            className="channel-name-input"
+            value={editingName}
+            onChange={(e) => onEditingNameChange(e.target.value)}
+            onKeyDown={handleNameKeyDown}
+            onBlur={onSaveName}
+            onClick={(e) => e.stopPropagation()}
+            autoFocus
+          />
+        ) : (
+          <span
+            className={`channel-name ${isEditMode ? 'editable' : ''}`}
+            onDoubleClick={onStartEditName}
+            title={isEditMode ? 'Double-click to edit name' : 'Enter Edit Mode to change channel name'}
+          >
+            {channel.name}
+          </span>
+        )}
+        {(tvgId || tvgName) && !isEditingName && (
+          <span
+            className="channel-tvg-info"
+            title={[tvgId && `TVG ID: ${tvgId}`, tvgName && `TVG Name: ${tvgName}`].filter(Boolean).join(' · ')}
+            data-testid={`channel-tvg-info-${channel.id}`}
+          >
+            {[tvgId, tvgName].filter(Boolean).join(' · ')}
+          </span>
+        )}
+      </div>
       {proposedNormalizedName && !isEditingName && (
         <button
           type="button"
