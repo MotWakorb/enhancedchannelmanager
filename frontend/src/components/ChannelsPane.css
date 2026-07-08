@@ -1091,9 +1091,34 @@
   outline: none;
 }
 
+/* Column wrapper so the TVG subtitle stacks under the channel name while
+   the row itself stays a single horizontal flex line. Takes over the
+   flex: 1 that .channel-name had when it sat directly in the row. */
+.channel-name-block {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.channel-name-block .channel-name,
+.channel-name-block .channel-name-input {
+  flex: none;
+  width: 100%;
+}
+
 .channel-name {
   flex: 1;
   font-size: 0.875rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Applied TVG ID / TVG name subtitle under the channel name */
+.channel-tvg-info {
+  font-size: 0.7rem;
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
