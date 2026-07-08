@@ -61,6 +61,8 @@ export interface ChannelListItemProps {
   tvgId?: string | null;
   /** Name of the linked EPG record, shown alongside the TVG ID. */
   tvgName?: string | null;
+  /** Name of the EPG source the linked EPG record belongs to. */
+  epgSourceName?: string | null;
 }
 
 interface ChannelMenuProps {
@@ -257,6 +259,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   onShowNormalizePreview,
   tvgId,
   tvgName,
+  epgSourceName,
 }: ChannelListItemProps) {
   const {
     attributes,
@@ -399,10 +402,10 @@ export const ChannelListItem = memo(function ChannelListItem({
         {(tvgId || tvgName) && !isEditingName && (
           <span
             className="channel-tvg-info"
-            title={[tvgId && `TVG ID: ${tvgId}`, tvgName && `TVG Name: ${tvgName}`].filter(Boolean).join(' · ')}
+            title={[epgSourceName && `EPG: ${epgSourceName}`, tvgId && `TVG ID: ${tvgId}`, tvgName && `TVG Name: ${tvgName}`].filter(Boolean).join(' · ')}
             data-testid={`channel-tvg-info-${channel.id}`}
           >
-            {[tvgId, tvgName].filter(Boolean).join(' · ')}
+            {[epgSourceName, tvgId, tvgName].filter(Boolean).join(' · ')}
           </span>
         )}
       </div>
