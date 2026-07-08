@@ -58,6 +58,10 @@ Ordered, if/then. Do not skip steps — the wrong resolution for the wrong cause
 
 4. **Correlate with the canary.** If `ecm_normalization_canary_divergence_total` is non-zero for the same period, the divergence is between Test Rules and the auto-create executor — not between "correct rule" and "stale channel name." Stop this runbook and follow [`normalization-canary-divergence.md`](./normalization-canary-divergence.md).
 
+5. **Not a Unicode-suffix divergence at all? Check multi-provider auto-sync overlap.** If Test Rules shows both raw names normalizing to the SAME output (step 2 routed you to Resolution B) but the duplicate pair are otherwise byte-identical or clearly the same channel duplicated with no suffix/accent/superscript difference, this runbook's root cause may not apply. Check `GET /api/settings` for `allow_multi_provider_auto_sync` (Settings → Appearance → Display Options, admin-only) — when enabled (bd-dgs64, GH #591), two different M3U provider accounts can both auto-sync the same (globally-shared) Dispatcharr channel group, each independently creating a channel for it. Confirm via Settings → M3U → *[account]* → Manage Groups: if the same group name shows a live (non-locked) Auto-Sync toggle on more than one account, that overlap — not normalization — is producing the duplicates.
+
+   **Rollback caveat:** disabling `allow_multi_provider_auto_sync` re-engages the single-owner lock going forward (it prevents *new* cross-provider overlap), but it does **not** retroactively clean up channels the overlap already created. Resolve existing duplicates the same way as Resolution B — Merge Channels or a dedup pass — the setting change alone will not remove them.
+
 **Escalate** if:
 
 - Scope > 100 channels. Bulk rename/merge over that size warrants a postmortem and a staged rollout plan. Do not run Re-normalize Existing Channels against a set that large without PO authorization.

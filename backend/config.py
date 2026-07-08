@@ -102,6 +102,19 @@ class DispatcharrSettings(BaseModel):
     # Appearance settings
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
     hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
+    # bd-dgs64 (GH #591): Dispatcharr channel groups are global entities — a
+    # group with the same name on two M3U providers shares one channel_group
+    # ID. The M3UGroupsModal frontend guard (commit 030c1ef8) therefore locks
+    # a group's Auto-Sync toggle/Start#/Settings to a single "owning" account
+    # once any OTHER account has auto_channel_sync enabled for that group ID,
+    # to prevent two providers silently double-creating channels for the same
+    # group. This flag lets an operator opt OUT of that guard so the same
+    # group CAN be auto-synced from multiple providers at once, as Dispatcharr
+    # itself allows. Admin-gated (routers/settings.py
+    # _ADMIN_ONLY_SETTINGS_FIELDS) because enabling it is an install-wide
+    # duplicate-channel risk, not a per-user display preference. Default False
+    # preserves today's single-owner lock.
+    allow_multi_provider_auto_sync: bool = False
     hide_ungrouped_streams: bool = True  # Hide ungrouped streams in the streams pane
     hide_epg_urls: bool = False  # Hide EPG URLs in EPG Manager tab
     hide_m3u_urls: bool = False  # Hide M3U URLs in M3U Manager tab

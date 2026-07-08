@@ -1015,6 +1015,10 @@ export interface SettingsResponse {
   date_format: string;  // Global UI date format: "auto", "mdy", "dmy", or "iso" (bd-8j47e)
   default_channel_profile_ids: number[];
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
+  // bd-dgs64 (GH #591): opt out of the M3UGroupsModal single-owner auto-sync
+  // guard. Admin-only on the backend (install-wide duplicate-channel risk).
+  // Default False preserves today's locked behavior.
+  allow_multi_provider_auto_sync: boolean;
   epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
   custom_network_prefixes: string[];  // User-defined network prefixes to strip
   custom_network_suffixes: string[];  // User-defined network suffixes to strip
@@ -1171,6 +1175,8 @@ export async function saveSettings(settings: {
   date_format?: string;  // Optional - "auto" | "mdy" | "dmy" | "iso", defaults to 'auto' (bd-8j47e)
   default_channel_profile_ids?: number[];  // Optional - empty array means no defaults
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
+  // bd-dgs64 (GH #591): optional - admin-only on the backend, defaults to false.
+  allow_multi_provider_auto_sync?: boolean;
   epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
   custom_network_prefixes?: string[];  // Optional - user-defined network prefixes
   custom_network_suffixes?: string[];  // Optional - user-defined network suffixes

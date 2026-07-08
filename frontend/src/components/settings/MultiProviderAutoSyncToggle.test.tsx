@@ -1,25 +1,26 @@
 /**
- * Tests for the Channel Pipeline "Runaway Safety Cap" control (skg35).
+ * Tests for the "Allow multi-provider auto-sync on shared groups" toggle
+ * (bd-dgs64, GH #591).
  *
- * Surfaces ``max_auto_created_channels_per_run`` (the GH #473 runaway-creation
- * OOM safety valve) and its sibling ``max_auto_creation_log_entries`` in the
- * Settings > Channel Pipeline page so an operator can view + adjust them instead
- * of hand-editing settings.json.
+ * Dispatcharr channel groups are global: a group with the same name on two
+ * M3U providers shares one channel_group ID. The M3UGroupsModal frontend
+ * guard (commit 030c1ef8) locks a group's auto-sync controls to a single
+ * "owning" account once another account already auto-syncs that ID, to
+ * avoid two providers silently double-creating channels for the same group.
  *
- * Contracts under test:
- *   - The numeric inputs render on the Channel Pipeline page and populate from
- *     the loaded settings.
- *   - Helper text explains the idempotent-rerun behavior + the 0-disables
- *     semantics (so the operator knows a capped run can simply be re-run).
- *   - An admin can edit the cap and the new value is sent in the save payload.
- *   - For a NON-admin the inputs are disabled (consistent with the backend
- *     field-level admin gate, which 403s a non-admin who changes them).
+ * `allow_multi_provider_auto_sync` is the opt-out. It's an install-wide
+ * duplicate-channel-risk toggle (not a per-user display preference), so it
+ * follows the same admin-gated pattern as the GH #473 Runaway Safety Cap:
+ *   - The checkbox renders on the General/Display Options page and
+ *     populates from loaded settings.
+ *   - Help text warns enabling it can create duplicate channels.
+ *   - An admin can flip it and the new value is sent in the save payload.
+ *   - A non-admin sees the control disabled (backend field-level admin gate
+ *     would 403 a change attempt).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-// Mutable auth identity so a single mocked module can serve both the admin and
-// non-admin cases (vi.mock factories are hoisted + evaluated once per file).
 let mockUser: { is_admin: boolean; username: string } = { is_admin: true, username: 'admin' };
 
 vi.mock('../../services/api', () => ({
@@ -214,16 +215,16 @@ const settingsBase = {
   ssrf_outbound_mode: 'lan_friendly' as const,
 };
 
-function renderOnChannelPipeline() {
+function renderOnGeneral() {
   return render(
     <SettingsTab
       onSaved={vi.fn()}
-      initialSettingsPage="channel-pipeline"
+      initialSettingsPage="appearance"
     />
   );
 }
 
-describe('Channel Pipeline Runaway Safety Cap (skg35)', () => {
+describe('Multi-provider auto-sync toggle (bd-dgs64, GH #591)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUser = { is_admin: true, username: 'admin' };
@@ -234,47 +235,48 @@ describe('Channel Pipeline Runaway Safety Cap (skg35)', () => {
     vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
   });
 
-  it('renders the channel-cap input populated from loaded settings', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ max_auto_created_channels_per_run: 750 }));
-    renderOnChannelPipeline();
+  it('renders checked when loaded settings have it enabled', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ allow_multi_provider_auto_sync: true }));
+    renderOnGeneral();
 
-    const input = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
-    expect(input.value).toBe('750');
+    const checkbox = await screen.findByLabelText(/Allow multi-provider auto-sync/i) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
   });
 
-  it('explains the idempotent-rerun + 0-disables semantics in helper text', async () => {
-    renderOnChannelPipeline();
+  it('renders unchecked when loaded settings have it disabled (default)', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ allow_multi_provider_auto_sync: false }));
+    renderOnGeneral();
 
-    await screen.findByLabelText(/Max channels created per run/i);
-    // The idempotent-rerun hint is the operator's actual escape hatch — it must
-    // appear on the channel-cap field specifically (the one the capped-run
-    // message points them at).
-    expect(screen.getByText(/idempotent/i)).toBeInTheDocument();
-    // Both cap fields document the 0-disables sentinel, so there are two.
-    expect(screen.getAllByText(/Set to 0 to disable the cap/i)).toHaveLength(2);
+    const checkbox = await screen.findByLabelText(/Allow multi-provider auto-sync/i) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
   });
 
-  it('lets an admin raise the cap and sends the new value on save', async () => {
-    renderOnChannelPipeline();
+  it('warns that enabling it can create duplicate channels', async () => {
+    renderOnGeneral();
 
-    const input = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
-    expect(input.disabled).toBe(false);
-    fireEvent.change(input, { target: { value: '5000' } });
+    await screen.findByLabelText(/Allow multi-provider auto-sync/i);
+    expect(screen.getByText(/duplicate channels/i)).toBeInTheDocument();
+  });
+
+  it('lets an admin enable it and sends the new value on save', async () => {
+    renderOnGeneral();
+
+    const checkbox = await screen.findByLabelText(/Allow multi-provider auto-sync/i) as HTMLInputElement;
+    expect(checkbox.disabled).toBe(false);
+    fireEvent.click(checkbox);
 
     fireEvent.click(screen.getByRole('button', { name: /Save Settings/i }));
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
     const payload = vi.mocked(api.saveSettings).mock.calls[0][0];
-    expect(payload.max_auto_created_channels_per_run).toBe(5000);
+    expect(payload.allow_multi_provider_auto_sync).toBe(true);
   });
 
-  it('disables the cap inputs for a non-admin (backend gate would 403 a change)', async () => {
+  it('disables the control for a non-admin (backend gate would 403 a change)', async () => {
     mockUser = { is_admin: false, username: 'viewer' };
-    renderOnChannelPipeline();
+    renderOnGeneral();
 
-    const channelInput = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
-    const logInput = screen.getByLabelText(/Max execution-log entries per run/i) as HTMLInputElement;
-    expect(channelInput.disabled).toBe(true);
-    expect(logInput.disabled).toBe(true);
+    const checkbox = await screen.findByLabelText(/Allow multi-provider auto-sync/i) as HTMLInputElement;
+    expect(checkbox.disabled).toBe(true);
   });
 });
