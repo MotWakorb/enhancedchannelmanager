@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from urllib.parse import urlparse, urlunparse
 
+import journal
 from auth import RequireAdminIfEnabled
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
@@ -104,6 +105,11 @@ _ADMIN_ONLY_SETTINGS_FIELDS: dict[str, str] = {
     # supplying a different value is rejected 403.
     "max_auto_created_channels_per_run": "max_auto_created_channels_per_run",
     "max_auto_creation_log_entries": "max_auto_creation_log_entries",
+    # bd-dgs64 (GH #591): enabling this removes the frontend guard that
+    # prevents auto-syncing the same (global) Dispatcharr channel_group ID
+    # from more than one M3U provider — an install-wide duplicate-channel
+    # risk, so it's an admin action, not a per-user preference.
+    "allow_multi_provider_auto_sync": "allow_multi_provider_auto_sync",
 }
 # Credential fields use preserve-on-omit (None/empty => keep stored value), so
 # a plain attribute compare can't see a "change". They are admin-only by
@@ -343,6 +349,9 @@ class SettingsRequest(BaseModel):
     date_format: str = "auto"
     default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
+    # bd-dgs64 (GH #591): opt out of the M3UGroupsModal single-owner auto-sync
+    # guard. Admin-only (see _ADMIN_ONLY_SETTINGS_FIELDS). Default False.
+    allow_multi_provider_auto_sync: bool = False
     epg_auto_match_threshold: int = 80
     # bd-ugzn4 (BD-K): dedup epic operator settings. Defaults match
     # config.DispatcharrSettings so an older frontend bundle that doesn't
@@ -478,6 +487,8 @@ class SettingsResponse(BaseModel):
     date_format: str
     default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
+    # bd-dgs64 (GH #591): see DispatcharrSettings.allow_multi_provider_auto_sync.
+    allow_multi_provider_auto_sync: bool
     epg_auto_match_threshold: int
     dedup_threshold: float
     dedup_m3u_toast_suppressed: bool
@@ -710,6 +721,7 @@ async def get_current_settings():
         date_format=settings.date_format,
         default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
+        allow_multi_provider_auto_sync=settings.allow_multi_provider_auto_sync,
         epg_auto_match_threshold=settings.epg_auto_match_threshold,
         dedup_threshold=settings.dedup_threshold,
         dedup_m3u_toast_suppressed=settings.dedup_m3u_toast_suppressed,
@@ -975,6 +987,7 @@ async def update_settings(
         date_format=request.date_format,
         default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
+        allow_multi_provider_auto_sync=request.allow_multi_provider_auto_sync,
         epg_auto_match_threshold=request.epg_auto_match_threshold,
         dedup_threshold=request.dedup_threshold,
         dedup_m3u_toast_suppressed=request.dedup_m3u_toast_suppressed,
@@ -1177,6 +1190,35 @@ async def update_settings(
     if new_settings.backend_log_level != current_settings.backend_log_level:
         logger.info("[SETTINGS] Applying new backend log level: %s", new_settings.backend_log_level)
         set_log_level(new_settings.backend_log_level)
+
+    # bd-dgs64 (GH #591): audit trail for the multi-provider auto-sync guard
+    # opt-out. This is an install-wide duplicate-channel-risk toggle (see
+    # _ADMIN_ONLY_SETTINGS_FIELDS above), so a value change is worth both a
+    # log line (mirroring the backend_log_level pattern immediately above)
+    # and a journal entry capturing before/after state (mirroring the
+    # group-settings PATCH in routers/m3u.py's update_m3u_group_settings,
+    # which journals before/after for auto-sync-related field changes). No
+    # other field in this handler journals today, so this introduces the
+    # "settings" journal category — category is a free-text String(20)
+    # column (backend/models.py), not an enum, so a new value is safe.
+    if new_settings.allow_multi_provider_auto_sync != current_settings.allow_multi_provider_auto_sync:
+        logger.info(
+            "[SETTINGS] allow_multi_provider_auto_sync changed: %s -> %s",
+            current_settings.allow_multi_provider_auto_sync,
+            new_settings.allow_multi_provider_auto_sync,
+        )
+        journal.log_entry(
+            category="settings",
+            action_type="update",
+            entity_name="allow_multi_provider_auto_sync",
+            description=(
+                "Multi-provider auto-sync guard opt-out changed: "
+                f"{current_settings.allow_multi_provider_auto_sync} -> "
+                f"{new_settings.allow_multi_provider_auto_sync}"
+            ),
+            before_value={"allow_multi_provider_auto_sync": current_settings.allow_multi_provider_auto_sync},
+            after_value={"allow_multi_provider_auto_sync": new_settings.allow_multi_provider_auto_sync},
+        )
 
     # Update prober's parallel probing settings without requiring restart
     if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or

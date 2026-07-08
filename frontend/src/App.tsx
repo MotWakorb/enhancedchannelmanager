@@ -190,6 +190,12 @@ function App() {
   // review" toast that fires after an M3U refresh queues pending merges.
   // Sourced from `settings.dedup_m3u_toast_suppressed` (BD-K Settings UI).
   const [dedupM3uToastSuppressed, setDedupM3uToastSuppressed] = useState(false);
+  // bd-dgs64 (GH #591): opt out of the M3UGroupsModal single-owner auto-sync
+  // guard — when true, a channel group already auto-synced by another M3U
+  // account is no longer locked; the toggle/Start#/Settings stay usable
+  // (with a shared-ownership indicator). Sourced from
+  // `settings.allow_multi_provider_auto_sync` (admin-only, default false).
+  const [allowMultiProviderAutoSync, setAllowMultiProviderAutoSync] = useState(false);
   const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
   const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
   const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
@@ -547,6 +553,7 @@ function App() {
         setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
         setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
+        setAllowMultiProviderAutoSync(settings.allow_multi_provider_auto_sync ?? false);
         setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
@@ -771,6 +778,7 @@ function App() {
       setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
+      setAllowMultiProviderAutoSync(settings.allow_multi_provider_auto_sync ?? false);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
@@ -2493,6 +2501,7 @@ function App() {
               onChannelGroupsChange={loadChannelGroups}
               onAccountsChange={() => { loadProviders(); loadStreamGroups(); }}
               hideM3uUrls={hideM3uUrls}
+              allowMultiProviderAutoSync={allowMultiProviderAutoSync}
             />
             </ErrorBoundary>
           )}

@@ -36,6 +36,12 @@ def _mock_settings(**overrides):
         "timezone_preference": "both",
         "show_stream_urls": False,
         "hide_auto_sync_groups": True,
+        # GH #591 / bd-dgs64: opt-in override for the frontend-only guard that
+        # locks a channel group's auto-sync controls when another M3U account
+        # already auto-syncs the same (global) Dispatcharr channel_group ID.
+        # Real bool (not a MagicMock auto-attr) so the admin-field gate tests
+        # compare real values. Default False preserves today's locked behavior.
+        "allow_multi_provider_auto_sync": False,
         "hide_ungrouped_streams": True,
         "hide_epg_urls": True,
         "hide_m3u_urls": True,
@@ -180,6 +186,30 @@ class TestGetSettings:
         assert data["max_auto_created_channels_per_run"] == 750
         assert data["max_auto_creation_log_entries"] == 300
 
+    @pytest.mark.asyncio
+    async def test_exposes_allow_multi_provider_auto_sync(self, async_client):
+        """bd-dgs64 (GH #591): GET surfaces the multi-provider auto-sync override."""
+        mock = _mock_settings(allow_multi_provider_auto_sync=True)
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["allow_multi_provider_auto_sync"] is True
+
+    @pytest.mark.asyncio
+    async def test_defaults_allow_multi_provider_auto_sync_false(self, async_client):
+        """bd-dgs64: default is False — preserves today's single-owner lock."""
+        mock = _mock_settings(allow_multi_provider_auto_sync=False)
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["allow_multi_provider_auto_sync"] is False
+
 
 class TestUpdateSettings:
     """Tests for POST /api/settings."""
@@ -225,6 +255,81 @@ class TestUpdateSettings:
         assert response.status_code == 200
         saved = mock_save.call_args[0][0]
         assert saved.date_format == "iso"
+
+    @pytest.mark.asyncio
+    async def test_persists_allow_multi_provider_auto_sync(self, async_client):
+        """bd-dgs64 (GH #591): POST threads the override into saved settings."""
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings") as mock_save, \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                "allow_multi_provider_auto_sync": True,
+            })
+
+        assert response.status_code == 200
+        saved = mock_save.call_args[0][0]
+        assert saved.allow_multi_provider_auto_sync is True
+
+    @pytest.mark.asyncio
+    async def test_logs_and_journals_allow_multi_provider_auto_sync_change(self, async_client):
+        """bd-dgs64 (GH #591): a value change logs a line and writes a
+        before/after journal entry — mirrors the group-settings PATCH journal
+        convention in routers/m3u.py (no other settings.py field journals
+        today, so this introduces the "settings" journal category)."""
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("routers.settings.journal.log_entry") as mock_journal:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                "allow_multi_provider_auto_sync": True,
+            })
+
+        assert response.status_code == 200
+        mock_journal.assert_called_once()
+        call_kwargs = mock_journal.call_args.kwargs
+        assert call_kwargs["category"] == "settings"
+        assert call_kwargs["action_type"] == "update"
+        assert call_kwargs["before_value"] == {"allow_multi_provider_auto_sync": False}
+        assert call_kwargs["after_value"] == {"allow_multi_provider_auto_sync": True}
+
+    @pytest.mark.asyncio
+    async def test_no_journal_entry_when_allow_multi_provider_auto_sync_unchanged(self, async_client):
+        """No journal noise when the field is echoed back unchanged (the
+        common case — every settings save round-trips this field)."""
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("routers.settings.journal.log_entry") as mock_journal:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                "allow_multi_provider_auto_sync": False,
+            })
+
+        assert response.status_code == 200
+        mock_journal.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_requires_password_when_changing_url(self, async_client):
@@ -2031,6 +2136,9 @@ def _full_payload(mock):
         # unless a test deliberately flips them.
         "max_auto_created_channels_per_run": mock.max_auto_created_channels_per_run,
         "max_auto_creation_log_entries": mock.max_auto_creation_log_entries,
+        # bd-dgs64 (GH #591): echo the stored value so the admin-field gate
+        # sees NO change unless a test deliberately flips it.
+        "allow_multi_provider_auto_sync": mock.allow_multi_provider_auto_sync,
     }
 
 
@@ -2189,6 +2297,41 @@ class TestSettingsAdminFieldGate:
         assert response.status_code == 200, response.json()
         saved = mock_save.call_args[0][0]
         assert saved.max_auto_created_channels_per_run == 5000
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_multi_provider_auto_sync_rejected(self, non_admin_client):
+        """bd-dgs64 (GH #591): non-admin flipping the override -> 403, no save.
+
+        Enabling it removes the frontend guard that prevents auto-syncing the
+        same (global) Dispatcharr channel group from two M3U providers at once
+        — an install-wide duplicate-channel risk, so it joins the admin-only
+        field partition alongside the auto-creation safety caps.
+        """
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["allow_multi_provider_auto_sync"] = True
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_change_multi_provider_auto_sync_and_persists(self, admin_client):
+        """bd-dgs64: an admin CAN enable the override and it reaches save."""
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["allow_multi_provider_auto_sync"] = True
+            response = await admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.allow_multi_provider_auto_sync is True
 
     @pytest.mark.asyncio
     async def test_admin_can_change_admin_field(self, admin_client):

@@ -22,6 +22,12 @@ interface M3UGroupsModalProps {
   channelProfiles?: ChannelProfile[];
   streamProfiles?: StreamProfile[];
   onChannelGroupsChange?: () => void; // Called when channel groups are created/changed
+  // bd-dgs64 (GH #591): admin-only global setting (settings.allow_multi_provider_auto_sync).
+  // When true, a channel group already auto-synced by another M3U account is
+  // NOT locked here — the toggle/Start#/Settings stay usable, with a
+  // shared-ownership indicator instead of the "owned by" lock. Default false
+  // preserves the original single-owner guard from commit 030c1ef8.
+  allowMultiProviderAutoSync?: boolean;
 }
 
 // Extended type with name from channel groups lookup
@@ -41,6 +47,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
   channelProfiles = [],
   streamProfiles = [],
   onChannelGroupsChange,
+  allowMultiProviderAutoSync = false,
 }: M3UGroupsModalProps) {
   const notifications = useNotifications();
   const [groups, setGroups] = useState<GroupWithName[]>([]);
@@ -358,21 +365,31 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                     </label>
                   </div>
                   <div className="group-autosync">
-                    {autoSyncedByOtherAccounts.has(group.channel_group) ? (
+                    {autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync ? (
                       <div className="autosync-owned" title={`Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`}>
                         <span className="material-icons">link</span>
                         <span className="owned-text">{autoSyncedByOtherAccounts.get(group.channel_group)}</span>
                       </div>
                     ) : (
-                      <label className="toggle">
-                        <input
-                          type="checkbox"
-                          checked={group.auto_channel_sync}
-                          onChange={() => handleToggleAutoSync(group.channel_group)}
-                          disabled={!group.enabled}
-                        />
-                        <span className="toggle-slider"></span>
-                      </label>
+                      <div className="autosync-toggle-wrapper">
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={group.auto_channel_sync}
+                            onChange={() => handleToggleAutoSync(group.channel_group)}
+                            disabled={!group.enabled}
+                          />
+                          <span className="toggle-slider"></span>
+                        </label>
+                        {autoSyncedByOtherAccounts.has(group.channel_group) && (
+                          <span
+                            className="material-icons autosync-shared-indicator"
+                            title={`Also auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)} — may create duplicate channels`}
+                          >
+                            link
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
                   <div className="group-start">
@@ -382,20 +399,22 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                       placeholder="--"
                       value={group.auto_sync_channel_start ?? ''}
                       onChange={(e) => handleStartChannelChange(group.channel_group, e.target.value)}
-                      disabled={!group.auto_channel_sync || autoSyncedByOtherAccounts.has(group.channel_group)}
+                      disabled={!group.auto_channel_sync || (autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync)}
                     />
                   </div>
                   <div className="group-settings">
                     <button
                       className={`settings-btn ${hasCustomProperties(group) ? 'has-settings' : ''}`}
                       onClick={() => setSettingsModalGroup(group)}
-                      disabled={!group.auto_channel_sync || autoSyncedByOtherAccounts.has(group.channel_group)}
+                      disabled={!group.auto_channel_sync || (autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync)}
                       title={
-                        autoSyncedByOtherAccounts.has(group.channel_group)
+                        autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync
                           ? `Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`
-                          : group.auto_channel_sync
-                            ? 'Configure auto-sync settings'
-                            : 'Enable auto-sync to configure settings'
+                          : autoSyncedByOtherAccounts.has(group.channel_group)
+                            ? `Also auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)} — may create duplicate channels`
+                            : group.auto_channel_sync
+                              ? 'Configure auto-sync settings'
+                              : 'Enable auto-sync to configure settings'
                       }
                     >
                       <span className="material-icons">settings</span>
