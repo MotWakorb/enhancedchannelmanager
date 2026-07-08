@@ -428,6 +428,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
+  // bd-dgs64 (GH #591): opt out of the M3UGroupsModal single-owner auto-sync
+  // guard. Admin-only install-wide toggle (duplicate-channel risk), default false.
+  const [allowMultiProviderAutoSync, setAllowMultiProviderAutoSync] = useState(false);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [hideEpgUrls, setHideEpgUrls] = useState(false);
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
@@ -836,6 +839,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
+      setAllowMultiProviderAutoSync(settings.allow_multi_provider_auto_sync ?? false);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setHideEpgUrls(settings.hide_epg_urls ?? false);
       setHideM3uUrls(settings.hide_m3u_urls ?? false);
@@ -1266,6 +1270,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
+        allow_multi_provider_auto_sync: allowMultiProviderAutoSync,
         hide_ungrouped_streams: hideUngroupedStreams,
         hide_epg_urls: hideEpgUrls,
         hide_m3u_urls: hideM3uUrls,
@@ -2278,6 +2283,29 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <p>
               Automatically hide channel groups that are managed by Dispatcharr's M3U auto-sync feature.
               You can still show them using the filter in the Channel Manager tab.
+            </p>
+          </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="allowMultiProviderAutoSync"
+            type="checkbox"
+            checked={allowMultiProviderAutoSync}
+            onChange={(e) => setAllowMultiProviderAutoSync(e.target.checked)}
+            disabled={!user?.is_admin}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="allowMultiProviderAutoSync">Allow multi-provider auto-sync on shared groups</label>
+            <p>
+              Dispatcharr channel groups are global — a group with the same name on two M3U
+              providers shares one underlying group ID. By default, ECM locks a group's Auto-Sync
+              controls to whichever account enabled it first, to prevent two providers from
+              silently double-creating channels for the same group. Enabling this lets you
+              auto-sync the same group from multiple providers, as Dispatcharr itself allows,
+              but it <strong>can create duplicate channels</strong> if both providers stream the
+              same content. An informational icon still marks groups shared across providers.
+              {!user?.is_admin && ' Only an administrator can change this safety setting.'}
             </p>
           </div>
         </div>
