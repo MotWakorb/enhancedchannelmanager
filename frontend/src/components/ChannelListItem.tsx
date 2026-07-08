@@ -63,6 +63,12 @@ export interface ChannelListItemProps {
   tvgName?: string | null;
   /** Name of the EPG source the linked EPG record belongs to. */
   epgSourceName?: string | null;
+  /**
+   * Distinct resolution capability tiers among the channel's probed streams,
+   * ordered highest-first (e.g. ['4K', 'FHD', 'HD']). Rendered as pills on
+   * line 2. Empty/undefined renders no pills.
+   */
+  capabilities?: string[];
 }
 
 interface ChannelMenuProps {
@@ -260,6 +266,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   tvgId,
   tvgName,
   epgSourceName,
+  capabilities = [],
 }: ChannelListItemProps) {
   const {
     attributes,
@@ -291,6 +298,17 @@ export const ChannelListItem = memo(function ChannelListItem({
       onCancelEditName();
     }
   };
+
+  const showTvgInfo = Boolean((tvgId || tvgName) && !isEditingName);
+  const hasCapabilities = capabilities.length > 0;
+  const showLine2 = showTvgInfo || hasCapabilities;
+
+  const streamCount = channel.streams.length;
+  const streamCountLabel = `${streamCount} stream${streamCount !== 1 ? 's' : ''}`;
+  // Healthy channels (streams present, no probe problem) show a neutral
+  // sources icon; problem states keep their existing status icon below.
+  const showNeutralStreamsIcon =
+    streamCount > 0 && !hasFailedStreams && !hasBlackScreenStreams && !hasLowFpsStreams;
 
   return (
     <div
@@ -358,79 +376,106 @@ export const ChannelListItem = memo(function ChannelListItem({
           </div>
         )}
       </div>
-      {isEditingNumber ? (
-        <input
-          type="text"
-          className="channel-number-input"
-          value={editingNumber}
-          onChange={(e) => onEditingNumberChange(e.target.value)}
-          onKeyDown={handleNumberKeyDown}
-          onBlur={onSaveNumber}
-          onClick={(e) => e.stopPropagation()}
-          autoFocus
-        />
-      ) : (
-        <span
-          className={`channel-number ${isEditMode ? 'editable' : ''}`}
-          onDoubleClick={onStartEditNumber}
-          title={isEditMode ? 'Double-click to edit' : 'Enter Edit Mode to change channel number'}
-        >
-          {channel.channel_number ?? '-'}
-        </span>
-      )}
-      <div className="channel-name-block">
-        {isEditingName ? (
+      <div className="channel-number-col">
+        {isEditingNumber ? (
           <input
             type="text"
-            className="channel-name-input"
-            value={editingName}
-            onChange={(e) => onEditingNameChange(e.target.value)}
-            onKeyDown={handleNameKeyDown}
-            onBlur={onSaveName}
+            className="channel-number-input"
+            value={editingNumber}
+            onChange={(e) => onEditingNumberChange(e.target.value)}
+            onKeyDown={handleNumberKeyDown}
+            onBlur={onSaveNumber}
             onClick={(e) => e.stopPropagation()}
             autoFocus
           />
         ) : (
           <span
-            className={`channel-name ${isEditMode ? 'editable' : ''}`}
-            onDoubleClick={onStartEditName}
-            title={isEditMode ? 'Double-click to edit name' : 'Enter Edit Mode to change channel name'}
+            className={`channel-number ${isEditMode ? 'editable' : ''}`}
+            onDoubleClick={onStartEditNumber}
+            title={isEditMode ? 'Double-click to edit' : 'Enter Edit Mode to change channel number'}
           >
-            {channel.name}
-          </span>
-        )}
-        {(tvgId || tvgName) && !isEditingName && (
-          <span
-            className="channel-tvg-info"
-            title={[epgSourceName && `EPG: ${epgSourceName}`, tvgId && `TVG ID: ${tvgId}`, tvgName && `TVG Name: ${tvgName}`].filter(Boolean).join(' · ')}
-            data-testid={`channel-tvg-info-${channel.id}`}
-          >
-            {[epgSourceName, tvgId, tvgName].filter(Boolean).join(' · ')}
+            {channel.channel_number ?? '-'}
           </span>
         )}
       </div>
-      {proposedNormalizedName && !isEditingName && (
-        <button
-          type="button"
-          className="channel-normalize-indicator"
-          aria-label={`Channel name would normalize to "${proposedNormalizedName}". Click to preview.`}
-          title={`This name would be normalized to "${proposedNormalizedName}". Click to preview.`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onShowNormalizePreview?.();
-          }}
-          data-testid={`channel-normalize-indicator-${channel.id}`}
-          data-channel-id={channel.id}
-        >
-          <span className="material-icons" aria-hidden="true">auto_fix_high</span>
-        </button>
-      )}
-      {showStreamUrls && channelUrl && (
-        <span className="channel-url" title={channelUrl}>
-          {channelUrl}
-        </span>
-      )}
-      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : hasBlackScreenStreams ? 'has-black-screen' : hasLowFpsStreams ? 'has-low-fps' : ''}`}>
+      <div className="channel-content">
+        <div className="channel-line1">
+          {isEditingName ? (
+            <input
+              type="text"
+              className="channel-name-input"
+              value={editingName}
+              onChange={(e) => onEditingNameChange(e.target.value)}
+              onKeyDown={handleNameKeyDown}
+              onBlur={onSaveName}
+              onClick={(e) => e.stopPropagation()}
+              autoFocus
+            />
+          ) : (
+            <span
+              className={`channel-name ${isEditMode ? 'editable' : ''}`}
+              onDoubleClick={onStartEditName}
+              title={isEditMode ? 'Double-click to edit name' : 'Enter Edit Mode to change channel name'}
+            >
+              {channel.name}
+            </span>
+          )}
+          {proposedNormalizedName && !isEditingName && (
+            <button
+              type="button"
+              className="channel-normalize-indicator"
+              aria-label={`Channel name would normalize to "${proposedNormalizedName}". Click to preview.`}
+              title={`This name would be normalized to "${proposedNormalizedName}". Click to preview.`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowNormalizePreview?.();
+              }}
+              data-testid={`channel-normalize-indicator-${channel.id}`}
+              data-channel-id={channel.id}
+            >
+              <span className="material-icons" aria-hidden="true">auto_fix_high</span>
+            </button>
+          )}
+          {showStreamUrls && channelUrl && (
+            <span
+              className="channel-url"
+              title="Click to copy channel URL"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCopyChannelUrl?.();
+              }}
+            >
+              {channelUrl}
+            </span>
+          )}
+        </div>
+        {showLine2 && (
+          <div className="channel-line2">
+            {showTvgInfo && (
+              <span
+                className="channel-tvg-info"
+                title={[epgSourceName && `EPG: ${epgSourceName}`, tvgId && `TVG ID: ${tvgId}`, tvgName && `TVG Name: ${tvgName}`].filter(Boolean).join(' · ')}
+                data-testid={`channel-tvg-info-${channel.id}`}
+              >
+                {[epgSourceName, tvgId, tvgName].filter(Boolean).join(' · ')}
+              </span>
+            )}
+            {hasCapabilities && (
+              <span className="channel-capabilities" data-testid={`channel-capabilities-${channel.id}`}>
+                {capabilities.map((cap) => (
+                  <span key={cap} className={`capability-pill cap-${cap.toLowerCase()}`}>
+                    {cap}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+      <span
+        className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : hasBlackScreenStreams ? 'has-black-screen' : hasLowFpsStreams ? 'has-low-fps' : ''}`}
+        title={streamCountLabel}
+      >
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {hasFailedStreams && channel.streams.length > 0 && (
           <span className="material-icons failed-stream-icon" title="One or more streams failed probe">error</span>
@@ -441,7 +486,10 @@ export const ChannelListItem = memo(function ChannelListItem({
         {!hasFailedStreams && !hasBlackScreenStreams && hasLowFpsStreams && channel.streams.length > 0 && (
           <span className="material-icons low-fps-icon" title="One or more streams have low FPS">slow_motion_video</span>
         )}
-        {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
+        {showNeutralStreamsIcon && (
+          <span className="material-icons streams-count-icon">lan</span>
+        )}
+        {channel.streams.length}
       </span>
       <ChannelMenu
         channel={channel}
