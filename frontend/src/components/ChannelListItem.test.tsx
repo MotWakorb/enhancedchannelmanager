@@ -181,3 +181,56 @@ describe('ChannelListItem — applied TVG ID / name subtitle', () => {
     expect(subtitle).toHaveAttribute('title', 'TVG ID: espn.us · TVG Name: ESPN');
   });
 });
+
+describe('ChannelListItem — resolution capability pills', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not render the pills container when no capabilities are provided', () => {
+    renderRow();
+    expect(screen.queryByTestId('channel-capabilities-42')).not.toBeInTheDocument();
+  });
+
+  it('does not render the pills container for an empty capabilities array (unprobed channel)', () => {
+    renderRow({ capabilities: [] });
+    expect(screen.queryByTestId('channel-capabilities-42')).not.toBeInTheDocument();
+  });
+
+  it('renders one pill per distinct tier, in the highest-first order supplied', () => {
+    renderRow({ capabilities: ['4K', 'FHD', 'HD'] });
+    const container = screen.getByTestId('channel-capabilities-42');
+    const pills = container.querySelectorAll('.capability-pill');
+    expect(pills).toHaveLength(3);
+    expect(Array.from(pills).map((p) => p.textContent)).toEqual(['4K', 'FHD', 'HD']);
+  });
+
+  it('applies the tier-specific class to each pill', () => {
+    renderRow({ capabilities: ['4K', 'FHD', 'HD', 'SD'] });
+    const container = screen.getByTestId('channel-capabilities-42');
+    expect(container.querySelector('.cap-4k')).toHaveTextContent('4K');
+    expect(container.querySelector('.cap-fhd')).toHaveTextContent('FHD');
+    expect(container.querySelector('.cap-hd')).toHaveTextContent('HD');
+    expect(container.querySelector('.cap-sd')).toHaveTextContent('SD');
+  });
+
+  it('renders a lone SD pill for a sub-720 channel', () => {
+    renderRow({ capabilities: ['SD'] });
+    const pills = screen.getByTestId('channel-capabilities-42').querySelectorAll('.capability-pill');
+    expect(pills).toHaveLength(1);
+    expect(pills[0]).toHaveTextContent('SD');
+    expect(pills[0]).toHaveClass('cap-sd');
+  });
+
+  it('renders pills even while the name is being edited inline (independent of the TVG subtitle)', () => {
+    renderRow({
+      capabilities: ['HD'],
+      isEditingName: true,
+      isEditMode: true,
+      editingName: 'ESPN HD',
+    });
+    // Subtitle hides during editing, but capability pills are not name-gated.
+    expect(screen.queryByTestId('channel-tvg-info-42')).not.toBeInTheDocument();
+    expect(screen.getByTestId('channel-capabilities-42')).toBeInTheDocument();
+  });
+});
