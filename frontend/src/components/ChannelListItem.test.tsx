@@ -125,3 +125,42 @@ describe('ChannelListItem — would-normalize indicator (bd-eio04.13)', () => {
     expect(btn.querySelector('.material-icons')).toHaveTextContent('auto_fix_high');
   });
 });
+
+describe('ChannelListItem — applied TVG ID / name subtitle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not render the subtitle when no TVG info is provided', () => {
+    renderRow();
+    expect(screen.queryByTestId('channel-tvg-info-42')).not.toBeInTheDocument();
+  });
+
+  it('renders TVG ID and TVG name joined by a separator', () => {
+    renderRow({ tvgId: 'espn.us', tvgName: 'ESPN' });
+    const subtitle = screen.getByTestId('channel-tvg-info-42');
+    expect(subtitle).toHaveTextContent('espn.us · ESPN');
+    expect(subtitle).toHaveAttribute('title', 'TVG ID: espn.us · TVG Name: ESPN');
+  });
+
+  it('renders TVG ID alone when no EPG name is linked', () => {
+    renderRow({ tvgId: 'espn.us' });
+    expect(screen.getByTestId('channel-tvg-info-42')).toHaveTextContent(/^espn\.us$/);
+  });
+
+  it('renders TVG name alone when only the EPG link provides it', () => {
+    renderRow({ tvgName: 'ESPN' });
+    expect(screen.getByTestId('channel-tvg-info-42')).toHaveTextContent(/^ESPN$/);
+  });
+
+  it('hides the subtitle while the name is being edited inline', () => {
+    renderRow({
+      tvgId: 'espn.us',
+      tvgName: 'ESPN',
+      isEditingName: true,
+      isEditMode: true,
+      editingName: 'ESPN HD',
+    });
+    expect(screen.queryByTestId('channel-tvg-info-42')).not.toBeInTheDocument();
+  });
+});
