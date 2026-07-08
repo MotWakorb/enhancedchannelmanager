@@ -291,13 +291,24 @@ def require_auth_if_enabled():
 RequireAuthIfEnabled = Depends(require_auth_if_enabled())
 
 
-def require_admin_if_enabled():
+def require_admin_if_enabled(*, reject_mcp_service_principal: bool = False):
     """
     Factory function to create a dependency that requires admin when auth is enabled.
 
     When auth is disabled (setup not complete or require_auth=False),
     the endpoint is publicly accessible. When auth is enabled, the
     caller must be an authenticated admin.
+
+    ``reject_mcp_service_principal`` (kgz3k / bead 6n76m): when True, the static
+    MCP service principal is DENIED even though it carries ``is_admin=True``.
+    The MCP key is a channel/stream automation credential, not an operator
+    identity — it has no business rewriting outbound base URLs or secrets. This
+    mirrors the field-level carve-out ``routers.settings._resolve_settings_admin``
+    applies to POST /api/settings, extending it to the backup-restore endpoints
+    that write the settings blob WHOLESALE (and so would otherwise let the MCP
+    key flip every admin-only field via a restore, bypassing the settings gate).
+    The default (False) preserves the historical behaviour for every other
+    admin-gated route the MCP key is meant to reach (channel management, etc.).
     """
     async def check_admin(
         request: Request,
@@ -316,12 +327,35 @@ def require_admin_if_enabled():
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Admin access required"
             )
+        # kgz3k / 6n76m: the MCP service principal is is_admin=True but must be
+        # denied the settings-write path (restore rewrites the whole settings
+        # blob). Reject it AFTER the is_admin check so a non-admin still gets the
+        # generic "Admin access required" message and the MCP-specific reason is
+        # only disclosed to a caller that WAS admin-equivalent.
+        if reject_mcp_service_principal and is_mcp_service_principal(user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "The MCP service principal cannot perform backup restore. "
+                    "Restore rewrites admin-only settings (outbound URLs, "
+                    "secrets) and must be driven by a human operator admin."
+                ),
+            )
         return user
 
     return check_admin
 
 
 RequireAdminIfEnabled = Depends(require_admin_if_enabled())
+
+# kgz3k / bead 6n76m — admin gate that ALSO rejects the static MCP service
+# principal. Use for endpoints that write the settings blob wholesale (the
+# backup-restore paths), which would otherwise let the MCP key bypass the
+# field-level admin gate ``routers.settings._resolve_settings_admin`` enforces
+# on POST /api/settings.
+RequireHumanAdminIfEnabled = Depends(
+    require_admin_if_enabled(reject_mcp_service_principal=True)
+)
 
 
 def resolve_is_admin_if_enabled():
