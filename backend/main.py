@@ -67,6 +67,14 @@ from observability import (  # noqa: E402
 
 install_observability(level=getattr(logging, initial_log_level))
 
+# Exit-path diagnostics (bd-0gt2i / GH #546): make any silent process death
+# self-diagnosing from docker logs. atexit + sys.excepthook +
+# threading.excepthook are installed here at import time; the asyncio loop
+# exception handler needs a running loop and is installed in startup_event.
+import exit_diagnostics  # noqa: E402
+
+exit_diagnostics.install()
+
 logger = logging.getLogger(__name__)
 
 # OpenAPI tags for organizing endpoints in Swagger UI
@@ -131,7 +139,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0051",
+    version="0.17.6-0052",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -774,6 +782,11 @@ async def startup_event():
     logger.info("=" * 60)
     logger.info("[MAIN] Enhanced Channel Manager starting up%s", " (HTTPS subprocess)" if _is_https_subprocess else "")
     logger.info("[MAIN] Initial log level from environment: %s", initial_log_level)
+
+    # Exit-path diagnostics (bd-0gt2i / GH #546): the loop exception handler
+    # can only be installed once the event loop is running. Logs loudly on
+    # any unhandled loop exception, then delegates to the default handler.
+    exit_diagnostics.install_loop_handler(asyncio.get_running_loop())
 
     # Initialize journal database
     init_db()

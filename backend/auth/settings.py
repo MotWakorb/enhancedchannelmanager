@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 from pathlib import Path
 from typing import Optional, Literal
 
@@ -100,6 +101,15 @@ class AuthSettings(BaseModel):
 # In-memory cache of auth settings
 _cached_auth_settings: Optional[AuthSettings] = None
 
+# Guards load/save/secret-generation (bd-0gt2i): without it, two concurrent
+# requests that both observe an empty jwt.secret_key each generate a
+# DIFFERENT secret and race the save — tokens signed with the loser's secret
+# fail validation (401s) for their entire session. Re-entrant because
+# load_auth_settings() calls save_auth_settings() while holding the lock.
+# Sync routes run in Starlette's threadpool, so multiple threads can reach
+# this module concurrently.
+_settings_lock = threading.RLock()
+
 
 def _ensure_config_dir() -> bool:
     """Ensure config directory exists. Returns True if successful."""
@@ -131,69 +141,78 @@ def load_auth_settings() -> AuthSettings:
     """Load auth settings from file or return defaults."""
     global _cached_auth_settings
 
+    # Fast path: unlocked read of an already-populated cache (a single
+    # reference read — benign under the GIL).
     if _cached_auth_settings is not None:
         return _cached_auth_settings
 
-    logger.info("[AUTH-SETTINGS] Loading auth settings from %s", AUTH_CONFIG_FILE)
-    file_exists = AUTH_CONFIG_FILE.exists()
-
-    if file_exists:
-        try:
-            data = json.loads(AUTH_CONFIG_FILE.read_text())
-            data = _sanitize_auth_data(data)
-            _cached_auth_settings = AuthSettings(**data)
-
-            # Ensure we have a secret key
-            if not _cached_auth_settings.jwt.secret_key:
-                _cached_auth_settings.jwt.secret_key = _generate_secret_key()
-                save_auth_settings(_cached_auth_settings)
-
-            logger.info("[AUTH-SETTINGS] Loaded auth settings, setup_complete: %s", _cached_auth_settings.setup_complete)
+    with _settings_lock:
+        # Re-check under the lock: another thread may have completed the
+        # load (and secret generation) while we waited.
+        if _cached_auth_settings is not None:
             return _cached_auth_settings
-        except json.JSONDecodeError as e:
-            logger.error("[AUTH-SETTINGS] Auth settings file is not valid JSON: %s", e)
-        except Exception as e:
-            logger.error("[AUTH-SETTINGS] Failed to load auth settings: %s", e)
 
-    if file_exists:
-        # File exists but failed to parse — use in-memory defaults only.
-        # Do NOT overwrite the file; the user's real settings may be recoverable.
-        logger.warning("[AUTH-SETTINGS] Using in-memory defaults (existing file could not be parsed)")
+        logger.info("[AUTH-SETTINGS] Loading auth settings from %s", AUTH_CONFIG_FILE)
+        file_exists = AUTH_CONFIG_FILE.exists()
+
+        if file_exists:
+            try:
+                data = json.loads(AUTH_CONFIG_FILE.read_text())
+                data = _sanitize_auth_data(data)
+                _cached_auth_settings = AuthSettings(**data)
+
+                # Ensure we have a secret key
+                if not _cached_auth_settings.jwt.secret_key:
+                    _cached_auth_settings.jwt.secret_key = _generate_secret_key()
+                    save_auth_settings(_cached_auth_settings)
+
+                logger.info("[AUTH-SETTINGS] Loaded auth settings, setup_complete: %s", _cached_auth_settings.setup_complete)
+                return _cached_auth_settings
+            except json.JSONDecodeError as e:
+                logger.error("[AUTH-SETTINGS] Auth settings file is not valid JSON: %s", e)
+            except Exception as e:
+                logger.error("[AUTH-SETTINGS] Failed to load auth settings: %s", e)
+
+        if file_exists:
+            # File exists but failed to parse — use in-memory defaults only.
+            # Do NOT overwrite the file; the user's real settings may be recoverable.
+            logger.warning("[AUTH-SETTINGS] Using in-memory defaults (existing file could not be parsed)")
+            _cached_auth_settings = AuthSettings()
+            _cached_auth_settings.jwt.secret_key = _generate_secret_key()
+            return _cached_auth_settings
+
+        # No file at all — first-run: generate and persist a secret key
+        logger.info("[AUTH-SETTINGS] Using default auth settings (no config file found)")
         _cached_auth_settings = AuthSettings()
         _cached_auth_settings.jwt.secret_key = _generate_secret_key()
+        save_auth_settings(_cached_auth_settings)
+
         return _cached_auth_settings
-
-    # No file at all — first-run: generate and persist a secret key
-    logger.info("[AUTH-SETTINGS] Using default auth settings (no config file found)")
-    _cached_auth_settings = AuthSettings()
-    _cached_auth_settings.jwt.secret_key = _generate_secret_key()
-    save_auth_settings(_cached_auth_settings)
-
-    return _cached_auth_settings
 
 
 def save_auth_settings(settings: AuthSettings) -> bool:
     """Save auth settings to file. Returns True if successful."""
     global _cached_auth_settings
 
-    if not _ensure_config_dir():
-        # Can't create directory, just cache in memory
-        _cached_auth_settings = settings
-        return False
+    with _settings_lock:
+        if not _ensure_config_dir():
+            # Can't create directory, just cache in memory
+            _cached_auth_settings = settings
+            return False
 
-    try:
-        settings_json = json.dumps(settings.model_dump(), indent=2)
-        AUTH_CONFIG_FILE.write_text(settings_json)
-        _cached_auth_settings = settings
-        logger.info("[AUTH-SETTINGS] Auth settings saved to %s", AUTH_CONFIG_FILE)
-        return True
-    except (PermissionError, OSError) as e:
-        logger.warning("[AUTH-SETTINGS] Cannot save auth settings to %s: %s", AUTH_CONFIG_FILE, e)
-        _cached_auth_settings = settings  # Still cache in memory
-        return False
-    except Exception as e:
-        logger.error("[AUTH-SETTINGS] Failed to save auth settings: %s", e)
-        raise
+        try:
+            settings_json = json.dumps(settings.model_dump(), indent=2)
+            AUTH_CONFIG_FILE.write_text(settings_json)
+            _cached_auth_settings = settings
+            logger.info("[AUTH-SETTINGS] Auth settings saved to %s", AUTH_CONFIG_FILE)
+            return True
+        except (PermissionError, OSError) as e:
+            logger.warning("[AUTH-SETTINGS] Cannot save auth settings to %s: %s", AUTH_CONFIG_FILE, e)
+            _cached_auth_settings = settings  # Still cache in memory
+            return False
+        except Exception as e:
+            logger.error("[AUTH-SETTINGS] Failed to save auth settings: %s", e)
+            raise
 
 
 def get_auth_settings() -> AuthSettings:
@@ -202,11 +221,27 @@ def get_auth_settings() -> AuthSettings:
 
 
 def get_jwt_secret_key() -> str:
-    """Get the JWT secret key, generating one if needed."""
+    """Get the JWT secret key, generating one if needed.
+
+    The generate-and-save path is serialized (bd-0gt2i): previously two
+    concurrent callers could each generate a different secret, and tokens
+    signed with the losing secret would 401 on every subsequent request.
+    """
     settings = get_auth_settings()
-    if not settings.jwt.secret_key:
-        settings.jwt.secret_key = _generate_secret_key()
-        save_auth_settings(settings)
-    return settings.jwt.secret_key
+    if settings.jwt.secret_key:
+        return settings.jwt.secret_key
+
+    with _settings_lock:
+        # Re-read under the lock: another thread may have generated and
+        # saved a secret while we waited.
+        settings = get_auth_settings()
+        if not settings.jwt.secret_key:
+            settings.jwt.secret_key = _generate_secret_key()
+            logger.warning(
+                "[AUTH-SETTINGS] JWT secret key was empty — generated a new one "
+                "(all previously issued tokens are now invalid)"
+            )
+            save_auth_settings(settings)
+        return settings.jwt.secret_key
 
 
