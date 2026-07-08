@@ -136,6 +136,7 @@ const settingsBase = {
   gracenote_conflict_mode: 'ask' as const,
   default_channel_profile_ids: [],
   linked_m3u_accounts: [],
+  allow_multi_provider_auto_sync: false,
   epg_auto_match_threshold: 80,
   custom_network_prefixes: [],
   custom_network_suffixes: [],

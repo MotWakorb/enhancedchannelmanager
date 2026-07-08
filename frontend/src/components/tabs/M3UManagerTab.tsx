@@ -21,6 +21,10 @@ interface M3UManagerTabProps {
   onChannelGroupsChange?: () => void;
   onAccountsChange?: () => void;  // Called when M3U accounts are added/deleted/modified
   hideM3uUrls?: boolean;
+  // bd-dgs64 (GH #591): when true, the Manage Groups modal no longer locks a
+  // group's auto-sync controls just because another M3U account already
+  // auto-syncs that (global) channel_group ID. Admin-only setting, default false.
+  allowMultiProviderAutoSync?: boolean;
 }
 
 interface M3UAccountRowProps {
@@ -267,6 +271,7 @@ export function M3UManagerTab({
   onChannelGroupsChange,
   onAccountsChange,
   hideM3uUrls = false,
+  allowMultiProviderAutoSync = false,
 }: M3UManagerTabProps) {
   const notifications = useNotifications();
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
@@ -812,6 +817,7 @@ export function M3UManagerTab({
           channelProfiles={channelProfiles}
           streamProfiles={streamProfiles}
           onChannelGroupsChange={onChannelGroupsChange}
+          allowMultiProviderAutoSync={allowMultiProviderAutoSync}
         />
       )}
 
