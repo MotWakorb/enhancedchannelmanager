@@ -27,7 +27,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from auth import RequireAdminIfEnabled
+from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
 from dbas import artifact_crypto
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
@@ -74,7 +74,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.17.6-0050"
+APP_VERSION = "0.17.6-0051"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -1384,8 +1384,17 @@ async def create_backup(_admin=RequireAdminIfEnabled):
 
 
 @router.post("/restore")
-async def restore_backup(file: UploadFile = File(...), _admin=RequireAdminIfEnabled):
-    """Restore ECM configuration from an uploaded backup zip. Admin only."""
+async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminIfEnabled):
+    """Restore ECM configuration from an uploaded backup zip. Human-admin only.
+
+    kgz3k / bead 6n76m: gated with ``RequireHumanAdminIfEnabled`` (NOT the plain
+    ``RequireAdminIfEnabled``) so the static MCP service principal is rejected.
+    Restore rewrites the settings blob wholesale via ``_restore_from_zip`` ->
+    ``_merge_settings_preserving_redacted``, which would otherwise let the MCP
+    key flip every admin-only field (and restore non-redacted credentials from a
+    legacy ZIP) — bypassing the field-level gate ``_resolve_settings_admin``
+    enforces on POST /api/settings.
+    """
     logger.info("[BACKUP] Restore requested, filename=%s", file.filename)
 
     # Read uploaded file
@@ -2150,9 +2159,14 @@ class YamlRestoreRequest(BaseModel):
 async def restore_from_yaml(
     file: UploadFile = File(...),
     sections: str = Body(..., description="JSON array of section keys to restore"),
-    _admin=RequireAdminIfEnabled,
+    _admin=RequireHumanAdminIfEnabled,
 ):
-    """Selectively restore ECM configuration from a YAML export.
+    """Selectively restore ECM configuration from a YAML export. Human-admin only.
+
+    kgz3k / bead 6n76m: uses ``RequireHumanAdminIfEnabled`` so the MCP service
+    principal is rejected. The ``settings`` section restore path
+    (``_restore_settings`` -> ``save_settings``) writes the settings blob
+    wholesale, the same admin-only-field-bypass surface as the ZIP restores.
 
     Accepts a YAML file and a list of section keys. Each section is restored
     independently; partial failures are reported without aborting other sections.
@@ -2784,8 +2798,13 @@ class RestoreSavedRequest(BaseModel):
 
 
 @router.post("/restore-saved")
-async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireAdminIfEnabled):
-    """Restore ECM configuration from an on-disk saved backup ZIP. Admin only.
+async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdminIfEnabled):
+    """Restore ECM configuration from an on-disk saved backup ZIP. Human-admin only.
+
+    kgz3k / bead 6n76m: uses ``RequireHumanAdminIfEnabled`` so the MCP service
+    principal is rejected — this reuses the EXACT ``_restore_from_zip`` settings-
+    blob write path as POST /restore, so it carries the same admin-field-bypass
+    risk. The shipped MCP ``restore_backup`` tool now receives a clean 403 here.
 
     Takes ``{"filename": "ecm-backup-<ts>.zip"}``, validates it through the
     strict regex + containment guard (zip-only allowlist), then restores from

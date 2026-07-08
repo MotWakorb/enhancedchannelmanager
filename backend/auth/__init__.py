@@ -86,6 +86,7 @@ try:
         RequireAuthIfEnabled,
         require_admin_if_enabled,
         RequireAdminIfEnabled,
+        RequireHumanAdminIfEnabled,
         resolve_is_admin_if_enabled,
         ResolveIsAdminIfEnabled,
     )
@@ -101,6 +102,7 @@ try:
         "RequireAuthIfEnabled",
         "require_admin_if_enabled",
         "RequireAdminIfEnabled",
+        "RequireHumanAdminIfEnabled",
         "resolve_is_admin_if_enabled",
         "ResolveIsAdminIfEnabled",
     ])
