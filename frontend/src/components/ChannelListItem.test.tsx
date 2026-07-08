@@ -163,4 +163,21 @@ describe('ChannelListItem — applied TVG ID / name subtitle', () => {
     });
     expect(screen.queryByTestId('channel-tvg-info-42')).not.toBeInTheDocument();
   });
+
+  it('renders the EPG source name first, before TVG ID and TVG name', () => {
+    renderRow({ tvgId: 'espn.us', tvgName: 'ESPN', epgSourceName: 'Gracenote' });
+    const subtitle = screen.getByTestId('channel-tvg-info-42');
+    expect(subtitle).toHaveTextContent('Gracenote · espn.us · ESPN');
+    expect(subtitle).toHaveAttribute(
+      'title',
+      'EPG: Gracenote · TVG ID: espn.us · TVG Name: ESPN'
+    );
+  });
+
+  it('omits the EPG source name when it does not resolve, keeping the two-part rendering', () => {
+    renderRow({ tvgId: 'espn.us', tvgName: 'ESPN', epgSourceName: null });
+    const subtitle = screen.getByTestId('channel-tvg-info-42');
+    expect(subtitle).toHaveTextContent('espn.us · ESPN');
+    expect(subtitle).toHaveAttribute('title', 'TVG ID: espn.us · TVG Name: ESPN');
+  });
 });
