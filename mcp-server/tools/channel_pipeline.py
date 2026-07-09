@@ -8,6 +8,7 @@ instead]`` pointer. Remove the aliases in a later dated release once callers
 have migrated (tracking bead to be filed after this phase ships).
 """
 import asyncio
+import json
 import logging
 
 from mcp.server.fastmcp import FastMCP
@@ -31,6 +32,156 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed", "rolled_back"})
 async def _poll_sleep(seconds: float) -> None:
     """Thin asyncio.sleep wrapper — patchable in tests."""
     await asyncio.sleep(seconds)
+
+
+# ---------------------------------------------------------------------------
+# Lenient type coercion for values nested in ``conditions``/``actions`` (GH #600).
+#
+# Top-level tool params are typed, so the FastMCP/Pydantic boundary lax-coerces
+# a stringified "true" back to True — but values nested inside the ``list[dict]``
+# params are untyped (additionalProperties: true) and ride through verbatim.
+# Some LLM MCP clients stringify nested scalars ("true", "0.75", "[912, 913]"),
+# which the backend's strict isinstance validation then 400s — or worse, an
+# unvalidated truthy "false" for a condition's ``negate`` silently inverts it.
+# Coerce the known non-string fields with the same leniency the typed params
+# already get. Values that don't cleanly parse pass through unchanged so the
+# backend's validation errors still surface.
+# ---------------------------------------------------------------------------
+
+# Action params the backend type-checks strictly (channel_pipeline_schema
+# Action.validate), plus max_streams/max_streams_per_channel which the executor
+# consumes as ints.
+_ACTION_BOOL_KEYS = frozenset({
+    "remove_non_matching", "loose_name_match", "allow_no_callsign", "set_tvg_id",
+})
+_ACTION_NUMBER_KEYS = frozenset({"min_score"})
+_ACTION_INT_KEYS = frozenset({
+    "max_candidates", "epg_id", "profile_id",
+    "max_streams", "max_streams_per_channel",
+})
+_ACTION_INT_LIST_KEYS = frozenset({
+    "target_channel_in_group", "target_channel_not_in_group", "channel_profile_ids",
+})
+
+_CONDITION_BOOL_KEYS = frozenset({"negate", "case_sensitive"})
+# A condition's ``value`` is polymorphic — coerce only for condition types
+# whose expected value type is unambiguously non-string (Condition.validate).
+_CONDITION_INT_VALUE_TYPES = frozenset({
+    "channel_in_group", "normalized_name_in_group", "normalized_name_not_in_group",
+})
+_CONDITION_NUMBER_VALUE_TYPES = frozenset({
+    "quality_min", "quality_max", "channel_has_streams", "has_audio_tracks",
+})
+_CONDITION_BOOL_VALUE_TYPES = frozenset({"tvg_id_exists", "logo_exists", "has_channel"})
+
+
+def _coerce_bool(v):
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s == "true":
+            return True
+        if s == "false":
+            return False
+    return v
+
+
+def _coerce_int(v):
+    # bool is an int subclass — never reinterpret True as 1 (the backend
+    # rejects booleans masquerading as IDs deliberately).
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        try:
+            return int(v.strip())
+        except ValueError:
+            return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return v
+
+
+def _coerce_number(v):
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            return int(s)
+        except ValueError:
+            pass
+        try:
+            return float(s)
+        except ValueError:
+            return v
+    return v
+
+
+def _coerce_int_list(v):
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+        except ValueError:
+            return v
+        if not isinstance(parsed, list):
+            return v
+        v = parsed
+    if isinstance(v, list):
+        return [_coerce_int(item) for item in v]
+    return v
+
+
+def _coerce_actions(actions):
+    """Return ``actions`` with stringified values in known typed params coerced."""
+    if not isinstance(actions, list):
+        return actions
+    out = []
+    for action in actions:
+        if not isinstance(action, dict):
+            out.append(action)
+            continue
+        action = dict(action)
+        for key, value in action.items():
+            if key in _ACTION_BOOL_KEYS:
+                action[key] = _coerce_bool(value)
+            elif key in _ACTION_NUMBER_KEYS:
+                action[key] = _coerce_number(value)
+            elif key in _ACTION_INT_KEYS:
+                action[key] = _coerce_int(value)
+            elif key in _ACTION_INT_LIST_KEYS:
+                action[key] = _coerce_int_list(value)
+        out.append(action)
+    return out
+
+
+def _coerce_conditions(conditions):
+    """Return ``conditions`` with stringified typed values coerced (recursive)."""
+    if not isinstance(conditions, list):
+        return conditions
+    out = []
+    for cond in conditions:
+        if not isinstance(cond, dict):
+            out.append(cond)
+            continue
+        cond = dict(cond)
+        for key in _CONDITION_BOOL_KEYS:
+            if key in cond:
+                cond[key] = _coerce_bool(cond[key])
+        ctype = cond.get("type")
+        if "value" in cond:
+            v = cond["value"]
+            if ctype == "provider_is":
+                # provider_is accepts an int or a list of ints.
+                coerced = _coerce_int_list(v)
+                cond["value"] = coerced if isinstance(coerced, list) else _coerce_int(v)
+            elif ctype in _CONDITION_INT_VALUE_TYPES:
+                cond["value"] = _coerce_int(v)
+            elif ctype in _CONDITION_NUMBER_VALUE_TYPES:
+                cond["value"] = _coerce_number(v)
+            elif ctype in _CONDITION_BOOL_VALUE_TYPES:
+                cond["value"] = _coerce_bool(v)
+        # Nested condition groups carry their own ``conditions`` list.
+        if isinstance(cond.get("conditions"), list):
+            cond["conditions"] = _coerce_conditions(cond["conditions"])
+        out.append(cond)
+    return out
 
 
 def _action_descriptor(a: dict) -> str:
@@ -629,8 +780,8 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
             payload = {
                 "name": name,
-                "conditions": conditions,
-                "actions": actions,
+                "conditions": _coerce_conditions(conditions),
+                "actions": _coerce_actions(actions),
                 "enabled": enabled,
                 "priority": priority,
                 "run_on_refresh": run_on_refresh,
@@ -781,8 +932,9 @@ def register(mcp: FastMCP):
             for field_name, value in [
                 ("name", name), ("description", description), ("enabled", enabled),
                 ("priority", priority), ("m3u_account_id", m3u_account_id),
-                ("target_group_id", target_group_id), ("conditions", conditions),
-                ("actions", actions), ("run_on_refresh", run_on_refresh),
+                ("target_group_id", target_group_id),
+                ("conditions", _coerce_conditions(conditions)),
+                ("actions", _coerce_actions(actions)), ("run_on_refresh", run_on_refresh),
                 ("stop_on_first_match", stop_on_first_match), ("sort_field", sort_field),
                 ("sort_order", sort_order), ("probe_on_sort", probe_on_sort),
                 ("sort_regex", sort_regex), ("stream_sort_field", stream_sort_field),
