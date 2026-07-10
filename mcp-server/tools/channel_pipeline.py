@@ -666,6 +666,7 @@ def register(mcp: FastMCP):
         orphan_action: str = "delete",
         quality_tie_break_order: str | None = None,
         match_scope_target_group: bool | None = None,
+        allow_manual_channel_merge: bool | None = None,
     ) -> str:
         """Create a new auto-creation rule.
 
@@ -775,6 +776,13 @@ def register(mcp: FastMCP):
             match_scope_target_group: When True, restrict the existing-channel name
                 lookup (for merge/skip decisions) to the rule's target group
                 instead of searching all groups (backend default True)
+            allow_manual_channel_merge: When True, this rule may merge into /
+                adopt hand-built MANUAL channels (each adoption is journaled).
+                Backend default False — manual-channel isolation: a matching
+                manual channel is treated as "not found" (the blocked merge is
+                journaled as manual_channel_merge_blocked and shown in the
+                execution log) and the rule may create a new auto channel
+                instead of merging.
         """
         try:
             client = get_ecm_client()
@@ -812,6 +820,10 @@ def register(mcp: FastMCP):
                 payload["quality_tie_break_order"] = quality_tie_break_order
             if match_scope_target_group is not None:
                 payload["match_scope_target_group"] = match_scope_target_group
+            # enhancedchannelmanager-zrte6: per-rule manual-channel isolation
+            # opt-in (PR #547 / orzck). None = omit → backend default (False).
+            if allow_manual_channel_merge is not None:
+                payload["allow_manual_channel_merge"] = allow_manual_channel_merge
 
             result = await client.call_endpoint(ENDPOINTS["ac_create_rule"], body=payload)
 
@@ -845,6 +857,7 @@ def register(mcp: FastMCP):
         orphan_action: str = "delete",
         quality_tie_break_order: str | None = None,
         match_scope_target_group: bool | None = None,
+        allow_manual_channel_merge: bool | None = None,
     ) -> str:
         """[DEPRECATED — use create_channel_pipeline_rule instead] Create a new auto-creation rule.
 
@@ -874,6 +887,7 @@ def register(mcp: FastMCP):
             orphan_action=orphan_action,
             quality_tie_break_order=quality_tie_break_order,
             match_scope_target_group=match_scope_target_group,
+            allow_manual_channel_merge=allow_manual_channel_merge,
         )
 
     @mcp.tool()
@@ -898,6 +912,7 @@ def register(mcp: FastMCP):
         normalization_group_ids: list[int] | None = None,
         skip_struck_streams: bool | None = None,
         orphan_action: str | None = None,
+        allow_manual_channel_merge: bool | None = None,
     ) -> str:
         """Update an existing auto-creation rule. Only provided fields are changed.
 
@@ -924,6 +939,12 @@ def register(mcp: FastMCP):
             normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
             skip_struck_streams: Skip streams with consecutive probe failures
             orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
+            allow_manual_channel_merge: When True, this rule may merge into /
+                adopt hand-built MANUAL channels (each adoption is journaled).
+                When False (backend default) manual channels are protected: a
+                matching manual channel is treated as "not found" (journaled as
+                manual_channel_merge_blocked) and the rule may create a new
+                auto channel instead of merging.
         """
         try:
             client = get_ecm_client()
@@ -940,6 +961,7 @@ def register(mcp: FastMCP):
                 ("sort_regex", sort_regex), ("stream_sort_field", stream_sort_field),
                 ("stream_sort_order", stream_sort_order), ("normalization_group_ids", normalization_group_ids),
                 ("skip_struck_streams", skip_struck_streams), ("orphan_action", orphan_action),
+                ("allow_manual_channel_merge", allow_manual_channel_merge),
             ]:
                 if value is not None:
                     payload[field_name] = value
@@ -978,6 +1000,7 @@ def register(mcp: FastMCP):
         normalization_group_ids: list[int] | None = None,
         skip_struck_streams: bool | None = None,
         orphan_action: str | None = None,
+        allow_manual_channel_merge: bool | None = None,
     ) -> str:
         """[DEPRECATED — use update_channel_pipeline_rule instead] Update an existing auto-creation rule. Only provided fields are changed.
 
@@ -1005,6 +1028,7 @@ def register(mcp: FastMCP):
             normalization_group_ids=normalization_group_ids,
             skip_struck_streams=skip_struck_streams,
             orphan_action=orphan_action,
+            allow_manual_channel_merge=allow_manual_channel_merge,
         )
 
     @mcp.tool()

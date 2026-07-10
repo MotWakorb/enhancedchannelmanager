@@ -246,6 +246,12 @@ export interface ChannelPipelineRule {
   // undefined = "Auto" (create_channel falls back to the action's target
   // group; merge_streams stays group-agnostic).
   match_scope_group_id?: number | null;
+  // Manual-channel isolation opt-out (PR #547). Default false = hand-built
+  // (manual) channels are protected: a matching manual merge target is
+  // treated as "not found" (the block is journaled + shown in the execution
+  // log) and the rule may create a new auto channel instead. True = this
+  // rule may merge into manual channels; each adoption is journaled.
+  allow_manual_channel_merge?: boolean;
   last_run_at?: string;
   match_count: number;
   created_at: string;
@@ -280,6 +286,8 @@ export interface CreateRuleData {
   match_scope_target_group?: boolean;
   // Explicit rule-level scope group for merge lookups (GH #298). null = "Auto".
   match_scope_group_id?: number | null;
+  // Allow this rule to merge into hand-built manual channels (default false).
+  allow_manual_channel_merge?: boolean;
 }
 
 /**
