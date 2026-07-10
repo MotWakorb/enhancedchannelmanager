@@ -6,6 +6,7 @@ import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelMod
 import { PrintGuideModal } from '../PrintGuideModal';
 import { CustomSelect } from '../CustomSelect';
 import { getDateLocale } from '../../utils/formatting';
+import { getProgramStart, getProgramEnd, buildProgramsByTvgId } from '../../utils/epgProgram';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -21,16 +22,6 @@ const getLocalDateString = (date: Date): string => {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
-};
-
-// Helper to get program start time (handles both start_time and start field names)
-const getProgramStart = (program: EPGProgram): Date => {
-  return new Date(program.start_time || program.start || '');
-};
-
-// Helper to get program end time (handles both end_time and stop field names)
-const getProgramEnd = (program: EPGProgram): Date => {
-  return new Date(program.end_time || program.stop || '');
 };
 
 interface GuideTabProps {
@@ -118,21 +109,7 @@ export function GuideTab({
   }, [epgData]);
 
   // Build programs map by tvg_id for quick lookup
-  const programsByTvgId = useMemo(() => {
-    const map = new Map<string, EPGProgram[]>();
-    programs.forEach(program => {
-      if (program.tvg_id) {
-        const existing = map.get(program.tvg_id) || [];
-        existing.push(program);
-        map.set(program.tvg_id, existing);
-      }
-    });
-    // Sort programs by start time within each tvg_id
-    map.forEach((progs) => {
-      progs.sort((a, b) => getProgramStart(a).getTime() - getProgramStart(b).getTime());
-    });
-    return map;
-  }, [programs]);
+  const programsByTvgId = useMemo(() => buildProgramsByTvgId(programs), [programs]);
 
 
   // Get selected profile for filtering
