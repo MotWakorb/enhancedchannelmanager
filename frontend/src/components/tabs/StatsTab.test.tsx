@@ -173,6 +173,8 @@ beforeEach(() => {
   } as unknown as Awaited<ReturnType<typeof api.getSystemEvents>>);
   vi.mocked(api.getBandwidthStats).mockResolvedValue(baseBandwidth);
   vi.mocked(api.getTopWatchedChannels).mockResolvedValue(baseTopWatched);
+  vi.mocked(api.getEPGGrid).mockResolvedValue([]);
+  vi.mocked(api.getEPGData).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -1637,5 +1639,103 @@ describe('StatsTab — Recent Events username (#2)', () => {
       const msg = container.querySelector('.event-message');
       expect(msg?.textContent).toContain('- 203.0.113.9');
     });
+  });
+});
+
+// Currently Showing (EPG) row on Active Channels cards
+// (enhancedchannelmanager-hoj54): joins the active stream (keyed by UUID)
+// to its guide programs via epg_data_id → EPGData.tvg_id (preferred),
+// channel.tvg_id (fallback), or channel UUID (dummy EPG sources), and
+// renders the program airing right now.
+describe('StatsTab — Currently Showing EPG row (hoj54)', () => {
+  const CS_UUID = 'aaaabbbb-cccc-dddd-eeee-ffff00001111';
+
+  // A program window straddling "now" so the row always matches.
+  const nowMs = Date.now();
+  const startIso = new Date(nowMs - 30 * 60 * 1000).toISOString();
+  const endIso = new Date(nowMs + 30 * 60 * 1000).toISOString();
+
+  function mockActiveChannel(channelFields: Record<string, unknown>) {
+    vi.mocked(api.getChannels).mockResolvedValue({
+      results: [{ uuid: CS_UUID, name: 'ESPN HD', channel_number: 5, logo_id: null, tvg_id: null, epg_data_id: null, ...channelFields }],
+      next: null,
+      count: 1,
+    } as unknown as Awaited<ReturnType<typeof api.getChannels>>);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [{ channel_id: CS_UUID, channel_name: 'ESPN HD', channel_number: 5, state: 'streaming', client_count: 0, clients: [] }],
+    } as unknown as ChannelStatsResponse);
+  }
+
+  it('renders the current program via the epg_data_id → tvg_id hop', async () => {
+    mockActiveChannel({ epg_data_id: 10, tvg_id: 'stale.channel.tvg' });
+    vi.mocked(api.getEPGData).mockResolvedValue([
+      { id: 10, tvg_id: 'espn.us', name: 'ESPN', icon_url: null, epg_source: 1 },
+    ]);
+    vi.mocked(api.getEPGGrid).mockResolvedValue([
+      { id: 1, tvg_id: 'espn.us', title: 'SportsCenter', start_time: startIso, end_time: endIso },
+      { id: 2, tvg_id: 'espn.us', title: 'Later Show', start_time: endIso, end_time: new Date(nowMs + 90 * 60 * 1000).toISOString() },
+    ] as unknown as Awaited<ReturnType<typeof api.getEPGGrid>>);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-now-playing')).toHaveTextContent('SportsCenter');
+    });
+    expect(screen.getByTestId('channel-now-playing')).not.toHaveTextContent('Later Show');
+  });
+
+  it('falls back to channel.tvg_id when there is no epg_data_id mapping', async () => {
+    mockActiveChannel({ tvg_id: 'tnt.us' });
+    vi.mocked(api.getEPGGrid).mockResolvedValue([
+      { id: 3, tvg_id: 'tnt.us', title: 'Movie Night', start_time: startIso, end_time: endIso },
+    ] as unknown as Awaited<ReturnType<typeof api.getEPGGrid>>);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-now-playing')).toHaveTextContent('Movie Night');
+    });
+  });
+
+  it('matches dummy EPG programs keyed by the channel UUID', async () => {
+    mockActiveChannel({});
+    vi.mocked(api.getEPGGrid).mockResolvedValue([
+      { id: 4, tvg_id: CS_UUID, title: 'Dummy Program', start_time: startIso, end_time: endIso },
+    ] as unknown as Awaited<ReturnType<typeof api.getEPGGrid>>);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-now-playing')).toHaveTextContent('Dummy Program');
+    });
+  });
+
+  it('renders no row when no program is airing right now', async () => {
+    mockActiveChannel({ tvg_id: 'tnt.us' });
+    // Program already ended — nothing is currently showing.
+    vi.mocked(api.getEPGGrid).mockResolvedValue([
+      { id: 5, tvg_id: 'tnt.us', title: 'Old Program', start_time: new Date(nowMs - 120 * 60 * 1000).toISOString(), end_time: new Date(nowMs - 60 * 60 * 1000).toISOString() },
+    ] as unknown as Awaited<ReturnType<typeof api.getEPGGrid>>);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.channel-card')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('channel-now-playing')).toBeNull();
+  });
+
+  it('renders no row when EPG guide data is unavailable', async () => {
+    mockActiveChannel({ tvg_id: 'tnt.us' });
+    vi.mocked(api.getEPGGrid).mockRejectedValue(new Error('grid down'));
+    vi.mocked(api.getEPGData).mockRejectedValue(new Error('epg down'));
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.channel-card')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('channel-now-playing')).toBeNull();
   });
 });

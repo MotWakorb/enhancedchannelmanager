@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy } from '../../types';
+import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy, EPGProgram } from '../../types';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
+import { getProgramStart, getProgramEnd, buildProgramsByTvgId, findCurrentProgram } from '../../utils/epgProgram';
 import {
   LineChart,
   Line,
@@ -36,6 +37,12 @@ interface HistoricalDataPoint {
 
 // Max number of data points to keep per channel
 const MAX_HISTORY_POINTS = 60;
+
+// How often the EPG guide data (grid + tvg_id map) is considered fresh.
+// The grid covers "now" through +24h, so which program is Currently
+// Showing can be recomputed locally — a slow cadence only needs to pick
+// up guide refreshes, not program transitions.
+const EPG_REFRESH_MS = 30 * 60 * 1000;
 
 // Refresh interval options (in seconds)
 const REFRESH_OPTIONS = [
@@ -211,6 +218,11 @@ function DataTooltip({ active, payload }: { active?: boolean; payload?: Array<{ 
   return null;
 }
 
+// Format an EPG program boundary for the Currently Showing row (e.g. "8:00 PM")
+function formatProgramTime(date: Date): string {
+  return date.toLocaleTimeString(getDateLocale(), { hour: 'numeric', minute: '2-digit' });
+}
+
 export function StatsTab() {
   // Data state
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
@@ -239,10 +251,28 @@ export function StatsTab() {
 
   // Build lookup maps for channel names by UUID and stream profiles by ID.
   // The channel map also carries logo_id so the Active Channels rows can render
-  // the channel logo (#1); the URL is resolved via channelLogoMap (logo_id -> url).
-  const channelNameMap = useRef<Map<string, { name: string; number: number | null; logo_id: number | null }>>(new Map());
+  // the channel logo (#1); the URL is resolved via channelLogoMap (logo_id -> url),
+  // plus tvg_id/epg_data_id so the Currently Showing row can join the active
+  // stream (keyed by UUID only) to its EPG guide programs.
+  const channelNameMap = useRef<Map<string, { name: string; number: number | null; logo_id: number | null; tvg_id: string | null; epg_data_id: number | null }>>(new Map());
   const channelLogoMap = useRef<Map<number, string>>(new Map());
   const streamProfileMap = useRef<Map<string, string>>(new Map());
+
+  // EPG guide data for the Currently Showing row. Programs come from the
+  // Dispatcharr grid proxy (now → +24h); epgTvgIdByDataId resolves a
+  // channel's epg_data_id to the guide's tvg_id (which can differ from
+  // channel.tvg_id — same double-hop the Guide tab uses).
+  const [epgPrograms, setEpgPrograms] = useState<EPGProgram[]>([]);
+  const epgTvgIdByDataId = useRef<Map<number, string>>(new Map());
+  const lastEpgFetchRef = useRef<number>(0);
+
+  // Clock for recomputing which program is Currently Showing; ticks every
+  // minute so program transitions surface even in Manual refresh mode.
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Historical data for charts (per channel)
   const channelHistory = useRef<Map<string, HistoricalDataPoint[]>>(new Map());
@@ -253,7 +283,7 @@ export function StatsTab() {
     const startTime = Date.now();
 
     try {
-      const map = new Map<string, { name: string; number: number | null; logo_id: number | null }>();
+      const map = new Map<string, { name: string; number: number | null; logo_id: number | null; tvg_id: string | null; epg_data_id: number | null }>();
       let page = 1;
       let hasMore = true;
       const pageSize = 500;
@@ -262,7 +292,7 @@ export function StatsTab() {
         const result = await api.getChannels({ page, pageSize });
         for (const ch of result.results || []) {
           if (ch.uuid) {
-            map.set(ch.uuid, { name: ch.name, number: ch.channel_number, logo_id: ch.logo_id });
+            map.set(ch.uuid, { name: ch.name, number: ch.channel_number, logo_id: ch.logo_id, tvg_id: ch.tvg_id, epg_data_id: ch.epg_data_id });
           }
         }
         hasMore = result.next !== null;
@@ -320,6 +350,26 @@ export function StatsTab() {
     }
   }, []);
 
+  // Load EPG guide data (grid programs + epg_data_id → tvg_id map) for the
+  // Currently Showing row. Non-fatal: on failure the row simply doesn't
+  // render. The attempt timestamp is stamped up front so a failing EPG
+  // backend is retried on the slow EPG_REFRESH_MS cadence, not every poll.
+  const loadEpgGuide = useCallback(async () => {
+    lastEpgFetchRef.current = Date.now();
+    try {
+      const [grid, epgData] = await Promise.all([api.getEPGGrid(), api.getEPGData()]);
+      const map = new Map<number, string>();
+      for (const epg of epgData || []) {
+        map.set(epg.id, epg.tvg_id);
+      }
+      epgTvgIdByDataId.current = map;
+      setEpgPrograms(grid || []);
+      logger.debug(`Stats Tab: Loaded ${grid?.length || 0} EPG programs and ${map.size} EPG data entries for Currently Showing`);
+    } catch (err) {
+      logger.warn('Stats Tab: EPG guide data unavailable for Currently Showing', err);
+    }
+  }, []);
+
   // Fetch stats data
   const fetchData = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -328,6 +378,12 @@ export function StatsTab() {
 
     logger.debug('Stats Tab: Starting stats refresh');
     const startTime = Date.now();
+
+    // Re-fetch EPG guide data when stale so Currently Showing tracks guide
+    // refreshes. Fire-and-forget — errors are handled inside loadEpgGuide.
+    if (Date.now() - lastEpgFetchRef.current > EPG_REFRESH_MS) {
+      loadEpgGuide();
+    }
 
     try {
       logger.debug('Stats Tab: Fetching channel stats, events, bandwidth, and top watched channels');
@@ -443,7 +499,7 @@ export function StatsTab() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [loadEpgGuide]);
 
   // Fetch only top watched channels (for sort changes without full refresh)
   const fetchTopWatched = useCallback(async (sortBy: TopWatchedSortBy) => {
@@ -498,6 +554,7 @@ export function StatsTab() {
           loadAllLogos(),
           loadStreamProfiles(),
           loadM3UAccounts(),
+          loadEpgGuide(),
         ]);
 
         // Now load stats
@@ -515,7 +572,7 @@ export function StatsTab() {
       }
     };
     loadLookups();
-  }, [loadAllChannels, loadAllLogos, loadStreamProfiles, loadM3UAccounts, fetchData]);
+  }, [loadAllChannels, loadAllLogos, loadStreamProfiles, loadM3UAccounts, loadEpgGuide, fetchData]);
 
   // Auto-refresh timer (pauses when tab/window is not visible)
   useEffect(() => {
@@ -758,6 +815,9 @@ export function StatsTab() {
     return prepareBandwidthChartData(bandwidthStats.daily_history);
   }, [bandwidthStats?.daily_history]);
 
+  // Guide programs grouped by tvg_id for the Currently Showing lookup
+  const programsByTvgId = useMemo(() => buildProgramsByTvgId(epgPrograms), [epgPrograms]);
+
   if (loading) {
     return (
       <div className="stats-tab">
@@ -940,6 +1000,22 @@ export function StatsTab() {
                   )
                 : null;
 
+              // Currently Showing: resolve the channel's guide tvg_id via
+              // epg_data_id → EPGData (preferred — the guide's tvg_id can
+              // differ from channel.tvg_id), falling back to the channel's
+              // own tvg_id. Dummy EPG sources key programs by channel UUID;
+              // findCurrentProgram covers that fallback.
+              const epgDataId = lookupData?.epg_data_id ?? null;
+              const guideTvgId = (epgDataId != null ? epgTvgIdByDataId.current.get(epgDataId) : null)
+                ?? lookupData?.tvg_id
+                ?? null;
+              const nowShowing = findCurrentProgram(
+                programsByTvgId,
+                guideTvgId,
+                isUUID ? channelIdStr : null,
+                currentTime,
+              );
+
               return (
               <div key={channel.channel_id} className="channel-card">
                 <div className="channel-card-header">
@@ -1036,6 +1112,24 @@ export function StatsTab() {
                     </button>
                   </div>
                 </div>
+
+                {/* Currently Showing (EPG) */}
+                {nowShowing && (
+                  <div className="channel-now-playing" data-testid="channel-now-playing">
+                    <span className="material-icons">live_tv</span>
+                    <span className="now-playing-label">Now Showing</span>
+                    <span
+                      className="now-playing-title"
+                      title={nowShowing.description || nowShowing.title}
+                    >
+                      {nowShowing.title}
+                      {nowShowing.sub_title ? ` — ${nowShowing.sub_title}` : ''}
+                    </span>
+                    <span className="now-playing-time">
+                      {formatProgramTime(getProgramStart(nowShowing))} – {formatProgramTime(getProgramEnd(nowShowing))}
+                    </span>
+                  </div>
+                )}
 
                 {/* Quick Stats */}
                 <div className="channel-stats">
