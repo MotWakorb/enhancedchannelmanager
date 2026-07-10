@@ -43,6 +43,11 @@ _GUARD_TYPES = frozenset({
     "normalized_name_not_in_group",
     "normalized_name_exists",
     "provider_is",
+    # bd-rgw9p: stream_group_is constrains *which streams* qualify (the
+    # stream's provider group) exactly like provider_is — same guard-drop
+    # risk when ANDed with a regex/contains filter inside one OR-arm but
+    # absent from a sibling OR-arm.
+    "stream_group_is",
 })
 
 

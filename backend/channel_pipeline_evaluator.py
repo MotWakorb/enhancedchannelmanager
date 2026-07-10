@@ -347,6 +347,9 @@ class ConditionEvaluator:
         elif cond_enum == ConditionType.STREAM_GROUP_MATCHES:
             return self._evaluate_regex(condition.value, context.group_name or "",
                                         condition.case_sensitive, cond_type)
+        elif cond_enum == ConditionType.STREAM_GROUP_IS:
+            return self._evaluate_equals(condition.value, context.group_name or "",
+                                         condition.case_sensitive, cond_type)
 
         # TVG conditions
         elif cond_enum == ConditionType.TVG_ID_EXISTS:
@@ -548,6 +551,32 @@ class ConditionEvaluator:
         return EvaluationResult(
             matched, cond_type,
             f"'{value}' {'contains' if matched else 'does not contain'} '{substring}'"
+        )
+
+    def _evaluate_equals(self, expected: str, actual: str, case_sensitive: bool,
+                         cond_type: str) -> EvaluationResult:
+        """Evaluate exact string equality (case-insensitive by default).
+
+        Used by stream_group_is (bd-rgw9p): the stream's provider group
+        (context.group_name, i.e. the M3U group_title) must exactly equal
+        the configured value — no substring/regex semantics. Matches the
+        case-insensitive-by-default convention shared with
+        stream_group_contains/stream_group_matches; case_sensitive=True
+        opts into exact-case comparison.
+        """
+        if not expected:
+            return EvaluationResult(False, cond_type, "No value specified")
+        if actual is None:
+            actual = ""
+
+        if case_sensitive:
+            matched = actual == expected
+        else:
+            matched = actual.lower() == str(expected).lower()
+
+        return EvaluationResult(
+            matched, cond_type,
+            f"'{actual}' {'==' if matched else '!='} '{expected}'"
         )
 
     # =========================================================================
