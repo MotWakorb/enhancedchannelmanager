@@ -3657,3 +3657,139 @@ class TestAutoCreatedFilter:
                                   existing_groups=[{"id": 1, "name": "SPORTS"}])
         assert executor._find_channel_by_name("ESPN") is None
         assert executor._find_channel_by_name("ESPN", block_manual=False)["id"] == 55
+
+
+class TestManualChannelBlockVisibility:
+    """enhancedchannelmanager-wy6l5: a manual-channel-blocked merge must be a
+    user-visible outcome (execution-log description + journal entry), not an
+    INFO-log-only event.
+
+    Mirrors the opt-in ``manual_channel_adopted`` journal pattern: the blocked
+    path writes a ``manual_channel_merge_blocked`` entry (deduped to one per
+    blocked channel per run) and the ActionResult description/details name the
+    blocked manual channel so the executions list / debug bundle show WHY the
+    rule "skipped everything" — and that a duplicate auto channel may be
+    created instead.
+    """
+
+    # ---- merge_streams: blocked reason lands in the ActionResult ----
+
+    def test_merge_streams_name_exact_blocked_reason_in_description(self):
+        _client, executor = _make_manual_isolation_executor()
+        action = {"type": "merge_streams", "target": "existing_channel",
+                  "find_channel_by": "name_exact", "find_channel_value": "ESPN"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+        # Same failure semantics as "not found" (success=False), but the
+        # description must name the blocked manual channel and the flag.
+        assert result.success is False
+        assert "ESPN" in result.description
+        assert "id=99" in result.description
+        assert "allow_manual_channel_merge" in result.description
+        assert result.entity_id == 99
+
+    def test_merge_streams_auto_blocked_reason_in_description(self):
+        _client, executor = _make_manual_isolation_executor()
+        action = {"type": "merge_streams", "target": "auto"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+        # auto target with no match is a skip — but the reason must be the
+        # manual block, not the generic "no existing channel found".
+        assert result.skipped is True
+        assert "ESPN" in result.description
+        assert "id=99" in result.description
+        assert "allow_manual_channel_merge" in result.description
+
+    def test_merge_streams_tvg_id_blocked_journals_and_describes(self):
+        """The post-resolution reject (non-chokepoint paths) is also covered."""
+        client = MagicMock()
+        client.create_channel = AsyncMock()
+        client.update_channel = AsyncMock(return_value={})
+        client.get_channel = AsyncMock(return_value={"id": 99, "streams": []})
+        channels = [{"id": 99, "name": "ESPN", "channel_group_id": 1,
+                     "streams": [], "tvg_id": "ESPN.us", "auto_created": False}]
+        executor = ActionExecutor(client, existing_channels=channels,
+                                  existing_groups=[{"id": 1, "name": "SPORTS"}])
+        executor._execution_id = 777
+        action = {"type": "merge_streams", "target": "existing_channel",
+                  "find_channel_by": "tvg_id", "find_channel_value": "ESPN.us"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1,
+                                   tvg_id="ESPN.us")
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+        assert "allow_manual_channel_merge" in result.description
+        blocked = [e for e in executor._journal_buffer
+                   if e.get("action_type") == "manual_channel_merge_blocked"]
+        assert len(blocked) == 1
+        assert blocked[0]["entity_id"] == 99
+        assert "ESPN" in blocked[0]["description"]
+
+    # ---- create_channel if_exists=merge: consequence is discoverable ----
+
+    def test_create_channel_blocked_detail_and_journal(self):
+        client, executor = _make_manual_isolation_executor()
+        executor._execution_id = 12345
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "if_exists": "merge"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(), rule_target_group_id=1)
+        )
+        # Behavior unchanged: a NEW auto channel is created...
+        assert result.success is True
+        client.create_channel.assert_called_once()
+        # ...but the block and its consequence are now user-visible details.
+        joined = " ".join(result.details)
+        assert "allow_manual_channel_merge" in joined
+        assert "id=99" in joined
+        blocked = [e for e in executor._journal_buffer
+                   if e.get("action_type") == "manual_channel_merge_blocked"]
+        assert len(blocked) == 1
+        assert blocked[0]["entity_id"] == 99
+
+    # ---- journal hygiene ----
+
+    def test_block_journal_dedupes_per_channel_per_run(self):
+        _client, executor = _make_manual_isolation_executor()
+        executor._execution_id = 12345
+        action = {"type": "merge_streams", "target": "auto"}
+        for stream_id in (502, 503):
+            stream_ctx = StreamContext(stream_id=stream_id, stream_name="ESPN",
+                                       m3u_account_id=1)
+            asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, stream_ctx, ExecutionContext())
+            )
+        blocked = [e for e in executor._journal_buffer
+                   if e.get("action_type") == "manual_channel_merge_blocked"]
+        assert len(blocked) == 1
+
+    def test_no_block_journal_without_execution_id(self):
+        _client, executor = _make_manual_isolation_executor()
+        # _execution_id stays None (direct-construct/tests) → journaling off,
+        # same contract as _journal_manual_channel_adoption.
+        action = {"type": "merge_streams", "target": "auto"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+        assert executor._journal_buffer == []
+
+    def test_opt_in_writes_adoption_not_block(self):
+        client, executor = _make_manual_isolation_executor()
+        executor._execution_id = 12345
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "if_exists": "merge"}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN", m3u_account_id=1)
+        asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             rule_target_group_id=1,
+                             allow_manual_channel_merge=True)
+        )
+        kinds = {e.get("action_type") for e in executor._journal_buffer}
+        assert "manual_channel_adopted" in kinds
+        assert "manual_channel_merge_blocked" not in kinds
