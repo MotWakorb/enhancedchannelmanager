@@ -655,4 +655,69 @@ describe('RuleBuilder', () => {
       expect(screen.queryByText(/fall back to ALL channel groups/i)).not.toBeInTheDocument();
     });
   });
+
+  describe('manual channel merge opt-in (allow_manual_channel_merge)', () => {
+    it('renders the toggle unchecked by default', () => {
+      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      expect(
+        screen.getByRole('checkbox', { name: /allow merging into manual channels/i }),
+      ).not.toBeChecked();
+    });
+
+    it('round-trips a rule with the flag enabled', () => {
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'OptIn',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+        allow_manual_channel_merge: true,
+      };
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      expect(
+        screen.getByRole('checkbox', { name: /allow merging into manual channels/i }),
+      ).toBeChecked();
+    });
+
+    it('defaults allow_manual_channel_merge to false in the save payload', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'Protected',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+      };
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(
+          expect.objectContaining({ allow_manual_channel_merge: false }),
+        );
+      });
+    });
+
+    it('includes allow_manual_channel_merge true after toggling on', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'OptIn',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+      };
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(
+        screen.getByRole('checkbox', { name: /allow merging into manual channels/i }),
+      );
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(
+          expect.objectContaining({ allow_manual_channel_merge: true }),
+        );
+      });
+    });
+  });
 });
