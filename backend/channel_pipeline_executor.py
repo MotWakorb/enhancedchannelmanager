@@ -326,6 +326,19 @@ class ActionExecutor:
         self._last_manual_block: Optional[dict] = None
         self._journaled_manual_block_ids: set[int] = set()
 
+        # enhancedchannelmanager-3gigl: name-transform failure visibility.
+        # _last_name_transform_error is set by _apply_name_transform whenever
+        # safe_regex.sub reported a failure (invalid group reference in the
+        # replacement, timeout, oversize pattern) — reset at each call; the
+        # create_channel / create_group callers read it to append a
+        # user-visible reason to the execution log's action details.
+        # _journaled_transform_failure_keys dedupes the journal to ONE
+        # name_transform_failed entry per (pattern, replacement, kind) per
+        # run — effectively per rule per run, since the transform fields
+        # live on the rule's action.
+        self._last_name_transform_error: Optional[str] = None
+        self._journaled_transform_failure_keys: set[tuple] = set()
+
         # Channel number tracking
         self._used_channel_numbers = set()
         for c in self.existing_channels:
@@ -665,28 +678,92 @@ class ActionExecutor:
     # =========================================================================
 
     def _apply_name_transform(self, name: str, params: dict) -> str:
-        """Apply optional regex name transform to a name string."""
+        """Apply optional regex name transform to a name string.
+
+        On failure (invalid group reference in the replacement, timeout,
+        oversize pattern) the name passes through unchanged — the
+        pre-migration no-op contract — and the failure reason is stamped on
+        ``self._last_name_transform_error`` for the calling action to
+        surface in the execution log (enhancedchannelmanager-3gigl).
+        safe_regex.sub never raises: it swallows internally and reports
+        through the ``on_error`` callback, so there is no exception arm
+        here (enhancedchannelmanager-ock7c removed the unreachable
+        ``except re.error``).
+        """
+        self._last_name_transform_error = None
         pattern = params.get("name_transform_pattern")
         if pattern:
             replacement = params.get("name_transform_replacement", "")
             # Convert JS-style backreferences ($1, $2) to Python (\1, \2).
             # Pattern here is a hardcoded literal, so we leave this on stdlib re.
             py_replacement = re.sub(r'\$(\d+)', r'\\\1', replacement)
-            try:
-                original = name
-                # bd-eio04.15: user-supplied pattern routed through safe_regex.
-                # On timeout safe_regex.sub returns 'name' unchanged — that
-                # matches the pre-migration fallback contract (no-op on
-                # regex error) and keeps the channel-name pipeline moving.
-                name = safe_regex.sub(pattern, py_replacement, name)
-                if name != original:
-                    logger.debug("[AUTO-CREATE-EXEC] '%s' -> '%s' (pattern=/%s/ replacement='%s')", original, name, pattern, replacement)
-            except re.error as e:
-                # safe_regex swallows regex.error internally and returns the
-                # input text unchanged; this arm is defensive for any
-                # lingering stdlib re escapes.
-                logger.warning("[AUTO-CREATE-EXEC] Name transform regex error: %s", e)
+            original = name
+            failures: list[safe_regex.SubFailure] = []
+            # bd-eio04.15: user-supplied pattern routed through safe_regex.
+            # On failure safe_regex.sub returns 'name' unchanged — that
+            # matches the pre-migration fallback contract (no-op on
+            # regex error) and keeps the channel-name pipeline moving.
+            name = safe_regex.sub(pattern, py_replacement, name,
+                                  on_error=failures.append)
+            if failures:
+                failure = failures[0]
+                hint = ""
+                if failure.kind == "template":
+                    hint = (" — check that every $N in the replacement "
+                            "matches a capture group in the pattern")
+                self._last_name_transform_error = (
+                    f"Name transform failed ({failure.kind}): "
+                    f"{failure.message}{hint}. Pattern /{pattern}/ with "
+                    f"replacement '{replacement}' left '{original}' unchanged."
+                )
+                logger.warning("[AUTO-CREATE-EXEC] %s",
+                               self._last_name_transform_error)
+                self._journal_name_transform_failure(
+                    pattern, replacement, failure)
+            elif name != original:
+                logger.debug("[AUTO-CREATE-EXEC] '%s' -> '%s' (pattern=/%s/ replacement='%s')", original, name, pattern, replacement)
         return name.strip()
+
+    def _journal_name_transform_failure(
+        self, pattern: str, replacement: str, failure: "safe_regex.SubFailure"
+    ) -> None:
+        """Record a name-transform regex failure in the journal.
+
+        enhancedchannelmanager-3gigl: mirrors the wy6l5 merge-block writer —
+        deduped to ONE ``name_transform_failed`` entry per (pattern,
+        replacement, kind) per run (per-stream reasons ride in the execution
+        log's action details); a None ``_execution_id`` (direct-construct
+        callers/tests) disables journaling.
+        """
+        if self._execution_id is None:
+            return
+        key = (pattern, replacement, failure.kind)
+        if key in self._journaled_transform_failure_keys:
+            return
+        self._journaled_transform_failure_keys.add(key)
+        self._journal_buffer.append({
+            "category": "auto_creation",
+            "action_type": "name_transform_failed",
+            "entity_id": None,
+            "entity_name": pattern,
+            "description": (
+                "Name transform failed during auto-creation run (%s): %s — "
+                "pattern /%s/ with replacement '%s'; affected stream names "
+                "were left untransformed" % (
+                    failure.kind, failure.message, pattern, replacement)
+            ),
+            "before_value": {
+                "pattern": pattern,
+                "replacement": replacement,
+                "failure_kind": failure.kind,
+            },
+            "after_value": None,
+            "user_initiated": False,
+            "mutation_source": journal.MUTATION_SOURCE_AUTO_CREATION,
+            "batch_id": str(self._execution_id),
+        })
+        if len(self._journal_buffer) >= self._journal_flush_threshold:
+            self._flush_journal_buffer()
 
     async def _resolve_logo_id(self, logo_url: str, name_hint: str = "") -> Optional[int]:
         """Resolve a logo URL to a Dispatcharr logo_id, creating if needed.
@@ -750,6 +827,12 @@ class ActionExecutor:
 
         # Track details for the execution log
         action_details = []
+
+        # enhancedchannelmanager-3gigl: surface a name-transform failure as a
+        # user-visible execution-log detail (previously a hash-labeled
+        # safe_regex WARNING only — a silent per-stream no-op).
+        if self._last_name_transform_error:
+            action_details.append(self._last_name_transform_error)
 
         # Apply normalization engine if enabled (non-empty group IDs list)
         pre_norm_name = channel_name
@@ -1339,12 +1422,21 @@ class ActionExecutor:
         if_exists = params.get("if_exists", "use_existing")
         logger.debug("[AUTO-CREATE-EXEC] name='%s' if_exists=%s", group_name, if_exists)
 
+        # Track details for the execution log.
+        # enhancedchannelmanager-3gigl: surface a name-transform failure as a
+        # user-visible execution-log detail (previously a hash-labeled
+        # safe_regex WARNING only — a silent per-stream no-op).
+        action_details = []
+        if self._last_name_transform_error:
+            action_details.append(self._last_name_transform_error)
+
         if not group_name:
             return ActionResult(
                 success=False,
                 action_type=action.type,
                 description="Group name is empty after template expansion",
-                error="Empty group name"
+                error="Empty group name",
+                details=action_details
             )
 
         # Check if group already exists
@@ -1360,7 +1452,8 @@ class ActionExecutor:
                     entity_type="group",
                     entity_id=existing["id"],
                     entity_name=group_name,
-                    skipped=True
+                    skipped=True,
+                    details=action_details
                 )
             else:  # skip
                 exec_ctx.current_group_id = existing["id"]
@@ -1371,7 +1464,8 @@ class ActionExecutor:
                     entity_type="group",
                     entity_id=existing["id"],
                     entity_name=group_name,
-                    skipped=True
+                    skipped=True,
+                    details=action_details
                 )
 
         # Create new group
@@ -1385,7 +1479,8 @@ class ActionExecutor:
                 description=f"Would create group '{group_name}'",
                 entity_type="group",
                 entity_name=group_name,
-                created=True
+                created=True,
+                details=action_details
             )
 
         try:
@@ -1402,7 +1497,8 @@ class ActionExecutor:
                 entity_type="group",
                 entity_id=new_group["id"],
                 entity_name=group_name,
-                created=True
+                created=True,
+                details=action_details
             )
 
         except Exception as e:
@@ -1411,7 +1507,8 @@ class ActionExecutor:
                 success=False,
                 action_type=action.type,
                 description=f"Failed to create group '{group_name}'",
-                error=str(e)
+                error=str(e),
+                details=action_details
             )
 
     # =========================================================================

@@ -821,6 +821,133 @@ describe('ActionEditor', () => {
     });
   });
 
+  describe('name transform group reference validation', () => {
+    // Backend parity (enhancedchannelmanager-yom3k): the pipeline converts
+    // $N to Python \N and errors at execution when N exceeds the pattern's
+    // capture-group count. JS treats out-of-range $N as literal text, which
+    // used to make the preview look correct while every matching stream
+    // silently failed. The preview must flag it as an error instead.
+
+    it('flags a replacement referencing an out-of-range group as an error', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            group_id: 1,
+            name_transform_pattern: '(\\w+) (\\w+) (\\w+)',
+            name_transform_replacement: '$2 $1 $3 $4',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'references group 4 but pattern defines 3 capture groups'
+      );
+    });
+
+    it('accepts in-range group references', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            group_id: 1,
+            name_transform_pattern: '(\\w+) (\\w+) (\\w+)',
+            name_transform_replacement: '$3 $2 $1',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('flags $0 as an invalid group reference', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            group_id: 1,
+            name_transform_pattern: '(\\w+)',
+            name_transform_replacement: '$0',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.getByRole('alert')).toHaveTextContent(/\$0/);
+      expect(screen.getByRole('alert')).toHaveTextContent(/numbered from \$1/);
+    });
+
+    it('shows the error in the preview instead of rendering literal $N text', () => {
+      // {stream_name} example is 'ESPN HD' — the pattern matches, so the
+      // backend would error on every matching stream. The preview must NOT
+      // render '$3' as literal text.
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            name_transform_pattern: '(ESPN) (HD)',
+            name_transform_replacement: '$3',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showPreview={true}
+        />
+      );
+
+      expect(
+        screen.getByText(/references group 3 but pattern defines 2 capture groups/)
+      ).toBeInTheDocument();
+      expect(screen.queryByText('$3')).not.toBeInTheDocument();
+    });
+
+    it('previews a valid transform with backreferences applied', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            name_transform_pattern: '(ESPN) (HD)',
+            name_transform_replacement: '$2 $1',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showPreview={true}
+        />
+      );
+
+      expect(screen.getByText('HD ESPN')).toBeInTheDocument();
+    });
+
+    it('notes that pattern matching is case-sensitive', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            name_transform_pattern: '(ESPN) (HD)',
+            name_transform_replacement: '$2 $1',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/case-sensitive/i)).toBeInTheDocument();
+    });
+  });
+
   describe('readonly mode', () => {
     it('disables all inputs when readonly', () => {
       render(

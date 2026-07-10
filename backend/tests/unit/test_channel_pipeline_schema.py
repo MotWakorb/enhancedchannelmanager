@@ -761,6 +761,74 @@ class TestNameTransformValidation:
         errors = action.validate()
         assert len(errors) == 0
 
+    # ---- $N group-reference cross-check (enhancedchannelmanager-2uwi3) ----
+
+    def test_replacement_group_ref_out_of_range_rejected(self):
+        """The user-reported scenario: 3 groups, replacement references $4."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                "name_transform_replacement": "$2 $1 $3 $4",
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "references group 4 but pattern defines 3 capture groups" in errors[0]
+
+    def test_replacement_group_ref_out_of_range_rejected_create_group(self):
+        action = Action(
+            type="create_group",
+            params={
+                "name_template": "{stream_group}",
+                "name_transform_pattern": r"^(\w+)",
+                "name_transform_replacement": "$2",
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "references group 2 but pattern defines 1 capture group" in errors[0]
+
+    def test_replacement_group_refs_in_range_valid(self):
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                "name_transform_replacement": "$3 $2 $1",
+            }
+        )
+        assert action.validate() == []
+
+    def test_replacement_dollar_zero_rejected(self):
+        """$0 converts to an octal escape (NUL), never the whole match."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+)",
+                "name_transform_replacement": "$0",
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "$0" in errors[0]
+
+    def test_replacement_group_ref_skipped_when_pattern_invalid(self):
+        """An uncompilable pattern reports only the compile error."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": "[invalid(",
+                "name_transform_replacement": "$4",
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "Invalid name_transform_pattern" in errors[0]
+
 
 class TestSetVariableValidation:
     """Tests for set_variable action validation."""

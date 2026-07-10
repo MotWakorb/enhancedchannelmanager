@@ -26,6 +26,45 @@ const TEMPLATE_VARIABLES = [
   { name: '{normalized_name}', description: 'Normalized name', example: 'ESPN' },
 ];
 
+// Count capture groups in a regex pattern (including named groups),
+// mirroring how the backend counts `compiled.groups`. Appending an empty
+// alternative makes the regex match the empty string, so exec('') always
+// succeeds and the match-array length reveals the group count.
+// Returns null when the pattern is not valid JS regex.
+function countCaptureGroups(pattern: string): number | null {
+  try {
+    const match = new RegExp(pattern + '|').exec('');
+    return match ? match.length - 1 : null;
+  } catch {
+    return null;
+  }
+}
+
+// Backend parity check for name-transform replacements: the pipeline
+// converts $N to Python \N and ERRORS at execution time when N exceeds the
+// pattern's capture-group count ($0 and leading-zero refs become octal
+// escapes — control characters). JS's .replace() renders out-of-range $N as
+// literal text, which used to make the preview look right while the backend
+// failed on every matching stream (enhancedchannelmanager-yom3k).
+// Returns an error message matching the backend's save-time validation, or
+// null when all references are valid (or the pattern itself is invalid —
+// that is reported separately).
+function getGroupRefError(pattern: string, replacement: string): string | null {
+  const groups = countCaptureGroups(pattern);
+  if (groups === null) return null;
+  for (const match of replacement.matchAll(/\$(\d+)/g)) {
+    const digits = match[1];
+    if (digits.startsWith('0')) {
+      return `Replacement references $${digits}, which is not a valid group reference — groups are numbered from $1`;
+    }
+    const n = parseInt(digits, 10);
+    if (n > groups) {
+      return `Replacement references group ${n} but pattern defines ${groups} capture group${groups === 1 ? '' : 's'}`;
+    }
+  }
+  return null;
+}
+
 // Parse starting number from backend range format (e.g., "100-99999" -> 100)
 function parseStartingNumber(spec: string | number | undefined): number | null {
   if (spec === undefined || spec === null) return null;
@@ -313,6 +352,13 @@ export function ActionEditor({
       } catch {
         return 'Invalid transform regex pattern';
       }
+      // Backend parity: out-of-range $N references error at execution time
+      // (enhancedchannelmanager-yom3k) — flag them before the save attempt.
+      const refError = getGroupRefError(
+        action.name_transform_pattern,
+        action.name_transform_replacement || ''
+      );
+      if (refError) return refError;
     }
 
     // Validate set_variable
@@ -374,6 +420,23 @@ export function ActionEditor({
     setShowVariables(false);
   };
 
+  // Name-transform error the preview must surface (backend parity —
+  // enhancedchannelmanager-yom3k): an out-of-range $N reference errors at
+  // execution time on every matching stream, so the preview must flag it
+  // instead of rendering the literal $N text JS's .replace() produces.
+  const getTransformPreviewError = (): string | null => {
+    if (!nameTransformEnabled || !action.name_transform_pattern) return null;
+    try {
+      new RegExp(action.name_transform_pattern);
+    } catch {
+      return 'Invalid transform regex pattern';
+    }
+    return getGroupRefError(
+      action.name_transform_pattern,
+      action.name_transform_replacement || ''
+    );
+  };
+
   // Generate preview text
   const getPreviewText = (): string => {
     if (!action.name_template) return '';
@@ -381,10 +444,11 @@ export function ActionEditor({
     TEMPLATE_VARIABLES.forEach(v => {
       preview = preview.replace(v.name, v.example);
     });
-    // Apply name transform preview
-    if (nameTransformEnabled && action.name_transform_pattern) {
+    // Apply name transform preview. The 'g' flag matches the backend's
+    // regex.sub semantics (replace ALL occurrences, not just the first).
+    if (nameTransformEnabled && action.name_transform_pattern && !getTransformPreviewError()) {
       try {
-        const regex = new RegExp(action.name_transform_pattern);
+        const regex = new RegExp(action.name_transform_pattern, 'g');
         preview = preview.replace(regex, action.name_transform_replacement || '');
       } catch {
         // Invalid regex, show untransformed
@@ -512,7 +576,14 @@ export function ActionEditor({
             {showPreview && action.name_template && (
               <div className="template-preview">
                 <span className="preview-label">Preview:</span>
-                <span className="preview-text">{getPreviewText()}</span>
+                {(() => {
+                  const transformError = getTransformPreviewError();
+                  return transformError ? (
+                    <span className="preview-text preview-error">{transformError}</span>
+                  ) : (
+                    <span className="preview-text">{getPreviewText()}</span>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -655,7 +726,7 @@ export function ActionEditor({
                     placeholder="Leave empty to remove match"
                     aria-label="Transform replacement"
                   />
-                  <span className="field-hint">Use $1, $2 for capture group backreferences</span>
+                  <span className="field-hint">Use $1, $2 for capture group backreferences. Pattern matching is case-sensitive.</span>
                 </div>
               </div>
             )}

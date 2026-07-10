@@ -3793,3 +3793,189 @@ class TestManualChannelBlockVisibility:
         kinds = {e.get("action_type") for e in executor._journal_buffer}
         assert "manual_channel_adopted" in kinds
         assert "manual_channel_merge_blocked" not in kinds
+
+
+def _make_name_transform_executor():
+    """Executor with no existing channels/groups for name-transform tests."""
+    client = MagicMock()
+    _next = {"id": 900}
+
+    async def _create_channel(data):
+        _next["id"] += 1
+        return {
+            "id": _next["id"],
+            "name": data["name"],
+            "channel_number": data.get("channel_number"),
+            "channel_group_id": data.get("channel_group_id"),
+            "streams": data.get("streams", []),
+        }
+
+    client.create_channel = AsyncMock(side_effect=_create_channel)
+    client.create_channel_group = AsyncMock(
+        return_value={"id": 77, "name": "created-group"})
+    client.update_channel = AsyncMock(return_value={})
+    executor = ActionExecutor(
+        client, existing_channels=[],
+        existing_groups=[{"id": 1, "name": "SPORTS"}])
+    return client, executor
+
+
+class TestNameTransformFailureVisibility:
+    """enhancedchannelmanager-3gigl: a name-transform regex failure at
+    execution time (invalid group reference, timeout, oversize) must be a
+    user-visible outcome — an entry in the ActionResult details (execution
+    log / rule Test output) and a deduped journal entry — not a
+    hash-labeled safe_regex WARNING only.
+
+    The regression scenario is the user-reported one: a pre-existing
+    (grandfathered) rule with a 3-group pattern and a '$2 $1 $3 $4'
+    replacement. The regex library raises lazily — only on matching
+    inputs — and safe_regex swallows into a per-stream no-op.
+    """
+
+    PATTERN = r"(\w+) (\w+) (\w+)"
+    BAD_REPLACEMENT = "$2 $1 $3 $4"
+
+    # ---- _apply_name_transform reports through _last_name_transform_error ----
+
+    def test_apply_name_transform_failure_stamps_last_error(self):
+        _client, executor = _make_name_transform_executor()
+        out = executor._apply_name_transform(
+            "ESPN Sports HD",
+            {"name_transform_pattern": self.PATTERN,
+             "name_transform_replacement": self.BAD_REPLACEMENT},
+        )
+        # Behavior unchanged: the name passes through untransformed.
+        assert out == "ESPN Sports HD"
+        err = executor._last_name_transform_error
+        assert err is not None
+        assert "invalid group reference" in err
+        assert self.PATTERN in err
+        assert self.BAD_REPLACEMENT in err
+
+    def test_apply_name_transform_success_resets_last_error(self):
+        _client, executor = _make_name_transform_executor()
+        executor._apply_name_transform(
+            "ESPN Sports HD",
+            {"name_transform_pattern": self.PATTERN,
+             "name_transform_replacement": self.BAD_REPLACEMENT},
+        )
+        assert executor._last_name_transform_error is not None
+        out = executor._apply_name_transform(
+            "ESPN HD",
+            {"name_transform_pattern": r"\s*HD$",
+             "name_transform_replacement": ""},
+        )
+        assert out == "ESPN"
+        assert executor._last_name_transform_error is None
+
+    def test_non_matching_input_is_not_a_failure(self):
+        """The regex engine parses the template lazily — a stream the
+        pattern does not match must not report a failure."""
+        _client, executor = _make_name_transform_executor()
+        out = executor._apply_name_transform(
+            "ESPN",
+            {"name_transform_pattern": self.PATTERN,
+             "name_transform_replacement": self.BAD_REPLACEMENT},
+        )
+        assert out == "ESPN"
+        assert executor._last_name_transform_error is None
+
+    # ---- failure surfaces in the execution log via ActionResult.details ----
+
+    def test_create_channel_details_surface_transform_failure(self):
+        client, executor = _make_name_transform_executor()
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "name_transform_pattern": self.PATTERN,
+                  "name_transform_replacement": self.BAD_REPLACEMENT}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN Sports HD",
+                                   m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             rule_target_group_id=1)
+        )
+        # Behavior unchanged: channel still created with the untransformed name.
+        assert result.success is True
+        client.create_channel.assert_called_once()
+        joined = " ".join(result.details)
+        assert "Name transform failed" in joined
+        assert "invalid group reference" in joined
+
+    def test_create_group_details_surface_transform_failure(self):
+        client, executor = _make_name_transform_executor()
+        action = {"type": "create_group", "name_template": "{stream_group}",
+                  "name_transform_pattern": self.PATTERN,
+                  "name_transform_replacement": self.BAD_REPLACEMENT}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN",
+                                   m3u_account_id=1,
+                                   group_name="US Sports East")
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+        assert result.success is True
+        joined = " ".join(result.details)
+        assert "Name transform failed" in joined
+        assert "invalid group reference" in joined
+
+    def test_no_failure_detail_when_transform_succeeds(self):
+        client, executor = _make_name_transform_executor()
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "name_transform_pattern": r"\s*HD$",
+                  "name_transform_replacement": ""}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN HD",
+                                   m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             rule_target_group_id=1)
+        )
+        assert result.success is True
+        assert all("Name transform failed" not in d for d in result.details)
+
+    def test_dry_run_details_surface_transform_failure(self):
+        """Rule Test / dry-run output carries the same failure detail."""
+        _client, executor = _make_name_transform_executor()
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "name_transform_pattern": self.PATTERN,
+                  "name_transform_replacement": self.BAD_REPLACEMENT}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN Sports HD",
+                                   m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(dry_run=True),
+                             rule_target_group_id=1)
+        )
+        joined = " ".join(result.details)
+        assert "Name transform failed" in joined
+
+    # ---- journal: one entry per (pattern, replacement, kind) per run ----
+
+    def test_transform_failure_journaled_once_per_rule_per_run(self):
+        _client, executor = _make_name_transform_executor()
+        executor._execution_id = 4242
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "name_transform_pattern": self.PATTERN,
+                  "name_transform_replacement": self.BAD_REPLACEMENT}
+        for stream_id, name in ((502, "ESPN Sports HD"), (503, "Fox Sports One")):
+            stream_ctx = StreamContext(stream_id=stream_id, stream_name=name,
+                                       m3u_account_id=1)
+            asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, stream_ctx, ExecutionContext(),
+                                 rule_target_group_id=1)
+            )
+        entries = [e for e in executor._journal_buffer
+                   if e.get("action_type") == "name_transform_failed"]
+        assert len(entries) == 1
+        assert "invalid group reference" in entries[0]["description"]
+        assert entries[0]["batch_id"] == "4242"
+
+    def test_no_transform_failure_journal_without_execution_id(self):
+        _client, executor = _make_name_transform_executor()
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "name_transform_pattern": self.PATTERN,
+                  "name_transform_replacement": self.BAD_REPLACEMENT}
+        stream_ctx = StreamContext(stream_id=502, stream_name="ESPN Sports HD",
+                                   m3u_account_id=1)
+        asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             rule_target_group_id=1)
+        )
+        assert executor._journal_buffer == []
