@@ -342,6 +342,47 @@
   font-size: 18px;
 }
 
+/* Currently Showing (EPG) row */
+.channel-now-playing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border-primary);
+  min-width: 0;
+}
+
+.channel-now-playing .material-icons {
+  font-size: 16px;
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.channel-now-playing .now-playing-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+.channel-now-playing .now-playing-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.channel-now-playing .now-playing-time {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* Channel Stats Grid */
 .channel-stats {
   display: grid;
