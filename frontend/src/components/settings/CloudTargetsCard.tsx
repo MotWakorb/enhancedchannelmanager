@@ -160,8 +160,9 @@ export function CloudTargetsCard() {
                     onClick={() => handleTest(target)}
                     disabled={testingId === target.id}
                     title="Test Connection"
+                    aria-label="Test Connection"
                   >
-                    <span className={`material-icons${testingId === target.id ? ' spinning' : ''}`}>
+                    <span className={`material-icons${testingId === target.id ? ' spinning' : ''}`} aria-hidden="true">
                       {testingId === target.id ? 'sync' : 'wifi_tethering'}
                     </span>
                   </button>
@@ -169,16 +170,18 @@ export function CloudTargetsCard() {
                     className="btn btn-sm btn-icon"
                     onClick={() => handleToggle(target)}
                     title={target.enabled ? 'Disable' : 'Enable'}
+                    aria-label={target.enabled ? 'Disable cloud target' : 'Enable cloud target'}
+                    aria-pressed={target.enabled}
                   >
-                    <span className="material-icons">
+                    <span className="material-icons" aria-hidden="true">
                       {target.enabled ? 'toggle_on' : 'toggle_off'}
                     </span>
                   </button>
-                  <button className="btn btn-sm btn-icon" onClick={() => handleEdit(target)} title="Edit">
-                    <span className="material-icons">edit</span>
+                  <button className="btn btn-sm btn-icon" onClick={() => handleEdit(target)} title="Edit" aria-label="Edit cloud target">
+                    <span className="material-icons" aria-hidden="true">edit</span>
                   </button>
-                  <button className="btn btn-sm btn-icon" onClick={() => setDeletingTarget(target)} title="Delete">
-                    <span className="material-icons">delete</span>
+                  <button className="btn btn-sm btn-icon" onClick={() => setDeletingTarget(target)} title="Delete" aria-label="Delete cloud target">
+                    <span className="material-icons" aria-hidden="true">delete</span>
                   </button>
                 </div>
               </div>

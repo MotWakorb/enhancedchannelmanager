@@ -98,7 +98,12 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          {/* Enabled indicator */}
+          {/* Enabled/Disabled status indicator.
+              bd-9n08a: this is a STATUS pill, not an action — kept as an
+              outline/ghost chip (transparent fill, colored border+text)
+              so it doesn't read as another solid-green button sitting
+              next to the (genuinely actionable, solid-fill) Run Now
+              button below. Solid fill is reserved for actions. */}
           <span style={{
             display: 'flex',
             alignItems: 'center',
@@ -106,7 +111,8 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
             fontSize: '0.85rem',
             color: task.enabled ? 'var(--success)' : 'var(--text-muted)',
             padding: '0.25rem 0.5rem',
-            backgroundColor: task.enabled ? 'rgba(46, 204, 113, 0.1)' : 'rgba(128, 128, 128, 0.1)',
+            backgroundColor: 'transparent',
+            border: task.enabled ? '1px solid var(--success)' : '1px solid var(--border-color)',
             borderRadius: '4px',
           }}>
             <span className="material-icons" style={{ fontSize: '14px' }}>
@@ -289,8 +295,8 @@ function RunNowDialog({ task, onRun, onCancel }: {
       <div className="modal-container modal-sm" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h2 className="modal-title">Run {task.task_name}</h2>
-          <button className="modal-close-btn" onClick={onCancel}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onCancel} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
         <div className="modal-body">

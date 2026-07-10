@@ -1,10 +1,65 @@
-.tab-navigation {
+/* bd-3thyn: the wrapper carries the band's background/border so it still
+   spans full width even though `.tab-navigation` itself is now the
+   scrollable strip (and the chevrons sit outside it, sharing the band). */
+.tab-navigation-wrapper {
   display: flex;
+  align-items: stretch;
   background-color: var(--bg-tertiary);
   border-bottom: 1px solid var(--border-primary);
+  flex-shrink: 0;
+}
+
+.tab-navigation {
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
   padding: 0 1rem;
   gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  scrollbar-width: thin;
+}
+
+.tab-navigation::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tab-navigation::-webkit-scrollbar-thumb {
+  background: var(--border-secondary, rgba(255, 255, 255, 0.25));
+  border-radius: 2px;
+}
+
+/* Scroll affordance chevrons — only rendered when the strip actually
+   overflows in that direction, so they never show up on wide viewports. */
+.tab-nav-scroll-btn {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  background: var(--bg-tertiary);
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.tab-nav-scroll-btn:hover {
+  color: var(--button-text);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.tab-nav-scroll-btn .material-icons {
+  font-size: 20px;
+}
+
+.tab-nav-scroll-left {
+  box-shadow: 4px 0 6px -4px rgba(0, 0, 0, 0.4);
+}
+
+.tab-nav-scroll-right {
+  box-shadow: -4px 0 6px -4px rgba(0, 0, 0, 0.4);
 }
 
 .tab-button {

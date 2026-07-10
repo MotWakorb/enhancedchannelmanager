@@ -846,6 +846,21 @@
   margin-bottom: 1.5rem;
 }
 
+/* bd-b3g0r: `.header-title` is a flex item of every `X-header` row
+   (`.m3u-header`, `.epg-header`, `.logo-header`, `.dep-manager-header`,
+   `.page-header`, ...) but previously had no flex-grow, so it defaulted to
+   `flex: 0 1 auto` — it could shrink but never claimed leftover row width.
+   A wide `.header-actions` toolbar (many buttons) would then squeeze it
+   down toward its min-content width, wrapping a long title+description to
+   a narrow column (EPG Dummy Profiles wrapped to ~250px). Growing it and
+   zeroing min-width lets it take the row's remaining space instead of
+   losing the fight; `.header-actions` gets flex-shrink:0 so the toolbar
+   keeps its natural size rather than also competing for shrink budget. */
+.header-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .header-title h2 {
   margin: 0 0 0.25rem 0;
   font-size: 1.5rem;
@@ -862,6 +877,7 @@
   display: flex;
   gap: 0.75rem;
   align-items: center;
+  flex-shrink: 0;
 }
 
 

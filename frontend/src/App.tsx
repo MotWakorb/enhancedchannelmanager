@@ -100,7 +100,15 @@ function EditModeTimer({ enteredAt }: { enteredAt: number }) {
       ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
       : `${Math.floor(seconds / 60)}m`;
 
-  return <span className="edit-mode-timer">({display})</span>;
+  // bd-b2vf5: with no label, "Edit Mode (1m 20s)" reads ambiguously — a
+  // first-time user could easily mistake it for a countdown-to-cancel
+  // warning instead of what it actually is, elapsed time since Edit Mode
+  // was entered (it only ever counts up).
+  return (
+    <span className="edit-mode-timer" title="Time elapsed since Edit Mode was entered (counts up, not a countdown)">
+      ({display})
+    </span>
+  );
 }
 
 function App() {

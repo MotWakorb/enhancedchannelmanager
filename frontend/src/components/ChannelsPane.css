@@ -784,6 +784,13 @@
   background-color: var(--input-bg);
 }
 
+/* bd-6n14l: the header is a div with role="button" (not a native <button>),
+   so it needs an explicit visible focus indicator for keyboard users. */
+.group-header:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .group-checkbox {
   display: flex;
   align-items: center;

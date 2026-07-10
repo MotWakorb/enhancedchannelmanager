@@ -4,6 +4,7 @@ import type { Logo } from '../../types';
 import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
 import { ModalOverlay } from '../ModalOverlay';
+import { PageHeader } from '../PageHeader';
 import './LogoManagerTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 
@@ -142,60 +143,64 @@ export function LogoManagerTab() {
   return (
     <div className="logo-manager-tab">
       {/* Header */}
-      <div className="logo-header">
-        <div className="header-title">
-          <h2>Logos</h2>
-          <p className="header-description">
-            Manage logos for your channels ({filteredLogos.length}{searchInput ? ` of ${logos.length}` : ''} total)
-          </p>
-        </div>
-        <div className="header-actions">
-          {/* Search */}
-          <div className="search-box">
-            <span className="material-icons">search</span>
-            <input
-              type="text"
-              placeholder="Search logos..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-            />
-            {searchInput && (
+      <PageHeader
+        className="logo-header"
+        title="Logos"
+        description={`Manage logos for your channels (${filteredLogos.length}${searchInput ? ` of ${logos.length}` : ''} total)`}
+        actions={(
+          <>
+            {/* Search */}
+            <div className="search-box">
+              <span className="material-icons">search</span>
+              <input
+                type="text"
+                placeholder="Search logos..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+              />
+              {searchInput && (
+                <button
+                  type="button"
+                  className="clear-search"
+                  onClick={() => setSearchInput('')}
+                  title="Clear search"
+                  aria-label="Clear search"
+                >
+                  <span className="material-icons" aria-hidden="true">close</span>
+                </button>
+              )}
+            </div>
+
+            {/* View Toggle */}
+            <div className="view-toggle">
               <button
-                type="button"
-                className="clear-search"
-                onClick={() => setSearchInput('')}
-                title="Clear search"
+                className={viewMode === 'list' ? 'active' : ''}
+                onClick={() => setViewMode('list')}
+                title="List view"
+                aria-label="List view"
+                aria-pressed={viewMode === 'list'}
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">view_list</span>
               </button>
-            )}
-          </div>
+              <button
+                className={viewMode === 'grid' ? 'active' : ''}
+                onClick={() => setViewMode('grid')}
+                title="Grid view"
+                aria-label="Grid view"
+                aria-pressed={viewMode === 'grid'}
+              >
+                <span className="material-icons" aria-hidden="true">grid_view</span>
+              </button>
+            </div>
 
-          {/* View Toggle */}
-          <div className="view-toggle">
-            <button
-              className={viewMode === 'list' ? 'active' : ''}
-              onClick={() => setViewMode('list')}
-              title="List view"
-            >
-              <span className="material-icons">view_list</span>
+            {/* Add Logo Button */}
+            <button className="btn-primary" onClick={handleAddLogo}>
+              <span className="material-icons">add</span>
+              Add Logo
             </button>
-            <button
-              className={viewMode === 'grid' ? 'active' : ''}
-              onClick={() => setViewMode('grid')}
-              title="Grid view"
-            >
-              <span className="material-icons">grid_view</span>
-            </button>
-          </div>
-
-          {/* Add Logo Button */}
-          <button className="btn-primary" onClick={handleAddLogo}>
-            <span className="material-icons">add</span>
-            Add Logo
-          </button>
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       {/* Content */}
       <div className="logos-container">
@@ -254,8 +259,9 @@ export function LogoManagerTab() {
                     className="copy-btn"
                     onClick={() => handleCopyUrl(logo.cache_url || logo.url)}
                     title="Copy URL"
+                    aria-label="Copy logo URL"
                   >
-                    <span className="material-icons">content_copy</span>
+                    <span className="material-icons" aria-hidden="true">content_copy</span>
                   </button>
                 </div>
                 <div className={`logo-count ${logo.channel_count > 0 ? 'in-use' : ''}`}>
@@ -266,15 +272,17 @@ export function LogoManagerTab() {
                     className="action-btn"
                     onClick={() => handleEditLogo(logo)}
                     title="Edit"
+                    aria-label="Edit logo"
                   >
-                    <span className="material-icons">edit</span>
+                    <span className="material-icons" aria-hidden="true">edit</span>
                   </button>
                   <button
                     className="action-btn delete"
                     onClick={() => handleDeleteClick(logo)}
                     title="Delete"
+                    aria-label="Delete logo"
                   >
-                    <span className="material-icons">delete</span>
+                    <span className="material-icons" aria-hidden="true">delete</span>
                   </button>
                 </div>
               </div>
@@ -316,22 +324,25 @@ export function LogoManagerTab() {
                       className="action-btn"
                       onClick={() => handleEditLogo(logo)}
                       title="Edit"
+                      aria-label="Edit logo"
                     >
-                      <span className="material-icons">edit</span>
+                      <span className="material-icons" aria-hidden="true">edit</span>
                     </button>
                     <button
                       className="action-btn"
                       onClick={() => handleCopyUrl(logo.cache_url || logo.url)}
                       title="Copy URL"
+                      aria-label="Copy logo URL"
                     >
-                      <span className="material-icons">content_copy</span>
+                      <span className="material-icons" aria-hidden="true">content_copy</span>
                     </button>
                     <button
                       className="action-btn delete"
                       onClick={() => handleDeleteClick(logo)}
                       title="Delete"
+                      aria-label="Delete logo"
                     >
-                      <span className="material-icons">delete</span>
+                      <span className="material-icons" aria-hidden="true">delete</span>
                     </button>
                   </div>
                 </div>
@@ -355,16 +366,18 @@ export function LogoManagerTab() {
               onClick={() => setPage(1)}
               disabled={safePage <= 1}
               title="First page"
+              aria-label="First page"
             >
-              <span className="material-icons">first_page</span>
+              <span className="material-icons" aria-hidden="true">first_page</span>
             </button>
             <button
               className="page-btn"
               onClick={() => setPage(p => p - 1)}
               disabled={safePage <= 1}
               title="Previous page"
+              aria-label="Previous page"
             >
-              <span className="material-icons">chevron_left</span>
+              <span className="material-icons" aria-hidden="true">chevron_left</span>
             </button>
             <span className="page-indicator">
               Page {safePage} of {totalPages}
@@ -374,16 +387,18 @@ export function LogoManagerTab() {
               onClick={() => setPage(p => p + 1)}
               disabled={safePage >= totalPages}
               title="Next page"
+              aria-label="Next page"
             >
-              <span className="material-icons">chevron_right</span>
+              <span className="material-icons" aria-hidden="true">chevron_right</span>
             </button>
             <button
               className="page-btn"
               onClick={() => setPage(totalPages)}
               disabled={safePage >= totalPages}
               title="Last page"
+              aria-label="Last page"
             >
-              <span className="material-icons">last_page</span>
+              <span className="material-icons" aria-hidden="true">last_page</span>
             </button>
           </div>
           <div className="pagination-right">

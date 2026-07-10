@@ -185,6 +185,13 @@
   border-left: 3px solid var(--success, #22c55e);
 }
 
+/* bd-6n14l: the row is a <tr> with role="button" (not a native <button>),
+   so it needs an explicit visible focus indicator for keyboard users. */
+.watch-history-panel .history-row:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .watch-history-panel .history-row td {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-primary);

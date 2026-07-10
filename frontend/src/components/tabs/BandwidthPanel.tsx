@@ -77,8 +77,8 @@ export function BandwidthPanel({ refreshTrigger }: BandwidthPanelProps) {
           <h3 className="section-title">Bandwidth In/Out</h3>
         </div>
         <div className="header-right">
-          <button className="refresh-btn" onClick={fetchData} disabled={loading}>
-            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
+          <button className="refresh-btn" onClick={fetchData} disabled={loading} aria-label="Refresh bandwidth data" title="Refresh bandwidth data">
+            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`} aria-hidden="true">refresh</span>
           </button>
         </div>
       </div>

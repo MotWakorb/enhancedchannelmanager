@@ -1489,8 +1489,8 @@ export function ChannelPipelineTab() {
                           className="log-search-input"
                         />
                         {logSearch && (
-                          <button className="log-search-clear" onClick={() => setLogSearch('')}>
-                            <span className="material-icons">close</span>
+                          <button className="log-search-clear" onClick={() => setLogSearch('')} aria-label="Clear search" title="Clear search">
+                            <span className="material-icons" aria-hidden="true">close</span>
                           </button>
                         )}
                       </div>
@@ -1536,7 +1536,13 @@ export function ChannelPipelineTab() {
                               onClick={() => toggleLogEntry(entry.stream_id)}
                               role="button"
                               tabIndex={0}
-                              onKeyDown={e => e.key === 'Enter' && toggleLogEntry(entry.stream_id)}
+                              aria-expanded={isExpanded}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  toggleLogEntry(entry.stream_id);
+                                }
+                              }}
                             >
                               <span className="material-icons log-chevron">
                                 {isExpanded ? 'expand_more' : 'chevron_right'}

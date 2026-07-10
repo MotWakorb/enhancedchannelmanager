@@ -201,8 +201,10 @@ export function UserMenu() {
               <button
                 className="user-modal-close"
                 onClick={() => setShowProfileModal(false)}
+                aria-label="Close profile dialog"
+                title="Close profile dialog"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <form onSubmit={handleSaveProfile}>
@@ -263,8 +265,10 @@ export function UserMenu() {
               <button
                 className="user-modal-close"
                 onClick={() => setShowPasswordModal(false)}
+                aria-label="Close password dialog"
+                title="Close password dialog"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <form onSubmit={handleChangePassword}>

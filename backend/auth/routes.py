@@ -8,6 +8,7 @@ import os
 import secrets
 import smtplib
 import ssl
+import time
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -17,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from config import get_settings
@@ -38,6 +40,7 @@ from .dependencies import (
     AuthenticationError,
     get_current_user,
     get_refresh_token_from_request,
+    get_token_from_request,
     reject_mcp_service_principal_mutation,
 )
 
@@ -222,16 +225,28 @@ class LoginResponse(BaseModel):
     """Login response body."""
     user: UserResponse
     message: str = "Login successful"
+    # Read-only metadata: seconds until the access token issued alongside this
+    # response expires. Lets the frontend schedule a proactive refresh instead
+    # of waiting for the first 401 after expiry (bd-3ymo4). No behavior change.
+    access_token_expires_in: Optional[int] = None
 
 
 class MeResponse(BaseModel):
     """Current user response body."""
     user: UserResponse
+    # Read-only metadata: seconds until the CURRENT access token expires
+    # (remaining lifetime, not the full configured lifetime — /me is often
+    # called mid-lifetime on page load). None when unavailable (e.g. static
+    # MCP key, auth disabled). See bd-3ymo4.
+    access_token_expires_in: Optional[int] = None
 
 
 class RefreshResponse(BaseModel):
     """Token refresh response body."""
     message: str = "Token refreshed"
+    # Read-only metadata: seconds until the freshly minted access token
+    # expires (bd-3ymo4).
+    access_token_expires_in: Optional[int] = None
 
 
 class LogoutResponse(BaseModel):
@@ -300,6 +315,58 @@ class SetupResponse(BaseModel):
     message: str = "Setup complete"
 
 
+def _access_token_lifetime_seconds() -> int:
+    """Configured access-token lifetime in seconds (read-only metadata)."""
+    return get_auth_settings().jwt.access_token_expire_minutes * 60
+
+
+def _access_token_seconds_remaining(request: Request) -> Optional[int]:
+    """Best-effort seconds until the request's access token expires.
+
+    Returns None when it cannot be determined (no token, static MCP key,
+    malformed/expired token). Read-only metadata for the frontend's
+    proactive refresh scheduling (bd-3ymo4) — never used for auth decisions.
+    """
+    try:
+        token = get_token_from_request(request)
+        if not token:
+            return None
+        claims = decode_token(token)
+        exp = claims.get("exp")
+        if exp is None:
+            return None
+        # JWT exp is a UTC epoch timestamp; compare against epoch time
+        # (NOT datetime.utcnow().timestamp(), which misreads naive as local).
+        remaining = int(exp - time.time())
+        return max(remaining, 0)
+    except Exception as e:
+        logger.debug("[AUTH] Could not compute access token remaining lifetime: %s", e)
+        return None
+
+
+def _set_access_cookie(
+    response: Response,
+    access_token: str,
+    secure: bool = False,  # Set to True in production with HTTPS
+) -> None:
+    """Set ONLY the short-lived access-token cookie.
+
+    Used by the rotation grace path (bd-x67qe), which must NOT touch the
+    refresh cookie: the browser's jar already holds the winner's rotated
+    refresh token, and re-sending the loser's stale one would regress it.
+    """
+    settings = get_auth_settings()
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        max_age=settings.jwt.access_token_expire_minutes * 60,
+        path="/",
+    )
+
+
 def _set_auth_cookies(
     response: Response,
     access_token: str,
@@ -318,15 +385,7 @@ def _set_auth_cookies(
     settings = get_auth_settings()
 
     # Access token - short lived, httpOnly for security
-    response.set_cookie(
-        key="access_token",
-        value=access_token,
-        httponly=True,
-        secure=secure,
-        samesite="lax",
-        max_age=settings.jwt.access_token_expire_minutes * 60,
-        path="/",
-    )
+    _set_access_cookie(response, access_token, secure=secure)
 
     # Refresh token - longer lived, httpOnly for security
     response.set_cookie(
@@ -559,11 +618,13 @@ async def login(
     return LoginResponse(
         user=UserResponse.model_validate(user),
         message="Login successful",
+        access_token_expires_in=_access_token_lifetime_seconds(),
     )
 
 
 @router.get("/me", response_model=MeResponse)
 async def get_current_user_info(
+    request: Request,
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -571,7 +632,10 @@ async def get_current_user_info(
 
     Requires valid access token.
     """
-    return MeResponse(user=UserResponse.model_validate(current_user))
+    return MeResponse(
+        user=UserResponse.model_validate(current_user),
+        access_token_expires_in=_access_token_seconds_remaining(request),
+    )
 
 
 class UpdateProfileRequest(BaseModel):
@@ -633,6 +697,78 @@ async def update_current_user_profile(
     )
 
 
+# How long (seconds) the immediately-prior refresh token stays acceptable
+# after a rotation (bd-x67qe). Long enough to absorb the cross-tab race —
+# two tabs' proactive-refresh timers fire within milliseconds of each other —
+# and short enough that a stolen predecessor is useless almost immediately.
+REFRESH_ROTATION_GRACE_SECONDS = 10
+
+
+def _refresh_via_rotation_grace(
+    session: Session,
+    response: Response,
+    token_hash: str,
+    user_id: int,
+) -> RefreshResponse:
+    """Answer a refresh presented with the immediately-prior refresh token.
+
+    Cross-tab rotation race (bd-x67qe): two tabs of one session can POST
+    /auth/refresh with the same pre-rotation cookie near-simultaneously. The
+    winner rotates; the loser lands here. Inside a short grace window the
+    loser gets an idempotent answer — a fresh access token bound to the SAME
+    session — instead of a hard-logout 401.
+
+    Security invariants:
+    - Only the LATEST predecessor is honored, one generation deep — a normal
+      rotation overwrites ``prior_refresh_token_hash``, so graced tokens
+      cannot chain.
+    - NO second rotation and NO refresh cookie: the browser jar keeps the
+      winner's rotated refresh token.
+    - ``expires_at`` is untouched — grace never extends session lifetime.
+    - Revoked sessions are excluded — logout kills grace immediately.
+
+    Raises:
+        AuthenticationError: when no grace applies.
+    """
+    graced_session = session.query(UserSession).filter(
+        UserSession.prior_refresh_token_hash == token_hash,
+        UserSession.user_id == user_id,
+        UserSession.is_revoked == False,
+    ).first()
+
+    now = datetime.utcnow()
+    if (
+        not graced_session
+        or graced_session.rotated_at is None
+        or (now - graced_session.rotated_at).total_seconds()
+        > REFRESH_ROTATION_GRACE_SECONDS
+    ):
+        raise AuthenticationError("Session not found or revoked")
+
+    if graced_session.expires_at < now:
+        raise AuthenticationError("Session expired")
+
+    user = session.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        raise AuthenticationError("User not found or disabled")
+
+    access_token = create_access_token(user_id=user.id, username=user.username)
+    _set_access_cookie(response, access_token)
+
+    # last_used_at only — never expires_at (see invariants above).
+    graced_session.last_used_at = now
+    session.commit()
+
+    logger.info(
+        "[AUTH] Refresh honored within rotation grace window for user: %s",
+        user.username,
+    )
+    return RefreshResponse(
+        message="Token refreshed",
+        access_token_expires_in=_access_token_lifetime_seconds(),
+    )
+
+
 @router.post("/refresh", response_model=RefreshResponse)
 async def refresh_tokens(
     request: Request,
@@ -642,7 +778,10 @@ async def refresh_tokens(
     """
     Refresh access token using refresh token.
 
-    Sets new httpOnly cookies with fresh access and refresh tokens.
+    Sets new httpOnly cookies with fresh access and refresh tokens. A refresh
+    presented with the immediately-prior token inside the rotation grace
+    window is answered idempotently (bd-x67qe) — see
+    :func:`_refresh_via_rotation_grace`.
     """
     refresh_token = get_refresh_token_from_request(request)
     if not refresh_token:
@@ -650,7 +789,14 @@ async def refresh_tokens(
 
     try:
         # Decode and validate refresh token
-        claims = decode_token(refresh_token)
+        try:
+            claims = decode_token(refresh_token)
+        except TokenRevokedError:
+            # A rotated-away predecessor's jti is blacklisted in-process the
+            # moment the winner rotates, but the token may still be inside
+            # the rotation grace window. Re-validate signature + expiry only
+            # and let the DB-side grace check below decide (bd-x67qe).
+            claims = decode_token(refresh_token, ignore_revocation=True)
 
         if claims.get("type") != "refresh":
             raise AuthenticationError("Invalid token type")
@@ -667,7 +813,11 @@ async def refresh_tokens(
         ).first()
 
         if not user_session:
-            raise AuthenticationError("Session not found or revoked")
+            # Not the current token — maybe the immediately-prior one inside
+            # the rotation grace window (cross-tab refresh race, bd-x67qe).
+            return _refresh_via_rotation_grace(
+                session, response, token_hash, int(user_id)
+            )
 
         if user_session.expires_at < datetime.utcnow():
             raise AuthenticationError("Session expired")
@@ -680,12 +830,36 @@ async def refresh_tokens(
         # Rotate tokens
         new_access_token, new_refresh_token = rotate_refresh_token(refresh_token)
 
-        # Update session with new refresh token hash
-        user_session.refresh_token_hash = hash_token(new_refresh_token)
-        user_session.last_used_at = datetime.utcnow()
+        # Guarded rotation (bd-x67qe): the UPDATE only applies while the row
+        # still holds the pre-rotation hash, so exactly ONE of two racing
+        # requests can rotate. Recording the predecessor hash + rotation time
+        # opens the grace window for the loser.
         settings = get_auth_settings()
-        user_session.expires_at = datetime.utcnow() + timedelta(days=settings.jwt.refresh_token_expire_days)
+        now = datetime.utcnow()
+        rotated = session.query(UserSession).filter(
+            UserSession.id == user_session.id,
+            UserSession.refresh_token_hash == token_hash,
+            UserSession.is_revoked == False,
+        ).update(
+            {
+                "refresh_token_hash": hash_token(new_refresh_token),
+                "prior_refresh_token_hash": token_hash,
+                "rotated_at": now,
+                "last_used_at": now,
+                "expires_at": now
+                + timedelta(days=settings.jwt.refresh_token_expire_days),
+            },
+            synchronize_session=False,
+        )
         session.commit()
+
+        if not rotated:
+            # Photo-finish: another request rotated this session between our
+            # read and write. Fall through to the grace path instead of
+            # clobbering the winner's rotation.
+            return _refresh_via_rotation_grace(
+                session, response, token_hash, int(user_id)
+            )
 
         # Clean up expired sessions for this user
         _cleanup_expired_sessions(session, int(user_id))
@@ -694,7 +868,10 @@ async def refresh_tokens(
         _set_auth_cookies(response, new_access_token, new_refresh_token)
 
         logger.info("[AUTH] Token refreshed for user: %s", user.username)
-        return RefreshResponse(message="Token refreshed")
+        return RefreshResponse(
+            message="Token refreshed",
+            access_token_expires_in=_access_token_lifetime_seconds(),
+        )
 
     except TokenExpiredError:
         raise AuthenticationError("Refresh token expired")
@@ -716,13 +893,19 @@ async def logout(
     Revokes the refresh token and clears cookies.
     Always returns success even if not logged in (idempotent).
     """
-    # Try to revoke the session if we have a refresh token
+    # Try to revoke the session if we have a refresh token. Also match the
+    # immediately-prior (graced) token hash (bd-x67qe): a stale tab logging
+    # out with the pre-rotation cookie must still kill the session — logout
+    # always beats the rotation grace window.
     refresh_token = get_refresh_token_from_request(request)
     if refresh_token:
         try:
             token_hash = hash_token(refresh_token)
             user_session = session.query(UserSession).filter(
-                UserSession.refresh_token_hash == token_hash,
+                or_(
+                    UserSession.refresh_token_hash == token_hash,
+                    UserSession.prior_refresh_token_hash == token_hash,
+                ),
             ).first()
 
             if user_session:
@@ -1137,6 +1320,7 @@ async def dispatcharr_login(
     return LoginResponse(
         user=UserResponse.model_validate(user),
         message="Login successful",
+        access_token_expires_in=_access_token_lifetime_seconds(),
     )
 
 

@@ -74,8 +74,9 @@ export const ExamplesList = memo(function ExamplesList({
                   className="pb-example-remove"
                   onClick={(e) => { e.stopPropagation(); onRemoveExample(i); }}
                   title="Remove example"
+                  aria-label="Remove example"
                 >
-                  <span className="material-icons">close</span>
+                  <span className="material-icons" aria-hidden="true">close</span>
                 </button>
               </div>
             );
@@ -99,8 +100,9 @@ export const ExamplesList = memo(function ExamplesList({
           disabled={!newText.trim()}
           onClick={handleAdd}
           title="Add example"
+          aria-label="Add example"
         >
-          <span className="material-icons">add</span>
+          <span className="material-icons" aria-hidden="true">add</span>
         </button>
       </div>
     </div>

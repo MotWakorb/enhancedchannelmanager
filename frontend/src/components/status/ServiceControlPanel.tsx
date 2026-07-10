@@ -83,8 +83,8 @@ export function ServiceControlPanel({
           Service Control
         </h3>
         {onRefresh && (
-          <button className="btn-secondary" onClick={onRefresh}>
-            <span className="material-icons">refresh</span>
+          <button className="btn-secondary" onClick={onRefresh} aria-label="Refresh services" title="Refresh services">
+            <span className="material-icons" aria-hidden="true">refresh</span>
           </button>
         )}
       </div>
@@ -117,8 +117,9 @@ export function ServiceControlPanel({
                 onClick={() => handleTriggerCheck(service.id)}
                 disabled={loading[`check-${service.id}`] || !service.enabled}
                 title="Trigger Health Check"
+                aria-label="Trigger Health Check"
               >
-                <span className={`material-icons ${loading[`check-${service.id}`] ? 'spinning' : ''}`}>
+                <span className={`material-icons ${loading[`check-${service.id}`] ? 'spinning' : ''}`} aria-hidden="true">
                   {loading[`check-${service.id}`] ? 'sync' : 'refresh'}
                 </span>
               </button>
@@ -130,8 +131,9 @@ export function ServiceControlPanel({
                   onClick={() => handleRestart(service.id)}
                   disabled={loading[`restart-${service.id}`] || !service.enabled}
                   title="Restart Service"
+                  aria-label="Restart Service"
                 >
-                  <span className={`material-icons ${loading[`restart-${service.id}`] ? 'spinning' : ''}`}>
+                  <span className={`material-icons ${loading[`restart-${service.id}`] ? 'spinning' : ''}`} aria-hidden="true">
                     {loading[`restart-${service.id}`] ? 'sync' : 'restart_alt'}
                   </span>
                 </button>

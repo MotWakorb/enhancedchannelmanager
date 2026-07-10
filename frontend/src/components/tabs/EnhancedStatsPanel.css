@@ -24,6 +24,7 @@
 
 .enhanced-stats-panel .view-toggle {
   display: flex;
+  flex-shrink: 0;
   gap: 4px;
   background: var(--bg-tertiary);
   padding: 3px;
@@ -34,6 +35,7 @@
   padding: 6px 12px;
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;

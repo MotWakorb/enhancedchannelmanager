@@ -89,8 +89,9 @@ export const VariantTabs = memo(function VariantTabs({
                 className="pb-variant-tab-delete"
                 onClick={(e) => { e.stopPropagation(); onDelete(i); }}
                 title="Delete variant"
+                aria-label="Delete variant"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             )}
           </div>
@@ -100,8 +101,9 @@ export const VariantTabs = memo(function VariantTabs({
           className="pb-variant-tab-add"
           onClick={onAdd}
           title="Add variant"
+          aria-label="Add variant"
         >
-          <span className="material-icons">add</span>
+          <span className="material-icons" aria-hidden="true">add</span>
         </button>
       </div>
     </div>

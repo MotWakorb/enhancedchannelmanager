@@ -176,8 +176,8 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
         <div className="modal-header">
           <h3 className="modal-title">Restore DBAS Backup</h3>
           {canClose && (
-            <button className="modal-close-btn" onClick={onClose}>
-              <span className="material-icons">close</span>
+            <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+              <span className="material-icons" aria-hidden="true">close</span>
             </button>
           )}
         </div>
