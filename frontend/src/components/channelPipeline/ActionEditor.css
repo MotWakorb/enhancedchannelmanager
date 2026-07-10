@@ -351,6 +351,13 @@
   font-family: monospace;
 }
 
+/* Name-transform error surfaced in the preview (backend parity — an
+   out-of-range $N reference fails at execution time, so the preview
+   flags it instead of rendering literal $N text). */
+.preview-text.preview-error {
+  color: var(--error-color, #dc3545);
+}
+
 /* Channel Number Start Wrapper */
 .channel-number-start-wrapper {
   display: flex;

@@ -274,3 +274,105 @@ class TestLogFormat:
         assert self._TAIL_SENTINEL_OVERSIZE not in combined, (
             "oversize pattern tail leaked into log output beyond the 50-char excerpt"
         )
+
+
+# =========================================================================
+# sub() failure reporting — on_error callback (enhancedchannelmanager-3gigl).
+# =========================================================================
+
+
+class TestSubOnErrorReporting:
+    """``sub()`` must be able to REPORT why it returned the input unchanged.
+
+    Default contract is untouched (swallow-and-return-input). The optional
+    ``on_error`` callback receives one :class:`safe_regex.SubFailure` per
+    failure so callers (the channel-pipeline executor) can surface the
+    reason in user-visible execution logs instead of a hash-labeled WARN.
+    """
+
+    # Same genuine-ReDoS fixture as TestTimeoutBehavior.
+    REAL_REDOS_PATTERN = r"(a|aa)+b"
+    REAL_REDOS_TEXT = "a" * 30 + "!"
+
+    def test_template_error_invokes_on_error_with_template_kind(self):
+        failures = []
+        result = safe_regex.sub(
+            r"(a)(b)(c)", r"\2 \1 \3 \4", "abc", on_error=failures.append
+        )
+        assert result == "abc"  # swallow contract unchanged
+        assert len(failures) == 1
+        failure = failures[0]
+        assert isinstance(failure, safe_regex.SubFailure)
+        assert failure.kind == "template"
+        assert "invalid group reference" in failure.message
+
+    def test_template_error_is_lazy_no_error_without_match(self):
+        """regex parses the template lazily — no match, no failure."""
+        failures = []
+        result = safe_regex.sub(
+            r"(a)(b)(c)", r"\4", "zzz", on_error=failures.append
+        )
+        assert result == "zzz"
+        assert failures == []
+
+    def test_pattern_error_invokes_on_error_with_pattern_kind(self):
+        failures = []
+        result = safe_regex.sub("[invalid(", "x", "abc", on_error=failures.append)
+        assert result == "abc"
+        assert len(failures) == 1
+        assert failures[0].kind == "pattern"
+
+    def test_timeout_invokes_on_error_with_timeout_kind(self):
+        failures = []
+        result = safe_regex.sub(
+            self.REAL_REDOS_PATTERN, "REPLACED", self.REAL_REDOS_TEXT,
+            on_error=failures.append,
+        )
+        assert result == self.REAL_REDOS_TEXT
+        assert len(failures) == 1
+        assert failures[0].kind == "timeout"
+        assert "timed out" in failures[0].message
+
+    def test_oversize_invokes_on_error_with_oversize_kind(self):
+        failures = []
+        oversize = "a" * 501
+        result = safe_regex.sub(oversize, "x", "aaa", on_error=failures.append)
+        assert result == "aaa"
+        assert len(failures) == 1
+        assert failures[0].kind == "oversize"
+
+    def test_success_does_not_invoke_on_error(self):
+        failures = []
+        result = safe_regex.sub(r"(a)", r"\1!", "a", on_error=failures.append)
+        assert result == "a!"
+        assert failures == []
+
+    def test_default_contract_unchanged_without_on_error(self):
+        """No callback: same swallow behavior as before (regression lock)."""
+        assert safe_regex.sub(r"(a)(b)(c)", r"\4", "abc") == "abc"
+
+    def test_precompiled_pattern_template_error_reports_template_kind(self):
+        failures = []
+        compiled = safe_regex.compile(r"(a)")
+        result = safe_regex.sub(compiled, r"\2", "a", on_error=failures.append)
+        assert result == "a"
+        assert failures[0].kind == "template"
+
+
+class TestSubErrorLogLabels:
+    """The WARN label must distinguish replacement-template errors from
+    pattern compile errors (3gigl: the old label said 'compile error at
+    sub' even when the pattern compiled fine and the TEMPLATE was bad)."""
+
+    def test_template_error_logged_as_template_error(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="safe_regex"):
+            safe_regex.sub(r"(a)(b)(c)", r"\4", "abc")
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "replacement template error at sub" in combined
+        assert "compile error at sub" not in combined
+
+    def test_pattern_error_still_logged_as_compile_error(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="safe_regex"):
+            safe_regex.sub("[invalid(", "x", "abc")
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "compile error at sub" in combined

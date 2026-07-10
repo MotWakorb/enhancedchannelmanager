@@ -33,6 +33,12 @@ compile          raises ``PatternTooLongError``      raises ``SafeRegexError``
                  raising is the correct contract)
 =============== =================================== ===============================
 
+``sub`` additionally accepts an optional ``on_error`` callback (3gigl)
+that receives a :class:`SubFailure` describing WHY the input was returned
+unchanged (``oversize`` / ``timeout`` / ``pattern`` / ``template``) —
+callers that need user-visible failure surfacing opt in; the default
+swallow contract above is unchanged.
+
 On every timeout or oversize the module emits a ``WARNING`` record via
 ``logging.getLogger("safe_regex")`` with the ``[SAFE_REGEX]`` prefix and
 a structured payload: ``{pattern_sha256, pattern_excerpt_50chars,
@@ -53,7 +59,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import sys
-from typing import Optional, Union
+from dataclasses import dataclass
+from typing import Callable, Optional, Union
 
 import regex as _regex
 
@@ -66,6 +73,7 @@ __all__ = [
     "SafeRegexError",
     "RegexTimeoutError",
     "PatternTooLongError",
+    "SubFailure",
     "DEFAULT_TIMEOUT_MS",
     "DEFAULT_MAX_PATTERN_LEN",
 ]
@@ -104,6 +112,30 @@ class RegexTimeoutError(SafeRegexError):
 
 class PatternTooLongError(SafeRegexError):
     """Raised by :func:`compile` when the pattern exceeds the length cap."""
+
+
+@dataclass
+class SubFailure:
+    """Why :func:`sub` returned its input unchanged (3gigl).
+
+    Passed to the optional ``on_error`` callback so callers that need
+    user-visible failure surfacing (e.g. the channel-pipeline executor's
+    execution log) can report the reason without changing the module's
+    default swallow-and-return-input contract.
+
+    ``kind`` is one of:
+
+    * ``"oversize"`` — pattern exceeded ``max_pattern_len``.
+    * ``"timeout"`` — the match/substitution exceeded ``timeout_ms``.
+    * ``"pattern"`` — the pattern itself failed to compile.
+    * ``"template"`` — the pattern compiled but the REPLACEMENT template is
+      invalid (e.g. a backreference to a nonexistent group). Note the
+      ``regex`` library parses templates lazily: this only fires on inputs
+      the pattern actually matches.
+    """
+
+    kind: str
+    message: str
 
 
 # =========================================================================
@@ -277,13 +309,27 @@ def sub(
     flags: int = 0,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     max_pattern_len: int = DEFAULT_MAX_PATTERN_LEN,
+    on_error: Optional[Callable[[SubFailure], None]] = None,
 ) -> str:
     """Substitute *pattern* with *repl* across *text*; return the result.
 
-    On timeout or oversize pattern, returns *text* unchanged and logs WARN.
+    On timeout, oversize pattern, or regex error, returns *text* unchanged
+    and logs WARN — the module's default swallow contract, unchanged.
+
+    ``on_error`` (3gigl): optional callback invoked with a
+    :class:`SubFailure` whenever the swallow path is taken, so callers can
+    surface WHY the substitution no-opped (e.g. in the channel-pipeline
+    execution log). The callback must not raise. Omitting it preserves the
+    exact pre-existing behavior for all other call sites.
     """
     if isinstance(pattern, str) and len(pattern) > max_pattern_len:
         _log_oversize(pattern, len(text), max_pattern_len)
+        if on_error is not None:
+            on_error(SubFailure(
+                kind="oversize",
+                message="pattern length %d exceeds max_pattern_len=%d"
+                        % (len(pattern), max_pattern_len),
+            ))
         return text
     try:
         return _regex.sub(
@@ -292,17 +338,54 @@ def sub(
     except TimeoutError:
         pattern_str = pattern if isinstance(pattern, str) else pattern.pattern
         _log_timeout(pattern_str, len(text), timeout_ms)
+        if on_error is not None:
+            on_error(SubFailure(
+                kind="timeout",
+                message="pattern timed out after %dms" % timeout_ms,
+            ))
         return text
     except _regex.error as exc:
         pattern_str = pattern if isinstance(pattern, str) else pattern.pattern
-        logger.warning(
-            "[SAFE_REGEX] compile error at sub "
-            "pattern_sha256=%s pattern_excerpt=%r error=%s caller=%s",
-            _pattern_sha256(pattern_str),
-            _pattern_excerpt(pattern_str),
-            exc,
-            _caller_name(skip_frames=2),
-        )
+        # Distinguish a bad PATTERN from a bad replacement TEMPLATE: if the
+        # pattern (re)compiles cleanly, the error came from the template —
+        # the old label blamed 'compile error' either way (3gigl). A
+        # pre-compiled Pattern object trivially compiled, so any error on
+        # that path is a template error. The regex library caches compiles,
+        # so the probe is cheap.
+        if isinstance(pattern, str):
+            try:
+                _regex.compile(pattern, flags=flags)
+                template_error = True
+            except _regex.error:
+                template_error = False
+        else:
+            template_error = True
+        if template_error:
+            repl_str = repl if isinstance(repl, str) else str(repl)
+            logger.warning(
+                "[SAFE_REGEX] replacement template error at sub "
+                "pattern_sha256=%s pattern_excerpt=%r repl_excerpt=%r "
+                "error=%s caller=%s",
+                _pattern_sha256(pattern_str),
+                _pattern_excerpt(pattern_str),
+                _pattern_excerpt(repl_str),
+                exc,
+                _caller_name(skip_frames=2),
+            )
+        else:
+            logger.warning(
+                "[SAFE_REGEX] compile error at sub "
+                "pattern_sha256=%s pattern_excerpt=%r error=%s caller=%s",
+                _pattern_sha256(pattern_str),
+                _pattern_excerpt(pattern_str),
+                exc,
+                _caller_name(skip_frames=2),
+            )
+        if on_error is not None:
+            on_error(SubFailure(
+                kind="template" if template_error else "pattern",
+                message=str(exc),
+            ))
         return text
 
 
