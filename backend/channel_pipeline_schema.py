@@ -12,6 +12,7 @@ import re
 import json
 
 import safe_regex
+from regex_lint import lint_replacement_group_refs
 
 logger = logging.getLogger(__name__)
 
@@ -633,6 +634,22 @@ class Action:
                     safe_regex.compile(pattern)
                 except safe_regex.SafeRegexError as e:
                     errors.append(f"Invalid name_transform_pattern: {e}")
+                else:
+                    # enhancedchannelmanager-2uwi3: cross-check $N group
+                    # references in the replacement against the pattern's
+                    # capture-group count. At execution time an out-of-range
+                    # reference raises lazily inside regex.sub (only on
+                    # matching inputs) and is swallowed into a silent no-op
+                    # — reject it at save time with an actionable message.
+                    if isinstance(replacement, str):
+                        for violation in lint_replacement_group_refs(
+                            pattern, replacement,
+                            field="name_transform_replacement",
+                        ):
+                            errors.append(
+                                f"Invalid name_transform_replacement: "
+                                f"{violation.message}"
+                            )
             # replacement is optional (defaults to empty string), but must be string if present
             if replacement is not None and not isinstance(replacement, str):
                 errors.append("name_transform_replacement must be a string")

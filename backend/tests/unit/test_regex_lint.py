@@ -26,6 +26,7 @@ from regex_lint import (
     lint_pattern,
     lint_pattern_advisory,
     lint_pattern_fields,
+    lint_replacement_group_refs,
     lint_substitution_pairs,
     violations_to_http_detail,
 )
@@ -425,6 +426,139 @@ class TestBulkHelpers:
         ])
         assert len(viols) == 1
         assert viols[0].field == "substitution_pairs[1].find"
+
+
+# =========================================================================
+# Replacement group references (enhancedchannelmanager-2uwi3).
+# =========================================================================
+
+
+class TestReplacementGroupRefs:
+    """``$N`` references in a name-transform replacement must not exceed the
+    pattern's capture-group count. At execution time the pipeline converts
+    ``$N`` to Python ``\\N`` and the ``regex`` library raises lazily (only on
+    matching inputs) — which safe_regex swallows into a silent per-stream
+    no-op. Save-time cross-checking closes that class (bead 2uwi3)."""
+
+    # ---- the exact user-reported scenario ----
+
+    def test_out_of_range_ref_flagged_with_actionable_message(self):
+        viols = lint_replacement_group_refs(
+            r"(\w+) (\w+) (\w+)", "$2 $1 $3 $4", field="repl"
+        )
+        assert len(viols) == 1
+        v = viols[0]
+        assert v.code == "REGEX_GROUP_REF_OUT_OF_RANGE"
+        assert v.severity == "error"
+        assert v.field == "repl"
+        assert "references group 4 but pattern defines 3 capture groups" in v.message
+
+    def test_in_range_refs_pass(self):
+        assert lint_replacement_group_refs(r"(\w+) (\w+) (\w+)", "$2 $1 $3") == []
+
+    def test_singular_group_count_message(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$2")
+        assert len(viols) == 1
+        assert "references group 2 but pattern defines 1 capture group" in viols[0].message
+
+    def test_zero_capture_groups_message(self):
+        viols = lint_replacement_group_refs(r"^US:\s*", "$1")
+        assert len(viols) == 1
+        assert "references group 1 but pattern defines 0 capture groups" in viols[0].message
+
+    # ---- $0 / leading-zero semantics: the executor's $N→\N conversion
+    # turns these into Python OCTAL escapes (control characters), never a
+    # group reference — reject with an explanation ----
+
+    def test_dollar_zero_rejected(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$0")
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_GROUP_REF_OUT_OF_RANGE"
+        assert "$0" in viols[0].message
+        assert "numbered from $1" in viols[0].message
+
+    def test_leading_zero_ref_rejected(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$01")
+        assert len(viols) == 1
+        assert "$01" in viols[0].message
+
+    # ---- non-reference dollars and edge shapes ----
+
+    def test_literal_dollar_not_flagged(self):
+        assert lint_replacement_group_refs(r"(\w+)", "price$ $1 US$") == []
+
+    def test_empty_or_none_replacement_passes(self):
+        assert lint_replacement_group_refs(r"(\w+)", "") == []
+        assert lint_replacement_group_refs(r"(\w+)", None) == []
+
+    def test_none_pattern_passes(self):
+        assert lint_replacement_group_refs(None, "$4") == []
+
+    def test_uncompilable_pattern_not_double_reported(self):
+        """Compile errors are lint_pattern's job — no group-ref finding."""
+        assert lint_replacement_group_refs("[invalid(", "$4") == []
+
+    def test_named_groups_count_toward_group_total(self):
+        assert lint_replacement_group_refs(r"(?P<x>\w+)(\d+)", "$2 $1") == []
+        viols = lint_replacement_group_refs(r"(?P<x>\w+)(\d+)", "$3")
+        assert len(viols) == 1
+        assert "pattern defines 2 capture groups" in viols[0].message
+
+    def test_non_capturing_groups_do_not_count(self):
+        viols = lint_replacement_group_refs(r"(?:\w+) (\w+)", "$2")
+        assert len(viols) == 1
+        assert "pattern defines 1 capture group" in viols[0].message
+
+    def test_repeated_bad_ref_reported_once(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$4 $4 $4")
+        assert len(viols) == 1
+
+    def test_multiple_distinct_bad_refs_each_reported(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$4 $7")
+        assert len(viols) == 2
+
+    def test_multi_digit_ref_validated_numerically(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$12")
+        assert len(viols) == 1
+        assert "references group 12" in viols[0].message
+
+    # ---- wiring through lint_actions_json (save-time 422 path) ----
+
+    def test_lint_actions_json_flags_out_of_range_ref_create_channel(self):
+        viols = lint_actions_json([
+            {
+                "type": "create_channel",
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                "name_transform_replacement": "$2 $1 $3 $4",
+            }
+        ])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_GROUP_REF_OUT_OF_RANGE"
+        assert viols[0].field == "actions[0].name_transform_replacement"
+
+    def test_lint_actions_json_flags_out_of_range_ref_create_group(self):
+        viols = lint_actions_json([
+            {
+                "type": "create_group",
+                "name_template": "{stream_group}",
+                "name_transform_pattern": r"^(\w+)",
+                "name_transform_replacement": "$2",
+            }
+        ])
+        assert len(viols) == 1
+        assert viols[0].field == "actions[0].name_transform_replacement"
+
+    def test_lint_actions_json_valid_refs_pass(self):
+        viols = lint_actions_json([
+            {
+                "type": "create_channel",
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+) (\w+)",
+                "name_transform_replacement": "$2 $1",
+            }
+        ])
+        assert viols == []
 
 
 # =========================================================================

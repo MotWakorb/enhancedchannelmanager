@@ -91,6 +91,11 @@ ViolationCode = Literal[
     "REGEX_TOO_LONG",
     "REGEX_NESTED_QUANTIFIER",
     "REGEX_COMPILE_ERROR",
+    # Replacement-template ``$N`` reference exceeds the pattern's capture
+    # group count, or is ``$0``/leading-zero (an octal escape after the
+    # executor's ``$N`` → ``\N`` conversion, never a group reference).
+    # Save-time path (enhancedchannelmanager-2uwi3).
+    "REGEX_GROUP_REF_OUT_OF_RANGE",
     # Advisory codes (bd-0gntx) — surfaced via the analyze endpoint
     # only, never from the strict :func:`lint_pattern` save-time path.
     "REGEX_TRIVIALLY_MATCHES_ALL",
@@ -703,6 +708,88 @@ def lint_conditions_json_advisory(
     return out
 
 
+# The EXACT conversion regex the executor applies to the replacement
+# (channel_pipeline_executor._apply_name_transform): every ``$<digits>``
+# becomes Python ``\<digits>`` before regex.sub runs. Anything this regex
+# does not match is passed through literally, so it is also the exact set
+# of tokens the save-time cross-check must validate.
+_GROUP_REF_RE = re.compile(r"\$(\d+)")
+
+
+def lint_replacement_group_refs(
+    pattern: str | None,
+    replacement: str | None,
+    field: str = "replacement",
+) -> list[LintViolation]:
+    """Cross-check ``$N`` references in *replacement* against *pattern*.
+
+    The channel-pipeline name transform converts JS-style ``$N`` to Python
+    ``\\N`` and substitutes with the third-party ``regex`` engine. A
+    reference to a nonexistent group raises ``regex.error`` **lazily** —
+    only on inputs the pattern matches — and safe_regex swallows that into
+    a silent no-op per stream (enhancedchannelmanager-2uwi3). This check
+    rejects the rule at save time instead:
+
+    * ``$N`` with ``N`` greater than the pattern's capture-group count
+      (named groups count; non-capturing ``(?:…)`` do not).
+    * ``$0`` or any leading-zero reference (``$01``): after the ``$N`` →
+      ``\\N`` conversion these are Python *octal escapes* — they insert a
+      control character, never the whole match or a group.
+
+    Compile problems in *pattern* are :func:`lint_pattern`'s job — when the
+    pattern does not compile this returns ``[]`` to avoid double-reporting.
+    Repeated occurrences of the same bad reference are reported once.
+    """
+    if not pattern or not isinstance(pattern, str):
+        return []
+    if not replacement or not isinstance(replacement, str):
+        return []
+    try:
+        compiled = safe_regex.compile(pattern)
+    except safe_regex.SafeRegexError:
+        # Length/compile violations are reported by lint_pattern.
+        return []
+
+    groups = compiled.groups
+    plural = "" if groups == 1 else "s"
+    out: list[LintViolation] = []
+    seen: set[str] = set()
+    for match in _GROUP_REF_RE.finditer(replacement):
+        digits = match.group(1)
+        if digits in seen:
+            continue
+        seen.add(digits)
+        if digits.startswith("0"):
+            out.append(
+                LintViolation(
+                    code="REGEX_GROUP_REF_OUT_OF_RANGE",
+                    message=(
+                        f"Replacement references ${digits}, which is not a "
+                        f"valid capture group reference — groups are "
+                        f"numbered from $1. (At execution time ${digits} "
+                        f"would insert a control character, not the match.) "
+                        f"See {DOCS_URL} for guidance."
+                    ),
+                    field=field,
+                    detail={"group_ref": digits, "groups_defined": groups},
+                )
+            )
+        elif int(digits) > groups:
+            out.append(
+                LintViolation(
+                    code="REGEX_GROUP_REF_OUT_OF_RANGE",
+                    message=(
+                        f"Replacement references group {int(digits)} but "
+                        f"pattern defines {groups} capture group{plural}. "
+                        f"See {DOCS_URL} for guidance."
+                    ),
+                    field=field,
+                    detail={"group_ref": digits, "groups_defined": groups},
+                )
+            )
+    return out
+
+
 def lint_actions_json(actions: list | None, prefix: str = "actions") -> list[LintViolation]:
     """Walk a list of action objects; lint any pattern-bearing values.
 
@@ -733,6 +820,15 @@ def lint_actions_json(actions: list | None, prefix: str = "actions") -> list[Lin
                 lint_pattern(
                     action.get("name_transform_pattern"),
                     field=f"{prefix}[{idx}].name_transform_pattern",
+                )
+            )
+            # Cross-check $N group references in the replacement against
+            # the pattern's capture-group count (2uwi3).
+            out.extend(
+                lint_replacement_group_refs(
+                    action.get("name_transform_pattern"),
+                    action.get("name_transform_replacement"),
+                    field=f"{prefix}[{idx}].name_transform_replacement",
                 )
             )
     return out
