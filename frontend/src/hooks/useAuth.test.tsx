@@ -6,7 +6,7 @@
  *
  * Test Spec: Frontend Auth Flow (v6dxf.8.12)
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 // These imports will fail until implementation exists
 // import { useAuth, AuthProvider } from './useAuth';
@@ -335,5 +335,202 @@ describe('Login Page', () => {
 
     // authStatus is populated — the Login component reads auth_methods from it
     expect(result.current.authStatus).not.toBeNull();
+  });
+});
+
+describe('Proactive token refresh (bd-3ymo4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('proactive-refresh: schedules a token refresh at 80% of the reported lifetime', async () => {
+    const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
+    const { getCurrentUser } = await import('../services/api');
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser, access_token_expires_in: 1000 });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: 'Token refreshed', access_token_expires_in: 1000 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+
+    const { useAuth, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    // Flush the mount-time auth check (microtasks only, no timers involved)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.user).toEqual(mockUser);
+
+    const refreshCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes('/auth/refresh')).length;
+
+    // Just before 80% of 1000s: no refresh yet
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(799_000);
+    });
+    expect(refreshCalls()).toBe(0);
+
+    // At 800s the proactive refresh fires
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(refreshCalls()).toBe(1);
+  });
+
+  it('proactive-refresh: reschedules after a successful refresh', async () => {
+    const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
+    const { getCurrentUser } = await import('../services/api');
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser, access_token_expires_in: 1000 });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: 'Token refreshed', access_token_expires_in: 1000 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+
+    const { useAuth, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.user).toEqual(mockUser);
+
+    const refreshCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes('/auth/refresh')).length;
+
+    // First cycle fires at 800s
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(801_000);
+    });
+    expect(refreshCalls()).toBe(1);
+
+    // The refresh response reports a fresh 1000s lifetime — a second cycle
+    // must fire ~800s later, proving the timer re-arms after each refresh.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(801_000);
+    });
+    expect(refreshCalls()).toBe(2);
+  });
+
+  it('proactive-refresh: falls back to the default 30-minute lifetime when expiry is not reported', async () => {
+    const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
+    const { getCurrentUser } = await import('../services/api');
+    // Older backend: no access_token_expires_in field
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: 'Token refreshed' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+
+    const { useAuth, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.user).toEqual(mockUser);
+
+    const refreshCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes('/auth/refresh')).length;
+
+    // 80% of 30min = 24min = 1_440_000ms. Just before: nothing.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_439_000);
+    });
+    expect(refreshCalls()).toBe(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(refreshCalls()).toBe(1);
+  });
+
+  it('proactive-refresh: timer is cancelled on logout', async () => {
+    const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
+    const { getCurrentUser, logout: mockLogout } = await import('../services/api');
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser, access_token_expires_in: 1000 });
+    vi.mocked(mockLogout).mockResolvedValue({ message: 'Logged out' });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: 'Token refreshed', access_token_expires_in: 1000 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+
+    const { useAuth, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.user).toEqual(mockUser);
+
+    await act(async () => {
+      await result.current.logout();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000_000);
+    });
+    const refreshCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/auth/refresh')).length;
+    expect(refreshCalls).toBe(0);
+  });
+
+  it('proactive-refresh: timer is cancelled on unmount', async () => {
+    const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
+    const { getCurrentUser } = await import('../services/api');
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser, access_token_expires_in: 1000 });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: 'Token refreshed', access_token_expires_in: 1000 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+
+    const { useAuth, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    const { result, unmount } = renderHook(() => useAuth(), { wrapper });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.user).toEqual(mockUser);
+
+    unmount();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000_000);
+    });
+    const refreshCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/auth/refresh')).length;
+    expect(refreshCalls).toBe(0);
   });
 });

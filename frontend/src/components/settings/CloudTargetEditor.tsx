@@ -167,8 +167,8 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
       <div className="modal-container modal-lg">
         <div className="modal-header">
           <h3>{isEditing ? 'Edit Cloud Target' : 'New Cloud Target'}</h3>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
         <div className="modal-body">

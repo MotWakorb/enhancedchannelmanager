@@ -11,6 +11,7 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
+import { ShowMoreRows } from './ShowMoreRows';
 import { StreamDedupModal } from './StreamDedupModal';
 import { logger } from '../utils/logger';
 import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
@@ -21,6 +22,11 @@ interface StreamGroup {
   streams: Stream[];
   expanded: boolean;
 }
+
+// Incremental rendering for large groups (bd-bed9r): expanding a group
+// renders at most this many stream rows initially; a ShowMoreRows sentinel
+// renders the next chunk on scroll or click. Mirrors ChannelsPane.
+const GROUP_RENDER_CHUNK_SIZE = 100;
 
 // Channel defaults from settings
 export interface ChannelDefaults {
@@ -185,8 +191,29 @@ export function StreamsPane({
     isExpanded: isGroupExpanded,
     toggleExpand: toggleGroup,
     expandAll: expandAllGroupsInternal,
-    collapseAll: collapseAllGroups,
+    collapseAll: collapseAllGroupsInternal,
   } = useExpandCollapse<string>();
+
+  // Per-group render limit for incremental rendering (bd-bed9r). Absent key
+  // means the initial chunk size; reset when the group is toggled.
+  const [groupRenderLimits, setGroupRenderLimits] = useState<Record<string, number>>({});
+
+  // Toggle a group and reset its incremental-render limit so a re-expanded
+  // group starts at the initial chunk again (bd-bed9r).
+  const handleToggleGroup = useCallback((groupName: string) => {
+    toggleGroup(groupName);
+    setGroupRenderLimits((prev) => {
+      if (!(groupName in prev)) return prev;
+      const next = { ...prev };
+      delete next[groupName];
+      return next;
+    });
+  }, [toggleGroup]);
+
+  const collapseAllGroups = useCallback(() => {
+    collapseAllGroupsInternal();
+    setGroupRenderLimits({});
+  }, [collapseAllGroupsInternal]);
 
   // Hide mapped streams toggle state (persisted in localStorage)
   const [hideMappedStreams, setHideMappedStreams] = useState(() => {
@@ -1466,8 +1493,9 @@ export function StreamsPane({
               onClick={onRefreshStreams}
               title="Refresh streams from Dispatcharr"
               disabled={loading}
+              aria-label="Refresh streams from Dispatcharr"
             >
-              <span className={`material-icons${loading ? ' spinning' : ''}`}>sync</span>
+              <span className={`material-icons${loading ? ' spinning' : ''}`} aria-hidden="true">sync</span>
             </button>
           )}
         </h2>
@@ -1535,8 +1563,9 @@ export function StreamsPane({
                 className="search-clear-btn"
                 onClick={() => onSearchChange('')}
                 title="Clear search"
+                aria-label="Clear search"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             )}
           </div>
@@ -1546,16 +1575,18 @@ export function StreamsPane({
               onClick={expandAllGroups}
               disabled={allExpanded || groupedStreams.length === 0}
               title="Expand all groups"
+              aria-label="Expand all groups"
             >
-              <span className="material-icons">unfold_more</span>
+              <span className="material-icons" aria-hidden="true">unfold_more</span>
             </button>
             <button
               className="expand-collapse-btn"
               onClick={collapseAllGroups}
               disabled={allCollapsed || groupedStreams.length === 0}
               title="Collapse all groups"
+              aria-label="Collapse all groups"
             >
-              <span className="material-icons">unfold_less</span>
+              <span className="material-icons" aria-hidden="true">unfold_less</span>
             </button>
           </div>
           {mappedStreamIds && mappedStreamIds.size > 0 && (
@@ -1672,8 +1703,10 @@ export function StreamsPane({
                           setGroupSearchFilter('');
                           groupSearchInputRef.current?.focus();
                         }}
+                        aria-label="Clear search"
+                        title="Clear search"
                       >
-                        <span className="material-icons">close</span>
+                        <span className="material-icons" aria-hidden="true">close</span>
                       </button>
                     )}
                   </div>
@@ -1759,8 +1792,9 @@ export function StreamsPane({
               className="clear-filters-btn"
               onClick={onClearStreamFilters}
               title="Clear all filters"
+              aria-label="Clear all filters"
             >
-              <span className="material-icons">filter_alt_off</span>
+              <span className="material-icons" aria-hidden="true">filter_alt_off</span>
             </button>
           )}
         </div>
@@ -1781,9 +1815,26 @@ export function StreamsPane({
                       if (!isGroupExpanded(group.name) && onGroupExpand) {
                         onGroupExpand(group.name);
                       }
-                      toggleGroup(group.name);
+                      handleToggleGroup(group.name);
                     }}
                     onContextMenu={(e) => handleGroupContextMenu(group, e)}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={group.expanded}
+                    onKeyDown={(e) => {
+                      // See bd-6n14l note in ChannelsPane's DroppableGroupHeader:
+                      // target check prevents nested buttons (selection
+                      // checkbox, drag handle) from double-firing their own
+                      // action plus this group's toggle on Enter/Space.
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        if (!isGroupExpanded(group.name) && onGroupExpand) {
+                          onGroupExpand(group.name);
+                        }
+                        handleToggleGroup(group.name);
+                      }
+                    }}
                   >
                     {isEditMode && onBulkCreateFromGroup && (
                       <span
@@ -1817,8 +1868,10 @@ export function StreamsPane({
                         onTouchStart={(e) => e.stopPropagation()}
                         draggable={false}
                         title={isGroupFullySelected(group) || selectedGroupNames.has(group.name) ? 'Deselect all streams in group' : 'Select all streams in group'}
+                        aria-label={isGroupFullySelected(group) || selectedGroupNames.has(group.name) ? 'Deselect all streams in group' : 'Select all streams in group'}
+                        aria-pressed={isGroupFullySelected(group) || selectedGroupNames.has(group.name)}
                       >
-                        <span className="material-icons">
+                        <span className="material-icons" aria-hidden="true">
                           {isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name))
                             ? 'check_box'
                             : isGroupPartiallySelected(group)
@@ -1838,14 +1891,23 @@ export function StreamsPane({
                           openBulkCreateModal(group);
                         }}
                         title="Create channels from this group"
+                        aria-label="Create channels from this group"
                       >
-                        <span className="material-icons">playlist_add</span>
+                        <span className="material-icons" aria-hidden="true">playlist_add</span>
                       </button>
                     )}
                   </div>
-                  {group.expanded && (
+                  {group.expanded && (() => {
+                    // Incremental rendering (bd-bed9r): cap rows in the DOM;
+                    // the ShowMoreRows sentinel renders the next chunk on
+                    // scroll/click. Selection/drag logic keeps operating on
+                    // the FULL group.streams list — only rendering is capped.
+                    const renderLimit = groupRenderLimits[group.name] ?? GROUP_RENDER_CHUNK_SIZE;
+                    const isTruncated = group.streams.length > renderLimit;
+                    const visibleStreams = isTruncated ? group.streams.slice(0, renderLimit) : group.streams;
+                    return (
                     <div className="stream-group-items">
-                      {group.streams.map((stream) => (
+                      {visibleStreams.map((stream) => (
                         <div
                           key={stream.id}
                           data-stream-id={stream.id}
@@ -1918,8 +1980,9 @@ export function StreamsPane({
                                   setPreviewStream(stream);
                                 }}
                                 title="Preview stream in browser"
+                                aria-label="Preview stream in browser"
                               >
-                                <span className="material-icons">visibility</span>
+                                <span className="material-icons" aria-hidden="true">visibility</span>
                               </button>
                               <button
                                 className="vlc-btn"
@@ -1928,8 +1991,9 @@ export function StreamsPane({
                                   openInVLC(stream.url!, stream.name);
                                 }}
                                 title="Open in VLC"
+                                aria-label="Open in VLC"
                               >
-                                <span className="material-icons">play_circle</span>
+                                <span className="material-icons" aria-hidden="true">play_circle</span>
                               </button>
                               <button
                                 className="copy-url-btn"
@@ -1938,15 +2002,30 @@ export function StreamsPane({
                                   handleCopyStreamUrl(stream.url!, stream.name);
                                 }}
                                 title="Copy stream URL"
+                                aria-label="Copy stream URL"
                               >
-                                <span className="material-icons">content_copy</span>
+                                <span className="material-icons" aria-hidden="true">content_copy</span>
                               </button>
                             </>
                           )}
                         </div>
                       ))}
+                      {/* Incremental rendering sentinel (bd-bed9r) */}
+                      {isTruncated && (
+                        <ShowMoreRows
+                          remaining={group.streams.length - visibleStreams.length}
+                          noun="streams"
+                          onShowMore={() => {
+                            setGroupRenderLimits((prev) => ({
+                              ...prev,
+                              [group.name]: (prev[group.name] ?? GROUP_RENDER_CHUNK_SIZE) + GROUP_RENDER_CHUNK_SIZE,
+                            }));
+                          }}
+                        />
+                      )}
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
               ))}
             </div>
@@ -2052,8 +2131,8 @@ export function StreamsPane({
                       : `Create Channels from ${streamsToCreate.length} Selected Streams`
                 }
               </h3>
-              <button className="modal-close-btn" onClick={closeBulkCreateModal}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={closeBulkCreateModal} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -2307,8 +2386,10 @@ export function StreamsPane({
                                       e.stopPropagation();
                                       setBulkCreateGroupSearch('');
                                     }}
+                                    aria-label="Clear search"
+                                    title="Clear search"
                                   >
-                                    <span className="material-icons">close</span>
+                                    <span className="material-icons" aria-hidden="true">close</span>
                                   </button>
                                 )}
                               </div>

@@ -218,6 +218,12 @@
   margin-top: 0.25rem;
 }
 
+/* Start-time detail on a collapsed started/completed pair (bd-ib2w3) */
+.notification-time-started {
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+
 /* Inline action button (e.g., Restart Services) */
 .notification-action-btn-inline {
   display: inline-flex;

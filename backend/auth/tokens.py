@@ -138,12 +138,18 @@ def create_refresh_token(user_id: int) -> str:
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 
 
-def decode_token(token: str) -> dict:
+def decode_token(token: str, ignore_revocation: bool = False) -> dict:
     """
     Decode and validate a JWT token.
 
     Args:
         token: The JWT token string to decode.
+        ignore_revocation: Skip the in-process jti revocation check while
+            still enforcing signature and expiry. Used ONLY by the refresh
+            rotation grace window (bd-x67qe): a rotated-away predecessor's
+            jti is blacklisted the moment the winner rotates, but the token
+            may still be honored by the DB-side grace check. Never use this
+            for authorization decisions.
 
     Returns:
         The decoded token claims.
@@ -151,6 +157,8 @@ def decode_token(token: str) -> dict:
     Raises:
         TokenExpiredError: If the token has expired.
         InvalidTokenError: If the token is invalid.
+        TokenRevokedError: If the token has been revoked (unless
+            ``ignore_revocation``).
     """
     if not token or not isinstance(token, str):
         raise InvalidTokenError("Invalid token format")
@@ -165,7 +173,7 @@ def decode_token(token: str) -> dict:
 
         # Check if token is revoked
         jti = payload.get("jti")
-        if jti and jti in _revoked_tokens:
+        if not ignore_revocation and jti and jti in _revoked_tokens:
             raise TokenRevokedError("Token has been revoked")
 
         # Convert sub back to int for API compatibility

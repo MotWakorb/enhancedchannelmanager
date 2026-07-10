@@ -9,6 +9,7 @@ import { M3UFiltersModal } from '../M3UFiltersModal';
 import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
+import { PageHeader } from '../PageHeader';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
 import './M3UManagerTab.css';
@@ -208,8 +209,10 @@ function M3UAccountRow({
           className={`action-btn toggle ${account.is_active ? 'active' : ''}`}
           onClick={() => onToggleActive(account)}
           title={account.is_active ? 'Disable' : 'Enable'}
+          aria-label={account.is_active ? 'Disable account' : 'Enable account'}
+          aria-pressed={account.is_active}
         >
-          <span className="material-icons">
+          <span className="material-icons" aria-hidden="true">
             {account.is_active ? 'toggle_on' : 'toggle_off'}
           </span>
         </button>
@@ -218,45 +221,51 @@ function M3UAccountRow({
           onClick={() => onRefresh(account)}
           title="Refresh"
           disabled={!account.is_active || isRefreshing || account.locked}
+          aria-label="Refresh account"
         >
-          <span className="material-icons">refresh</span>
+          <span className="material-icons" aria-hidden="true">refresh</span>
         </button>
         <button
           className="action-btn"
           onClick={() => onManageGroups(account)}
           title="Manage Groups"
+          aria-label="Manage Groups"
         >
-          <span className="material-icons">folder</span>
+          <span className="material-icons" aria-hidden="true">folder</span>
         </button>
         <button
           className="action-btn"
           onClick={() => onManageProfiles(account)}
           title="Manage Profiles"
+          aria-label="Manage Profiles"
         >
-          <span className="material-icons">account_circle</span>
+          <span className="material-icons" aria-hidden="true">account_circle</span>
         </button>
         <button
           className="action-btn"
           onClick={() => onManageFilters(account)}
           title="Manage Filters"
+          aria-label="Manage Filters"
         >
-          <span className="material-icons">filter_alt</span>
+          <span className="material-icons" aria-hidden="true">filter_alt</span>
         </button>
         <button
           className="action-btn"
           onClick={() => onEdit(account)}
           title="Edit"
           disabled={account.locked}
+          aria-label="Edit account"
         >
-          <span className="material-icons">edit</span>
+          <span className="material-icons" aria-hidden="true">edit</span>
         </button>
         <button
           className="action-btn delete"
           onClick={() => onDelete(account)}
           title="Delete"
           disabled={account.locked}
+          aria-label="Delete account"
         >
-          <span className="material-icons">delete</span>
+          <span className="material-icons" aria-hidden="true">delete</span>
         </button>
       </div>
     </div>
@@ -694,62 +703,61 @@ export function M3UManagerTab({
 
   return (
     <div className="m3u-manager-tab">
-      <div className="m3u-header">
-        <div className="header-title">
-          <h2>M3U Accounts</h2>
-          <p className="header-description">
-            Manage your M3U playlist sources and XtreamCodes accounts.
-          </p>
-        </div>
-        <div className="header-actions">
-          <button
-            className="btn-primary save-priorities-btn"
-            onClick={handleSavePriorities}
-            disabled={savingPriorities || !hasPriorityChanges}
-            title={hasPriorityChanges ? "Save priority changes" : "No priority changes to save"}
-          >
-            <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
-              {savingPriorities ? 'sync' : 'save'}
-            </span>
-            {savingPriorities ? 'Saving...' : 'Save Priorities'}
-          </button>
-          {serverGroups.length > 0 && (
-            <CustomSelect
-              className="server-group-filter"
-              value={filterServerGroup?.toString() ?? ''}
-              onChange={(val) => setFilterServerGroup(val ? Number(val) : null)}
-              options={[
-                { value: '', label: 'All Server Groups' },
-                ...serverGroups.map(sg => ({
-                  value: sg.id.toString(),
-                  label: sg.name,
-                })),
-              ]}
-            />
-          )}
-          <button className="btn-secondary" onClick={() => setLinkedAccountsModalOpen(true)}>
-            <span className="material-icons">link</span>
-            Manage Links
-          </button>
-          <button
-            className="btn-secondary"
-            onClick={handleSyncGroups}
-            disabled={syncingGroups || linkedM3UAccounts.length === 0}
-            title={linkedM3UAccounts.length === 0 ? 'No linked accounts configured' : 'Sync enabled groups across all linked accounts'}
-          >
-            <span className={`material-icons ${syncingGroups ? 'spinning' : ''}`}>sync_alt</span>
-            {syncingGroups ? 'Syncing...' : 'Sync Groups'}
-          </button>
-          <button className="btn-secondary" onClick={handleRefreshAll} disabled={anyRefreshing}>
-            <span className={`material-icons ${anyRefreshing ? 'spinning' : ''}`}>sync</span>
-            {anyRefreshing ? 'Refreshing...' : 'Refresh All'}
-          </button>
-          <button className="btn-primary" onClick={handleAddAccount}>
-            <span className="material-icons">add</span>
-            Add M3U Account
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        className="m3u-header"
+        title="M3U Accounts"
+        description="Manage your M3U playlist sources and XtreamCodes accounts."
+        actions={(
+          <>
+            <button
+              className="btn-primary save-priorities-btn"
+              onClick={handleSavePriorities}
+              disabled={savingPriorities || !hasPriorityChanges}
+              title={hasPriorityChanges ? "Save priority changes" : "No priority changes to save"}
+            >
+              <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
+                {savingPriorities ? 'sync' : 'save'}
+              </span>
+              {savingPriorities ? 'Saving...' : 'Save Priorities'}
+            </button>
+            {serverGroups.length > 0 && (
+              <CustomSelect
+                className="server-group-filter"
+                value={filterServerGroup?.toString() ?? ''}
+                onChange={(val) => setFilterServerGroup(val ? Number(val) : null)}
+                options={[
+                  { value: '', label: 'All Server Groups' },
+                  ...serverGroups.map(sg => ({
+                    value: sg.id.toString(),
+                    label: sg.name,
+                  })),
+                ]}
+              />
+            )}
+            <button className="btn-secondary" onClick={() => setLinkedAccountsModalOpen(true)}>
+              <span className="material-icons">link</span>
+              Manage Links
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={handleSyncGroups}
+              disabled={syncingGroups || linkedM3UAccounts.length === 0}
+              title={linkedM3UAccounts.length === 0 ? 'No linked accounts configured' : 'Sync enabled groups across all linked accounts'}
+            >
+              <span className={`material-icons ${syncingGroups ? 'spinning' : ''}`}>sync_alt</span>
+              {syncingGroups ? 'Syncing...' : 'Sync Groups'}
+            </button>
+            <button className="btn-secondary" onClick={handleRefreshAll} disabled={anyRefreshing}>
+              <span className={`material-icons ${anyRefreshing ? 'spinning' : ''}`}>sync</span>
+              {anyRefreshing ? 'Refreshing...' : 'Refresh All'}
+            </button>
+            <button className="btn-primary" onClick={handleAddAccount}>
+              <span className="material-icons">add</span>
+              Add M3U Account
+            </button>
+          </>
+        )}
+      />
 
       {filteredAccounts.length === 0 ? (
         <div className="empty-state">

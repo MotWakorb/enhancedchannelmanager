@@ -91,8 +91,8 @@ export function MaintenanceBanner({ windows }: MaintenanceBannerProps) {
           </div>
         </div>
         {hasMultiple && (
-          <button className="expand-btn">
-            <span className="material-icons">
+          <button className="expand-btn" aria-label={expanded ? 'Collapse maintenance windows' : 'Expand maintenance windows'} title={expanded ? 'Collapse maintenance windows' : 'Expand maintenance windows'}>
+            <span className="material-icons" aria-hidden="true">
               {expanded ? 'expand_less' : 'expand_more'}
             </span>
           </button>

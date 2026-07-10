@@ -263,6 +263,13 @@
   background-color: var(--input-bg);
 }
 
+/* bd-6n14l: the row is a div with role="button" (not a native <button>),
+   so it needs an explicit visible focus indicator for keyboard users. */
+.change-row:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .change-time {
   font-size: 0.8rem;
   color: var(--text-secondary);

@@ -111,8 +111,9 @@ export function HistoryToolbar({
         onClick={onUndo}
         disabled={!canUndo || isOperationPending}
         title={undoTitle}
+        aria-label={undoTitle}
       >
-        <span className="material-icons history-icon">undo</span>
+        <span className="material-icons history-icon" aria-hidden="true">undo</span>
         {undoCount > 0 && <span className="history-count">{undoCount}</span>}
       </button>
 
@@ -122,8 +123,9 @@ export function HistoryToolbar({
         onClick={onRedo}
         disabled={!canRedo || isOperationPending}
         title={redoTitle}
+        aria-label={redoTitle}
       >
-        <span className="material-icons history-icon">redo</span>
+        <span className="material-icons history-icon" aria-hidden="true">redo</span>
         {redoCount > 0 && <span className="history-count">{redoCount}</span>}
       </button>
 
@@ -135,8 +137,9 @@ export function HistoryToolbar({
         onClick={handleCreateSavePoint}
         disabled={isOperationPending}
         title="Create checkpoint"
+        aria-label="Create checkpoint"
       >
-        <span className="material-icons save-point-icon">bookmark_add</span>
+        <span className="material-icons save-point-icon" aria-hidden="true">bookmark_add</span>
       </button>
 
       {/* Save Points Dropdown */}
@@ -176,8 +179,9 @@ export function HistoryToolbar({
                       className="save-point-action delete"
                       onClick={() => onDeleteSavePoint(sp.id)}
                       title="Delete checkpoint"
+                      aria-label="Delete checkpoint"
                     >
-                      <span className="material-icons">close</span>
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   </div>
                 </div>

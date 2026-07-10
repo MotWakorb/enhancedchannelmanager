@@ -172,8 +172,8 @@ export function UserManagementSection({ isAdmin, currentUserId }: Props) {
         <div className="error-banner">
           <span className="material-icons">error</span>
           {error}
-          <button onClick={() => setError(null)}>
-            <span className="material-icons">close</span>
+          <button onClick={() => setError(null)} aria-label="Dismiss error" title="Dismiss error">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
       )}

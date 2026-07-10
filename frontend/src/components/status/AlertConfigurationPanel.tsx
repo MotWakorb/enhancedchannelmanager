@@ -226,8 +226,8 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
         <div className="error-banner">
           <span className="material-icons">error</span>
           {error}
-          <button onClick={() => setError(null)}>
-            <span className="material-icons">close</span>
+          <button onClick={() => setError(null)} aria-label="Dismiss error" title="Dismiss error">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
       )}
@@ -381,8 +381,9 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
                   className="btn-icon-small danger"
                   onClick={() => handleDeleteRule(rule.id)}
                   title="Delete Rule"
+                  aria-label="Delete Rule"
                 >
-                  <span className="material-icons">delete</span>
+                  <span className="material-icons" aria-hidden="true">delete</span>
                 </button>
               </div>
             </div>

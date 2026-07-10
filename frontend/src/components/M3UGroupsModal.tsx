@@ -293,8 +293,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               </span>
             )}
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -308,8 +308,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               onChange={(e) => setSearch(e.target.value)}
             />
             {search && (
-              <button className="clear-search" onClick={() => setSearch('')}>
-                <span className="material-icons">close</span>
+              <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search" title="Clear search">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             )}
           </div>
@@ -416,8 +416,17 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                               ? 'Configure auto-sync settings'
                               : 'Enable auto-sync to configure settings'
                       }
+                      aria-label={
+                        autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync
+                          ? `Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`
+                          : autoSyncedByOtherAccounts.has(group.channel_group)
+                            ? `Also auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)} — may create duplicate channels`
+                            : group.auto_channel_sync
+                              ? 'Configure auto-sync settings'
+                              : 'Enable auto-sync to configure settings'
+                      }
                     >
-                      <span className="material-icons">settings</span>
+                      <span className="material-icons" aria-hidden="true">settings</span>
                     </button>
                   </div>
                 </div>

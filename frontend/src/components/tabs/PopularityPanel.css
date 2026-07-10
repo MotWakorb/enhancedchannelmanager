@@ -46,6 +46,7 @@
 
 .popularity-panel .view-toggle {
   display: flex;
+  flex-shrink: 0;
   gap: 4px;
   background: var(--bg-tertiary);
   padding: 3px;
@@ -56,6 +57,7 @@
   padding: 8px 16px;
   font-size: 13px;
   font-weight: 500;
+  white-space: nowrap;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -137,6 +139,13 @@
 
 .popularity-panel .ranking-item.expanded {
   border-color: var(--button-primary-bg);
+}
+
+/* bd-6n14l: the row is a div with role="button" (not a native <button>),
+   so it needs an explicit visible focus indicator for keyboard users. */
+.popularity-panel .ranking-item:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .popularity-panel .ranking-main {

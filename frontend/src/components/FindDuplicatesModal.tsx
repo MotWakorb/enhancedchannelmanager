@@ -106,8 +106,8 @@ export function FindDuplicatesModal({ onClose, onMerged }: FindDuplicatesModalPr
             <span className="material-icons">content_copy</span>
             Find Duplicate Channels
           </h2>
-          <button className="modal-close-btn" onClick={onClose} title="Close">
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} title="Close" aria-label="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

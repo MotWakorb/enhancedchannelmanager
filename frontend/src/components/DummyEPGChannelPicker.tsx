@@ -146,8 +146,8 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
       <div className="modal-container modal-xl channel-picker-modal">
         <div className="modal-header">
           <h2>Channels - {profileName}</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -176,8 +176,9 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
                         className="channel-picker-remove"
                         onClick={() => handleRemoveChannel(assignment.channel_id)}
                         title="Remove"
+                        aria-label="Remove channel"
                       >
-                        <span className="material-icons">remove_circle_outline</span>
+                        <span className="material-icons" aria-hidden="true">remove_circle_outline</span>
                       </button>
                     </div>
                   ))
@@ -199,8 +200,8 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
                       placeholder="Search channels..."
                     />
                     {search && (
-                      <button className="clear-search" onClick={() => setSearch('')}>
-                        <span className="material-icons">close</span>
+                      <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search" title="Clear search">
+                        <span className="material-icons" aria-hidden="true">close</span>
                       </button>
                     )}
                   </div>

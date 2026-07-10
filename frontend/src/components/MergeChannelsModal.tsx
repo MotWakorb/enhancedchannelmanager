@@ -143,8 +143,8 @@ export function MergeChannelsModal({
       <div className="modal-container modal-lg merge-channels-modal">
         <div className="modal-header">
           <h2>Merge {channels.length} Channels</h2>
-          <button className="modal-close-btn" onClick={onClose} title="Close">
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} title="Close" aria-label="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

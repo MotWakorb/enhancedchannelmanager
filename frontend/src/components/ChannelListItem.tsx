@@ -146,8 +146,9 @@ const ChannelMenu = memo(function ChannelMenu({
           }
         }}
         title="Channel actions"
+        aria-label="Channel actions"
       >
-        <span className="material-icons">more_vert</span>
+        <span className="material-icons" aria-hidden="true">more_vert</span>
       </button>
       {menuOpen && menuPosition && createPortal(
         <div

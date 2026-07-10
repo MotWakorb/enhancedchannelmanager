@@ -163,6 +163,106 @@ class TestTraceIdMiddleware:
 
 
 # =========================================================================
+# Access log coverage of auth rejections (bd-cng0d)
+# =========================================================================
+class TestAccessLogCoversAuthRejections:
+    """The structured ``ecm.access`` logger must observe ALL requests —
+    including those the auth middleware rejects with 401 before any route
+    handler runs.
+
+    Regression guard: ``observability_middleware`` used to be registered
+    first (= innermost in Starlette's onion), so auth rejections
+    short-circuited before ever reaching it — 401s appeared only in raw
+    uvicorn lines, invisible to any consumer of the JSON stream. It is now
+    registered last (= outermost).
+    """
+
+    @pytest.fixture
+    def capture_access_records(self):
+        """Capture raw LogRecords emitted on the ``ecm.access`` logger."""
+        records: list[logging.LogRecord] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        handler = _Capture()
+        access_logger = logging.getLogger("ecm.access")
+        prev_level = access_logger.level
+        access_logger.addHandler(handler)
+        access_logger.setLevel(logging.INFO)
+        try:
+            yield records
+        finally:
+            access_logger.removeHandler(handler)
+            access_logger.setLevel(prev_level)
+
+    @pytest.mark.asyncio
+    async def test_401_rejection_emits_exactly_one_access_record(
+        self, async_client, capture_access_records
+    ):
+        """An unauthenticated request to a protected endpoint produces
+        exactly ONE structured access-log record carrying status 401 —
+        no bypass (0 records) and no duplication (2+ records)."""
+        with patch("main.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await async_client.get("/api/notifications")
+
+        assert response.status_code == 401
+
+        http_records = [
+            r
+            for r in capture_access_records
+            if getattr(r, "event", None) == "http_request"
+        ]
+        assert len(http_records) == 1, (
+            f"expected exactly 1 structured access record, got "
+            f"{len(http_records)}: {[r.getMessage() for r in http_records]}"
+        )
+        record = http_records[0]
+        assert record.status == "401"
+        assert record.method == "GET"
+        assert record.path == "/api/notifications"
+
+    @pytest.mark.asyncio
+    async def test_401_rejection_record_carries_no_credentials(
+        self, async_client, capture_access_records
+    ):
+        """The 401 access record must not leak tokens/cookies."""
+        with patch("main.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await async_client.get(
+                "/api/notifications",
+                headers={"Authorization": "Bearer super-secret-token"},
+                cookies={"access_token": "cookie-secret-token"},
+            )
+
+        assert response.status_code == 401
+        http_records = [
+            r
+            for r in capture_access_records
+            if getattr(r, "event", None) == "http_request"
+        ]
+        assert http_records
+        rendered = observability.JsonFormatter().format(http_records[0])
+        assert "super-secret-token" not in rendered
+        assert "cookie-secret-token" not in rendered
+
+    @pytest.mark.asyncio
+    async def test_401_rejection_gets_trace_id_header(self, async_client):
+        """Outermost observability layer stamps X-Request-ID even on 401s."""
+        with patch("main.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await async_client.get("/api/notifications")
+
+        assert response.status_code == 401
+        assert response.headers.get("x-request-id")
+
+
+# =========================================================================
 # Request counter
 # =========================================================================
 class TestHttpRequestCounter:

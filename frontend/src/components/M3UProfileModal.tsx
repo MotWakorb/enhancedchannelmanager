@@ -177,8 +177,8 @@ function M3UProfileModalInner({
             <span className="material-icons">account_circle</span>
             Manage Profiles - {account.name}
           </h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -252,8 +252,10 @@ function M3UProfileModalInner({
                               className={`action-btn toggle ${profile.is_active ? 'active' : ''}`}
                               onClick={() => handleToggleActive(profile)}
                               title={profile.is_active ? 'Deactivate' : 'Activate'}
+                              aria-label={profile.is_active ? 'Deactivate profile' : 'Activate profile'}
+                              aria-pressed={profile.is_active}
                             >
-                              <span className="material-icons">
+                              <span className="material-icons" aria-hidden="true">
                                 {profile.is_active ? 'toggle_on' : 'toggle_off'}
                               </span>
                             </button>
@@ -261,16 +263,18 @@ function M3UProfileModalInner({
                               className="action-btn"
                               onClick={() => handleEdit(profile)}
                               title="Edit"
+                              aria-label="Edit profile"
                             >
-                              <span className="material-icons">edit</span>
+                              <span className="material-icons" aria-hidden="true">edit</span>
                             </button>
                             {!profile.is_default && (
                               <button
                                 className="action-btn delete"
                                 onClick={() => handleDelete(profile)}
                                 title="Delete"
+                                aria-label="Delete profile"
                               >
-                                <span className="material-icons">delete</span>
+                                <span className="material-icons" aria-hidden="true">delete</span>
                               </button>
                             )}
                           </div>

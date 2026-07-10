@@ -463,8 +463,8 @@ export const EditChannelModal = memo(function EditChannelModal({
       <div className="modal-container edit-channel-modal">
         <div className="modal-header">
           <h2>Edit Channel</h2>
-          <button className="modal-close-btn" onClick={handleClose} title="Close">
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={handleClose} title="Close" aria-label="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
         <div className="modal-body">
@@ -535,8 +535,9 @@ export const EditChannelModal = memo(function EditChannelModal({
                     className="search-clear-btn"
                     onClick={() => handleTvgIdSearch('')}
                     title="Clear search"
+                    aria-label="Clear search"
                   >
-                    <span className="material-icons">close</span>
+                    <span className="material-icons" aria-hidden="true">close</span>
                   </button>
                 )}
               </div>
@@ -695,8 +696,9 @@ export const EditChannelModal = memo(function EditChannelModal({
                   className="search-clear-btn"
                   onClick={() => handleEpgSearch('')}
                   title="Clear search"
+                  aria-label="Clear search"
                 >
-                  <span className="material-icons">close</span>
+                  <span className="material-icons" aria-hidden="true">close</span>
                 </button>
               )}
               </div>
@@ -715,8 +717,9 @@ export const EditChannelModal = memo(function EditChannelModal({
                     className="search-clear-btn"
                     onClick={() => setTvgIdSuffixFilter('')}
                     title="Clear suffix filter"
+                    aria-label="Clear search"
                   >
-                    <span className="material-icons">close</span>
+                    <span className="material-icons" aria-hidden="true">close</span>
                   </button>
                 )}
               </div>
@@ -891,8 +894,9 @@ export const EditChannelModal = memo(function EditChannelModal({
                 className="search-clear-btn"
                 onClick={() => setLogoSearch('')}
                 title="Clear search"
+                aria-label="Clear search"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             )}
           </div>

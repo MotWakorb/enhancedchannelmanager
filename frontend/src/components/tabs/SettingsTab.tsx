@@ -3099,8 +3099,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       className="remove-btn"
                       onClick={() => setChannelPipelineExcludedTerms(prev => prev.filter(t => t !== term))}
                       title="Remove term"
+                      aria-label="Remove term"
                     >
-                      <span className="material-icons">close</span>
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   </span>
                 ))
@@ -3164,8 +3165,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       className="remove-btn"
                       onClick={() => setChannelPipelineExcludedGroups(prev => prev.filter(g => g !== group))}
                       title="Remove group"
+                      aria-label="Remove group"
                     >
-                      <span className="material-icons">close</span>
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   </span>
                 ))
@@ -4235,8 +4237,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           className="remove-btn"
                           onClick={() => handleRemoveGroupExcludePattern(pattern)}
                           title="Remove pattern"
+                          aria-label="Remove pattern"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       </span>
                     ))
@@ -4287,8 +4290,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           className="remove-btn"
                           onClick={() => handleRemoveStreamExcludePattern(pattern)}
                           title="Remove pattern"
+                          aria-label="Remove pattern"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       </span>
                     ))
@@ -4365,8 +4369,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           className="remove-btn"
                           onClick={() => handleRemoveDigestRecipient(email)}
                           title="Remove recipient"
+                          aria-label="Remove recipient"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       </span>
                     ))
@@ -5706,8 +5711,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <button
                 onClick={() => setShowProbeResultsModal(false)}
                 className="modal-close-btn"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -5849,8 +5856,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <button
                 onClick={() => setShowReorderModal(false)}
                 className="modal-close-btn"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 

@@ -341,8 +341,8 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
           <>
             <div className="modal-header">
               <h2>Channel Profiles</h2>
-              <button className="modal-close-btn" onClick={onClose}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -357,8 +357,8 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                     onChange={(e) => setSearch(e.target.value)}
                   />
                   {search && (
-                    <button className="clear-search" onClick={() => setSearch('')}>
-                      <span className="material-icons">close</span>
+                    <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search" title="Clear search">
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   )}
                 </div>
@@ -442,15 +442,17 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                                   className="modal-icon-btn"
                                   onClick={() => handleSaveEdit(profile)}
                                   title="Save"
+                                  aria-label="Save profile name"
                                 >
-                                  <span className="material-icons">check</span>
+                                  <span className="material-icons" aria-hidden="true">check</span>
                                 </button>
                                 <button
                                   className="modal-icon-btn"
                                   onClick={() => handleCancelEdit(profile.id)}
                                   title="Cancel"
+                                  aria-label="Cancel rename"
                                 >
-                                  <span className="material-icons">close</span>
+                                  <span className="material-icons" aria-hidden="true">close</span>
                                 </button>
                               </>
                             ) : (
@@ -459,22 +461,25 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                                   className="modal-icon-btn"
                                   onClick={() => handleOpenChannels(profile)}
                                   title="Manage channels"
+                                  aria-label="Manage channels"
                                 >
-                                  <span className="material-icons">tune</span>
+                                  <span className="material-icons" aria-hidden="true">tune</span>
                                 </button>
                                 <button
                                   className="modal-icon-btn"
                                   onClick={() => handleStartEdit(profile)}
                                   title="Rename"
+                                  aria-label="Rename"
                                 >
-                                  <span className="material-icons">edit</span>
+                                  <span className="material-icons" aria-hidden="true">edit</span>
                                 </button>
                                 <button
                                   className="modal-icon-btn danger"
                                   onClick={() => handleDeleteProfile(profile)}
                                   title="Delete"
+                                  aria-label="Delete profile"
                                 >
-                                  <span className="material-icons">delete</span>
+                                  <span className="material-icons" aria-hidden="true">delete</span>
                                 </button>
                               </>
                             )}
@@ -496,16 +501,16 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
             {/* Channel assignment view */}
             <div className="modal-header">
               <div className="modal-header-with-back">
-                <button className="modal-back-btn" onClick={handleBackToList}>
-                  <span className="material-icons">arrow_back</span>
+                <button className="modal-back-btn" onClick={handleBackToList} aria-label="Back to profiles list" title="Back to profiles list">
+                  <span className="material-icons" aria-hidden="true">arrow_back</span>
                 </button>
                 <div className="modal-header-info">
                   <h2>Manage Channels</h2>
                   <span className="modal-header-subtitle">{selectedProfile?.name}</span>
                 </div>
               </div>
-              <button className="modal-close-btn" onClick={onClose}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -520,8 +525,8 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                     onChange={(e) => setChannelSearch(e.target.value)}
                   />
                   {channelSearch && (
-                    <button className="clear-search" onClick={() => setChannelSearch('')}>
-                      <span className="material-icons">close</span>
+                    <button className="clear-search" onClick={() => setChannelSearch('')} aria-label="Clear search" title="Clear search">
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   )}
                 </div>
