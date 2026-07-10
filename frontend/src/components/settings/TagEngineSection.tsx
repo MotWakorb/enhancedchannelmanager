@@ -135,7 +135,20 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
 
   return (
     <div className={`tag-group-card ${isExpanded ? 'expanded' : ''}`}>
-      <div className="tag-group-header" onClick={onToggleExpand}>
+      <div
+        className="tag-group-header"
+        onClick={onToggleExpand}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onToggleExpand();
+          }
+        }}
+      >
         <div className="tag-group-info">
           <span className="material-icons expand-icon">
             {isExpanded ? 'expand_less' : 'expand_more'}
@@ -159,8 +172,8 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
             <div className="tag-error">
               <span className="material-icons">error</span>
               {error}
-              <button className="dismiss-error" onClick={() => setError(null)}>
-                <span className="material-icons">close</span>
+              <button className="dismiss-error" onClick={() => setError(null)} aria-label="Dismiss error" title="Dismiss error">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
           )}
@@ -176,11 +189,11 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
                   placeholder="Enter description..."
                   autoFocus
                 />
-                <button className="btn-icon" onClick={handleUpdateDescription}>
-                  <span className="material-icons">check</span>
+                <button className="btn-icon" onClick={handleUpdateDescription} aria-label="Save description" title="Save description">
+                  <span className="material-icons" aria-hidden="true">check</span>
                 </button>
-                <button className="btn-icon" onClick={() => setEditingDescription(false)}>
-                  <span className="material-icons">close</span>
+                <button className="btn-icon" onClick={() => setEditingDescription(false)} aria-label="Cancel editing description" title="Cancel editing description">
+                  <span className="material-icons" aria-hidden="true">close</span>
                 </button>
               </div>
             ) : (
@@ -224,8 +237,9 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
                         className="tag-delete"
                         onClick={() => handleDeleteTag(tag.id)}
                         title="Delete tag"
+                        aria-label="Delete tag"
                       >
-                        <span className="material-icons">close</span>
+                        <span className="material-icons" aria-hidden="true">close</span>
                       </button>
                     )}
                   </div>
@@ -252,8 +266,9 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
                 className="btn-secondary"
                 onClick={() => setShowBulkInput(!showBulkInput)}
                 title="Bulk add tags"
+                aria-label="Bulk add tags"
               >
-                <span className="material-icons">playlist_add</span>
+                <span className="material-icons" aria-hidden="true">playlist_add</span>
               </button>
             </div>
 
@@ -421,8 +436,8 @@ export function TagEngineSection() {
             placeholder="Search groups..."
           />
           {searchQuery && (
-            <button className="clear-search" onClick={() => setSearchQuery('')}>
-              <span className="material-icons">close</span>
+            <button className="clear-search" onClick={() => setSearchQuery('')} aria-label="Clear search" title="Clear search">
+              <span className="material-icons" aria-hidden="true">close</span>
             </button>
           )}
         </div>
@@ -480,8 +495,9 @@ export function TagEngineSection() {
                   className="delete-group-btn"
                   onClick={() => handleDeleteGroup(group.id)}
                   title="Delete group"
+                  aria-label="Delete group"
                 >
-                  <span className="material-icons">delete</span>
+                  <span className="material-icons" aria-hidden="true">delete</span>
                 </button>
               )}
             </div>
@@ -495,8 +511,8 @@ export function TagEngineSection() {
           <div className="modal-container modal-lg">
             <div className="modal-header">
               <h2>Import Tags</h2>
-              <button className="modal-close-btn" onClick={() => setShowImportModal(false)}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={() => setShowImportModal(false)} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <div className="modal-body">
@@ -557,8 +573,8 @@ export function TagEngineSection() {
           <div className="modal-content">
             <div className="modal-header">
               <h3>Create Tag Group</h3>
-              <button className="modal-close" onClick={() => setShowCreateModal(false)}>
-                <span className="material-icons">close</span>
+              <button className="modal-close" onClick={() => setShowCreateModal(false)} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <div className="modal-body">

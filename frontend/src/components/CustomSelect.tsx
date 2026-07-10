@@ -258,8 +258,10 @@ export function CustomSelect({
                     setSearchQuery('');
                     searchInputRef.current?.focus();
                   }}
+                  aria-label="Clear search"
+                  title="Clear search"
                 >
-                  <span className="material-icons">close</span>
+                  <span className="material-icons" aria-hidden="true">close</span>
                 </button>
               )}
             </div>

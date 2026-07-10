@@ -23,6 +23,7 @@ import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
 import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
+import { PageHeader } from '../PageHeader';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
 import '../ModalBase.css';
@@ -168,16 +169,19 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
               navigator.clipboard.writeText(source.url!);
             }}
             title="Copy URL"
+            aria-label="Copy URL"
           >
-            <span className="material-icons">content_copy</span>
+            <span className="material-icons" aria-hidden="true">content_copy</span>
           </button>
         )}
         <button
           className={`action-btn toggle ${source.is_active ? 'active' : ''}`}
           onClick={() => onToggleActive(source)}
           title={source.is_active ? 'Disable' : 'Enable'}
+          aria-label={source.is_active ? 'Disable EPG source' : 'Enable EPG source'}
+          aria-pressed={source.is_active}
         >
-          <span className="material-icons">
+          <span className="material-icons" aria-hidden="true">
             {source.is_active ? 'toggle_on' : 'toggle_off'}
           </span>
         </button>
@@ -186,22 +190,25 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
           onClick={() => onRefresh(source)}
           title="Refresh"
           disabled={!source.is_active || source.status === 'fetching' || source.status === 'parsing'}
+          aria-label="Refresh EPG source"
         >
-          <span className="material-icons">refresh</span>
+          <span className="material-icons" aria-hidden="true">refresh</span>
         </button>
         <button
           className="action-btn"
           onClick={() => onEdit(source)}
           title="Edit"
+          aria-label="Edit EPG source"
         >
-          <span className="material-icons">edit</span>
+          <span className="material-icons" aria-hidden="true">edit</span>
         </button>
         <button
           className="action-btn delete"
           onClick={() => onDelete(source)}
           title="Delete"
+          aria-label="Delete EPG source"
         >
-          <span className="material-icons">delete</span>
+          <span className="material-icons" aria-hidden="true">delete</span>
         </button>
       </div>
     </div>
@@ -355,8 +362,8 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
       <div className="modal-container modal-lg epg-source-modal">
         <div className="modal-header">
           <h2>{source ? 'Edit EPG Source' : 'Add Standard EPG'}</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -1042,36 +1049,35 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
 
   return (
     <div className="epg-manager-tab">
-      <div className="epg-header">
-        <div className="header-title">
-          <h2>EPG Sources</h2>
-          <p className="header-description">
-            Manage your Electronic Program Guide sources. Click Reorder to change priority.
-          </p>
-        </div>
-        <div className="header-actions">
-          {sources.length > 1 && (
-            <button
-              className="btn-secondary"
-              onClick={() => setIsReorderMode((v) => !v)}
-              title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
-            >
-              <span className="material-icons">
-                {isReorderMode ? 'check' : 'reorder'}
-              </span>
-              {isReorderMode ? 'Done' : 'Reorder'}
+      <PageHeader
+        className="epg-header"
+        title="EPG Sources"
+        description="Manage your Electronic Program Guide sources. Click Reorder to change priority."
+        actions={(
+          <>
+            {sources.length > 1 && (
+              <button
+                className="btn-secondary"
+                onClick={() => setIsReorderMode((v) => !v)}
+                title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
+              >
+                <span className="material-icons">
+                  {isReorderMode ? 'check' : 'reorder'}
+                </span>
+                {isReorderMode ? 'Done' : 'Reorder'}
+              </button>
+            )}
+            <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
+              <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
+              {refreshingAll ? 'Refreshing...' : 'Refresh All'}
             </button>
-          )}
-          <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
-            <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
-            {refreshingAll ? 'Refreshing...' : 'Refresh All'}
-          </button>
-          <button className="btn-primary" onClick={handleAddSource}>
-            <span className="material-icons">add</span>
-            Add Standard EPG
-          </button>
-        </div>
-      </div>
+            <button className="btn-primary" onClick={handleAddSource}>
+              <span className="material-icons">add</span>
+              Add Standard EPG
+            </button>
+          </>
+        )}
+      />
 
       {sources.length === 0 ? (
         <div className="empty-state">
@@ -1087,7 +1093,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         <div className="epg-sources-list">
           <div className="list-header">
             <span className="col-drag"></span>
-            <span className="col-priority" title="Higher priority number = matches first for EPG channel matching">Priority</span>
+            <span className="col-priority" title="Higher priority number = matches first for EPG channel matching. Ties are broken by which source was added to ECM first (lower internal ID wins) — drag any row in Reorder mode to assign each source a distinct priority and resolve ties explicitly.">Priority</span>
             <span className="col-status" title="Current refresh status. Idle and Ready are normal states.">Status</span>
             <span className="col-info" title="EPG source name, type, and URL">Source</span>
             <span className="col-stats" title="Number of channels matched to this EPG and total programs parsed">Stats</span>
@@ -1136,20 +1142,17 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
 
       {/* Dummy EPG Sources Section */}
       <div className="dummy-epg-section">
-        <div className="epg-header">
-          <div className="header-title">
-            <h2>Dummy EPG Sources</h2>
-            <p className="header-description">
-              Pattern-based EPG sources that generate programs from channel/stream names.
-            </p>
-          </div>
-          <div className="header-actions">
+        <PageHeader
+          className="epg-header"
+          title="Dummy EPG Sources"
+          description="Pattern-based EPG sources that generate programs from channel/stream names."
+          actions={(
             <button className="btn-primary" onClick={handleAddDummySource}>
               <span className="material-icons">add</span>
               Add Dummy EPG
             </button>
-          </div>
-        </div>
+          )}
+        />
 
         {dummySources.length === 0 ? (
           <div className="dummy-empty-state">
@@ -1177,8 +1180,10 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                     className={`action-btn toggle ${source.is_active ? 'active' : ''}`}
                     onClick={() => handleToggleDummyActive(source)}
                     title={source.is_active ? 'Disable' : 'Enable'}
+                    aria-label={source.is_active ? 'Disable EPG source' : 'Enable EPG source'}
+                    aria-pressed={source.is_active}
                   >
-                    <span className="material-icons">
+                    <span className="material-icons" aria-hidden="true">
                       {source.is_active ? 'toggle_on' : 'toggle_off'}
                     </span>
                   </button>
@@ -1186,15 +1191,17 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                     className="action-btn"
                     onClick={() => handleEditDummySource(source)}
                     title="Edit"
+                    aria-label="Edit EPG source"
                   >
-                    <span className="material-icons">edit</span>
+                    <span className="material-icons" aria-hidden="true">edit</span>
                   </button>
                   <button
                     className="action-btn delete"
                     onClick={() => handleDeleteDummySource(source)}
                     title="Delete"
+                    aria-label="Delete EPG source"
                   >
-                    <span className="material-icons">delete</span>
+                    <span className="material-icons" aria-hidden="true">delete</span>
                   </button>
                 </div>
               </div>

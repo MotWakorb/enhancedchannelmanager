@@ -1,0 +1,12 @@
+/* Shared page header (title/description + toolbar row). See PageHeader.tsx
+   for why this was extracted (bd-7l7wi / bd-b3g0r). The `.header-title`,
+   `.header-description`, and `.header-actions` classes it renders are
+   defined once in shared/common.css (§ TAB HEADERS) — this file only
+   supplies the outer row layout. */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1.5rem;
+}

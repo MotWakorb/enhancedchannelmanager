@@ -229,6 +229,13 @@
   background-color: var(--input-bg);
 }
 
+/* bd-6n14l: the header is a div with role="button" (not a native <button>),
+   so it needs an explicit visible focus indicator for keyboard users. */
+.stream-group-header:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .stream-group.group-selected .stream-group-header {
   background-color: var(--accent-primary)22;
   border: 1px solid var(--accent-primary)44;

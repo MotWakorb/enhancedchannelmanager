@@ -180,8 +180,8 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
             <h2>Manage Filters</h2>
             <span className="account-name">{account.name}</span>
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -365,16 +365,18 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
                           onClick={() => handleEdit(filter)}
                           title="Edit"
                           disabled={editingFilter !== null}
+                          aria-label="Edit filter"
                         >
-                          <span className="material-icons">edit</span>
+                          <span className="material-icons" aria-hidden="true">edit</span>
                         </button>
                         <button
                           className="action-btn delete"
                           onClick={() => handleDelete(filter)}
                           title="Delete"
                           disabled={editingFilter !== null}
+                          aria-label="Delete filter"
                         >
-                          <span className="material-icons">delete</span>
+                          <span className="material-icons" aria-hidden="true">delete</span>
                         </button>
                       </div>
                     </div>

@@ -1098,8 +1098,9 @@ export function StatsTab() {
                     <button
                       onClick={() => toggleExpanded(channel.channel_id)}
                       title={expandedChannels.has(channel.channel_id) ? 'Collapse' : 'Expand'}
+                      aria-label={expandedChannels.has(channel.channel_id) ? 'Collapse channel details' : 'Expand channel details'}
                     >
-                      <span className="material-icons">
+                      <span className="material-icons" aria-hidden="true">
                         {expandedChannels.has(channel.channel_id) ? 'expand_less' : 'expand_more'}
                       </span>
                     </button>
@@ -1107,8 +1108,9 @@ export function StatsTab() {
                       className="stop-btn"
                       onClick={() => handleStopChannel(channel.channel_id)}
                       title="Stop channel"
+                      aria-label="Stop channel"
                     >
-                      <span className="material-icons">stop</span>
+                      <span className="material-icons" aria-hidden="true">stop</span>
                     </button>
                   </div>
                 </div>

@@ -187,8 +187,8 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               <span>MCP server not reachable</span>
             </div>
           )}
-          <button className="btn btn-sm" onClick={checkMcpStatus} title="Refresh status">
-            <span className="material-icons">refresh</span>
+          <button className="btn btn-sm" onClick={checkMcpStatus} title="Refresh status" aria-label="Refresh status">
+            <span className="material-icons" aria-hidden="true">refresh</span>
           </button>
         </div>
         {mcpStatus?.reachable && !mcpStatus.api_key_configured && mcpStatus.setup_hint && (
@@ -224,8 +224,9 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                     className="mcp-copy-btn"
                     onClick={() => handleCopy(apiKey, 'API key')}
                     title="Copy API key"
+                    aria-label="Copy API key"
                   >
-                    <span className="material-icons">content_copy</span>
+                    <span className="material-icons" aria-hidden="true">content_copy</span>
                   </button>
                 </div>
               )}
@@ -301,8 +302,9 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                 className="mcp-copy-btn"
                 onClick={() => handleCopy(claudeDesktopConfig, 'Claude Desktop config')}
                 title="Copy config"
+                aria-label="Copy config"
               >
-                <span className="material-icons">content_copy</span>
+                <span className="material-icons" aria-hidden="true">content_copy</span>
               </button>
             </div>
             <p className="form-description" style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary, #888)' }}>
@@ -316,8 +318,9 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                 className="mcp-copy-btn"
                 onClick={() => handleCopy(mcpEndpoint, 'MCP endpoint URL')}
                 title="Copy URL"
+                aria-label="Copy URL"
               >
-                <span className="material-icons">content_copy</span>
+                <span className="material-icons" aria-hidden="true">content_copy</span>
               </button>
             </div>
 
@@ -334,8 +337,9 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                 className="mcp-copy-btn"
                 onClick={() => handleCopy(claudeCodeConfig, 'Claude Code config')}
                 title="Copy config"
+                aria-label="Copy config"
               >
-                <span className="material-icons">content_copy</span>
+                <span className="material-icons" aria-hidden="true">content_copy</span>
               </button>
             </div>
           </div>

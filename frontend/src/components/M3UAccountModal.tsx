@@ -276,8 +276,8 @@ export const M3UAccountModal = memo(function M3UAccountModal({
       <div className="modal-container m3u-account-modal">
         <div className="modal-header">
           <h2>{isEdit ? 'Edit M3U Account' : 'Add M3U Account'}</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

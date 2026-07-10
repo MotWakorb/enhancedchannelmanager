@@ -155,8 +155,8 @@ export function IncidentTimeline({
                 </div>
               </div>
               {!compact && incident.updates && incident.updates.length > 0 && (
-                <button className="expand-btn">
-                  <span className="material-icons">
+                <button className="expand-btn" aria-label={expandedIncidents.has(incident.id) ? 'Collapse incident updates' : 'Expand incident updates'} title={expandedIncidents.has(incident.id) ? 'Collapse incident updates' : 'Expand incident updates'}>
+                  <span className="material-icons" aria-hidden="true">
                     {expandedIncidents.has(incident.id) ? 'expand_less' : 'expand_more'}
                   </span>
                 </button>

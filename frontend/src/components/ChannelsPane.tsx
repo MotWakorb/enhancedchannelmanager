@@ -47,12 +47,20 @@ import { useModal } from '../hooks/useModal';
 import { useNormalizePreview } from '../hooks/useNormalizePreview';
 import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
+import { ShowMoreRows } from './ShowMoreRows';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
 import { MergeChannelsModal } from './MergeChannelsModal';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 import './ModalBase.css';
+
+// Incremental rendering for large groups (bd-bed9r). Expanding a group
+// renders at most this many channel rows initially; a ShowMoreRows sentinel
+// renders the next chunk on scroll or click. Bounds the DOM cost of huge
+// groups (427-channel group previously ≈ 2,000+ nodes on expand) without a
+// virtualization dependency and without unmounting rows @dnd-kit is using.
+const GROUP_RENDER_CHUNK_SIZE = 100;
 
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
@@ -226,12 +234,13 @@ const SortDropdownButton = memo(function SortDropdownButton({
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled || isLoading || !anyEnabled}
         title={isLoading ? 'Sorting streams...' : !anyEnabled ? 'No sort criteria enabled' : 'Sort streams'}
+        aria-label={isLoading ? 'Sorting streams...' : !anyEnabled ? 'No sort criteria enabled' : 'Sort streams'}
       >
-        <span className={`material-icons ${isLoading ? 'spinning' : ''}`}>
+        <span className={`material-icons ${isLoading ? 'spinning' : ''}`} aria-hidden="true">
           {isLoading ? 'sync' : 'sort'}
         </span>
         {showLabel && <span>{labelText}</span>}
-        <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
+        <span className="material-icons sort-dropdown-arrow" aria-hidden="true">arrow_drop_down</span>
       </button>
       {isOpen && (
         <div className="sort-dropdown-menu">
@@ -415,8 +424,9 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
           }
         }}
         title="More actions"
+        aria-label="More actions"
       >
-        <span className={`material-icons ${anyLoading ? 'spinning' : ''}`}>
+        <span className={`material-icons ${anyLoading ? 'spinning' : ''}`} aria-hidden="true">
           {anyLoading ? 'sync' : 'more_vert'}
         </span>
       </button>
@@ -956,6 +966,23 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
       onDragOver={handleStreamDragOver}
       onDragLeave={handleStreamDragLeave}
       onDrop={handleStreamDrop}
+      role="button"
+      tabIndex={0}
+      aria-expanded={isExpanded}
+      onKeyDown={(e) => {
+        // Nested real <button>s (probe, three-dot menu) already stop
+        // propagation on click to avoid double-toggling the group when
+        // clicked -- but keydown fires and bubbles before that click is
+        // synthesized, so without this target check, pressing Enter/Space
+        // on one of those nested buttons would both trigger the button's
+        // own action AND toggle this group (bd-6n14l). Only handle the key
+        // when it originated on the row itself, not a focusable descendant.
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
     >
       {isEditMode && !isEmpty && (
         <span
@@ -1020,8 +1047,9 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
           }}
           disabled={isProbing}
           title={isProbing ? 'Probing streams...' : 'Probe all streams in this group'}
+          aria-label={isProbing ? 'Probing streams...' : 'Probe all streams in this group'}
         >
-          <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
+          <span className={`material-icons ${isProbing ? 'spinning' : ''}`} aria-hidden="true">
             {isProbing ? 'sync' : 'speed'}
           </span>
         </button>
@@ -1044,8 +1072,9 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
               }
             }}
             title="Group actions"
+            aria-label="Group actions"
           >
-            <span className="material-icons">more_vert</span>
+            <span className="material-icons" aria-hidden="true">more_vert</span>
           </button>
           {groupMenuOpen && menuPosition && createPortal(
             <div
@@ -1340,6 +1369,9 @@ export function ChannelsPane({
   void onCreateChannel;
   void onStageAddStream;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
+  // Per-group render limit for incremental rendering (bd-bed9r). Absent key
+  // means the initial chunk size; reset when the group is toggled.
+  const [groupRenderLimits, setGroupRenderLimits] = useState<Record<number, number>>({});
   const [groupOrder, setGroupOrder] = useState<number[]>([]); // Custom order for groups
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
   const [localChannels, setLocalChannels] = useState<Channel[]>(channels);
@@ -3323,6 +3355,14 @@ export function ChannelsPane({
 
   const toggleGroup = (groupId: number) => {
     setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
+    // Reset incremental rendering so a re-expanded group starts at the
+    // initial chunk again (bd-bed9r).
+    setGroupRenderLimits((prev) => {
+      if (!(groupId in prev)) return prev;
+      const next = { ...prev };
+      delete next[groupId];
+      return next;
+    });
   };
 
   const handleStreamDragOver = (e: React.DragEvent, channelId: number) => {
@@ -5206,6 +5246,20 @@ export function ChannelsPane({
       ? { min: Math.min(...channelNumbers), max: Math.max(...channelNumbers) }
       : null;
 
+    // Incremental rendering (bd-bed9r): cap the rows in the DOM; the
+    // ShowMoreRows sentinel below the list renders the next chunk on
+    // scroll/click. Selection, select-all, and drop handlers keep operating
+    // on the FULL groupChannels list — only rendering is windowed.
+    const renderLimit = groupRenderLimits[numericGroupId] ?? GROUP_RENDER_CHUNK_SIZE;
+    const isTruncated = groupChannels.length > renderLimit;
+    const visibleChannels = isTruncated ? groupChannels.slice(0, renderLimit) : groupChannels;
+    const handleShowMoreChannels = () => {
+      setGroupRenderLimits((prev) => ({
+        ...prev,
+        [numericGroupId]: (prev[numericGroupId] ?? GROUP_RENDER_CHUNK_SIZE) + GROUP_RENDER_CHUNK_SIZE,
+      }));
+    };
+
     // Handler to select/deselect all channels in this group
     const handleSelectAllInGroup = () => {
       if (!onSelectGroupChannels) return;
@@ -5269,11 +5323,11 @@ export function ChannelsPane({
         {isExpanded && !isEmpty && (
           <>
             <SortableContext
-              items={groupChannels.map((c) => c.id)}
+              items={visibleChannels.map((c) => c.id)}
               strategy={verticalListSortingStrategy}
             >
               <div className="group-channels">
-                {groupChannels.map((channel) => {
+                {visibleChannels.map((channel) => {
                   // Check if drop indicator should show before this channel
                   const showIndicatorBefore = dropIndicator &&
                     dropIndicator.channelId === channel.id &&
@@ -5531,6 +5585,14 @@ export function ChannelsPane({
                 })}
               </div>
             </SortableContext>
+            {/* Incremental rendering sentinel (bd-bed9r) */}
+            {isTruncated && (
+              <ShowMoreRows
+                remaining={groupChannels.length - visibleChannels.length}
+                noun="channels"
+                onShowMore={handleShowMoreChannels}
+              />
+            )}
             {/* Drop zone at the end of the group - outside SortableContext for better detection */}
             <DroppableGroupEnd
               groupId={groupId}
@@ -5651,15 +5713,17 @@ export function ChannelsPane({
                   className="bulk-action-btn bulk-action-btn--danger"
                   onClick={handleBulkDeleteClick}
                   title="Delete selected channels"
+                  aria-label="Delete selected channels"
                 >
-                  <span className="material-icons">delete</span>
+                  <span className="material-icons" aria-hidden="true">delete</span>
                 </button>
                 <button
                   className="bulk-action-btn bulk-action-btn--clear"
                   onClick={onClearChannelSelection}
                   title="Clear selection"
+                  aria-label="Clear selection"
                 >
-                  <span className="material-icons">close</span>
+                  <span className="material-icons" aria-hidden="true">close</span>
                 </button>
               </div>
             </div>
@@ -5690,15 +5754,17 @@ export function ChannelsPane({
                 className="create-channel-btn"
                 onClick={() => onOpenCreateChannelModal?.()}
                 title="Create new channel"
+                aria-label="Create new channel"
               >
-                <span className="material-icons create-channel-icon">add</span>
+                <span className="material-icons create-channel-icon" aria-hidden="true">add</span>
               </button>
               <button
                 className="create-group-btn"
                 onClick={() => createGroupModal.open()}
                 title="Create new channel group"
+                aria-label="Create new channel group"
               >
-                <span className="material-icons create-channel-icon">create_new_folder</span>
+                <span className="material-icons create-channel-icon" aria-hidden="true">create_new_folder</span>
               </button>
             </>
           )}
@@ -6851,8 +6917,8 @@ export function ChannelsPane({
                 setRenumberAllStartingNumber('1');
                 setRenumberAllUpdateNames(true);
                 setRenumberAllGroupOverrides({});
-              }}>
-                <span className="material-icons">close</span>
+              }} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -6977,8 +7043,9 @@ export function ChannelsPane({
                 className="search-clear-btn"
                 onClick={() => onSearchChange('')}
                 title="Clear search"
+                aria-label="Clear search"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             )}
           </div>
@@ -7017,8 +7084,9 @@ export function ChannelsPane({
                 });
               }}
               title="Expand all groups"
+              aria-label="Expand all groups"
             >
-              <span className="material-icons">unfold_more</span>
+              <span className="material-icons" aria-hidden="true">unfold_more</span>
             </button>
             <button
               className="expand-collapse-btn"
@@ -7027,8 +7095,9 @@ export function ChannelsPane({
                 setExpandedGroups({});
               }}
               title="Collapse all groups"
+              aria-label="Collapse all groups"
             >
-              <span className="material-icons">unfold_less</span>
+              <span className="material-icons" aria-hidden="true">unfold_less</span>
             </button>
           </div>
         </div>
@@ -7062,8 +7131,9 @@ export function ChannelsPane({
                     className="group-filter-search-clear"
                     onClick={() => setGroupFilterSearch('')}
                     title="Clear search"
+                    aria-label="Clear search"
                   >
-                    <span className="material-icons">close</span>
+                    <span className="material-icons" aria-hidden="true">close</span>
                   </button>
                 )}
               </div>
@@ -7128,8 +7198,9 @@ export function ChannelsPane({
             className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || !channelListFilters?.filterFailedStreams || !channelListFilters?.filterWorkingStreams || !channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
             onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
             title="Channel List Filters"
+            aria-label="Channel List Filters"
           >
-            <span className="material-icons" style={{ fontSize: '18px' }}>tune</span>
+            <span className="material-icons" style={{ fontSize: '18px' }} aria-hidden="true">tune</span>
           </button>
           {filterSettingsOpen && channelListFilters && (
             <div className="filter-settings-menu">

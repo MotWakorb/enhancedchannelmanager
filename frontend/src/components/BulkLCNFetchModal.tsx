@@ -277,8 +277,8 @@ function BulkLCNFetchModalInner({
       <div className="modal-container modal-lg bulk-lcn-modal">
         <div className="modal-header">
           <h2>Fetch Gracenote IDs</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

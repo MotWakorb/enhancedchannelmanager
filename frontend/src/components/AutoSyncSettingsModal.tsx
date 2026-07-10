@@ -336,8 +336,8 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
             <h2>Auto-Sync Settings</h2>
             <span className="group-name-display">{groupName}</span>
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -422,8 +422,9 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                           className="clear-search"
                           onClick={() => setGroupSearch('')}
                           title="Clear search"
+                          aria-label="Clear search"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       )}
                     </div>
@@ -466,8 +467,9 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                           }}
                           title="Cancel"
                           className="cancel-btn"
+                          aria-label="Cancel new group creation"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       </div>
                     ) : (
@@ -726,8 +728,9 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                           className="clear-search"
                           onClick={() => setLogoSearch('')}
                           title="Clear search"
+                          aria-label="Clear search"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       )}
                     </div>

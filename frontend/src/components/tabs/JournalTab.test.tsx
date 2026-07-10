@@ -230,6 +230,76 @@ describe('JournalTab', () => {
     });
   });
 
+  describe('entry-row keyboard accessibility (bd-6n14l)', () => {
+    it('exposes the entry row as a focusable button with aria-expanded reflecting collapsed state', async () => {
+      renderWithProviders(<JournalTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      const row = document.querySelector('.entry-row') as HTMLElement;
+      expect(row).toHaveAttribute('role', 'button');
+      expect(row).toHaveAttribute('tabIndex', '0');
+      expect(row).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('Enter toggles the row open and updates aria-expanded', async () => {
+      renderWithProviders(<JournalTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      const row = document.querySelector('.entry-row') as HTMLElement;
+      fireEvent.keyDown(row, { key: 'Enter' });
+
+      expect(row).toHaveAttribute('aria-expanded', 'true');
+      expect(row).toHaveClass('expanded');
+    });
+
+    it('Space toggles the row open and updates aria-expanded', async () => {
+      renderWithProviders(<JournalTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      const row = document.querySelector('.entry-row') as HTMLElement;
+      fireEvent.keyDown(row, { key: ' ' });
+
+      expect(row).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('Enter toggles the row closed again on a second press (aria-expanded flips back)', async () => {
+      renderWithProviders(<JournalTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      const row = document.querySelector('.entry-row') as HTMLElement;
+      fireEvent.keyDown(row, { key: 'Enter' });
+      expect(row).toHaveAttribute('aria-expanded', 'true');
+
+      fireEvent.keyDown(row, { key: 'Enter' });
+      expect(row).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('ignores other keys (e.g. Tab) without toggling', async () => {
+      renderWithProviders(<JournalTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      const row = document.querySelector('.entry-row') as HTMLElement;
+      fireEvent.keyDown(row, { key: 'Tab' });
+
+      expect(row).toHaveAttribute('aria-expanded', 'false');
+    });
+  });
+
   describe('refresh', () => {
     it('re-fetches data when refresh button is clicked', async () => {
       renderWithProviders(<JournalTab />);

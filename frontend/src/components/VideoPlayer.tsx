@@ -354,8 +354,9 @@ export const VideoPlayer = memo(function VideoPlayer({
             className="video-player__control-btn"
             onClick={togglePlay}
             title={isPlaying ? 'Pause' : 'Play'}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
           >
-            <span className="material-icons">
+            <span className="material-icons" aria-hidden="true">
               {isPlaying ? 'pause' : 'play_arrow'}
             </span>
           </button>
@@ -365,8 +366,9 @@ export const VideoPlayer = memo(function VideoPlayer({
             className="video-player__control-btn"
             onClick={toggleMute}
             title={isMuted ? 'Unmute' : 'Mute'}
+            aria-label={isMuted ? 'Unmute' : 'Mute'}
           >
-            <span className="material-icons">
+            <span className="material-icons" aria-hidden="true">
               {isMuted ? 'volume_off' : volume > 0.5 ? 'volume_up' : 'volume_down'}
             </span>
           </button>
@@ -389,8 +391,9 @@ export const VideoPlayer = memo(function VideoPlayer({
             className="video-player__control-btn"
             onClick={toggleFullscreen}
             title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            aria-label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
           >
-            <span className="material-icons">
+            <span className="material-icons" aria-hidden="true">
               {isFullscreen ? 'fullscreen_exit' : 'fullscreen'}
             </span>
           </button>

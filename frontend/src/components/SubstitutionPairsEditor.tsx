@@ -111,16 +111,19 @@ function SortablePairRow({ pair, index, id, onUpdate, onDelete }: SortablePairRo
         className={`sub-pair-toggle ${pair.enabled ? 'active' : ''}`}
         onClick={() => onUpdate(index, { enabled: !pair.enabled })}
         title={pair.enabled ? 'Disable pair' : 'Enable pair'}
+        aria-label={pair.enabled ? 'Disable pair' : 'Enable pair'}
+        aria-pressed={pair.enabled}
       >
-        <span className="material-icons">{pair.enabled ? 'toggle_on' : 'toggle_off'}</span>
+        <span className="material-icons" aria-hidden="true">{pair.enabled ? 'toggle_on' : 'toggle_off'}</span>
       </button>
       <button
         type="button"
         className="sub-pair-delete"
         onClick={() => onDelete(index)}
         title="Remove pair"
+        aria-label="Remove pair"
       >
-        <span className="material-icons">close</span>
+        <span className="material-icons" aria-hidden="true">close</span>
       </button>
     </div>
   );

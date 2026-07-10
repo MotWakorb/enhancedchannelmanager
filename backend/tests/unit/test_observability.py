@@ -126,6 +126,111 @@ class TestJsonFormatter:
         assert payload["phase"] == "apply"
 
 
+class TestInstallJsonLogging:
+    """bd-cng0d: ``install_json_logging`` must leave exactly ONE console
+    handler on the root logger.
+
+    Regression: the plain ``logging.basicConfig`` StreamHandler was kept
+    (merely re-formatted to JSON) *alongside* the newly added JSON handler,
+    so every record was emitted twice — duplicate JSON access-log lines in
+    docker logs.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _preserve_root_logger(self):
+        """Detach and restore the real root handlers/filters/level."""
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_filters = root.filters[:]
+        saved_level = root.level
+        for h in saved_handlers:
+            root.removeHandler(h)
+        for f in saved_filters:
+            root.removeFilter(f)
+        yield
+        for h in root.handlers[:]:
+            root.removeHandler(h)
+        for f in root.filters[:]:
+            root.removeFilter(f)
+        for h in saved_handlers:
+            root.addHandler(h)
+        for f in saved_filters:
+            root.addFilter(f)
+        root.setLevel(saved_level)
+
+    @staticmethod
+    def _console_handlers() -> list[logging.Handler]:
+        """Exactly-StreamHandler instances on root (the console emitters)."""
+        return [
+            h
+            for h in logging.getLogger().handlers
+            if type(h) is logging.StreamHandler
+        ]
+
+    def test_basicconfig_handler_is_replaced_not_kept(self):
+        """After install, exactly one console handler remains — ours."""
+        # Simulate main.py's logging.basicConfig(...) console handler.
+        plain = logging.StreamHandler()  # defaults to sys.stderr like basicConfig
+        plain.setFormatter(logging.Formatter("%(message)s"))
+        logging.getLogger().addHandler(plain)
+
+        observability.install_json_logging()
+
+        console = self._console_handlers()
+        assert len(console) == 1, [type(h).__name__ for h in console]
+        assert getattr(console[0], "_ecm_json_handler", False)
+
+    def test_install_is_idempotent(self):
+        """Repeat installs never accumulate handlers."""
+        plain = logging.StreamHandler()
+        logging.getLogger().addHandler(plain)
+
+        observability.install_json_logging()
+        observability.install_json_logging()
+
+        assert len(self._console_handlers()) == 1
+
+    def test_each_record_emitted_exactly_once(self):
+        """One log call -> one JSON line on the (single) console handler."""
+        import io
+
+        plain = logging.StreamHandler()
+        logging.getLogger().addHandler(plain)
+        observability.install_json_logging()
+
+        # Point every surviving console handler at one shared buffer so any
+        # duplicate emission shows up as a second line.
+        buffer = io.StringIO()
+        for handler in self._console_handlers():
+            handler.setStream(buffer)
+
+        logging.getLogger("ecm.access").info(
+            "GET /api/x -> 401 in 0.1ms",
+            extra={"event": "http_request", "status": "401"},
+        )
+
+        lines = [ln for ln in buffer.getvalue().splitlines() if ln.strip()]
+        assert len(lines) == 1, lines
+        payload = json.loads(lines[0])
+        assert payload["logger"] == "ecm.access"
+        assert payload["event"] == "http_request"
+
+    def test_non_console_handlers_are_preserved(self):
+        """File-like and custom handlers must survive the install sweep."""
+        import io
+
+        root = logging.getLogger()
+        stringio_handler = logging.StreamHandler(io.StringIO())  # test capture
+        custom_handler = logging.NullHandler()  # stand-in for RingBufferHandler
+        root.addHandler(stringio_handler)
+        root.addHandler(custom_handler)
+
+        observability.install_json_logging()
+
+        assert stringio_handler in root.handlers
+        assert custom_handler in root.handlers
+
+
 class TestMetrics:
     def test_install_metrics_creates_required_series(self):
         metrics = observability.install_metrics()

@@ -577,8 +577,10 @@ export function GuideTab({
                   if (selectedGroup) setSelectedGroup(''); // Reset when switching modes
                 }}
                 title="Filter: Show only channels in selected group"
+                aria-label="Switch to filter mode"
+                aria-pressed={groupFilterMode === 'filter'}
               >
-                <span className="material-icons">filter_list</span>
+                <span className="material-icons" aria-hidden="true">filter_list</span>
               </button>
               <button
                 className={`mode-btn ${groupFilterMode === 'jump' ? 'active' : ''}`}
@@ -587,8 +589,10 @@ export function GuideTab({
                   if (selectedGroup) setSelectedGroup(''); // Reset when switching modes
                 }}
                 title="Jump: Scroll to first channel in selected group"
+                aria-label="Switch to jump mode"
+                aria-pressed={groupFilterMode === 'jump'}
               >
-                <span className="material-icons">arrow_downward</span>
+                <span className="material-icons" aria-hidden="true">arrow_downward</span>
               </button>
             </div>
           </div>

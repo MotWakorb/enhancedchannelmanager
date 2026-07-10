@@ -510,8 +510,8 @@ export const DummyEPGProfileModal = memo(function DummyEPGProfileModal({
       <div className="modal-container modal-xl dummy-epg-profile-modal">
         <div className="modal-header">
           <h2>{profile ? 'Edit Profile' : importData ? 'Import Dummy EPG Profile' : 'New Dummy EPG Profile'}</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -564,8 +564,8 @@ export const DummyEPGProfileModal = memo(function DummyEPGProfileModal({
                     onChange={(e) => setGroupSearchTerm(e.target.value)}
                   />
                   {groupSearchTerm && (
-                    <button type="button" className="clear-search" onClick={() => setGroupSearchTerm('')}>
-                      <span className="material-icons">close</span>
+                    <button type="button" className="clear-search" onClick={() => setGroupSearchTerm('')} aria-label="Clear search" title="Clear search">
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   )}
                 </div>
@@ -984,8 +984,8 @@ export const DummyEPGProfileModal = memo(function DummyEPGProfileModal({
                           autoFocus
                         />
                         {eventTimezoneSearch && (
-                          <button type="button" className="clear-search" onClick={() => setEventTimezoneSearch('')}>
-                            <span className="material-icons">close</span>
+                          <button type="button" className="clear-search" onClick={() => setEventTimezoneSearch('')} aria-label="Clear search" title="Clear search">
+                            <span className="material-icons" aria-hidden="true">close</span>
                           </button>
                         )}
                       </div>
@@ -1031,8 +1031,8 @@ export const DummyEPGProfileModal = memo(function DummyEPGProfileModal({
                           autoFocus
                         />
                         {outputTimezoneSearch && (
-                          <button type="button" className="clear-search" onClick={() => setOutputTimezoneSearch('')}>
-                            <span className="material-icons">close</span>
+                          <button type="button" className="clear-search" onClick={() => setOutputTimezoneSearch('')} aria-label="Clear search" title="Clear search">
+                            <span className="material-icons" aria-hidden="true">close</span>
                           </button>
                         )}
                       </div>
