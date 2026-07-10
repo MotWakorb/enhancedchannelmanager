@@ -115,7 +115,8 @@ if you genuinely want the regex shape.
 
 **Trigger.** A "guard" condition (one of `normalized_name_in_group`,
 `normalized_name_not_in_group`, `normalized_name_exists`,
-`provider_is`) appears in some OR-groups but not others.
+`provider_is`, `stream_group_is`) appears in some OR-groups but not
+others.
 
 **Why it matters.** The condition list `A AND B OR C` reads as
 `(A AND B) OR C` because AND binds tighter than OR (per

@@ -170,6 +170,33 @@ class TestConditionValidation:
         errors = cond.validate()
         assert len(errors) > 0
 
+    def test_valid_stream_group_is(self):
+        """Validates stream_group_is with a string value."""
+        cond = Condition(type="stream_group_is", value="USA Sports")
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_invalid_stream_group_is_no_value(self):
+        """Rejects stream_group_is without a value."""
+        cond = Condition(type="stream_group_is", value=None)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "requires a string" in errors[0]
+
+    def test_invalid_stream_group_is_non_string(self):
+        """Rejects stream_group_is with a non-string value."""
+        cond = Condition(type="stream_group_is", value=123)
+        errors = cond.validate()
+        assert len(errors) > 0
+
+    def test_stream_group_is_not_regex_validated(self):
+        """stream_group_is is exact-match, not regex — regex metacharacters
+        that would fail as a pattern (e.g. an unbalanced bracket) are a
+        valid literal group name and must NOT be rejected."""
+        cond = Condition(type="stream_group_is", value="USA [Sports")
+        errors = cond.validate()
+        assert len(errors) == 0
+
     def test_valid_and_condition(self):
         """Validates AND with multiple sub-conditions."""
         cond = Condition(
@@ -646,6 +673,7 @@ class TestConditionTypes:
         assert ConditionType.STREAM_NAME_MATCHES.value == "stream_name_matches"
         assert ConditionType.STREAM_NAME_CONTAINS.value == "stream_name_contains"
         assert ConditionType.STREAM_GROUP_MATCHES.value == "stream_group_matches"
+        assert ConditionType.STREAM_GROUP_IS.value == "stream_group_is"
         assert ConditionType.TVG_ID_EXISTS.value == "tvg_id_exists"
         assert ConditionType.HAS_CHANNEL.value == "has_channel"
         assert ConditionType.QUALITY_MIN.value == "quality_min"

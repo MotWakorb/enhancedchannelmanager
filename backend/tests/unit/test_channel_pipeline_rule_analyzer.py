@@ -86,6 +86,7 @@ GUARD_TYPES = (
     "normalized_name_not_in_group",
     "normalized_name_exists",
     "provider_is",
+    "stream_group_is",
 )
 
 

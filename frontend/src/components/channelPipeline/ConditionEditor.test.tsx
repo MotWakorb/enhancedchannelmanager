@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import {
   server,
   resetMockDataStore,
@@ -148,6 +149,112 @@ describe('ConditionEditor', () => {
 
       expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
       expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('stream_group_is (provider group dropdown)', () => {
+    it('parses a stream_group_is condition to the Stream Group Is field with Is operator', () => {
+      render(
+        <ConditionEditor
+          condition={{ type: 'stream_group_is', value: 'USA Sports' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/stream group is/i)).toBeInTheDocument();
+      expect(screen.getByText(/^Is$/)).toBeInTheDocument();
+    });
+
+    it('parses a negated stream_group_is condition to the Is Not operator', () => {
+      render(
+        <ConditionEditor
+          condition={{ type: 'stream_group_is', value: 'USA Sports', negate: true }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/^Is Not$/)).toBeInTheDocument();
+    });
+
+    it('populates the value dropdown from getStreamGroups() with real provider groups', async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.get('/api/stream-groups', () =>
+          HttpResponse.json([
+            { name: 'USA Sports', count: 12 },
+            { name: 'UK Entertainment', count: 5 },
+          ])
+        )
+      );
+
+      const { container } = render(
+        <ConditionEditor
+          condition={{ type: 'stream_group_is', value: '' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const valueSelect = container.querySelectorAll('.custom-select')[2];
+      const trigger = valueSelect?.querySelector('button');
+      expect(trigger).toBeTruthy();
+      await user.click(trigger!);
+
+      await waitFor(() => {
+        expect(screen.getByText(/USA Sports \(12\)/)).toBeInTheDocument();
+        expect(screen.getByText(/UK Entertainment \(5\)/)).toBeInTheDocument();
+      });
+    });
+
+    it('builds a stream_group_is condition with the selected group NAME as the value (not an id)', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      server.use(
+        http.get('/api/stream-groups', () =>
+          HttpResponse.json([{ name: 'USA Sports', count: 12 }])
+        )
+      );
+
+      const { container } = render(
+        <ConditionEditor
+          condition={{ type: 'stream_group_is', value: '' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const valueSelect = container.querySelectorAll('.custom-select')[2];
+      const trigger = valueSelect?.querySelector('button');
+      await user.click(trigger!);
+      await waitFor(() => screen.getByText(/USA Sports \(12\)/));
+      await user.click(screen.getByText(/USA Sports \(12\)/));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'stream_group_is', value: 'USA Sports' })
+      );
+    });
+
+    it('sets negate:true when Is Not is selected for stream_group_is', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ConditionEditor
+          condition={{ type: 'stream_group_is', value: 'USA Sports' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const operatorTrigger = screen.getByText(/^Is$/).closest('button')!;
+      await user.click(operatorTrigger);
+      await user.click(screen.getByText(/^Is Not$/));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'stream_group_is', negate: true, value: 'USA Sports' })
+      );
     });
   });
 

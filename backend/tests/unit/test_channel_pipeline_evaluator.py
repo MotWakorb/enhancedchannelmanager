@@ -182,6 +182,72 @@ class TestConditionEvaluatorStreamGroup:
         )
         assert result.matched is False
 
+    def test_stream_group_is_exact_match(self):
+        """Matches exact provider group name."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", group_name="USA Sports")
+
+        result = evaluator.evaluate(
+            {"type": "stream_group_is", "value": "USA Sports"},
+            ctx
+        )
+        assert result.matched is True
+
+    def test_stream_group_is_case_insensitive_by_default(self):
+        """Case-insensitive by default, matching stream_group_matches/contains."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", group_name="USA Sports")
+
+        result = evaluator.evaluate(
+            {"type": "stream_group_is", "value": "usa sports"},
+            ctx
+        )
+        assert result.matched is True
+
+    def test_stream_group_is_case_sensitive_opt_in(self):
+        """case_sensitive=True requires an exact-case match."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", group_name="USA Sports")
+
+        result = evaluator.evaluate(
+            {"type": "stream_group_is", "value": "usa sports", "case_sensitive": True},
+            ctx
+        )
+        assert result.matched is False
+
+    def test_stream_group_is_no_partial_match(self):
+        """Unlike stream_group_contains, a substring does NOT match."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", group_name="USA Sports HD")
+
+        result = evaluator.evaluate(
+            {"type": "stream_group_is", "value": "USA Sports"},
+            ctx
+        )
+        assert result.matched is False
+
+    def test_stream_group_is_empty_group(self):
+        """Handles missing group name."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", group_name=None)
+
+        result = evaluator.evaluate(
+            {"type": "stream_group_is", "value": "USA Sports"},
+            ctx
+        )
+        assert result.matched is False
+
+    def test_stream_group_is_negated(self):
+        """negate:true inverts the match, honoring the shared negate field."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", group_name="UK Sports")
+
+        result = evaluator.evaluate(
+            {"type": "stream_group_is", "value": "USA Sports", "negate": True},
+            ctx
+        )
+        assert result.matched is True
+
 
 class TestConditionEvaluatorTvgId:
     """Tests for TVG ID conditions."""

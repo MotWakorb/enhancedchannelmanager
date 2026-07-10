@@ -6,7 +6,7 @@ import { useState, useEffect, useId } from 'react';
 import type { Condition, ConditionType } from '../../types/channelPipeline';
 import { CustomSelect } from '../CustomSelect';
 import type { SelectOption } from '../CustomSelect';
-import { getM3UAccounts, getChannelGroups } from '../../services/api';
+import { getM3UAccounts, getChannelGroups, getStreamGroups } from '../../services/api';
 import './ConditionEditor.css';
 
 // ============================================================================
@@ -68,6 +68,13 @@ const EXISTS_OPS: OperatorDef[] = [
 const FIELDS: FieldDef[] = [
   { id: 'stream_name', label: 'Stream Name', category: 'stream', operators: TEXT_OPS },
   { id: 'stream_group', label: 'Stream Group', category: 'stream', operators: TEXT_OPS },
+  {
+    id: 'stream_group_is', label: 'Stream Group Is', category: 'stream',
+    operators: [
+      { id: 'is', label: 'Is', valueType: 'select' },
+      { id: 'is_not', label: 'Is Not', valueType: 'select' },
+    ],
+  },
   { id: 'tvg_id', label: 'TVG-ID', category: 'stream', operators: [...EXISTS_OPS, ...TEXT_OPS] },
   {
     id: 'provider', label: 'M3U Account', category: 'stream',
@@ -164,6 +171,10 @@ function buildCondition(
         default: type = 'stream_group_contains'; value = userValue; break;
       }
       break;
+    case 'stream_group_is':
+      type = 'stream_group_is'; value = userValue;
+      if (operator === 'is_not') negate = true;
+      break;
     case 'tvg_id':
       switch (operator) {
         case 'exists': type = 'tvg_id_exists'; value = true; break;
@@ -257,6 +268,8 @@ function parseCondition(condition: Condition): { field: string; operator: string
       return { field: 'stream_group', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
     case 'stream_group_matches':
       return detectRegexOp('stream_group', String(value ?? ''), true, negate);
+    case 'stream_group_is':
+      return { field: 'stream_group_is', operator: negate ? 'is_not' : 'is', displayValue: String(value ?? '') };
 
     case 'tvg_id_exists':
       return { field: 'tvg_id', operator: value === false ? 'does_not_exist' : 'exists', displayValue: '' };
@@ -484,6 +497,15 @@ export function ConditionEditor({
     ).catch(() => setGroupOptions([]));
   }, []);
 
+  // Stream (provider) groups for stream_group_is — value is the group NAME
+  // string (M3U group_title), not an id, unlike normalized_match_group.
+  const [streamGroupOptions, setStreamGroupOptions] = useState<SelectOption[]>([]);
+  useEffect(() => {
+    getStreamGroups().then(groups =>
+      setStreamGroupOptions(groups.map(g => ({ value: g.name, label: `${g.name} (${g.count})` })))
+    ).catch(() => setStreamGroupOptions([]));
+  }, []);
+
   // Derive field, operator, display value from the condition data
   const { field: currentField, operator: currentOperator, displayValue } = parseCondition(condition);
 
@@ -577,13 +599,21 @@ export function ConditionEditor({
               <label htmlFor={`${id}-value`} className="sr-only">Value</label>
               {isSelect ? (
                 <CustomSelect
-                  options={currentField === 'provider' ? providerOptions : currentField === 'normalized_match_group' ? groupOptions : (operatorDef?.selectOptions ?? [])}
+                  options={
+                    currentField === 'provider' ? providerOptions
+                    : currentField === 'normalized_match_group' ? groupOptions
+                    : currentField === 'stream_group_is' ? streamGroupOptions
+                    : (operatorDef?.selectOptions ?? [])
+                  }
                   value={String(displayValue ?? '')}
-                  onChange={(val) => handleValueChange(Number(val))}
-                  placeholder={currentField === 'normalized_match_group' ? "Select group..." : "Select..."}
+                  onChange={(val) => handleValueChange(currentField === 'stream_group_is' ? val : Number(val))}
+                  placeholder={
+                    currentField === 'normalized_match_group' || currentField === 'stream_group_is'
+                      ? "Select group..." : "Select..."
+                  }
                   disabled={readonly}
                   className="condition-value-select"
-                  searchable={currentField === 'provider' || currentField === 'normalized_match_group'}
+                  searchable={currentField === 'provider' || currentField === 'normalized_match_group' || currentField === 'stream_group_is'}
                 />
               ) : isNumber ? (
                 <input
