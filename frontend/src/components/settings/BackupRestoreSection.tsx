@@ -312,8 +312,10 @@ export function BackupRestoreSection({ isAdmin }: Props) {
                     className="btn-secondary saved-backup-btn saved-backup-delete"
                     onClick={() => handleDeleteSaved(backup.filename)}
                     disabled={deletingFile === backup.filename}
+                    aria-label={deletingFile === backup.filename ? 'Deleting backup…' : 'Delete backup'}
+                    title={deletingFile === backup.filename ? 'Deleting backup…' : 'Delete backup'}
                   >
-                    <span className="material-icons">
+                    <span className="material-icons" aria-hidden="true">
                       {deletingFile === backup.filename ? 'hourglass_empty' : 'delete'}
                     </span>
                   </button>

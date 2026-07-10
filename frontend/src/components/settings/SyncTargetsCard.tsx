@@ -375,8 +375,9 @@ export function SyncTargetsCard() {
                     title="Delete sync target"
                     data-testid={`sync-target-delete-${target.id}`}
                     onClick={() => handleDelete(target)}
+                    aria-label="Delete sync target"
                   >
-                    <span className="material-icons">delete</span>
+                    <span className="material-icons" aria-hidden="true">delete</span>
                   </button>
                 </div>
               </div>

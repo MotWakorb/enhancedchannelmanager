@@ -247,6 +247,293 @@ class TestSessionManagement:
         assert response.status_code == 200
 
 
+class TestAccessTokenExpiryMetadata:
+    """bd-3ymo4: auth responses expose read-only access-token expiry metadata
+    so the frontend can schedule a proactive refresh (kills the recurring
+    30-minute 401 on background polls)."""
+
+    @pytest.mark.asyncio
+    async def test_login_reports_access_token_lifetime(self, async_client, admin_user):
+        """POST /api/auth/login returns access_token_expires_in = full configured lifetime."""
+        response = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token_expires_in" in data
+        # Freshly minted token: full configured lifetime, a positive number
+        assert isinstance(data["access_token_expires_in"], int)
+        assert data["access_token_expires_in"] > 0
+
+    @pytest.mark.asyncio
+    async def test_me_reports_remaining_token_lifetime(self, async_client, admin_user):
+        """GET /api/auth/me returns remaining seconds <= full lifetime."""
+        login_response = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert login_response.status_code == 200
+        full_lifetime = login_response.json()["access_token_expires_in"]
+
+        response = await async_client.get("/api/auth/me")
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token_expires_in" in data
+        remaining = data["access_token_expires_in"]
+        assert isinstance(remaining, int)
+        assert 0 < remaining <= full_lifetime
+
+    @pytest.mark.asyncio
+    async def test_refresh_reports_access_token_lifetime(self, async_client, admin_user):
+        """POST /api/auth/refresh returns access_token_expires_in for the new token."""
+        login_response = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert login_response.status_code == 200
+
+        response = await async_client.post("/api/auth/refresh")
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token_expires_in" in data
+        assert isinstance(data["access_token_expires_in"], int)
+        assert data["access_token_expires_in"] > 0
+
+
+class TestRefreshRotationGraceWindow:
+    """bd-x67qe: server-side rotation grace window for the cross-tab refresh
+    race.
+
+    /auth/refresh rotates the refresh token one-time-use. Two tabs of one
+    session crossing the access-token expiry boundary can both POST
+    /auth/refresh with the same pre-rotation cookie; without a grace window
+    the loser gets 'Session not found or revoked' and hard-logs-out the tab.
+
+    Grace semantics under test:
+    - the immediately-prior token is accepted for a short window after
+      rotation and answered idempotently (fresh access token, SAME session,
+      NO second rotation, NO refresh cookie)
+    - the grace window never extends total session lifetime
+    - the graced token cannot chain (only one generation is kept)
+    - revocation (logout) kills current AND graced tokens immediately
+    - the window itself expires
+    """
+
+    async def _login(self, async_client):
+        """Login and return the refresh token the server set."""
+        response = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert response.status_code == 200
+        return response.cookies["refresh_token"]
+
+    async def _refresh_with(self, async_client, refresh_token):
+        """POST /api/auth/refresh presenting exactly the given token."""
+        # Clear the jar so the explicit cookie is the only one sent —
+        # otherwise the jar's rotated cookie would mask the token under test.
+        async_client.cookies.clear()
+        return await async_client.post(
+            "/api/auth/refresh",
+            cookies={"refresh_token": refresh_token},
+        )
+
+    def _session_row(self, test_session, user_id):
+        from models import UserSession
+
+        test_session.expire_all()
+        return (
+            test_session.query(UserSession)
+            .filter(UserSession.user_id == user_id)
+            .one()
+        )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_double_refresh_both_succeed_one_session(
+        self, async_client, admin_user, test_session
+    ):
+        """Two racing refreshes with the same pre-rotation token BOTH get
+        200, and exactly one valid (non-revoked) session remains."""
+        import asyncio
+        from models import UserSession
+
+        old_token = await self._login(async_client)
+        async_client.cookies.clear()
+
+        first, second = await asyncio.gather(
+            async_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": old_token}
+            ),
+            async_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": old_token}
+            ),
+        )
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+
+        # Exactly ONE rotation happened: one response carries a new refresh
+        # cookie (the winner), the graced loser gets an access token only —
+        # it must NOT push a stale refresh token back into the shared jar.
+        refresh_cookie_count = sum(
+            1 for r in (first, second) if "refresh_token" in r.cookies
+        )
+        assert refresh_cookie_count == 1
+        assert all("access_token" in r.cookies for r in (first, second))
+
+        test_session.expire_all()
+        live_sessions = (
+            test_session.query(UserSession)
+            .filter(
+                UserSession.user_id == admin_user.id,
+                UserSession.is_revoked == False,  # noqa: E712
+            )
+            .all()
+        )
+        assert len(live_sessions) == 1
+
+    @pytest.mark.asyncio
+    async def test_winner_token_still_works_after_graced_refresh(
+        self, async_client, admin_user
+    ):
+        """A graced (loser) refresh must not invalidate the winner's chain."""
+        old_token = await self._login(async_client)
+
+        winner = await self._refresh_with(async_client, old_token)
+        assert winner.status_code == 200
+        winner_token = winner.cookies["refresh_token"]
+
+        loser = await self._refresh_with(async_client, old_token)
+        assert loser.status_code == 200
+
+        follow_up = await self._refresh_with(async_client, winner_token)
+        assert follow_up.status_code == 200
+        assert "refresh_token" in follow_up.cookies
+
+    @pytest.mark.asyncio
+    async def test_graced_token_fails_after_window_expiry(
+        self, async_client, admin_user, test_session
+    ):
+        """The prior token is only honored INSIDE the grace window."""
+        from datetime import datetime, timedelta
+
+        old_token = await self._login(async_client)
+        response = await self._refresh_with(async_client, old_token)
+        assert response.status_code == 200
+
+        # Age the rotation far past the grace window.
+        row = self._session_row(test_session, admin_user.id)
+        row.rotated_at = datetime.utcnow() - timedelta(seconds=300)
+        test_session.commit()
+
+        expired_grace = await self._refresh_with(async_client, old_token)
+        assert expired_grace.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_graced_token_cannot_chain(self, async_client, admin_user):
+        """Grace covers only the LATEST predecessor — one generation deep.
+        After a second rotation, the oldest token must fail even though it
+        was graced a moment ago."""
+        gen0 = await self._login(async_client)
+
+        first = await self._refresh_with(async_client, gen0)
+        assert first.status_code == 200
+        gen1 = first.cookies["refresh_token"]
+
+        second = await self._refresh_with(async_client, gen1)
+        assert second.status_code == 200
+
+        chained = await self._refresh_with(async_client, gen0)
+        assert chained.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_logout_revokes_current_and_graced_tokens_immediately(
+        self, async_client, admin_user
+    ):
+        """Logout kills the session for BOTH the rotated token and its
+        graced predecessor — revocation always beats grace."""
+        old_token = await self._login(async_client)
+        rotated = await self._refresh_with(async_client, old_token)
+        assert rotated.status_code == 200
+        current_token = rotated.cookies["refresh_token"]
+
+        async_client.cookies.clear()
+        logout = await async_client.post(
+            "/api/auth/logout", cookies={"refresh_token": current_token}
+        )
+        assert logout.status_code == 200
+
+        graced_after_logout = await self._refresh_with(async_client, old_token)
+        assert graced_after_logout.status_code == 401
+
+        current_after_logout = await self._refresh_with(
+            async_client, current_token
+        )
+        assert current_after_logout.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_logout_with_graced_token_also_revokes_session(
+        self, async_client, admin_user, test_session
+    ):
+        """Logout presented with the graced PREDECESSOR still revokes the
+        session — a stale tab logging out must not leave the session live."""
+        old_token = await self._login(async_client)
+        rotated = await self._refresh_with(async_client, old_token)
+        assert rotated.status_code == 200
+        current_token = rotated.cookies["refresh_token"]
+
+        async_client.cookies.clear()
+        logout = await async_client.post(
+            "/api/auth/logout", cookies={"refresh_token": old_token}
+        )
+        assert logout.status_code == 200
+
+        current_after_logout = await self._refresh_with(
+            async_client, current_token
+        )
+        assert current_after_logout.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_grace_respects_session_expiry(
+        self, async_client, admin_user, test_session
+    ):
+        """An expired session is not resurrected by the grace window."""
+        from datetime import datetime, timedelta
+
+        old_token = await self._login(async_client)
+        response = await self._refresh_with(async_client, old_token)
+        assert response.status_code == 200
+
+        row = self._session_row(test_session, admin_user.id)
+        row.expires_at = datetime.utcnow() - timedelta(minutes=1)
+        test_session.commit()
+
+        graced = await self._refresh_with(async_client, old_token)
+        assert graced.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_graced_refresh_does_not_extend_session_lifetime(
+        self, async_client, admin_user, test_session
+    ):
+        """The grace path answers idempotently: no second rotation, and
+        expires_at (total session lifetime) is untouched."""
+        old_token = await self._login(async_client)
+        response = await self._refresh_with(async_client, old_token)
+        assert response.status_code == 200
+
+        row = self._session_row(test_session, admin_user.id)
+        expires_before = row.expires_at
+        hash_before = row.refresh_token_hash
+
+        graced = await self._refresh_with(async_client, old_token)
+        assert graced.status_code == 200
+
+        row = self._session_row(test_session, admin_user.id)
+        assert row.expires_at == expires_before
+        assert row.refresh_token_hash == hash_before
+
+
 class TestProtectedEndpoints:
     """Tests for authentication on protected endpoints."""
 

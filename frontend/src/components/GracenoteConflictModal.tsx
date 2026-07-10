@@ -70,8 +70,8 @@ export const GracenoteConflictModal = memo(function GracenoteConflictModal({
       <div className="modal-container gracenote-conflict-modal">
         <div className="modal-header">
           <h2>Gracenote ID Conflicts</h2>
-          <button className="modal-close-btn" onClick={onCancel}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onCancel} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

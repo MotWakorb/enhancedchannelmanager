@@ -383,8 +383,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
             <h2>Configure Task</h2>
             <div className="modal-subtitle">{task.task_name}</div>
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -480,8 +480,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                           onClick={() => handleRunSchedule(schedule)}
                           disabled={runningSchedules.has(schedule.id) || runningSchedules.size > 0}
                           title={runningSchedules.has(schedule.id) ? 'Running...' : 'Run now with this schedule\'s settings'}
+                          aria-label={runningSchedules.has(schedule.id) ? 'Running...' : 'Run now with this schedule\'s settings'}
                         >
-                          <span className="material-icons" style={runningSchedules.has(schedule.id) ? { animation: 'spin 1s linear infinite reverse' } : undefined}>
+                          <span className="material-icons" style={runningSchedules.has(schedule.id) ? { animation: 'spin 1s linear infinite reverse' } : undefined} aria-hidden="true">
                             {runningSchedules.has(schedule.id) ? 'sync' : 'play_arrow'}
                           </span>
                         </button>
@@ -490,15 +491,17 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                         className="schedule-action-btn"
                         onClick={() => setEditingSchedule(schedule)}
                         title="Edit schedule"
+                        aria-label="Edit schedule"
                       >
-                        <span className="material-icons">edit</span>
+                        <span className="material-icons" aria-hidden="true">edit</span>
                       </button>
                       <button
                         className="schedule-action-btn delete"
                         onClick={() => handleDeleteSchedule(schedule)}
                         title="Delete schedule"
+                        aria-label="Delete schedule"
                       >
-                        <span className="material-icons">delete</span>
+                        <span className="material-icons" aria-hidden="true">delete</span>
                       </button>
                     </div>
                   </div>
@@ -729,8 +732,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
           <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2>Add Schedule</h2>
-              <button className="modal-close-btn" onClick={() => setIsAddingSchedule(false)}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={() => setIsAddingSchedule(false)} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <ScheduleEditor
@@ -752,8 +755,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
           <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2>Edit Schedule</h2>
-              <button className="modal-close-btn" onClick={() => setEditingSchedule(null)}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={() => setEditingSchedule(null)} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <ScheduleEditor

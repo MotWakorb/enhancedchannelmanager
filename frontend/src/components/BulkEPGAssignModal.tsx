@@ -498,8 +498,8 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
       <div className="modal-container modal-xxl bulk-epg-modal">
         <div className="modal-header">
           <h2>Bulk EPG Assignment</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -818,16 +818,18 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
                                 className="edit-match-btn"
                                 onClick={() => handleOpenAutoMatchEdit(result)}
                                 title="Change EPG assignment"
+                                aria-label="Change EPG assignment"
                               >
-                                <span className="material-icons">edit</span>
+                                <span className="material-icons" aria-hidden="true">edit</span>
                               </button>
                               {hasOverride && (
                                 <button
                                   className="reset-match-btn"
                                   onClick={() => handleResetAutoMatchOverride(result.channel_id)}
                                   title="Reset to original match"
+                                  aria-label="Reset to original match"
                                 >
-                                  <span className="material-icons">undo</span>
+                                  <span className="material-icons" aria-hidden="true">undo</span>
                                 </button>
                               )}
                             </div>
@@ -1040,8 +1042,8 @@ const ConflictCard = memo(function ConflictCard({ result, epgSources, allEpgData
           onChange={e => onSearchChange(e.target.value)}
         />
         {searchFilter && (
-          <button className="clear-search" onClick={() => onSearchChange('')}>
-            <span className="material-icons">close</span>
+          <button className="clear-search" onClick={() => onSearchChange('')} aria-label="Clear search" title="Clear search">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         )}
       </div>
@@ -1196,8 +1198,8 @@ export const EPGSearchCard = memo(function EPGSearchCard({
             <span className="country-badge">{detectedCountry.toUpperCase()}</span>
           )}
         </div>
-        <button className="close-btn" onClick={onClose} title="Close">
-          <span className="material-icons">close</span>
+        <button className="close-btn" onClick={onClose} title="Close" aria-label="Close EPG search">
+          <span className="material-icons" aria-hidden="true">close</span>
         </button>
       </div>
       <div className="epg-search-card-search">
@@ -1210,8 +1212,8 @@ export const EPGSearchCard = memo(function EPGSearchCard({
           autoFocus
         />
         {searchTerm && (
-          <button className="clear-search" onClick={() => onSearchChange('')}>
-            <span className="material-icons">close</span>
+          <button className="clear-search" onClick={() => onSearchChange('')} aria-label="Clear search" title="Clear search">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         )}
       </div>

@@ -1757,6 +1757,17 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE journal_entries "
                     "ADD COLUMN mutation_source VARCHAR(20)"
                 ))
+                # 0030 (bd-x67qe): refresh-token rotation grace window on the
+                # pre-0005 user_sessions table — same create_all() limitation,
+                # add both nullable columns by hand.
+                conn.execute(text(
+                    "ALTER TABLE user_sessions "
+                    "ADD COLUMN prior_refresh_token_hash VARCHAR(255)"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE user_sessions "
+                    "ADD COLUMN rotated_at DATETIME"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.

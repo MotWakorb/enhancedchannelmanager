@@ -5,7 +5,7 @@ import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
-import { formatTimestamp } from '../../utils/formatting';
+import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {
@@ -253,8 +253,9 @@ export function JournalTab() {
               className="clear-search"
               onClick={() => setSearchInput('')}
               title="Clear search"
+              aria-label="Clear search"
             >
-              <span className="material-icons">close</span>
+              <span className="material-icons" aria-hidden="true">close</span>
             </button>
           )}
         </div>
@@ -328,9 +329,25 @@ export function JournalTab() {
                 <div
                   className={`entry-row ${expandedId === entry.id ? 'expanded' : ''}`}
                   onClick={() => handleToggleExpand(entry.id)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedId === entry.id}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleToggleExpand(entry.id);
+                    }
+                  }}
                 >
-                  <span className="entry-time" title={entry.timestamp}>
-                    {formatTimestamp(entry.timestamp)}
+                  {/* bd-juy2e: Journal used to always show the absolute
+                      timestamp; M3U Changes used a recency-threshold
+                      relative time for the same kind of data (event
+                      timestamps), which read as inconsistent across tabs.
+                      Both now go through the same shared formatRelativeTime
+                      rule — the absolute time is still one hover away. */}
+                  <span className="entry-time" title={formatTimestamp(entry.timestamp)}>
+                    {formatRelativeTime(entry.timestamp)}
                   </span>
                   <span className="entry-category">
                     <span className={`category-badge category-${entry.category}`}>
@@ -410,15 +427,19 @@ export function JournalTab() {
                 className="btn-secondary"
                 onClick={() => setPage(1)}
                 disabled={page === 1 || loading}
+                aria-label="First page"
+                title="First page"
               >
-                <span className="material-icons">first_page</span>
+                <span className="material-icons" aria-hidden="true">first_page</span>
               </button>
               <button
                 className="btn-secondary"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1 || loading}
+                aria-label="Previous page"
+                title="Previous page"
               >
-                <span className="material-icons">chevron_left</span>
+                <span className="material-icons" aria-hidden="true">chevron_left</span>
               </button>
               <span className="page-info">
                 Page {page} of {totalPages}
@@ -427,15 +448,19 @@ export function JournalTab() {
                 className="btn-secondary"
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page === totalPages || loading}
+                aria-label="Next page"
+                title="Next page"
               >
-                <span className="material-icons">chevron_right</span>
+                <span className="material-icons" aria-hidden="true">chevron_right</span>
               </button>
               <button
                 className="btn-secondary"
                 onClick={() => setPage(totalPages)}
                 disabled={page === totalPages || loading}
+                aria-label="Last page"
+                title="Last page"
               >
-                <span className="material-icons">last_page</span>
+                <span className="material-icons" aria-hidden="true">last_page</span>
               </button>
             </div>
             <div className="pagination-right">

@@ -1458,11 +1458,15 @@ export interface AuthProvidersResponse {
 export interface LoginResponse {
   user: User;
   message: string;
+  /** Seconds until the access token issued with this response expires (bd-3ymo4). */
+  access_token_expires_in?: number | null;
 }
 
 // Current user response
 export interface MeResponse {
   user: User;
+  /** Remaining seconds until the current access token expires (bd-3ymo4). */
+  access_token_expires_in?: number | null;
 }
 
 // Logout response
@@ -1473,6 +1477,8 @@ export interface LogoutResponse {
 // Refresh response
 export interface RefreshResponse {
   message: string;
+  /** Seconds until the freshly minted access token expires (bd-3ymo4). */
+  access_token_expires_in?: number | null;
 }
 
 // Setup required check response

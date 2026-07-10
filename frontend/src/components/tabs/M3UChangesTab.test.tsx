@@ -348,6 +348,8 @@ describe('M3UChangesTab', () => {
   });
 });
 
-// M3UChangesTab helper functions (formatChangeType, getChangeTypeClass, getChangeTypeIcon,
-// formatRelativeTime) are verified through component integration tests above.
+// M3UChangesTab helper functions (formatChangeType, getChangeTypeClass, getChangeTypeIcon)
+// are verified through component integration tests above. Time formatting now goes
+// through the shared utils/formatting.formatRelativeTime (bd-juy2e), tested in
+// utils/formatting.relativetime.test.ts.
 // Removing the empty describe block to keep the suite clean.

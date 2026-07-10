@@ -39,6 +39,7 @@ import itertools
 import json
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
@@ -209,17 +210,22 @@ def install_json_logging(level: int = logging.INFO) -> None:
     json_handler.setFormatter(JsonFormatter())
     json_handler.addFilter(_TraceIdFilter())
 
-    # Drop any handler we previously installed (idempotency).
     for existing in list(root.handlers):
         if getattr(existing, "_ecm_json_handler", False):
+            # Drop any handler we previously installed (idempotency).
             root.removeHandler(existing)
-        else:
-            # Also replace the formatter on any default stream handler so
-            # ``logging.basicConfig``-installed handlers speak JSON too,
-            # instead of emitting a second plaintext line alongside ours.
-            if isinstance(existing, logging.StreamHandler):
-                existing.setFormatter(JsonFormatter())
-                existing.addFilter(_TraceIdFilter())
+        elif type(existing) is logging.StreamHandler and getattr(
+            existing, "stream", None
+        ) in (sys.stderr, sys.stdout):
+            # Remove the plain console handler ``logging.basicConfig``
+            # installed at import time. Keeping it — even re-formatted to
+            # JSON — leaves TWO console handlers on the root logger, so
+            # every record is emitted twice (bd-cng0d: duplicate JSON
+            # access-log lines). ``type() is`` (not ``isinstance``) so
+            # FileHandler and other StreamHandler subclasses are left
+            # alone, and the stream check spares handlers a test attached
+            # to capture output into a StringIO.
+            root.removeHandler(existing)
 
     json_handler._ecm_json_handler = True  # type: ignore[attr-defined]
     root.addHandler(json_handler)

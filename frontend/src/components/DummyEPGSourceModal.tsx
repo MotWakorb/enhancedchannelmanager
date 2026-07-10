@@ -657,8 +657,8 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
       <div className="modal-container modal-lg dummy-epg-modal">
         <div className="modal-header">
           <h2>{source ? 'Edit Dummy EPG Source' : 'Add Dummy EPG Source'}</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -944,8 +944,8 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                           autoFocus
                         />
                         {eventTimezoneSearch && (
-                          <button type="button" className="clear-search" onClick={() => setEventTimezoneSearch('')}>
-                            <span className="material-icons">close</span>
+                          <button type="button" className="clear-search" onClick={() => setEventTimezoneSearch('')} aria-label="Clear search" title="Clear search">
+                            <span className="material-icons" aria-hidden="true">close</span>
                           </button>
                         )}
                       </div>
@@ -991,8 +991,8 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                           autoFocus
                         />
                         {outputTimezoneSearch && (
-                          <button type="button" className="clear-search" onClick={() => setOutputTimezoneSearch('')}>
-                            <span className="material-icons">close</span>
+                          <button type="button" className="clear-search" onClick={() => setOutputTimezoneSearch('')} aria-label="Clear search" title="Clear search">
+                            <span className="material-icons" aria-hidden="true">close</span>
                           </button>
                         )}
                       </div>

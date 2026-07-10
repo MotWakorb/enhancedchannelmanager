@@ -3,12 +3,10 @@
   flex-shrink: 0;
 }
 
-.dep-manager-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 1.5rem;
-}
+/* .dep-manager-header layout + .header-title/.header-description/
+   .header-actions are supplied by PageHeader.css / shared/common.css
+   (bd-7l7wi / bd-b3g0r). This section renders its header via
+   <PageHeader className="dep-manager-header" .../>. */
 
 .dep-loading {
   display: flex;

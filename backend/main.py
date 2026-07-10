@@ -139,7 +139,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0058",
+    version="0.17.6-0059",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -215,7 +215,15 @@ async def security_headers_middleware(request: Request, call_next):
 # middleware piggy-backs on the same request cycle to emit counter/histogram
 # samples labeled by route *pattern* — NOT raw path — so cardinality stays
 # bounded regardless of traffic mix.
-@app.middleware("http")
+#
+# NOTE (bd-cng0d): deliberately NOT registered with @app.middleware here.
+# Starlette's add_middleware() prepends, so the LAST registration becomes the
+# OUTERMOST layer. This middleware is registered explicitly at the end of the
+# middleware section (after auth_middleware / actor_source_middleware) so it
+# wraps EVERYTHING — including requests the auth middleware rejects with 401.
+# When it was registered first (innermost), auth rejections short-circuited
+# before ever reaching it: no structured ecm.access line, no metrics sample,
+# no X-Request-ID header on 401s.
 async def observability_middleware(request: Request, call_next):
     """Correlate requests and instrument them for Prometheus.
 
@@ -682,6 +690,17 @@ async def request_timing_middleware(request: Request, call_next):
             )
 
     return response
+
+
+# Register the observability middleware LAST so it is the OUTERMOST layer
+# (Starlette's add_middleware prepends — the last registration wraps every
+# earlier one). This guarantees the structured ecm.access log line, the
+# Prometheus sample, and the X-Request-ID header are emitted for EVERY
+# request, including 401/403 rejections short-circuited by auth_middleware
+# (bd-cng0d), and that the trace-id contextvar is bound before any other
+# middleware runs. If you add a new @app.middleware("http") below this line,
+# move this registration after it.
+app.middleware("http")(observability_middleware)
 
 
 # Diagnostic Endpoint for Request Rate Stats

@@ -119,8 +119,8 @@ export const CSVImportModal = memo(function CSVImportModal({
             <span className="material-icons">upload_file</span>
             Import Channels from CSV
           </h2>
-          <button className="modal-close-btn" onClick={handleClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={handleClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

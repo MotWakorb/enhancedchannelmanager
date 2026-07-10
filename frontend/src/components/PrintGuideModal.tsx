@@ -303,8 +303,8 @@ function PrintGuideModalInner({
       <div className="modal-container modal-md print-guide-modal">
         <div className="modal-header">
           <h2>Print Channel Guide</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

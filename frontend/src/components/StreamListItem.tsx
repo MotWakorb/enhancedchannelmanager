@@ -183,8 +183,9 @@ export const StreamListItem = memo(function StreamListItem({
             onPreview(stream);
           }}
           title="Preview stream in browser"
+          aria-label="Preview stream in browser"
         >
-          <span className="material-icons">visibility</span>
+          <span className="material-icons" aria-hidden="true">visibility</span>
         </button>
       )}
       {stream.url && (
@@ -195,8 +196,9 @@ export const StreamListItem = memo(function StreamListItem({
             openInVLC(stream.url!, stream.name);
           }}
           title="Open in VLC"
+          aria-label="Open in VLC"
         >
-          <span className="material-icons">play_circle</span>
+          <span className="material-icons" aria-hidden="true">play_circle</span>
         </button>
       )}
       {onClearStats && streamStats && (streamStats.probe_status === 'failed' || streamStats.probe_status === 'timeout') && (
@@ -208,8 +210,9 @@ export const StreamListItem = memo(function StreamListItem({
             onClearStats(stream.id);
           }}
           title="Reset probe status"
+          aria-label="Reset probe status"
         >
-          <span className="material-icons">restart_alt</span>
+          <span className="material-icons" aria-hidden="true">restart_alt</span>
         </button>
       )}
       {onCopyUrl && (
@@ -220,8 +223,9 @@ export const StreamListItem = memo(function StreamListItem({
             onCopyUrl();
           }}
           title="Copy stream URL"
+          aria-label="Copy stream URL"
         >
-          <span className="material-icons">content_copy</span>
+          <span className="material-icons" aria-hidden="true">content_copy</span>
         </button>
       )}
       {isEditMode && (

@@ -1770,6 +1770,15 @@ class UserSession(Base):
     # Token tracking (store hash of refresh token, not the token itself)
     refresh_token_hash = Column(String(255), nullable=False, unique=True)
 
+    # Rotation grace window (bd-x67qe): hash of the immediately-prior refresh
+    # token and when it was rotated away. For a short window after rotation
+    # the predecessor is still accepted by /auth/refresh (idempotent-refresh
+    # semantics) so two tabs racing the same rotation don't hard-logout the
+    # loser. Only ONE generation is kept — a normal rotation overwrites both
+    # fields, so a graced token can never chain to an older one.
+    prior_refresh_token_hash = Column(String(255), nullable=True)
+    rotated_at = Column(DateTime, nullable=True)
+
     # Session metadata
     ip_address = Column(String(45), nullable=True)  # IPv6 can be up to 45 chars
     user_agent = Column(String(500), nullable=True)
@@ -1791,6 +1800,7 @@ class UserSession(Base):
         Index("idx_session_user", user_id),
         Index("idx_session_expires", expires_at),
         Index("idx_session_token_hash", refresh_token_hash),
+        Index("idx_session_prior_token_hash", prior_refresh_token_hash),
     )
 
     def to_dict(self) -> dict:

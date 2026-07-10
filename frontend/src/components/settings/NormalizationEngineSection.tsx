@@ -194,16 +194,18 @@ function SortableRuleItem({
               onClick={onEdit}
               title="Edit rule"
               type="button"
+              aria-label="Edit rule"
             >
-              <span className="material-icons">edit</span>
+              <span className="material-icons" aria-hidden="true">edit</span>
             </button>
             <button
               className="norm-engine-btn-icon small danger"
               onClick={onDelete}
               title="Delete rule"
               type="button"
+              aria-label="Delete rule"
             >
-              <span className="material-icons">delete</span>
+              <span className="material-icons" aria-hidden="true">delete</span>
             </button>
           </>
         )}
@@ -1241,7 +1243,20 @@ export function NormalizationEngineSection() {
             >
               {groups.map((group) => (
                 <SortableGroupItem key={group.id} group={group}>
-                  <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
+                  <div
+                  className="norm-engine-group-header"
+                  onClick={() => toggleGroup(group.id)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedGroups.has(group.id)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleGroup(group.id);
+                    }
+                  }}
+                >
                 <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
                   chevron_right
                 </span>
@@ -1270,16 +1285,18 @@ export function NormalizationEngineSection() {
                         onClick={() => openEditGroupEditor(group)}
                         title="Edit group"
                         type="button"
+                        aria-label="Edit group"
                       >
-                        <span className="material-icons">edit</span>
+                        <span className="material-icons" aria-hidden="true">edit</span>
                       </button>
                       <button
                         className="norm-engine-btn-icon danger"
                         onClick={() => deleteGroup(group)}
                         title="Delete group"
                         type="button"
+                        aria-label="Delete group"
                       >
-                        <span className="material-icons">delete</span>
+                        <span className="material-icons" aria-hidden="true">delete</span>
                       </button>
                     </>
                   )}
@@ -1337,7 +1354,20 @@ export function NormalizationEngineSection() {
               className={`norm-engine-group ${!group.enabled ? 'disabled' : ''}`}
             >
               <div className="norm-engine-group-content">
-                <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
+                <div
+                  className="norm-engine-group-header"
+                  onClick={() => toggleGroup(group.id)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedGroups.has(group.id)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleGroup(group.id);
+                    }
+                  }}
+                >
                   <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
                     chevron_right
                   </span>
@@ -1366,16 +1396,18 @@ export function NormalizationEngineSection() {
                           onClick={() => openEditGroupEditor(group)}
                           title="Edit group"
                           type="button"
+                          aria-label="Edit group"
                         >
-                          <span className="material-icons">edit</span>
+                          <span className="material-icons" aria-hidden="true">edit</span>
                         </button>
                         <button
                           className="norm-engine-btn-icon danger"
                           onClick={() => deleteGroup(group)}
                           title="Delete group"
                           type="button"
+                          aria-label="Delete group"
                         >
-                          <span className="material-icons">delete</span>
+                          <span className="material-icons" aria-hidden="true">delete</span>
                         </button>
                       </>
                     )}
@@ -1420,16 +1452,18 @@ export function NormalizationEngineSection() {
                                 onClick={() => openEditRuleEditor(rule)}
                                 title="Edit rule"
                                 type="button"
+                                aria-label="Edit rule"
                               >
-                                <span className="material-icons">edit</span>
+                                <span className="material-icons" aria-hidden="true">edit</span>
                               </button>
                               <button
                                 className="norm-engine-btn-icon small danger"
                                 onClick={() => deleteRule(rule)}
                                 title="Delete rule"
                                 type="button"
+                                aria-label="Delete rule"
                               >
-                                <span className="material-icons">delete</span>
+                                <span className="material-icons" aria-hidden="true">delete</span>
                               </button>
                             </>
                           )}
@@ -1477,8 +1511,10 @@ export function NormalizationEngineSection() {
                 className="modal-close-btn"
                 onClick={closeRuleEditor}
                 type="button"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -1709,8 +1745,9 @@ export function NormalizationEngineSection() {
                             }}
                             disabled={ruleEditor.conditions.length <= 1}
                             title="Remove condition"
+                            aria-label="Remove condition"
                           >
-                            <span className="material-icons">remove_circle</span>
+                            <span className="material-icons" aria-hidden="true">remove_circle</span>
                           </button>
                         </div>
                       </div>
@@ -1923,8 +1960,10 @@ export function NormalizationEngineSection() {
                 className="modal-close-btn"
                 onClick={() => setShowImportModal(false)}
                 type="button"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <div className="modal-body">
@@ -1999,8 +2038,10 @@ export function NormalizationEngineSection() {
                 onClick={closeApplyModal}
                 type="button"
                 disabled={applyExecuting}
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -2349,8 +2390,10 @@ export function NormalizationEngineSection() {
                 onClick={() => setShowApplyConfirm(false)}
                 type="button"
                 disabled={applyExecuting}
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <div className="modal-body">
@@ -2423,8 +2466,10 @@ export function NormalizationEngineSection() {
                 className="modal-close-btn"
                 onClick={closeGroupEditor}
                 type="button"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
