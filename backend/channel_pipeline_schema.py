@@ -28,6 +28,7 @@ class ConditionType(str, Enum):
     STREAM_NAME_CONTAINS = "stream_name_contains"    # Substring match
     STREAM_GROUP_CONTAINS = "stream_group_contains"  # Substring match on group name
     STREAM_GROUP_MATCHES = "stream_group_matches"    # Regex match on group name
+    STREAM_GROUP_IS = "stream_group_is"              # Exact match on provider group (M3U group_title)
     TVG_ID_EXISTS = "tvg_id_exists"                  # Has EPG ID
     TVG_ID_MATCHES = "tvg_id_matches"                # Regex match on EPG ID
     LOGO_EXISTS = "logo_exists"                      # Has logo URL
@@ -149,6 +150,7 @@ class Condition:
             ConditionType.STREAM_NAME_CONTAINS,
             ConditionType.STREAM_GROUP_CONTAINS,
             ConditionType.STREAM_GROUP_MATCHES,
+            ConditionType.STREAM_GROUP_IS,
             ConditionType.TVG_ID_MATCHES,
             ConditionType.CHANNEL_EXISTS_WITH_NAME,
             ConditionType.CHANNEL_EXISTS_MATCHING,

@@ -680,6 +680,16 @@ def register(mcp: FastMCP):
                   stream_name_matches — regex match on stream name
                   stream_group_contains — substring match on group name
                   stream_group_matches — regex match on group name
+                  stream_group_is — EXACT match on the stream's provider group
+                    (value = the M3U group_title string, e.g. "USA Sports" — NOT
+                    the group id used by channel_in_group/normalized_name_in_group).
+                    Case-insensitive by default; set case_sensitive=true to require
+                    exact case. Caveats: (1) if two M3U accounts happen to use the
+                    same group name, this condition matches streams from BOTH —
+                    combine with provider_is to scope to one account; (2) if the
+                    provider renames the group upstream, this condition silently
+                    stops matching (no error — the group name just no longer
+                    appears on any stream).
                   provider_is — from specific M3U account (value = account ID)
                   tvg_id_exists — stream has EPG ID (no value needed)
                   tvg_id_matches — regex match on EPG ID

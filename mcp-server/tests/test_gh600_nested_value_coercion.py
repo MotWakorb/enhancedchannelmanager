@@ -165,6 +165,15 @@ class TestCoerceConditions:
         }])
         assert coerced["value"] == "1080"
 
+    def test_stream_group_is_value_untouched(self):
+        """stream_group_is (bd-rgw9p) takes a group NAME string, not an id —
+        it must never be swept into int/number coercion the way
+        channel_in_group's group ID is."""
+        [coerced] = _coerce_conditions([
+            {"type": "stream_group_is", "value": "4K Sports"},
+        ])
+        assert coerced["value"] == "4K Sports"
+
     def test_numeric_value_types_coerced(self):
         conds = _coerce_conditions([
             {"type": "quality_min", "value": "720"},
