@@ -315,6 +315,17 @@ class ActionExecutor:
         self._journal_buffer: list[dict] = []
         self._journal_flush_threshold = 100
 
+        # enhancedchannelmanager-wy6l5: manual-channel merge-block visibility.
+        # _last_manual_block is set by _find_channel_by_name whenever the
+        # block_manual gate rejected an otherwise-matching candidate (reset at
+        # each lookup); callers read it to surface a user-visible "merge
+        # blocked" reason instead of the old INFO-log-only outcome.
+        # _journaled_manual_block_ids dedupes the journal to ONE
+        # manual_channel_merge_blocked entry per blocked channel per run —
+        # per-stream reasons live in the execution log's action descriptions.
+        self._last_manual_block: Optional[dict] = None
+        self._journaled_manual_block_ids: set[int] = set()
+
         # Channel number tracking
         self._used_channel_numbers = set()
         for c in self.existing_channels:
@@ -370,6 +381,55 @@ class ActionExecutor:
                 "action_type": action_type,
             },
             "after_value": {"stream_id": stream_ctx.stream_id},
+            "user_initiated": False,
+            "mutation_source": journal.MUTATION_SOURCE_AUTO_CREATION,
+            "batch_id": str(self._execution_id),
+        })
+        if len(self._journal_buffer) >= self._journal_flush_threshold:
+            self._flush_journal_buffer()
+
+    def _journal_manual_channel_block(
+        self, channel: dict, stream_ctx: StreamContext, action_type: str
+    ) -> None:
+        """Record that the manual-channel gate BLOCKED a resolved merge target.
+
+        enhancedchannelmanager-wy6l5: when ``allow_manual_channel_merge`` is
+        off (the default) and the resolved merge/update target is a hand-built
+        MANUAL channel, the executor treats it as "not found" — and on the
+        create_channel path then creates a NEW auto channel instead. That
+        outcome used to be INFO-log-only, so rules looked like they were
+        "skipping everything" for no reason. Mirror the opt-in path's
+        ``manual_channel_adopted`` entry with a ``manual_channel_merge_blocked``
+        one so the journal shows WHY. Deduped to one entry per blocked channel
+        per run (``_journaled_manual_block_ids``) — the per-stream reasons ride
+        in the execution log's action descriptions. A None ``_execution_id``
+        (direct-construct callers/tests) disables journaling, same as the
+        adoption writer.
+        """
+        if self._execution_id is None:
+            return
+        channel_id = channel.get("id")
+        if channel_id in self._journaled_manual_block_ids:
+            return
+        self._journaled_manual_block_ids.add(channel_id)
+        self._journal_buffer.append({
+            "category": "auto_creation",
+            "action_type": "manual_channel_merge_blocked",
+            "entity_id": channel_id,
+            "entity_name": channel.get("name"),
+            "description": (
+                "Auto-creation matched MANUAL channel '%s' (id=%s) as merge "
+                "target for stream '%s' but allow_manual_channel_merge is off "
+                "— treated as not found (the rule may create a new auto "
+                "channel instead; enable allow_manual_channel_merge on the "
+                "rule to merge into hand-built channels)"
+                % (channel.get("name"), channel_id, stream_ctx.stream_name)
+            ),
+            "before_value": {
+                "auto_created": False,
+                "action_type": action_type,
+            },
+            "after_value": {"stream_id": stream_ctx.stream_id, "blocked": True},
             "user_initiated": False,
             "mutation_source": journal.MUTATION_SOURCE_AUTO_CREATION,
             "batch_id": str(self._execution_id),
@@ -745,6 +805,21 @@ class ActionExecutor:
         if existing is not None and allow_manual_channel_merge \
                 and self._is_manual_channel(existing):
             self._journal_manual_channel_adoption(existing, stream_ctx, action.type)
+        elif existing is None and self._last_manual_block is not None:
+            # enhancedchannelmanager-wy6l5: the block_manual gate rejected a
+            # matching hand-built manual channel. Surface WHY the merge did not
+            # happen AND its consequence (a NEW auto channel gets created
+            # below) in the execution log + journal — previously this was
+            # INFO-log-only and looked like an inexplicable duplicate.
+            blocked = self._last_manual_block
+            self._journal_manual_channel_block(blocked, stream_ctx, action.type)
+            action_details.append(
+                f"Matched manual channel '{blocked.get('name')}' "
+                f"(id={blocked.get('id')}) but allow_manual_channel_merge is "
+                f"off — treated as not found, so a new auto channel is created "
+                f"instead of merging into the hand-built channel (enable "
+                f"allow_manual_channel_merge on the rule to merge)"
+            )
         logger.debug(
             "[AUTO-CREATE-EXEC] Lookup '%s' (scope_group_id=%s): %s",
             channel_name, scope_group_id,
@@ -896,6 +971,10 @@ class ActionExecutor:
             )
             dedup_skip = None
         if dedup_skip is not None:
+            # Carry the accumulated context (normalization notes, wy6l5
+            # manual-block reason, …) onto the dedup-skip result so the
+            # execution log keeps the full story for this stream.
+            dedup_skip.details = action_details + dedup_skip.details
             return dedup_skip
 
         # Create new channel
@@ -1404,6 +1483,12 @@ class ActionExecutor:
             find_channel_value, stream_ctx.stream_name, effective_scope_group_id
         )
 
+        # enhancedchannelmanager-wy6l5: the manual channel the block_manual
+        # gate rejected during resolution (if any). Read at the terminal
+        # return points so the execution log shows WHY the merge was withheld
+        # instead of the generic "no existing channel found".
+        blocked_manual = None
+
         # For existing_channel target, find the channel
         if target == "existing_channel" or target == "auto":
             channel = None
@@ -1414,6 +1499,8 @@ class ActionExecutor:
                     expanded_name, scope_group_id=effective_scope_group_id,
                     block_manual=not allow_manual_channel_merge,
                 )
+                if channel is None:
+                    blocked_manual = self._last_manual_block
             elif find_channel_by == "name_regex":
                 channel = self._find_channel_by_regex(find_channel_value)
             elif find_channel_by == "tvg_id":
@@ -1461,6 +1548,8 @@ class ActionExecutor:
                     exact_only=not loose_name_match,
                     block_manual=not allow_manual_channel_merge,
                 )
+                if channel is None:
+                    blocked_manual = blocked_manual or self._last_manual_block
 
             # Core-name fallback (LEGACY FUZZY — bd-0emgo.1): strip country prefix
             # + quality suffix, deparenthesize, and do word-prefix containment.
@@ -1541,7 +1630,15 @@ class ActionExecutor:
                     "and allow_manual_channel_merge is off — treating as not found",
                     channel.get('name'), channel.get('id'),
                 )
+                blocked_manual = channel
                 channel = None
+            elif channel is None and blocked_manual is None:
+                # enhancedchannelmanager-wy6l5: a legacy-fuzzy
+                # _find_channel_by_name lookup (core-name / deparen) may have
+                # rejected a manual candidate without the call sites above
+                # capturing it — pick up the marker from the LAST lookup of
+                # this action so the skip reason still surfaces.
+                blocked_manual = self._last_manual_block
             elif channel and allow_manual_channel_merge \
                     and self._is_manual_channel(channel):
                 # Opt-in path adopted a manual channel — record it for audit.
@@ -1655,6 +1752,28 @@ class ActionExecutor:
                     merge_provenance=scored_provenance,
                 )
             elif target == "existing_channel":
+                if blocked_manual is not None:
+                    # enhancedchannelmanager-wy6l5: same failure semantics as
+                    # "not found", but tell the operator WHY — the match was a
+                    # protected manual channel, not a missing one.
+                    self._journal_manual_channel_block(
+                        blocked_manual, stream_ctx, action.type)
+                    return ActionResult(
+                        success=False,
+                        action_type=action.type,
+                        description=(
+                            f"Merge blocked: matched manual channel "
+                            f"'{blocked_manual.get('name')}' "
+                            f"(id={blocked_manual.get('id')}) but "
+                            f"allow_manual_channel_merge is off — treated as "
+                            f"not found (enable it on the rule to merge into "
+                            f"hand-built channels)"
+                        ),
+                        entity_type="channel",
+                        entity_id=blocked_manual.get("id"),
+                        entity_name=blocked_manual.get("name"),
+                        error="Channel not found for merge (manual channel blocked)"
+                    )
                 return ActionResult(
                     success=False,
                     action_type=action.type,
@@ -1665,6 +1784,28 @@ class ActionExecutor:
             # merge_streams only adds streams to existing channels;
             # use a create_channel action if new channels are needed.
 
+        if blocked_manual is not None:
+            # enhancedchannelmanager-wy6l5: user-visible skip reason for the
+            # manual-channel block (previously INFO-log-only, leaving the rule
+            # looking like it "skipped everything" with no reason).
+            self._journal_manual_channel_block(blocked_manual, stream_ctx, action.type)
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=(
+                    f"Skipped: matched manual channel "
+                    f"'{blocked_manual.get('name')}' "
+                    f"(id={blocked_manual.get('id')}) but "
+                    f"allow_manual_channel_merge is off — treated as not "
+                    f"found; stream not merged (merge_streams only adds to "
+                    f"existing channels; enable allow_manual_channel_merge on "
+                    f"the rule to merge into hand-built channels)"
+                ),
+                entity_type="channel",
+                entity_id=blocked_manual.get("id"),
+                entity_name=blocked_manual.get("name"),
+                skipped=True
+            )
         return ActionResult(
             success=True,
             action_type=action.type,
@@ -3041,12 +3182,22 @@ class ActionExecutor:
         def _in_scope(c: Optional[dict]) -> bool:
             if c is None:
                 return False
-            if block_manual and self._is_manual_channel(c):
+            if scope_group_id is not None \
+                    and c.get("channel_group_id") != scope_group_id:
                 return False
-            if scope_group_id is None:
-                return True
-            return c.get("channel_group_id") == scope_group_id
+            if block_manual and self._is_manual_channel(c):
+                # enhancedchannelmanager-wy6l5: remember the rejected manual
+                # candidate so callers can surface a user-visible "merge
+                # blocked" reason when the whole lookup ends in None. Only
+                # recorded when the candidate already passed the scope filter —
+                # i.e. the manual gate is the ONLY reason it was rejected.
+                self._last_manual_block = c
+                return False
+            return True
 
+        # Reset the block marker for THIS lookup (stale candidates from a
+        # previous stream/action must not leak into this one).
+        self._last_manual_block = None
         name_lower = name.lower()
         # Check newly created channels first (by exact name)
         if name_lower in self._created_channels:

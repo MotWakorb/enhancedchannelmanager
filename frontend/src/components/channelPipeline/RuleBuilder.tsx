@@ -52,6 +52,7 @@ export function RuleBuilder({
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
   const [matchScopeTargetGroup, setMatchScopeTargetGroup] = useState(rule?.match_scope_target_group ?? true);
   const [matchScopeGroupId, setMatchScopeGroupId] = useState<number | null>(rule?.match_scope_group_id ?? null);
+  const [allowManualChannelMerge, setAllowManualChannelMerge] = useState(rule?.allow_manual_channel_merge ?? false);
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
 
@@ -192,6 +193,7 @@ export function RuleBuilder({
         orphan_action: orphanAction,
         match_scope_target_group: matchScopeTargetGroup,
         match_scope_group_id: matchScopeTargetGroup ? matchScopeGroupId : null,
+        allow_manual_channel_merge: allowManualChannelMerge,
       });
     } finally {
       setSaving(false);
@@ -398,6 +400,28 @@ export function RuleBuilder({
                 )}
               </div>
             )}
+          </div>
+
+          <div className="form-field">
+            <label>Manual channel protection</label>
+            <span className="field-hint">
+              Off (default): channels you built by hand are protected — if this rule&apos;s merge target matches a
+              manual channel, the match is treated as not found (the blocked merge is recorded in the execution log
+              and journal) and the rule may create a new auto channel instead of merging. On: this rule may merge
+              streams into manual channels; each adoption is recorded in the journal.
+            </span>
+            <div className="checkbox-group">
+              <label className="checkbox-item">
+                <input
+                  type="checkbox"
+                  checked={allowManualChannelMerge}
+                  onChange={e => setAllowManualChannelMerge(e.target.checked)}
+                  disabled={isLoading}
+                  aria-label="Allow merging into manual channels"
+                />
+                <span>Allow merging into manual channels</span>
+              </label>
+            </div>
           </div>
 
           <div className="form-field">
