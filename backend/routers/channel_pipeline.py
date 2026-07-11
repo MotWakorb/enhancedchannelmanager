@@ -1805,6 +1805,11 @@ async def export_auto_creation_rules_yaml():
                     "match_scope_target_group": rule.match_scope_target_group or False,
                     "match_scope_group_id": rule.match_scope_group_id,
                     "allow_manual_channel_merge": rule.allow_manual_channel_merge or False,
+                    # ti939.1.3 (PR #612 review): export the event_sync KIND —
+                    # omitting it would make an export→import round-trip
+                    # resurrect the rule as a standard rule whose dormant
+                    # conditions/actions execute.
+                    "event_sync_config": rule.get_event_sync_config(),
                 }
 
                 # Add group_name to actions that have group_id
@@ -1943,6 +1948,24 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                     })
                     continue
 
+                # ti939.1.3 (PR #612 review): an imported event_sync_config
+                # MUST route through the same write-time validator as
+                # POST/PUT — an unvalidated import path would bypass the
+                # schema-enforced scoping rail. Invalid configs reject the
+                # rule with the standard import error shape. Also fills
+                # defaults in place so the stored JSON is explicit.
+                event_sync_config = rule_data.get("event_sync_config")
+                if event_sync_config is not None:
+                    from channel_pipeline_schema import validate_event_sync_config
+                    es_errors = validate_event_sync_config(event_sync_config)
+                    if es_errors:
+                        errors.append({
+                            "rule_index": i,
+                            "rule_name": rule_data.get("name", f"Rule {i}"),
+                            "errors": es_errors
+                        })
+                        continue
+
                 # Check if rule with same name exists
                 existing = session.query(ChannelPipelineRule).filter(
                     ChannelPipelineRule.name == rule_data.get("name")
@@ -1977,6 +2000,11 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         existing.match_scope_target_group = rule_data.get("match_scope_target_group", True)
                         existing.match_scope_group_id = rule_data.get("match_scope_group_id")
                         existing.allow_manual_channel_merge = rule_data.get("allow_manual_channel_merge", False)
+                        # ti939.1.3: preserve (or clear) the event_sync KIND
+                        # on overwrite-import. Import-update overwrites every
+                        # field unconditionally, so an exported standard rule
+                        # correctly imports as standard (None clears).
+                        existing.set_event_sync_config(event_sync_config)
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
@@ -2013,6 +2041,12 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         match_scope_target_group=rule_data.get("match_scope_target_group", True),
                         match_scope_group_id=rule_data.get("match_scope_group_id"),
                         allow_manual_channel_merge=rule_data.get("allow_manual_channel_merge", False),
+                        # ti939.1.3: keep the event_sync KIND on import-create
+                        # (validated above; None = standard kind).
+                        event_sync_config=(
+                            json.dumps(event_sync_config)
+                            if event_sync_config else None
+                        ),
                     )
                     session.add(rule)
                     logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)

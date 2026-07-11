@@ -2428,10 +2428,34 @@ def _restore_tag_groups(items: list) -> dict:
 
 def _restore_auto_creation_rules(items: list) -> dict:
     """Delete all auto-creation rules and recreate from YAML."""
+    # ti939.1.3 (PR #612 review): validate restored event_sync configs but
+    # DOWNGRADE failures to warnings — restore is delete-all-and-recreate,
+    # so refusing the row would destroy the rule outright. Restoring the
+    # config as-is is the fail-safe direction: the KIND comes from the raw
+    # column (models.ChannelPipelineRule.is_event_sync), so even an invalid
+    # config keeps the rule excluded from pipeline execution.
+    from channel_pipeline_schema import validate_event_sync_config
+
     session = get_session()
+    warnings: list[str] = []
     try:
         session.query(ChannelPipelineRule).delete()
         for item in items:
+            # ti939.1.3: the export (to_dict) carries event_sync_config as a
+            # parsed dict — re-serialize for the Text column. Dropping it
+            # here would resurrect the rule as a STANDARD rule whose dormant
+            # conditions/actions execute on the next run.
+            event_sync_config = item.get("event_sync_config")
+            if event_sync_config is not None:
+                es_errors = validate_event_sync_config(event_sync_config)
+                if es_errors:
+                    warnings.append(
+                        f"Rule '{item.get('name')}': event_sync_config failed "
+                        f"validation ({len(es_errors)} error(s)); restored "
+                        f"as-is — the rule keeps the event_sync kind and "
+                        f"stays excluded from pipeline execution. First "
+                        f"error: {es_errors[0]}"
+                    )
             rule = ChannelPipelineRule(
                 name=item["name"],
                 description=item.get("description"),
@@ -2464,10 +2488,17 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 # enhancedchannelmanager-orzck (W1): default False protects
                 # manual channels. Backups predating this column inherit False.
                 allow_manual_channel_merge=item.get("allow_manual_channel_merge", False),
+                # ti939.1.3: keep the event_sync KIND across backup/restore.
+                # Backups predating this column omit it and inherit None
+                # (standard kind).
+                event_sync_config=(
+                    json.dumps(event_sync_config)
+                    if event_sync_config else None
+                ),
             )
             session.add(rule)
         session.commit()
-        return {"warnings": []}
+        return {"warnings": warnings}
     except Exception:
         session.rollback()
         raise

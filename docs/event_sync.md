@@ -30,7 +30,7 @@ the rule.
     {
       "name": "my-provider-shape",
       "title_pattern": "^(?P<title>.+?)\\s*@",
-      "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})\\s*(?P<ampm>[AaPp])?",
+      "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?\\s*(?:E[SD]?T)?\\s*$",
       "date_pattern": "@\\s*(?P<day>\\d{1,2})\\s+(?P<month>[A-Za-z]{3,9})"
     }
   ],
@@ -49,7 +49,7 @@ the rule.
 | `secondary_group_ids` | yes, non-empty | The secondary event groups (`auto_channel_sync` OFF) whose streams get matched onto master channels. Must NOT contain `master_group_id`. |
 | `patterns` | no | Shared parse-pattern variants (title/time/date regexes with named capture groups, same shape as the built-in defaults in `backend/services/event_sync_matcher.py`). Omit to use the built-in defaults. |
 | `group_patterns` | no | Per-group pattern overrides, keyed by group ID (master or a secondary). |
-| `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. |
+| `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. Capped at 1440 (24 hours). |
 | `attach_threshold` | no (default 0.80) | Auto-attach score floor on the parsed-title score. **Hard-clamped ≥ 0.80** — it can be raised per rule, never lowered. |
 | `enabled` | no (default true) | Feature toggle within the rule. |
 
@@ -71,6 +71,10 @@ value you sent, what was expected, and a link back to this document.
   admission policy (`EVENT_ATTACH_FLOOR` in
   `backend/services/event_sync_matcher.py`, the single source of truth).
   Precision over recall everywhere.
+* **`time_window_minutes` is capped at 1440 (24 hours).** The time window
+  is the rail that keeps same-teams-different-day fixtures apart — an
+  oversized window re-opens that false-positive class, and the frozen
+  regression corpus only proves the matcher's precision at sane windows.
 * **Unknown keys are rejected**, so a typo'd optional key cannot silently
   fall back to its default.
 
