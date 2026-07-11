@@ -219,8 +219,13 @@ class TestCaptureSerialization:
             channels = row.get_channels_data()["channels"]
             ids = {c["id"] for c in channels}
             assert ids == {1, 3}
-            kept = {c["id"]: c["stream_ids"] for c in channels}
-            assert kept[1] == [100]  # master's PRE-RUN stream set
+            by_id = {c["id"]: c for c in channels}
+            assert by_id[1]["stream_ids"] == [100]  # master's PRE-RUN stream set
+            # ti939.2.3 (PR #616 review): the captured MASTER is flagged so
+            # restore_snapshot writes back a streams-only payload; manual
+            # channels carry NO flag (their restore stays byte-identical).
+            assert by_id[1]["event_sync_master"] is True
+            assert "event_sync_master" not in by_id[3]
         finally:
             session.close()
 

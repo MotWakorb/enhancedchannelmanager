@@ -374,6 +374,44 @@ picking a different (broader) master group, or a future promotion feature
 (tracked under epic `enhancedchannelmanager-ti939.4`, not built yet) — not
 something to work around today.
 
+### Undo a bad event_sync run
+
+Every live event_sync run captures a **pre-mutation snapshot** that
+includes the master group's channels, so a bad run (a wrong attachment, a
+threshold set too low, a pattern matching the wrong fixtures) is fully
+reversible by execution id:
+
+1. **Find the execution id.** It's in the run response, the executions
+   list (`GET /api/channel-pipeline/executions`), and on every journal
+   entry the run wrote (`batch_id` = execution id).
+2. **Inspect what the run did.** The journal (category `event_sync`,
+   action type `merge_stream`, `batch_id` = the execution id) has one
+   entry per attachment carrying the secondary stream **name**+id, the
+   provider, the master channel **name**+id, and the score / band /
+   time-delta / team-token verdict that justified the match — enough to
+   judge each attachment without replaying the run.
+3. **Roll it back.**
+   `POST /api/channel-pipeline/executions/{id}/rollback` with
+   `confirm=true` (or the UI's rollback on that execution). Because the
+   snapshot restore is an optimistic overwrite of each snapshot channel's
+   stream list, the API refuses without `confirm` and tells you what would
+   be overwritten. The rollback removes every stream the run attached and
+   **never deletes the master channels themselves** — ECM didn't create
+   them and won't remove them. Master channels are restored with a
+   **streams-only** payload: their name / group / EPG linkage stay
+   whatever Dispatcharr currently says (a slot rename that happened after
+   the run is not reverted).
+4. **Fix the rule before the next run.** The matcher is deterministic: a
+   bad match is reversible and non-compounding but **not self-healing** —
+   the same rule against the same names will make the same bad match on
+   the next manual run, every time, until you adjust the rule's pattern
+   or threshold (or the provider renames the stream). Rollback undoes the
+   damage; only a rule change prevents the recurrence.
+
+What the journal shows after the rollback: the run's execution record
+moves to `rolled_back`, and the original per-attach entries remain as the
+historical audit trail (journal entries are never deleted).
+
 ## Pre-flight checks
 
 Before a preview (and later, a run), ECM verifies against Dispatcharr —
@@ -458,7 +496,9 @@ dedicated attach phase:
   execution record's warnings.
 * **Rollback:** the run's pre-mutation snapshot includes the master
   group's channels, so the standard execution rollback / snapshot restore
-  undoes attaches.
+  undoes attaches. Master channels are restored **streams-only** (never
+  their Dispatcharr-owned name/group/EPG metadata) and are never deleted.
+  Step-by-step: [Undo a bad event_sync run](#undo-a-bad-event_sync-run).
 
 ## Developer reference
 

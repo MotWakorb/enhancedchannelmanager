@@ -750,7 +750,10 @@ class ChannelPipelineEngine:
           3. For each snapshot channel, full-REPLACE its stream set
              (``update_channel(streams=[ids])`` — the §D1 IDs-only primitive)
              and restore key metadata (name, channel_group_id, epg_data_id,
-             tvg_id) in one PATCH.
+             tvg_id) in one PATCH. Channels flagged ``event_sync_master`` at
+             capture time get a STREAMS-ONLY payload instead (bead
+             ti939.2.3): Dispatcharr owns their metadata, and the attach run
+             only ever changed their stream list.
           4. Idempotent: re-running re-issues the same PATCHes / deletes →
              same end state. A second call after a clean first call finds the
              created channels already gone (delete 404 swallowed by
@@ -848,13 +851,31 @@ class ChannelPipelineEngine:
                     # overwrite the entire stream set to the snapshot order;
                     # the metadata keys restore drift on name / group / epg /
                     # tvg.
-                    payload = {
-                        "streams": list(ch.get("stream_ids") or []),
-                        "name": channel_name,
-                        "channel_group_id": ch.get("channel_group_id"),
-                        "epg_data_id": ch.get("epg_data_id"),
-                        "tvg_id": ch.get("tvg_id"),
-                    }
+                    #
+                    # EXCEPT event_sync master channels (flagged at capture
+                    # time — PR #616 review / bead ti939.2.3): Dispatcharr
+                    # owns their metadata and updates it in place across
+                    # refreshes (slot renames, EPG re-links). The attach run
+                    # only ever changed their STREAM list, so the restore
+                    # writes back ONLY the stream list — restoring the
+                    # captured metadata would revert Dispatcharr-owned state
+                    # to stale pre-run values, and Dispatcharr is not
+                    # guaranteed to self-heal until the source stream next
+                    # changes. Unflagged channels (every standard-rule
+                    # snapshot, all pre-flag legacy snapshots) keep the
+                    # full-payload behavior byte-identical.
+                    if ch.get("event_sync_master"):
+                        payload = {
+                            "streams": list(ch.get("stream_ids") or []),
+                        }
+                    else:
+                        payload = {
+                            "streams": list(ch.get("stream_ids") or []),
+                            "name": channel_name,
+                            "channel_group_id": ch.get("channel_group_id"),
+                            "epg_data_id": ch.get("epg_data_id"),
+                            "tvg_id": ch.get("tvg_id"),
+                        }
                     await self.client.update_channel(channel_id, payload)
                     restored_channels += 1
                 except Exception as e:
@@ -3670,14 +3691,26 @@ class ChannelPipelineEngine:
                     s["id"] if isinstance(s, dict) else s
                     for s in ch.get("streams", [])
                 ]
-                channels.append({
+                entry = {
                     "id": ch.get("id"),
                     "name": ch.get("name"),
                     "channel_group_id": ch.get("channel_group_id"),
                     "epg_data_id": ch.get("epg_data_id"),
                     "tvg_id": ch.get("tvg_id"),
                     "stream_ids": stream_ids,
-                })
+                }
+                if ch.get("auto_created", False):
+                    # Only reachable via the include set: an event_sync
+                    # MASTER-group channel. Flag it so restore_snapshot
+                    # writes back ONLY the stream list (PR #616 review /
+                    # bead ti939.2.3): ECM's attach phase mutates nothing
+                    # but streams on these Dispatcharr-owned channels, and
+                    # restoring their captured name/group/epg/tvg would
+                    # revert Dispatcharr's own in-place updates (e.g. a
+                    # "TBD vs TBD" -> real-matchup slot rename) to stale
+                    # pre-run values ECM never touched.
+                    entry["event_sync_master"] = True
+                channels.append(entry)
 
             session = get_session()
             try:
