@@ -24,6 +24,7 @@ import { BandwidthPanel } from './BandwidthPanel';
 import { UserStatsPanel } from './UserStatsPanel';
 import { ProvidersPanel } from './ProvidersPanel';
 import { AttributionBadge } from '../AttributionBadge';
+import { ChannelStatsDetailModal } from '../ChannelStatsDetailModal';
 import type { Viewer } from '../../types';
 import './StatsTab.css';
 
@@ -254,7 +255,7 @@ export function StatsTab() {
   // the channel logo (#1); the URL is resolved via channelLogoMap (logo_id -> url),
   // plus tvg_id/epg_data_id so the Currently Showing row can join the active
   // stream (keyed by UUID only) to its EPG guide programs.
-  const channelNameMap = useRef<Map<string, { name: string; number: number | null; logo_id: number | null; tvg_id: string | null; epg_data_id: number | null }>>(new Map());
+  const channelNameMap = useRef<Map<string, { id: number; name: string; number: number | null; logo_id: number | null; tvg_id: string | null; epg_data_id: number | null }>>(new Map());
   const channelLogoMap = useRef<Map<number, string>>(new Map());
   const streamProfileMap = useRef<Map<string, string>>(new Map());
 
@@ -283,7 +284,7 @@ export function StatsTab() {
     const startTime = Date.now();
 
     try {
-      const map = new Map<string, { name: string; number: number | null; logo_id: number | null; tvg_id: string | null; epg_data_id: number | null }>();
+      const map = new Map<string, { id: number; name: string; number: number | null; logo_id: number | null; tvg_id: string | null; epg_data_id: number | null }>();
       let page = 1;
       let hasMore = true;
       const pageSize = 500;
@@ -292,7 +293,7 @@ export function StatsTab() {
         const result = await api.getChannels({ page, pageSize });
         for (const ch of result.results || []) {
           if (ch.uuid) {
-            map.set(ch.uuid, { name: ch.name, number: ch.channel_number, logo_id: ch.logo_id, tvg_id: ch.tvg_id, epg_data_id: ch.epg_data_id });
+            map.set(ch.uuid, { id: ch.id, name: ch.name, number: ch.channel_number, logo_id: ch.logo_id, tvg_id: ch.tvg_id, epg_data_id: ch.epg_data_id });
           }
         }
         hasMore = result.next !== null;
@@ -632,6 +633,36 @@ export function StatsTab() {
     } catch (err) {
       logger.error(`Stats Tab: Failed to stop channel ${channelId}`, err);
       alert('Failed to stop channel');
+    }
+  };
+
+  // Per-channel stats drill-down (enhancedchannelmanager-hq3de.g). Target
+  // carries both ids since the two endpoints key differently: detail stats
+  // by the integer Channel.id (resolved via channelNameMap), popularity by
+  // the stream UUID already on the Active-Channels row.
+  const [drillDownTarget, setDrillDownTarget] = useState<{ channelId: number | null; uuid: string; name: string } | null>(null);
+
+  // Per-client disconnect (enhancedchannelmanager-hq3de.h). Dispatcharr's
+  // underlying stop-client call is channel-scoped, not client-id-scoped (see
+  // api.stopClient) — it disconnects "a" client on the channel, not
+  // guaranteed to be the exact row clicked. The confirm copy says so.
+  const [disconnectingChannelId, setDisconnectingChannelId] = useState<string | number | null>(null);
+  const handleDisconnectClient = async (channelId: string | number) => {
+    if (!confirm(
+      'Disconnect a client from this channel? Dispatcharr disconnects one connection on this ' +
+      "channel — it may not be exactly the row you clicked if there are multiple clients."
+    )) return;
+
+    setDisconnectingChannelId(channelId);
+    try {
+      await api.stopClient(channelId);
+      logger.info(`Stats Tab: Disconnected a client from channel ${channelId}`);
+      fetchData(false);
+    } catch (err) {
+      logger.error(`Stats Tab: Failed to disconnect client from channel ${channelId}`, err);
+      alert('Failed to disconnect client');
+    } finally {
+      setDisconnectingChannelId(null);
     }
   };
 
@@ -1096,6 +1127,17 @@ export function StatsTab() {
 
                   <div className="channel-actions">
                     <button
+                      onClick={() => setDrillDownTarget({
+                        channelId: lookupData?.id ?? null,
+                        uuid: channelIdStr,
+                        name: displayName,
+                      })}
+                      title="View details"
+                      aria-label={`View details for ${displayName}`}
+                    >
+                      <span className="material-icons" aria-hidden="true">query_stats</span>
+                    </button>
+                    <button
                       onClick={() => toggleExpanded(channel.channel_id)}
                       title={expandedChannels.has(channel.channel_id) ? 'Collapse' : 'Expand'}
                       aria-label={expandedChannels.has(channel.channel_id) ? 'Collapse channel details' : 'Expand channel details'}
@@ -1544,6 +1586,17 @@ export function StatsTab() {
                                 {client.current_rate_KBps.toFixed(1)} KB/s
                               </span>
                             )}
+                            <button
+                              className="client-disconnect-btn"
+                              onClick={() => handleDisconnectClient(channel.channel_id)}
+                              disabled={disconnectingChannelId === channel.channel_id}
+                              title="Disconnect a client from this channel"
+                              aria-label="Disconnect client"
+                            >
+                              <span className="material-icons" aria-hidden="true">
+                                {disconnectingChannelId === channel.channel_id ? 'hourglass_empty' : 'link_off'}
+                              </span>
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -1761,6 +1814,15 @@ export function StatsTab() {
         {/* Providers (v0.17.0 — GH-59, bd-skqln.18) */}
         <ProvidersPanel />
       </div>
+
+      {drillDownTarget && (
+        <ChannelStatsDetailModal
+          channelId={drillDownTarget.channelId}
+          uuid={drillDownTarget.uuid}
+          name={drillDownTarget.name}
+          onClose={() => setDrillDownTarget(null)}
+        />
+      )}
     </div>
   );
 }

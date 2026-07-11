@@ -1,0 +1,68 @@
+.alert-methods-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary, #888);
+  padding: 0.75rem 0;
+}
+
+.alert-methods-empty {
+  color: var(--text-secondary, #888);
+  padding: 0.75rem 0;
+}
+
+.alert-methods-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.alert-method-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-secondary, #252540);
+}
+
+.alert-method-info {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.alert-method-name {
+  font-weight: 500;
+  color: var(--text-primary, #ffffff);
+}
+
+.alert-method-type-badge {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  background: var(--bg-primary, #1a1a2e);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  padding: 0.1rem 0.45rem;
+}
+
+.alert-method-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.alert-method-btn {
+  padding: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.alert-method-delete:hover:not(:disabled) {
+  color: var(--error, #ff6b6b);
+  border-color: var(--error, #ff6b6b);
+}

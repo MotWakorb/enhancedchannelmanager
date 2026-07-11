@@ -518,6 +518,29 @@
   font-family: monospace;
 }
 
+/* Per-client disconnect (enhancedchannelmanager-hq3de.h) */
+.client-disconnect-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.client-disconnect-btn:hover:not(:disabled) {
+  color: var(--error, #ff6b6b);
+  border-color: var(--error, #ff6b6b);
+}
+
+.client-disconnect-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Events Section */
 .events-section {
   margin-top: 0.5rem;

@@ -45,6 +45,18 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   const [channelChanges, setChannelChanges] = useState<Map<number, boolean>>(new Map());
   const [savingChannels, setSavingChannels] = useState(false);
 
+  // Bulk apply-to-selected (enhancedchannelmanager-hq3de.i) — a SEPARATE
+  // selection from the per-row enable/disable toggle above. Uses
+  // PATCH .../channels/bulk-update directly (applies immediately, no pending
+  // "Save Changes" step) for channels ALREADY known to the profile. Per
+  // dispatcharr_client.bulk_update_profile_channels, the bulk endpoint only
+  // updates EXISTING ChannelProfileMembership rows — it does not create new
+  // ones — so this selection excludes channels the profile has never
+  // tracked before; those still go through "Save Changes" (individual PATCH
+  // calls), which does create new membership rows.
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkApplying, setBulkApplying] = useState(false);
+
   const loadProfiles = useCallback(async () => {
     setLoading(true);
     try {
@@ -143,12 +155,14 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
     setChannelSearch('');
     setHideDisabledChannels(false);
     setChannelChanges(new Map());
+    setBulkSelectedIds(new Set());
   };
 
   const handleBackToList = () => {
     setViewMode('list');
     setSelectedProfile(null);
     setChannelChanges(new Map());
+    setBulkSelectedIds(new Set());
     loadProfiles(); // Refresh to get updated channel counts
   };
 
@@ -322,6 +336,37 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
     } finally {
       setSavingChannels(false);
     }
+  };
+
+  // Bulk apply-to-selected (bead hq3de.i). Applies immediately via the bulk
+  // endpoint — separate from the pending-diff "Save Changes" flow above.
+  const handleBulkApply = async (enabled: boolean) => {
+    if (!selectedProfile || bulkSelectedIds.size === 0) return;
+    setBulkApplying(true);
+    try {
+      await api.bulkUpdateProfileChannels(selectedProfile.id, Array.from(bulkSelectedIds), enabled);
+      const updated = await api.getChannelProfile(selectedProfile.id);
+      setSelectedProfile(updated);
+      setBulkSelectedIds(new Set());
+      onSaved();
+      notifications.success(
+        `${enabled ? 'Enabled' : 'Disabled'} ${bulkSelectedIds.size} channel(s) for "${selectedProfile.name}"`,
+        'Profiles'
+      );
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Bulk apply failed', 'Profiles');
+    } finally {
+      setBulkApplying(false);
+    }
+  };
+
+  const toggleBulkSelected = (channelId: number) => {
+    setBulkSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(channelId)) next.delete(channelId);
+      else next.add(channelId);
+      return next;
+    });
   };
 
   const enabledCount = useMemo(() => {
@@ -550,6 +595,35 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                   <span>Hide disabled</span>
                 </label>
               </div>
+              {bulkSelectedIds.size > 0 && (
+                <div className="modal-toolbar-row bulk-apply-row">
+                  <span className="modal-toolbar-count">{bulkSelectedIds.size} selected</span>
+                  <div className="modal-toolbar-actions">
+                    <button
+                      className="modal-btn-small enable"
+                      onClick={() => handleBulkApply(true)}
+                      disabled={bulkApplying}
+                      title="Apply this profile (enabled) to the selected channels — for channels already tracked by this profile"
+                    >
+                      {bulkApplying ? 'Applying...' : 'Apply to Selected: Enable'}
+                    </button>
+                    <button
+                      className="modal-btn-small disable"
+                      onClick={() => handleBulkApply(false)}
+                      disabled={bulkApplying}
+                    >
+                      {bulkApplying ? 'Applying...' : 'Apply to Selected: Disable'}
+                    </button>
+                    <button
+                      className="modal-btn-small"
+                      onClick={() => setBulkSelectedIds(new Set())}
+                      disabled={bulkApplying}
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="modal-body channels-view">
@@ -592,9 +666,18 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                         return (
                           <div
                             key={channel.id}
-                            className={`channel-item ${isEnabled ? 'enabled' : ''} ${hasChange ? 'changed' : ''}`}
+                            className={`channel-item ${isEnabled ? 'enabled' : ''} ${hasChange ? 'changed' : ''} ${bulkSelectedIds.has(channel.id) ? 'bulk-selected' : ''}`}
                             onClick={() => handleToggleChannel(channel.id)}
                           >
+                            <input
+                              type="checkbox"
+                              className="bulk-select-checkbox"
+                              checked={bulkSelectedIds.has(channel.id)}
+                              onChange={() => toggleBulkSelected(channel.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              aria-label={`Select ${channel.name} for bulk apply`}
+                              title="Select for bulk apply"
+                            />
                             <label className="modal-toggle" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"

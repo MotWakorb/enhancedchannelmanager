@@ -103,6 +103,29 @@ class ECMClient:
             logger.error("[ECM-CLIENT] GET %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
             raise _http_error("GET", path, e) from e
 
+    async def get_text(self, path: str, timeout: float | None = None, **params) -> str:
+        """GET request expecting a non-JSON response body (e.g. ``text/csv``).
+
+        Mirrors :meth:`get` exactly except it returns ``r.text`` instead of
+        parsing JSON — for endpoints like ``/api/channels/export-csv`` that
+        return a file download (``Content-Disposition: attachment``), not a
+        JSON envelope. ``call_endpoint`` only models JSON-body endpoints, so
+        callers use this directly with a ``# contract-exempt:`` comment.
+        """
+        client = _get_client()
+        params = {k: v for k, v in params.items() if v is not None}
+        try:
+            r = await client.get(path, params=params, timeout=timeout)
+            r.raise_for_status()
+            return r.text
+        except httpx.TimeoutException:
+            logger.error("[ECM-CLIENT] GET %s timed out after %ss", path, timeout or DEFAULT_TIMEOUT)
+            raise TimeoutError(f"GET {path} timed out after {timeout or DEFAULT_TIMEOUT}s")
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error("[ECM-CLIENT] GET %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
+            raise _http_error("GET", path, e) from e
+
     async def post(
         self,
         path: str,

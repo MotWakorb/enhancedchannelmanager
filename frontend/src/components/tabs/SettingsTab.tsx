@@ -13,6 +13,7 @@ import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { SecuritySettingsSection } from '../settings/SecuritySettingsSection';
 import { MCPSettingsSection } from '../settings/MCPSettingsSection';
 import { LookupTableSection } from '../settings/LookupTableSection';
+import { AlertMethodsSection } from '../settings/AlertMethodsSection';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -594,6 +595,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
   const [resettingStats, setResettingStats] = useState(false);
+
+  // Channel-groups diagnostic + with-streams views (enhancedchannelmanager-hq3de.b)
+  // — read-only, alongside the orphaned/auto-created scans above.
+  const [groupsDiagnostic, setGroupsDiagnostic] = useState<api.ChannelGroupsDiagnostic | null>(null);
+  const [loadingGroupsDiagnostic, setLoadingGroupsDiagnostic] = useState(false);
+  const [groupsWithStreams, setGroupsWithStreams] = useState<{ id: number; name: string }[] | null>(null);
+  const [totalGroupsForStreams, setTotalGroupsForStreams] = useState(0);
+  const [loadingGroupsWithStreams, setLoadingGroupsWithStreams] = useState(false);
 
   // Auto-created channels maintenance state
   const [autoCreatedGroups, setAutoCreatedGroups] = useState<api.AutoCreatedGroup[]>([]);
@@ -1842,6 +1851,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       notifications.error(`Failed to load orphaned groups: ${err}`);
     } finally {
       setLoadingOrphaned(false);
+    }
+  };
+
+  // Channel-groups diagnostic + with-streams views (bead hq3de.b)
+  const handleLoadGroupsDiagnostic = async () => {
+    setLoadingGroupsDiagnostic(true);
+    try {
+      const result = await api.getChannelGroupsDiagnostic();
+      setGroupsDiagnostic(result);
+    } catch (err) {
+      notifications.error(`Failed to load channel groups diagnostic: ${err}`);
+    } finally {
+      setLoadingGroupsDiagnostic(false);
+    }
+  };
+
+  const handleLoadGroupsWithStreams = async () => {
+    setLoadingGroupsWithStreams(true);
+    try {
+      const result = await api.getChannelGroupsWithStreams();
+      setGroupsWithStreams(result.groups);
+      setTotalGroupsForStreams(result.total_groups);
+    } catch (err) {
+      notifications.error(`Failed to load groups with streams: ${err}`);
+    } finally {
+      setLoadingGroupsWithStreams(false);
     }
   };
 
@@ -3633,6 +3668,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
 
       </div>
+
+      <AlertMethodsSection />
 
       <div className="settings-actions">
         <button
@@ -5510,6 +5547,122 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
           )}
 
+        </div>
+      </div>
+
+      {/* Channel Groups Diagnostic + With-Streams Views (bead hq3de.b) */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">troubleshoot</span>
+          <h3>Channel Groups Diagnostic</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Read-only report: duplicate group names, stale hidden-group records, and channels whose
+          group reference doesn't resolve. Same data the debug bundle generator writes.
+        </p>
+
+        <div className="settings-group">
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleLoadGroupsDiagnostic}
+              disabled={loadingGroupsDiagnostic}
+            >
+              <span className="material-icons">search</span>
+              {loadingGroupsDiagnostic ? 'Running...' : 'Run Diagnostic'}
+            </button>
+          </div>
+
+          {groupsDiagnostic && (
+            <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div className="header-stats" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                <span>Dispatcharr groups: <strong>{groupsDiagnostic.dispatcharr_group_count}</strong></span>
+                <span>Channels scanned: <strong>{groupsDiagnostic.channel_count}</strong></span>
+                <span>Duplicate names: <strong>{Object.keys(groupsDiagnostic.duplicate_group_names).length}</strong></span>
+                <span>Orphaned group refs: <strong>{groupsDiagnostic.orphaned_channel_group_id_count}</strong></span>
+                <span>Null-id-with-name: <strong>{groupsDiagnostic.null_id_with_name_count}</strong></span>
+              </div>
+
+              {Object.keys(groupsDiagnostic.duplicate_group_names).length > 0 && (
+                <div>
+                  <strong>Duplicate group names:</strong>
+                  <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                    {Object.entries(groupsDiagnostic.duplicate_group_names).map(([name, count]) => (
+                      <li key={name}>{name} &times;{count}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {groupsDiagnostic.orphaned_sample.length > 0 && (
+                <div>
+                  <strong>Channels with an unresolved group (sample):</strong>
+                  <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                    {groupsDiagnostic.orphaned_sample.slice(0, 10).map((c) => (
+                      <li key={c.id}>#{c.channel_number} {c.name} &rarr; group_id {c.channel_group_id}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {groupsDiagnostic.hidden_records.some((h) => h.status !== 'VALID') && (
+                <div>
+                  <strong>Stale hidden-group records:</strong>
+                  <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                    {groupsDiagnostic.hidden_records.filter((h) => h.status !== 'VALID').map((h) => (
+                      <li key={h.id}>id {h.id} ({h.stored_name}) — {h.status}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {Object.keys(groupsDiagnostic.duplicate_group_names).length === 0 &&
+                groupsDiagnostic.orphaned_channel_group_id_count === 0 &&
+                groupsDiagnostic.null_id_with_name_count === 0 &&
+                groupsDiagnostic.hidden_records.every((h) => h.status === 'VALID') && (
+                <p style={{ color: 'var(--text-secondary)' }}>No issues found.</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">stream</span>
+          <h3>Channel Groups With Streams</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Channel groups that have at least one channel with a stream — the groups that can be
+          probed.
+        </p>
+
+        <div className="settings-group">
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleLoadGroupsWithStreams}
+              disabled={loadingGroupsWithStreams}
+            >
+              <span className="material-icons">search</span>
+              {loadingGroupsWithStreams ? 'Scanning...' : 'Scan for Groups With Streams'}
+            </button>
+          </div>
+
+          {groupsWithStreams && (
+            <div style={{ marginTop: '1rem' }}>
+              <p>
+                <strong>{groupsWithStreams.length} of {totalGroupsForStreams} group(s) have streams:</strong>
+              </p>
+              {groupsWithStreams.length > 0 && (
+                <ul style={{ marginLeft: '1.5rem', marginTop: '0.5rem', maxHeight: '240px', overflowY: 'auto' }}>
+                  {groupsWithStreams.map((g) => (
+                    <li key={g.id}>{g.name} (ID: {g.id})</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

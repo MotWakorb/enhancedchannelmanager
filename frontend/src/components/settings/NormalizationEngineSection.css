@@ -267,6 +267,18 @@
   font-family: monospace;
 }
 
+/* Rule match-count badge (enhancedchannelmanager-hq3de.e) */
+.norm-engine-rule-match-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  font-size: 0.7rem;
+  font-family: inherit;
+  color: var(--accent-primary, #6c8ef5);
+  background: color-mix(in srgb, var(--accent-primary, #6c8ef5) 15%, transparent);
+  border-radius: var(--radius-sm, 4px);
+  padding: 0.05rem 0.4rem;
+}
+
 .norm-engine-rule-actions {
   display: flex;
   align-items: center;
