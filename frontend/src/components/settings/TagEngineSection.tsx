@@ -31,6 +31,13 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
   const [editingDescription, setEditingDescription] = useState(false);
   const [description, setDescription] = useState(group.description || '');
 
+  // Test panel (enhancedchannelmanager-hq3de.f) — mirrors
+  // NormalizationEngineSection's collapsible test panel UX.
+  const [testPanelExpanded, setTestPanelExpanded] = useState(false);
+  const [testInput, setTestInput] = useState('');
+  const [testResult, setTestResult] = useState<api.TestTagsResult | null>(null);
+  const [testing, setTesting] = useState(false);
+
   const loadTags = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -128,6 +135,20 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
     } catch (err) {
       setError('Failed to update description');
       logger.error('Tag operation failed:', err);
+    }
+  };
+
+  const handleTestTags = async () => {
+    if (!testInput.trim()) return;
+    setTesting(true);
+    try {
+      const result = await api.testTags(group.id, testInput);
+      setTestResult(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to test tags');
+      logger.error('Tag test failed:', err);
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -289,6 +310,74 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
                     Cancel
                   </button>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Test panel (bead hq3de.f) — mirrors NormalizationEngineSection's test UX */}
+          <div className={`tag-test-panel collapsible ${testPanelExpanded ? 'expanded' : ''}`}>
+            <div
+              className="tag-test-header clickable"
+              onClick={() => setTestPanelExpanded(!testPanelExpanded)}
+              role="button"
+              tabIndex={0}
+              aria-expanded={testPanelExpanded}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setTestPanelExpanded(!testPanelExpanded);
+                }
+              }}
+            >
+              <span className={`material-icons tag-test-expand ${testPanelExpanded ? 'expanded' : ''}`}>
+                chevron_right
+              </span>
+              <span className="material-icons">science</span>
+              <h5>Test Tags</h5>
+            </div>
+
+            {testPanelExpanded && (
+              <div className="tag-test-body">
+                <div className="tag-test-input-row">
+                  <input
+                    type="text"
+                    value={testInput}
+                    onChange={(e) => setTestInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleTestTags()}
+                    placeholder="Enter text to test against this group's enabled tags..."
+                  />
+                  <button
+                    className="btn-secondary"
+                    onClick={handleTestTags}
+                    disabled={!testInput.trim() || testing}
+                  >
+                    <span className="material-icons">{testing ? 'sync' : 'play_arrow'}</span>
+                    {testing ? 'Testing...' : 'Test'}
+                  </button>
+                </div>
+
+                {testResult && (
+                  <div className="tag-test-result">
+                    {testResult.match_count === 0 ? (
+                      <span className="tag-test-no-matches">No tags in this group matched.</span>
+                    ) : (
+                      <>
+                        <span className="tag-test-match-count">
+                          {testResult.match_count} tag{testResult.match_count === 1 ? '' : 's'} matched:
+                        </span>
+                        <div className="tag-test-matches">
+                          {testResult.matches.map((m) => (
+                            <span key={m.tag_id} className="tag-chip enabled">
+                              {m.value}
+                              {m.case_sensitive && <span className="case-sensitive-badge" title="Case sensitive">Aa</span>}
+                            </span>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

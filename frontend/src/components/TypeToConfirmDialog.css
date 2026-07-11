@@ -1,0 +1,27 @@
+.type-to-confirm-message {
+  color: var(--text-secondary, #888);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.type-to-confirm-label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary, #ffffff);
+  font-size: 0.9rem;
+}
+
+.type-to-confirm-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary, #1a1a2e);
+  color: var(--text-primary, #ffffff);
+  font-size: 0.95rem;
+}
+
+.type-to-confirm-input:disabled {
+  opacity: 0.6;
+}

@@ -20,6 +20,10 @@ vi.mock('../../services/api', () => ({
   listSavedBackups: vi.fn(() => Promise.resolve([])),
   getSavedBackupDownloadUrl: vi.fn((f: string) => `/api/backup/saved/${f}`),
   deleteSavedBackup: vi.fn(),
+  restoreSavedBackup: vi.fn(),
+  restoreDbasBackupSaved: vi.fn(),
+  getSettings: vi.fn(() => Promise.resolve({ url: '' })),
+  getTaskHistory: vi.fn(() => Promise.resolve({ history: [] })),
 }));
 
 // Mock the one-time backup-schedule setup banner (bead ikv8z) — it has its own
@@ -34,6 +38,17 @@ vi.mock('../BackupRestoreModal', () => ({
   BackupRestoreModal: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="backup-restore-modal">
       <button onClick={onClose}>Close Modal</button>
+    </div>
+  ),
+}));
+
+// Mock DbasRestoreSavedModal (bead rzhid) — it has its own test suite;
+// stub it here so this suite only asserts it opens with the right filename.
+vi.mock('../DbasRestoreSavedModal', () => ({
+  DbasRestoreSavedModal: ({ filename, onClose }: { filename: string; onClose: () => void }) => (
+    <div data-testid="dbas-restore-saved-modal">
+      {filename}
+      <button onClick={onClose}>Close DBAS Modal</button>
     </div>
   ),
 }));
@@ -349,6 +364,90 @@ describe('BackupRestoreSection', () => {
       await waitFor(() => {
         expect(mockError).toHaveBeenCalledWith('Server error', 'Restore Failed');
       });
+    });
+  });
+
+  describe('restore from saved backup (bead rzhid)', () => {
+    const savedZip = {
+      filename: 'ecm-backup-2026-01-01_000000.zip',
+      size_bytes: 1024,
+      created_at: '2026-01-01T00:00:00Z',
+      type: 'zip' as const,
+    };
+    const savedYaml = {
+      filename: 'ecm-backup-2026-01-02_000000.yaml',
+      size_bytes: 512,
+      created_at: '2026-01-02T00:00:00Z',
+      type: 'yaml' as const,
+    };
+
+    it('shows legacy and DBAS restore buttons only for zip saved backups', async () => {
+      vi.mocked(api.listSavedBackups).mockResolvedValue([savedZip, savedYaml]);
+
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(savedZip.filename)).toBeInTheDocument();
+      });
+
+      expect(screen.getByLabelText('Restore as legacy full backup')).toBeInTheDocument();
+      expect(screen.getByLabelText('Restore as DBAS backup')).toBeInTheDocument();
+    });
+
+    it('opens a type-to-confirm dialog for legacy restore and requires exact filename', async () => {
+      vi.mocked(api.listSavedBackups).mockResolvedValue([savedZip]);
+      const mockResult = {
+        status: 'ok',
+        filename: savedZip.filename,
+        backup_version: '0.15.0',
+        backup_date: '2026-01-01T00:00:00Z',
+        restored_files: ['settings.json'],
+      };
+      vi.mocked(api.restoreSavedBackup).mockResolvedValue(mockResult);
+
+      render(<BackupRestoreSection isAdmin={true} />);
+      await waitFor(() => screen.getByLabelText('Restore as legacy full backup'));
+
+      fireEvent.click(screen.getByLabelText('Restore as legacy full backup'));
+
+      const confirmBtn = screen.getByRole('button', { name: 'Restore this backup' });
+      expect(confirmBtn).toBeDisabled();
+      expect(api.restoreSavedBackup).not.toHaveBeenCalled();
+
+      const input = screen.getByLabelText(/type/i);
+      fireEvent.change(input, { target: { value: savedZip.filename } });
+      fireEvent.click(confirmBtn);
+
+      await waitFor(() => {
+        expect(api.restoreSavedBackup).toHaveBeenCalledWith(savedZip.filename);
+      });
+    });
+
+    it('cancelling the legacy restore dialog does not call the API', async () => {
+      vi.mocked(api.listSavedBackups).mockResolvedValue([savedZip]);
+
+      render(<BackupRestoreSection isAdmin={true} />);
+      await waitFor(() => screen.getByLabelText('Restore as legacy full backup'));
+
+      fireEvent.click(screen.getByLabelText('Restore as legacy full backup'));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(api.restoreSavedBackup).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText(/type/i)).not.toBeInTheDocument();
+    });
+
+    it('opens the DBAS-saved restore modal with the clicked filename', async () => {
+      vi.mocked(api.listSavedBackups).mockResolvedValue([savedZip]);
+
+      render(<BackupRestoreSection isAdmin={true} />);
+      await waitFor(() => screen.getByLabelText('Restore as DBAS backup'));
+
+      fireEvent.click(screen.getByLabelText('Restore as DBAS backup'));
+
+      expect(screen.getByTestId('dbas-restore-saved-modal')).toHaveTextContent(savedZip.filename);
+
+      fireEvent.click(screen.getByText('Close DBAS Modal'));
+      expect(screen.queryByTestId('dbas-restore-saved-modal')).not.toBeInTheDocument();
     });
   });
 });

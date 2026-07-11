@@ -697,6 +697,56 @@ class TestCancelProbe:
         mock_prober.cancel_probe.assert_called_once()
 
 
+class TestPauseProbe:
+    """Tests for POST /api/stream-stats/probe/pause."""
+
+    @pytest.mark.asyncio
+    async def test_pauses_in_progress_probe(self, async_client):
+        """Pauses an in-progress probe by delegating to the prober."""
+        mock_prober = MagicMock()
+        mock_prober.pause_probe.return_value = {"status": "paused", "message": "Probe paused"}
+
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
+            response = await async_client.post("/api/stream-stats/probe/pause")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "paused", "message": "Probe paused"}
+        mock_prober.pause_probe.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_503_when_prober_unavailable(self, async_client):
+        """Returns 503 when the stream prober singleton isn't initialized."""
+        with patch("routers.stream_stats.ensure_prober", return_value=None):
+            response = await async_client.post("/api/stream-stats/probe/pause")
+
+        assert response.status_code == 503
+
+
+class TestResumeProbe:
+    """Tests for POST /api/stream-stats/probe/resume."""
+
+    @pytest.mark.asyncio
+    async def test_resumes_paused_probe(self, async_client):
+        """Resumes a paused probe by delegating to the prober."""
+        mock_prober = MagicMock()
+        mock_prober.resume_probe.return_value = {"status": "resumed", "message": "Probe resumed"}
+
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
+            response = await async_client.post("/api/stream-stats/probe/resume")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "resumed", "message": "Probe resumed"}
+        mock_prober.resume_probe.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_503_when_prober_unavailable(self, async_client):
+        """Returns 503 when the stream prober singleton isn't initialized."""
+        with patch("routers.stream_stats.ensure_prober", return_value=None):
+            response = await async_client.post("/api/stream-stats/probe/resume")
+
+        assert response.status_code == 503
+
+
 class TestResetProbeState:
     """Tests for POST /api/stream-stats/probe/reset."""
 

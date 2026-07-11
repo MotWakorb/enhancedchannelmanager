@@ -2508,6 +2508,7 @@ function App() {
               streamProfiles={streamProfiles}
               onChannelGroupsChange={loadChannelGroups}
               onAccountsChange={() => { loadProviders(); loadStreamGroups(); }}
+              onStreamProfilesChange={loadStreamProfiles}
               hideM3uUrls={hideM3uUrls}
               allowMultiProviderAutoSync={allowMultiProviderAutoSync}
             />

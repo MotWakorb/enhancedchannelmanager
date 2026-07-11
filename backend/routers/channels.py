@@ -130,6 +130,20 @@ class ClearAutoCreatedRequest(BaseModel):
     group_ids: list[int]
 
 
+class FindDuplicatesRequest(BaseModel):
+    """Optional scope for POST /channels/find-duplicates (enhancedchannelmanager-uahp6).
+
+    ``channel_ids`` absent — or the request body omitted entirely — scans all
+    channels (global, backward-compatible default for MCP/script callers).
+    When present, the scan is restricted to exactly those channel ids (used
+    by the frontend's checkbox-selection-scoped "Find Duplicates" action).
+    An explicit empty list is a valid scope of "no channels": it returns an
+    empty result (0 groups) rather than silently falling back to a global
+    scan — a caller that asked to scope to nothing should not get everything.
+    """
+    channel_ids: Optional[list[int]] = None
+
+
 class BulkMergeItem(BaseModel):
     """A single merge operation: keep target, absorb sources."""
     target_channel_id: int
@@ -2695,14 +2709,25 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
 
 
 @router.post("/find-duplicates")
-async def find_duplicate_channels():
-    """Scan all channels and find duplicates by normalized name.
+async def find_duplicate_channels(request: Optional[FindDuplicatesRequest] = None):
+    """Scan channels and find duplicates by normalized name.
 
     Applies the user's normalization rules to every channel name,
     then groups channels that resolve to the same normalized name.
     Returns only groups with 2+ channels.
+
+    Scope (enhancedchannelmanager-uahp6): when ``request.channel_ids`` is
+    provided, the scan is restricted to those channel ids. Absent body /
+    absent field = global scan across all channels (backward compatible —
+    MCP and script callers that never send a body keep working unchanged).
+    An explicit empty list scopes the scan to nothing (see
+    ``FindDuplicatesRequest`` docstring).
     """
-    logger.debug("[CHANNELS] POST /channels/find-duplicates")
+    scoped_ids: Optional[set[int]] = None
+    if request is not None and request.channel_ids is not None:
+        scoped_ids = set(request.channel_ids)
+
+    logger.debug("[CHANNELS] POST /channels/find-duplicates scoped=%s", scoped_ids is not None)
     from normalization_engine import get_normalization_engine
 
     client = get_client()
@@ -2711,20 +2736,46 @@ async def find_duplicate_channels():
     try:
         engine = get_normalization_engine(session)
 
-        # Fetch all channels (paginated)
+        # Fetch channels (paginated). Dispatcharr's list endpoint has no
+        # id-filter, so a scoped scan still has to walk pages — but it filters
+        # each page down to the requested ids and stops early once all of
+        # them have been found, instead of walking the whole install for a
+        # handful of selected channels.
         all_channels = []
-        page = 1
-        while True:
-            result = await client.get_channels(page=page, page_size=500)
-            batch = result.get("results", [])
-            if not batch:
-                break
-            all_channels.extend(batch)
-            if not result.get("next"):
-                break
-            page += 1
+        if scoped_ids is None:
+            page = 1
+            while True:
+                result = await client.get_channels(page=page, page_size=500)
+                batch = result.get("results", [])
+                if not batch:
+                    break
+                all_channels.extend(batch)
+                if not result.get("next"):
+                    break
+                page += 1
+        elif scoped_ids:
+            remaining = set(scoped_ids)
+            page = 1
+            while remaining:
+                result = await client.get_channels(page=page, page_size=500)
+                batch = result.get("results", [])
+                if not batch:
+                    break
+                matched = [ch for ch in batch if ch.get("id") in remaining]
+                all_channels.extend(matched)
+                remaining -= {ch.get("id") for ch in matched}
+                if not result.get("next"):
+                    break
+                page += 1
+        # else: scoped_ids == set() — explicit empty scope, nothing to fetch.
 
-        logger.info("[CHANNELS] find-duplicates: scanning %d channels", len(all_channels))
+        if scoped_ids is not None:
+            logger.info(
+                "[CHANNELS] find-duplicates: scanning %d channels (scoped to %d selected)",
+                len(all_channels), len(scoped_ids),
+            )
+        else:
+            logger.info("[CHANNELS] find-duplicates: scanning %d channels", len(all_channels))
 
         # Group by normalized name
         groups: dict[str, list[dict]] = {}

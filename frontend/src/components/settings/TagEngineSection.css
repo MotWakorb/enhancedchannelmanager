@@ -578,3 +578,99 @@
   gap: 0.5rem;
 }
 
+/* Test panel (enhancedchannelmanager-hq3de.f) — mirrors
+   NormalizationEngineSection's .norm-engine-test-* pattern. */
+.tag-test-panel {
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  margin-top: 0.75rem;
+  overflow: hidden;
+}
+
+.tag-test-panel.collapsible .tag-test-header {
+  cursor: pointer;
+  user-select: none;
+  padding: 0.6rem 0.85rem;
+  transition: background 0.15s;
+}
+
+.tag-test-panel.collapsible .tag-test-header:hover {
+  background: var(--bg-hover);
+}
+
+.tag-test-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tag-test-header h5 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tag-test-header .material-icons {
+  color: var(--accent-primary);
+}
+
+.tag-test-expand {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+
+.tag-test-expand.expanded {
+  transform: rotate(90deg);
+}
+
+.tag-test-body {
+  padding: 0 0.85rem 0.85rem;
+  border-top: 1px solid var(--border-secondary);
+}
+
+.tag-test-input-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.tag-test-input-row input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.tag-test-input-row input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.tag-test-result {
+  margin-top: 0.75rem;
+}
+
+.tag-test-no-matches {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.tag-test-match-count {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+.tag-test-matches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+

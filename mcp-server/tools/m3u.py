@@ -143,24 +143,102 @@ def register(mcp: FastMCP):
     async def create_m3u_account(
         name: str,
         url: str,
-        server_type: str = "standard",
+        account_type: str = "STD",
+        server_type: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        file_path: str | None = None,
+        server_group: int | None = None,
+        max_streams: int | None = None,
+        is_active: bool | None = None,
+        refresh_interval: int | None = None,
+        stale_stream_days: int | None = None,
+        enable_vod: bool | None = None,
+        auto_enable_new_groups_live: bool | None = None,
+        auto_enable_new_groups_vod: bool | None = None,
+        auto_enable_new_groups_series: bool | None = None,
     ) -> str:
         """Create a new M3U provider account.
 
+        enhancedchannelmanager-yd6qh: expanded to the full field set Dispatcharr
+        accepts (previously only name/url/server_type — most of the account
+        config, and Xtream credentials specifically, had no MCP path at all).
+        This also FIXES a latent bug: the old ``server_type`` param sent a
+        literal ``server_type`` key, which is not a real Dispatcharr field
+        (the real field is ``account_type``, values "STD"/"XC") — Dispatcharr
+        silently ignored it, so ``server_type`` never actually set the account
+        type. ``account_type`` now sends the correct field; ``server_type`` is
+        kept only as a deprecated convenience alias (see below).
+
         Args:
             name: Display name for the account
-            url: URL of the M3U playlist
-            server_type: Account type — "standard" (M3U URL), "xtream" (Xtream Codes), or "hdhr" (HD Homerun)
+            url: URL of the M3U playlist (STD) or Xtream server URL (XC)
+            account_type: Dispatcharr account type — "STD" (standard M3U
+                URL/file, default) or "XC" (Xtream Codes; requires username
+                and password). For an HD HomeRun source, use "STD" with the
+                lineup URL directly in `url` (e.g. "http://<ip>/lineup.m3u").
+            server_type: DEPRECATED legacy alias for account_type — only takes
+                effect when account_type is left at its default. Accepts
+                "standard" (-> STD), "xtream" (-> XC), "hdhr" (-> STD).
+            username: XtreamCodes account username (account_type="XC")
+            password: XtreamCodes account password (account_type="XC"). Never
+                echoed back in this tool's result.
+            file_path: Path to a previously-uploaded M3U file (see the M3U
+                upload flow) — an alternative to `url` for STD accounts.
+            server_group: Optional server group ID (see server group tools)
+            max_streams: Max concurrent streams for this account (0 = unlimited)
+            is_active: Whether the account is active (backend default True)
+            refresh_interval: Auto-refresh interval in hours (backend default 24)
+            stale_stream_days: Days of no activity before a stream is flagged
+                stale (backend default 7)
+            enable_vod: Whether to import VOD content (backend default False)
+            auto_enable_new_groups_live: Auto-enable newly discovered LIVE
+                groups (backend default True)
+            auto_enable_new_groups_vod: Auto-enable newly discovered VOD groups
+                (backend default False)
+            auto_enable_new_groups_series: Auto-enable newly discovered SERIES
+                groups (backend default False)
         """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(
-                ENDPOINTS["m3u_create_account"],
-                body={"name": name, "url": url, "server_type": server_type},
-            )
+            resolved_type = account_type
+            if server_type is not None and account_type == "STD":
+                # Legacy alias only takes effect when the caller left account_type
+                # at its default — never silently overrides an explicit choice.
+                legacy_map = {"standard": "STD", "xtream": "XC", "hdhr": "STD"}
+                resolved_type = legacy_map.get(server_type.lower(), account_type)
+
+            payload: dict = {"name": name, "url": url, "account_type": resolved_type}
+            if file_path is not None:
+                payload["file_path"] = file_path
+            if server_group is not None:
+                payload["server_group"] = server_group
+            if max_streams is not None:
+                payload["max_streams"] = max_streams
+            if is_active is not None:
+                payload["is_active"] = is_active
+            if refresh_interval is not None:
+                payload["refresh_interval"] = refresh_interval
+            if stale_stream_days is not None:
+                payload["stale_stream_days"] = stale_stream_days
+            if enable_vod is not None:
+                payload["enable_vod"] = enable_vod
+            if auto_enable_new_groups_live is not None:
+                payload["auto_enable_new_groups_live"] = auto_enable_new_groups_live
+            if auto_enable_new_groups_vod is not None:
+                payload["auto_enable_new_groups_vod"] = auto_enable_new_groups_vod
+            if auto_enable_new_groups_series is not None:
+                payload["auto_enable_new_groups_series"] = auto_enable_new_groups_series
+            # Credential params: accepted and forwarded, never echoed back below.
+            if username is not None:
+                payload["username"] = username
+            if password is not None:
+                payload["password"] = password
+
+            result = await client.call_endpoint(ENDPOINTS["m3u_create_account"], body=payload)
             aid = result.get("id", "?") if isinstance(result, dict) else "?"
             rname = result.get("name", name) if isinstance(result, dict) else name
-            return f"M3U account created: {rname} (id={aid})"
+            return f"M3U account created: {rname} (id={aid}, type={resolved_type})"
         except Exception as e:
             logger.error("[MCP] create_m3u_account failed: %s", e)
             return f"Error creating M3U account: {e}"
@@ -170,6 +248,7 @@ def register(mcp: FastMCP):
         account_id: int,
         name: str | None = None,
         url: str | None = None,
+        is_active: bool | None = None,
     ) -> str:
         """Update an existing M3U account.
 
@@ -177,6 +256,7 @@ def register(mcp: FastMCP):
             account_id: The M3U account ID to update
             name: New display name
             url: New M3U playlist URL
+            is_active: Enable/disable the account
         """
         try:
             client = get_ecm_client()
@@ -185,6 +265,8 @@ def register(mcp: FastMCP):
                 payload["name"] = name
             if url is not None:
                 payload["url"] = url
+            if is_active is not None:
+                payload["is_active"] = is_active
 
             if not payload:
                 return "No changes specified."
