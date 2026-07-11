@@ -95,6 +95,7 @@ Exception — governance cadence rules from ADRs (e.g., ADR-005's monthly-then-q
 | CodeQL Configuration | `docs/security/codeql-config.md` |
 | Normalization (user + dev guide) | `docs/normalization.md` |
 | Channel Pipeline Rule Analyzer | `docs/channel_pipeline_rule_analyzer.md` |
+| Event Sync (user + dev guide) | `docs/event_sync.md` |
 | Versioning Scheme | `docs/versioning.md` |
 | API Reference | `docs/api.md` |
 | SLOs | `docs/sre/slos.md` |
