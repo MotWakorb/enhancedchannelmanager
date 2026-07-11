@@ -2324,6 +2324,339 @@ async def preview_fuzzy_matches(
     )
 
 
+# =============================================================================
+# Event Sync preview — dry-run matching, ZERO writes (bead ti939.1.4)
+# =============================================================================
+
+# Per-stream candidate cap: candidates arrive best-first from the matcher, so
+# truncation only trims the diagnostic tail. Stream-level counts (which is
+# what reconciles against the summary) are unaffected.
+_EVENT_PREVIEW_MAX_CANDIDATES_PER_STREAM = 10
+# Sample cap inside one parse-failure group; ``count`` always carries the
+# full total so a silently broken pattern stays loud even when sampled.
+_EVENT_PREVIEW_MAX_FAILURE_SAMPLES = 25
+
+
+class EventSyncPreviewRequest(BaseModel):
+    """Preview an event_sync rule: a saved rule id OR an inline config.
+
+    Exactly one source must be provided — ``event_sync_config`` exists so the
+    rule editor can preview BEFORE saving (bead ti939.1.4).
+    """
+
+    rule_id: Optional[int] = None
+    event_sync_config: Optional[dict] = None
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self):
+        if (self.rule_id is None) == (self.event_sync_config is None):
+            raise ValueError(
+                "provide exactly one of rule_id (preview a saved rule) or "
+                "event_sync_config (preview before saving)"
+            )
+        return self
+
+
+async def _load_event_sync_preview_config(request: EventSyncPreviewRequest) -> dict:
+    """Resolve + validate the config to preview (saved rule or inline)."""
+    from channel_pipeline_schema import validate_event_sync_config
+
+    if request.rule_id is not None:
+        from models import ChannelPipelineRule
+        session = get_session()
+        try:
+            rule = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.id == request.rule_id
+            ).first()
+            if not rule:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            config = rule.get_event_sync_config()
+            if config is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Rule {request.rule_id} is not an event_sync rule "
+                        f"(no event_sync_config)"
+                    ),
+                )
+        finally:
+            session.close()
+    else:
+        # Shallow copy: the validator fills defaults in place and the
+        # request object must not be mutated.
+        config = dict(request.event_sync_config)
+
+    # Inline configs are unvalidated by definition; stored configs are
+    # re-validated so a config predating a schema rail (or hand-edited via
+    # import) fails loudly here instead of previewing under stale semantics.
+    errors = validate_event_sync_config(config)
+    if errors:
+        raise HTTPException(status_code=400, detail={
+            "message": "Invalid event_sync_config",
+            "errors": errors,
+        })
+    return config
+
+
+@router.post("/event-sync-preview")
+async def preview_event_sync(
+    request: EventSyncPreviewRequest, _admin=RequireAdminIfEnabled
+):
+    """Dry-run event matching against live master channels — ZERO writes.
+
+    Phase 1A of Event Sync (epic ti939): runs the read-only pre-flight, then
+    fetches the master group's channels and the secondary groups' streams
+    from Dispatcharr and resolves matches through
+    ``services.event_sync_resolver.resolve_event_sync`` — the EXACT function
+    the Phase 1B attach path will call, so preview scoring and future attach
+    scoring cannot diverge (dry-run parity by construction).
+
+    A pre-flight failure does NOT block the preview — the operator must see
+    the misconfiguration alongside what the matcher would still do. This
+    endpoint never calls any mutating Dispatcharr method: no merges, no
+    channel mutations, and it never toggles Dispatcharr group settings.
+
+    Summary counts (would_attach / ambiguous_skipped / unmatched /
+    parse_failed) reconcile exactly with the ``streams`` detail rows: each
+    stream carries exactly one disposition and the four counts sum to
+    ``secondary_streams``. Master channels are re-resolved by name on every
+    call (stateless recompute — duplicate-named masters map to the lowest
+    channel id, deterministically).
+    """
+    from services.event_sync_preflight import check_event_sync_group_settings
+    from services.event_sync_resolver import (
+        DISPOSITION_AMBIGUOUS,
+        DISPOSITION_PARSE_FAILED,
+        DISPOSITION_UNMATCHED,
+        DISPOSITION_WOULD_ATTACH,
+        SecondaryStream,
+        resolve_event_sync,
+    )
+    from stream_prober import extract_m3u_account_id
+
+    config = await _load_event_sync_preview_config(request)
+    master_group_id = config["master_group_id"]
+    secondary_group_ids = config["secondary_group_ids"]
+    client = get_client()
+
+    # --- Pre-flight (READ-ONLY; failures surface, never block) -----------
+    try:
+        preflight = await check_event_sync_group_settings(client, config)
+    except Exception as e:
+        logger.warning("[EVENT-SYNC] preview pre-flight failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    truncated = False
+
+    # --- Fetch the master group's channels (capped, paginated) -----------
+    master_channels: list[dict] = []
+    try:
+        cpage = 1
+        while True:
+            resp = await client.get_channels(
+                page=cpage, page_size=_PREVIEW_FETCH_PAGE_SIZE,
+                channel_group=master_group_id,
+            )
+            batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
+            master_channels.extend(
+                ch for ch in batch
+                if ch.get("channel_group_id") == master_group_id
+            )
+            if len(master_channels) >= _PREVIEW_MAX_CHANNELS:
+                master_channels = master_channels[:_PREVIEW_MAX_CHANNELS]
+                truncated = True
+                break
+            if not isinstance(resp, dict) or not resp.get("next"):
+                break
+            cpage += 1
+    except Exception as e:
+        logger.warning("[EVENT-SYNC] preview master-channel fetch failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Name -> current channel id, re-resolved on THIS call (stateless
+    # recompute; the matcher itself never sees ids). Lowest id wins for
+    # duplicate names — deterministic.
+    name_to_id: dict[str, int] = {}
+    for ch in master_channels:
+        name, cid = ch.get("name"), ch.get("id")
+        if not name or cid is None:
+            continue
+        if name not in name_to_id or cid < name_to_id[name]:
+            name_to_id[name] = cid
+    master_names = sorted(name_to_id)
+
+    # --- Fetch the secondary groups' streams (capped, paginated) ---------
+    group_names: dict[int, str | None] = {}
+    secondary_streams: list[SecondaryStream] = []
+    try:
+        accounts = await client.get_m3u_accounts() or []
+        account_names = {a.get("id"): a.get("name") for a in accounts}
+        for gid in secondary_group_ids:
+            gname = await client._channel_group_name_for_id(gid)
+            group_names[gid] = gname
+            if not gname:
+                logger.warning(
+                    "[EVENT-SYNC] preview: secondary group %s has no "
+                    "resolvable channel-group name; skipping fetch", gid,
+                )
+                continue
+            if truncated:
+                break
+            spage = 1
+            while True:
+                resp = await client.get_streams(
+                    page=spage, page_size=_PREVIEW_FETCH_PAGE_SIZE,
+                    channel_group_name=gname,
+                )
+                batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
+                for s in batch:
+                    if not s.get("name"):
+                        continue
+                    secondary_streams.append(SecondaryStream(
+                        name=s["name"],
+                        group_id=gid,
+                        stream_id=s.get("id"),
+                        provider=account_names.get(
+                            extract_m3u_account_id(s.get("m3u_account"))
+                        ),
+                    ))
+                if len(secondary_streams) >= _PREVIEW_MAX_STREAMS:
+                    secondary_streams = secondary_streams[:_PREVIEW_MAX_STREAMS]
+                    truncated = True
+                    break
+                if not isinstance(resp, dict) or not resp.get("next"):
+                    break
+                spage += 1
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("[EVENT-SYNC] preview stream fetch failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # --- Resolve (CPU-bound scoring off the event loop) ------------------
+    resolution = await run_cpu_bound(
+        resolve_event_sync, config, master_names, secondary_streams
+    )
+
+    # --- Build detail rows; counts derive from the SAME iteration so they
+    # reconcile with the rows by construction. --------------------------
+    counts = {
+        DISPOSITION_WOULD_ATTACH: 0,
+        DISPOSITION_AMBIGUOUS: 0,
+        DISPOSITION_UNMATCHED: 0,
+        DISPOSITION_PARSE_FAILED: 0,
+    }
+    streams_out: list[dict] = []
+    unmatched_out: list[dict] = []
+    failure_groups: dict[tuple[int, str], dict] = {}
+
+    for r in resolution.resolved:
+        counts[r.disposition] += 1
+        parsed_start = (
+            r.result.parsed.start.isoformat() if r.result.parsed.start else None
+        )
+        streams_out.append({
+            "stream_id": r.stream.stream_id,
+            "stream_name": r.stream.name,
+            "group_id": r.stream.group_id,
+            "provider": r.stream.provider,
+            "parsed_title": r.result.parsed.title,
+            "parsed_start": parsed_start,
+            "matched_pattern": r.result.parsed.matched_pattern,
+            "disposition": r.disposition,
+            "unmatchable_reason": r.result.unmatchable_reason,
+            "would_attach_master": (
+                {
+                    "channel_id": name_to_id.get(r.best.master_name),
+                    "name": r.best.master_name,
+                }
+                if r.best is not None else None
+            ),
+            "candidates": [
+                {
+                    "master_channel_name": c.master_name,
+                    "master_channel_id": name_to_id.get(c.master_name),
+                    "master_parsed_title": c.parsed.title,
+                    "master_parsed_start": (
+                        c.parsed.start.isoformat() if c.parsed.start else None
+                    ),
+                    "score": round(c.score, 4),
+                    "band": c.band,
+                    "team_verdict": c.team_verdict,
+                    "time_delta_minutes": round(c.time_delta_minutes, 1),
+                    "reject_reason": (
+                        c.reject_reasons[0] if c.reject_reasons else None
+                    ),
+                }
+                for c in r.result.candidates[:_EVENT_PREVIEW_MAX_CANDIDATES_PER_STREAM]
+            ],
+        })
+
+        if r.disposition == DISPOSITION_UNMATCHED:
+            top = r.result.candidates[0] if r.result.candidates else None
+            unmatched_out.append({
+                "stream_id": r.stream.stream_id,
+                "stream_name": r.stream.name,
+                "group_id": r.stream.group_id,
+                "provider": r.stream.provider,
+                "parsed_title": r.result.parsed.title,
+                "parsed_start": parsed_start,
+                "best_candidate": (
+                    {
+                        "master_channel_name": top.master_name,
+                        "score": round(top.score, 4),
+                        "band": top.band,
+                        "reject_reason": (
+                            top.reject_reasons[0] if top.reject_reasons else None
+                        ),
+                    }
+                    if top is not None else None
+                ),
+            })
+        elif r.disposition == DISPOSITION_PARSE_FAILED:
+            key = (r.stream.group_id, r.result.unmatchable_reason or "unknown")
+            bucket = failure_groups.setdefault(key, {
+                "group_id": r.stream.group_id,
+                "group_name": group_names.get(r.stream.group_id),
+                "reason": r.result.unmatchable_reason,
+                "count": 0,
+                "stream_names": [],
+            })
+            bucket["count"] += 1
+            if len(bucket["stream_names"]) < _EVENT_PREVIEW_MAX_FAILURE_SAMPLES:
+                bucket["stream_names"].append(r.stream.name)
+
+    logger.info(
+        "[EVENT-SYNC] preview master_group=%s secondaries=%s masters=%d "
+        "streams=%d would_attach=%d ambiguous=%d unmatched=%d parse_failed=%d "
+        "preflight_ok=%s truncated=%s",
+        master_group_id, secondary_group_ids, len(master_channels),
+        len(resolution.resolved), counts[DISPOSITION_WOULD_ATTACH],
+        counts[DISPOSITION_AMBIGUOUS], counts[DISPOSITION_UNMATCHED],
+        counts[DISPOSITION_PARSE_FAILED], preflight["ok"], truncated,
+    )
+
+    return {
+        "preflight": preflight,
+        "summary": {
+            "secondary_streams": len(resolution.resolved),
+            "would_attach": counts[DISPOSITION_WOULD_ATTACH],
+            "ambiguous_skipped": counts[DISPOSITION_AMBIGUOUS],
+            "unmatched": counts[DISPOSITION_UNMATCHED],
+            "parse_failed": counts[DISPOSITION_PARSE_FAILED],
+            "master_channels": len(master_channels),
+            "master_channels_unparsed": len(resolution.unparsed_master_names),
+        },
+        "streams": streams_out,
+        "unmatched_streams": unmatched_out,
+        "parse_failures": [
+            failure_groups[key] for key in sorted(failure_groups)
+        ],
+        "unparsed_master_channels": list(resolution.unparsed_master_names),
+        "truncated": truncated,
+    }
+
+
 @router.post("/validate")
 async def validate_auto_creation_rule(
     conditions: list = Body(...),

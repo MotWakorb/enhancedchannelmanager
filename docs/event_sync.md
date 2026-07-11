@@ -78,6 +78,20 @@ value you sent, what was expected, and a link back to this document.
 * **Unknown keys are rejected**, so a typo'd optional key cannot silently
   fall back to its default.
 
+## Previewing matches (Phase 1A)
+
+`POST /api/channel-pipeline/event-sync-preview` runs the full matcher
+against live Dispatcharr data with **zero writes** — per-stream match rows
+(score, band, team-token verdict, time delta, reject reason), unmatched
+streams, parse failures grouped by group, and summary counts that
+reconcile exactly with the detail rows. It accepts either a saved rule id
+or an inline `event_sync_config` (so the rule editor can preview before
+saving). Full request/response contract: `docs/api.md`. Headless mirror:
+the `preview_event_sync` MCP tool. The preview and the future attach path
+share one resolver (`backend/services/event_sync_resolver.py`), so what
+the preview shows is what Phase 1B would do — dry-run parity by
+construction.
+
 ## Pre-flight checks
 
 Before a preview (and later, a run), ECM verifies against Dispatcharr —
