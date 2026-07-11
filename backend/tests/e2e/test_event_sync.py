@@ -136,6 +136,14 @@ def event_sync_rule(e2e_client, event_sync_groups):
             "secondary_group_ids": [
                 g["id"] for g in event_sync_groups["secondaries"]
             ],
+            # Blast-radius cap for the fixture-drift TOCTOU: the zero-channel
+            # master check happens at fixture time, so if the group gained
+            # channels before the execute-mode run fires (operator flips
+            # auto-sync mid-test, concurrent rule, manually created channel),
+            # the worst case is ONE journaled, rollback-reversible attach
+            # instead of many. Zero effect on the intended zero-master
+            # scenario. Belt to the pre-run re-assert in the manual-run test.
+            "max_attach_per_run": 1,
         },
     }
     resp = e2e_client.post(f"{PIPELINE}/rules", json=payload)
@@ -195,8 +203,14 @@ class TestEventSyncHappyPath:
         assert config["attach_threshold"] >= 0.80
         assert config["time_window_minutes"] > 0
         assert config["enabled"] is True
-        # Shipped defaults in use: no per-rule pattern override was stored.
-        assert "patterns" not in config or config["patterns"] is None
+        # Shipped defaults in use: the stored contract is that the
+        # ``patterns`` key is OMITTED entirely (the validator fills the other
+        # defaults in place but never materializes patterns), so backend
+        # improvements to DEFAULT_EVENT_PATTERNS flow through without
+        # editing saved rules.
+        assert "patterns" not in config
+        # The fixture's blast-radius cap round-trips.
+        assert config["max_attach_per_run"] == 1
 
     def test_configure_rule_create_is_journaled(
         self, e2e_client, event_sync_rule
@@ -306,15 +320,35 @@ class TestEventSyncHappyPath:
     # -- manual run --------------------------------------------------------
 
     def test_manual_run_completes_and_attaches_nothing_without_masters(
-        self, e2e_client, event_sync_rule
+        self, e2e_client, event_sync_rule, event_sync_groups
     ):
         """The single-rule run API (triggered_by="api") executes the rule.
 
-        With zero master channels (enforced by the group-selection fixture)
-        the execute-mode run is attach-nothing by construction: it must
-        complete cleanly, create no channels, merge no streams, and write
-        the event_sync run-summary line into the execution log.
+        With zero master channels (asserted at fixture time AND re-asserted
+        immediately below, closing the fixture-drift TOCTOU) the
+        execute-mode run is attach-nothing by construction: it must complete
+        cleanly, create no channels, merge no streams, and write the
+        event_sync run-summary line into the execution log.
         """
+        # Pre-run re-assert: the zero-channel precondition was checked when
+        # the fixture picked the group; re-check RIGHT before the only
+        # mutating call so drift in between (operator toggles auto-sync,
+        # concurrent rule, manual channel) skips loudly instead of running
+        # against a changed world. The rule's max_attach_per_run=1 cap is
+        # the belt if the group changes in the remaining instants.
+        master_id = event_sync_groups["master"]["id"]
+        groups_resp = e2e_client.get("/api/channel-groups")
+        assert groups_resp.status_code == 200, groups_resp.text[:300]
+        master_now = next(
+            (g for g in groups_resp.json() if g["id"] == master_id), None
+        )
+        if master_now is None or (master_now.get("channel_count") or 0) != 0:
+            pytest.skip(
+                f"master group {master_id} no longer has zero channels "
+                f"(now: {master_now and master_now.get('channel_count')}) — "
+                "zero-master precondition drifted between fixture and run"
+            )
+
         resp = e2e_client.post(
             f"{PIPELINE}/rules/{event_sync_rule['id']}/run"
         )
