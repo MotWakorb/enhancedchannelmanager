@@ -768,7 +768,7 @@ curl -X GET \
 
 ### `POST /api/channel-pipeline/event-sync-preview`
 
-Event Sync (epic ti939) Phase 1A dry-run: parses and scores every secondary-group stream against the master group's live channels using the exact resolver the future attach path will use (`backend/services/event_sync_resolver.py` → `backend/services/event_sync_matcher.py`), so preview scoring and attach scoring cannot diverge. **Zero writes** — no merges, no channel mutations, and Dispatcharr group settings are never toggled. Feature guide: `docs/event_sync.md`.
+Event Sync (epic ti939) dry-run: parses and scores every secondary-group stream against the master group's live channels using the exact resolver the attach path uses (`backend/services/event_sync_resolver.py` → `backend/services/event_sync_matcher.py`), so preview scoring and attach scoring cannot diverge. **Zero writes** — no merges, no channel mutations, and Dispatcharr group settings are never toggled. Feature guide: `docs/event_sync.md`.
 
 **Authentication:** `RequireAdminIfEnabled` (admin token required when auth is enabled).
 
@@ -785,7 +785,7 @@ Event Sync (epic ti939) Phase 1A dry-run: parses and scores every secondary-grou
 |-|-|
 | `preflight` | `{ok, failures[]}` from the read-only group-settings check (master auto-sync ON, secondaries OFF, groups exist). |
 | `summary` | `secondary_streams`, `would_attach`, `ambiguous_skipped`, `unmatched`, `parse_failed` (the four dispositions sum to `secondary_streams` and reconcile exactly with `streams`), plus `master_channels` / `master_channels_unparsed`. |
-| `streams` | One row per secondary stream: raw name, provider, group, parsed title + start, disposition, `would_attach_master` (name + current channel id, re-resolved this call), and up to 10 scored candidates (master name/id, parsed title/start, score, band, team-token verdict, time delta, machine-readable reject reason). |
+| `streams` | One row per secondary stream: raw name, provider, group, parsed title + start, disposition, `ambiguous_reason` (`contested_top_candidates` — the ti939.2.1 contested rail — or `top_candidate_ambiguous_band`; `null` otherwise), `would_attach_master` (name + current channel id, re-resolved this call), and up to 10 scored candidates (master name/id, parsed title/start, score, band, team-token verdict, time delta, machine-readable reject reason). |
 | `unmatched_streams` | Streams with no master in the time window (the master-as-ceiling visibility hedge; evidence base for any future promotion feature). |
 | `parse_failures` | Failures grouped by `(group, reason)` with counts and sample names — a silently broken pattern is loud here. |
 | `unparsed_master_channels` | Master channel names with no complete parsed identity (they can never be attach targets). |

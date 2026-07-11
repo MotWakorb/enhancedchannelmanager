@@ -1202,13 +1202,22 @@ class ActionExecutor:
 
     async def _add_stream_to_channel(self, channel: dict, stream_ctx: StreamContext,
                                       exec_ctx: ExecutionContext,
-                                      merge_provenance: dict | None = None) -> ActionResult:
+                                      merge_provenance: dict | None = None,
+                                      journal_category: str = "auto_creation") -> ActionResult:
         """Add a stream to an existing channel (merge behavior).
 
         ``merge_provenance`` (enhancedchannelmanager-jnzst) carries the scored-
         fuzzy provenance (score, effective threshold, signal, both parsed
         callsigns, rule_id, allowlist) for the journal. None on the exact /
         legacy paths so their journal entries are unchanged.
+
+        ``journal_category`` (enhancedchannelmanager-ti939.2.1) is the journal
+        category for the per-merge entry. The event_sync attach path passes
+        "event_sync" so its attaches are auditable as their own category; the
+        default keeps every pre-existing path on "auto_creation". The journal
+        ``action_type`` stays "merge_stream" for BOTH so the journal-driven
+        surgical unmerge (``_journal_driven_unmerge``) covers event_sync
+        attaches on the legacy rollback path too.
         """
         channel_id = channel["id"]
         channel_name = channel["name"]
@@ -1295,6 +1304,8 @@ class ActionExecutor:
                 channel_id, channel_name, stream_ctx.stream_id,
                 current_streams, new_streams,
                 provenance=merge_provenance,
+                category=journal_category,
+                stream_name=stream_ctx.stream_name,
             )
 
             return ActionResult(
@@ -1319,7 +1330,9 @@ class ActionExecutor:
 
     def _journal_merge(self, channel_id: int, channel_name: str, stream_id: int,
                        before_ids: list, after_ids: list,
-                       provenance: dict | None = None) -> None:
+                       provenance: dict | None = None,
+                       category: str = "auto_creation",
+                       stream_name: str | None = None) -> None:
         """Write a per-merge journal entry for an executed LIVE merge (bd-0emgo.5).
 
         Tags the entry with ``batch_id=str(execution_id)`` so an operator can
@@ -1335,6 +1348,15 @@ class ActionExecutor:
         (the free-form JSON escape hatch — no migration). It records the score,
         effective threshold, signal fired, both parsed callsigns, rule_id and
         allowlist so a bad scored merge is auditable.
+
+        enhancedchannelmanager-ti939.2.1: ``category`` lets the event_sync
+        attach path write its entries under the "event_sync" category (its own
+        auditable stream) while keeping ``action_type="merge_stream"`` so
+        batch-recovery readers and the journal-driven surgical unmerge treat
+        them identically. ``stream_name`` (when given) puts the secondary
+        stream's NAME in the description alongside its id — names survive
+        stale IDs (journal is historical audit with lazy resolution, ADR-008
+        §D4 precedent).
         """
         if self._execution_id is None:
             # No execution_id threaded in (direct-construct callers): an
@@ -1345,12 +1367,18 @@ class ActionExecutor:
             # Fold provenance into the after_value JSON. Keep stream_ids the
             # leading key so existing batch-recovery readers are unaffected.
             after_value["match"] = provenance
+        if stream_name:
+            description = "Merged stream '%s' (id %s) into channel '%s'" % (
+                stream_name, stream_id, channel_name)
+        else:
+            description = "Merged stream %s into channel '%s'" % (
+                stream_id, channel_name)
         self._journal_buffer.append({
-            "category": "auto_creation",
+            "category": category,
             "action_type": "merge_stream",
             "entity_id": channel_id,
             "entity_name": channel_name,
-            "description": "Merged stream %s into channel '%s'" % (stream_id, channel_name),
+            "description": description,
             "before_value": {"stream_ids": list(before_ids)},
             "after_value": after_value,
             "user_initiated": False,
@@ -3298,6 +3326,255 @@ class ActionExecutor:
             best_match.score, best_match.signal,
         )
         return best_channel, provenance
+
+    def _resolve_event_sync(self, config: dict, secondary_streams: list,
+                            now=None) -> tuple:
+        """Event-mode candidate resolution (ti939.2.1) — SIBLING of
+        :meth:`_resolve_scored_fuzzy`.
+
+        Resolves every secondary stream against the MASTER group's channels
+        through ``services.event_sync_resolver.resolve_event_sync`` — the
+        EXACT function the preview endpoint calls, so preview decisions and
+        run decisions cannot diverge on identical inputs (dry-run parity by
+        construction). This method adds NO policy of its own: it only builds
+        the master name universe and the name → channel-id map.
+
+        Candidates are exclusively the master group's channels (tighter
+        scoping than the scored-fuzzy allowlist — the mandatory-scoping
+        rail). Master channels come from ``self.existing_channels`` — loaded
+        ONCE per run by the engine and indexed in ``self._channel_by_id`` —
+        so there is no per-stream (or even per-rule) refetch. Duplicate
+        master names map to the LOWEST channel id, mirroring the preview
+        endpoint exactly (stateless recompute: ids are re-resolved from the
+        in-run channel list every run, never persisted).
+
+        Args:
+            config: A VALIDATED event_sync_config.
+            secondary_streams: list[services.event_sync_resolver.SecondaryStream].
+            now: Optional tz-aware anchor threaded to the resolver (tests).
+
+        Returns:
+            ``(resolution, name_to_id, master_channel_count)`` where
+            ``resolution`` is the EventSyncResolution and ``name_to_id`` maps
+            master channel name -> current channel id.
+        """
+        # Lazy import: keeps the heavy matcher stack (rapidfuzz, pytz,
+        # dummy-EPG engine) off this module's import path — same pattern as
+        # channel_pipeline_schema's lazy matcher imports.
+        from services.event_sync_resolver import resolve_event_sync
+
+        master_group_id = config["master_group_id"]
+        name_to_id: dict[str, int] = {}
+        master_channel_count = 0
+        for ch in self.existing_channels:
+            if ch.get("channel_group_id") != master_group_id:
+                continue
+            master_channel_count += 1
+            name, cid = ch.get("name"), ch.get("id")
+            if not name or cid is None:
+                continue
+            if name not in name_to_id or cid < name_to_id[name]:
+                name_to_id[name] = cid
+        master_names = sorted(name_to_id)
+
+        resolution = resolve_event_sync(
+            config, master_names, secondary_streams, now=now
+        )
+        return resolution, name_to_id, master_channel_count
+
+    async def execute_event_sync_rule(self, rule_id: Optional[int],
+                                      rule_name: str, config: dict,
+                                      secondary_streams: list,
+                                      exec_ctx: ExecutionContext) -> dict:
+        """Execute one event_sync rule's attach path (bead ti939.2.1).
+
+        Phase 1B — the FIRST write path for event_sync. Resolves every
+        fetched secondary stream via :meth:`_resolve_event_sync` (the shared
+        decision path), then executes band semantics:
+
+        * ``would_attach`` → attach via the EXISTING add-stream-to-channel
+          merge internals (:meth:`_add_stream_to_channel`). Idempotent by
+          construction: a stream already on the master channel is a no-op
+          skip, so stateless re-runs after every refresh are safe.
+        * ``ambiguous`` (band or contested rail) → skip + count.
+        * ``unmatched`` / ``parse_failed`` → skip with reason (counted).
+
+        Blast-radius controls:
+
+        * Per-run attach cap (``config["max_attach_per_run"]``): on overage
+          this stops attaching (WARNs; the engine also writes an execution
+          log entry + run warning from the returned summary) and records the
+          overage count. Live runs only — a dry run mutates nothing, and
+          capping it would hide the run's true would-attach size. Idempotent
+          already-attached no-ops never consume cap budget.
+        * Journal entry per attach: category "event_sync",
+          batch_id = execution id, with NAMES alongside IDs (secondary
+          stream name+id, provider, master channel name+id) plus score,
+          band, time delta and team-token verdict — via the provenance dict
+          threaded into ``_add_stream_to_channel``.
+        * NEVER creates or deletes channels; never touches
+          managed_channel_ids; never toggles Dispatcharr group settings.
+
+        Returns a summary dict the engine folds into the execution record:
+        counts per disposition, cap state, and per-attach ``attach_entries``
+        for the execution log.
+        """
+        from services.event_sync_resolver import (
+            AMBIGUOUS_REASON_CONTESTED,
+            DEFAULT_MAX_ATTACH_PER_RUN,
+            DISPOSITION_AMBIGUOUS,
+            DISPOSITION_PARSE_FAILED,
+            DISPOSITION_UNMATCHED,
+            DISPOSITION_WOULD_ATTACH,
+        )
+        from concurrency import run_cpu_bound
+
+        # CPU-bound scoring off the event loop (same treatment as the
+        # preview endpoint).
+        resolution, name_to_id, master_channel_count = await run_cpu_bound(
+            self._resolve_event_sync, config, secondary_streams
+        )
+
+        cap = config.get("max_attach_per_run", DEFAULT_MAX_ATTACH_PER_RUN)
+        cap_active = bool(cap) and not exec_ctx.dry_run
+
+        summary = {
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "master_group_id": config["master_group_id"],
+            "secondary_group_ids": list(config["secondary_group_ids"]),
+            "secondary_streams": len(resolution.resolved),
+            "master_channels": master_channel_count,
+            "master_channels_unparsed": len(resolution.unparsed_master_names),
+            "attached": 0,
+            "already_attached": 0,
+            "ambiguous_skipped": 0,
+            "contested_skipped": 0,
+            "unmatched": 0,
+            "parse_failed": 0,
+            "attach_errors": 0,
+            "cap": cap,
+            "capped": False,
+            "cap_overage": 0,
+            "attach_entries": [],
+        }
+
+        for r in resolution.resolved:
+            if r.disposition == DISPOSITION_PARSE_FAILED:
+                summary["parse_failed"] += 1
+                continue
+            if r.disposition == DISPOSITION_UNMATCHED:
+                summary["unmatched"] += 1
+                continue
+            if r.disposition == DISPOSITION_AMBIGUOUS:
+                summary["ambiguous_skipped"] += 1
+                if r.ambiguous_reason == AMBIGUOUS_REASON_CONTESTED:
+                    summary["contested_skipped"] += 1
+                logger.info(
+                    "[EVENT-SYNC] Rule '%s': stream '%s' AMBIGUOUS (%s) — "
+                    "skipped, never auto-attached",
+                    rule_name, r.stream.name, r.ambiguous_reason,
+                )
+                continue
+            if r.disposition != DISPOSITION_WOULD_ATTACH:
+                # Defensive: an unknown disposition must be loud, not a
+                # silent attach or a silent drop.
+                logger.warning(
+                    "[EVENT-SYNC] Rule '%s': stream '%s' has unknown "
+                    "disposition %r — skipped",
+                    rule_name, r.stream.name, r.disposition,
+                )
+                summary["attach_errors"] += 1
+                continue
+
+            # would_attach — resolve the master channel dict by CURRENT id.
+            master_channel_id = name_to_id.get(r.best.master_name)
+            channel = self._channel_by_id.get(master_channel_id)
+            if channel is None:
+                logger.warning(
+                    "[EVENT-SYNC] Rule '%s': master channel '%s' (id=%s) "
+                    "vanished from the run's channel cache — stream '%s' "
+                    "not attached",
+                    rule_name, r.best.master_name, master_channel_id,
+                    r.stream.name,
+                )
+                summary["attach_errors"] += 1
+                continue
+
+            # Per-run attach cap (live only). Checked only for streams that
+            # actually NEED attaching: an already-attached stream is an
+            # idempotent no-op that neither consumes budget nor counts as
+            # overage (otherwise a capped re-run would misreport its own
+            # prior work as deferred).
+            already_attached = r.stream.stream_id in {
+                s["id"] if isinstance(s, dict) else s
+                for s in channel.get("streams", [])
+            }
+            if not already_attached \
+                    and cap_active and summary["attached"] >= cap:
+                if not summary["capped"]:
+                    summary["capped"] = True
+                    logger.warning(
+                        "[EVENT-SYNC] Rule '%s': per-run attach cap reached "
+                        "(%s) — no further streams will be attached this "
+                        "run. event_sync is idempotent: run it again to "
+                        "continue, or raise max_attach_per_run on the rule.",
+                        rule_name, cap,
+                    )
+                summary["cap_overage"] += 1
+                continue
+
+            provenance = {
+                "kind": "event_sync",
+                "rule_id": rule_id,
+                "secondary_stream_id": r.stream.stream_id,
+                "secondary_stream_name": r.stream.name,
+                "provider": r.stream.provider,
+                "secondary_group_id": r.stream.group_id,
+                "master_channel_id": master_channel_id,
+                "master_channel_name": r.best.master_name,
+                "score": round(r.best.score, 4),
+                "band": r.best.band,
+                "time_delta_minutes": round(r.best.time_delta_minutes, 1),
+                "team_verdict": r.best.team_verdict,
+            }
+            stream_ctx = StreamContext(
+                stream_id=r.stream.stream_id,
+                stream_name=r.stream.name,
+                group_name=None,
+                m3u_account_name=r.stream.provider,
+            )
+            result = await self._add_stream_to_channel(
+                channel, stream_ctx, exec_ctx,
+                merge_provenance=provenance,
+                journal_category="event_sync",
+            )
+            # Route through the shared chokepoint so streams_merged /
+            # merged_channel_ids / modified_entities (legacy rollback state)
+            # aggregate exactly like every other merge path.
+            exec_ctx.add_result(result)
+
+            if not result.success:
+                summary["attach_errors"] += 1
+            elif result.skipped:
+                # Already attached — the idempotence that makes stateless
+                # re-runs after every refresh safe.
+                summary["already_attached"] += 1
+            else:
+                summary["attached"] += 1
+
+            summary["attach_entries"].append({
+                "type": "event_sync_attach",
+                "description": result.description,
+                "success": result.success,
+                "skipped": result.skipped,
+                "entity_id": master_channel_id,
+                "entity_name": r.best.master_name,
+                "error": result.error,
+                "match": provenance,
+            })
+
+        return summary
 
     @staticmethod
     def _is_manual_channel(channel: Optional[dict]) -> bool:

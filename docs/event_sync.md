@@ -5,11 +5,14 @@
 > [Developer reference](#developer-reference) at the bottom is for engineers
 > working on the matcher, resolver, or schema.
 
-> **Phase status: preview-only (Phase 1A).** event_sync rules are excluded
-> from pipeline execution entirely — there is no attach path yet. Everything
-> below the Quick start describes the preview surface. The attach path
-> (Phase 1B) ships only after match quality is validated on real provider
-> data (epic `enhancedchannelmanager-ti939`).
+> **Phase status: attach path implemented (Phase 1B, bead ti939.2.1),
+> manual-run-only.** event_sync rules stay excluded from the pipeline's
+> per-stream Pass 1/2 evaluation; on a **manually triggered** pipeline run
+> they execute via a dedicated attach phase that resolves matches through
+> the same resolver the preview uses and attaches streams via the existing
+> merge internals. They never fire from the unattended post-refresh task or
+> any scheduled path (auto-run is a Phase 2 explicit opt-in). See
+> [Running the attach path](#running-the-attach-path-phase-1b).
 
 ## Overview
 
@@ -26,7 +29,7 @@ that group, exactly as it does today. Every other provider's event group
 is a **secondary**: `auto_channel_sync` **OFF**, a pure stream source.
 ECM matches each secondary stream to a master channel — parse the name to
 (event title, start time), block by time window, fuzzy-score the parsed
-titles, cross-check team tokens — and, in a later phase, attaches the
+titles, cross-check team tokens — and, on a manual run, attaches the
 matched stream to that master channel (failover + quality choice on one
 channel number). **ECM never creates or deletes channels in this
 feature** — Dispatcharr does, from the master group only.
@@ -124,13 +127,14 @@ Read it top to bottom:
 - **Unmatched secondary streams** and **Parse failures** — see
   [Troubleshooting](#troubleshooting) below.
 
-If the counts and match cards look right, **Save** the rule. There is
-deliberately no "Apply" or "Attach" button anywhere in this phase — saving
-only stores the config; Preview is the only action that touches live data,
-and it never writes.
+If the counts and match cards look right, **Save** the rule, then execute
+it with a **manual pipeline Run** — see
+[Running the attach path](#running-the-attach-path-phase-1b). Preview
+itself never writes; the attach only happens on a run you trigger.
 
-Saved Event Sync rules carry a badge in the rule list and are excluded
-from **Run** / **Dry Run** — they have no execution path yet:
+Saved Event Sync rules carry a badge in the rule list. Their per-rule
+**Run** / **Dry Run** icons remain hidden in this phase (execute them via
+the pipeline-level manual Run, or the single-rule run API):
 
 ![Channel Pipeline rule list showing a "Live Events (multi-provider)" rule with an "Event Sync" badge, and no play/eye/dry-run icons in its Actions column (only edit, duplicate, delete)](images/event_sync/7-rule-list-badge.png)
 
@@ -229,6 +233,7 @@ the rule.
   },
   "time_window_minutes": 30,
   "attach_threshold": 0.80,
+  "max_attach_per_run": 100,
   "enabled": true
 }
 ```
@@ -241,6 +246,7 @@ the rule.
 | `group_patterns` | no | Per-group pattern overrides, keyed by group ID (master or a secondary). A group with an override uses ONLY its own patterns for parsing; other groups keep the shared `patterns` selection. |
 | `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. Capped at 1440 (24 hours). |
 | `attach_threshold` | no (default 0.80) | Auto-attach score floor on the parsed-title score. **Hard-clamped ≥ 0.80** — it can be raised per rule, never lowered. |
+| `max_attach_per_run` | no (default 100) | Per-run attach cap (1–1000). On overage the run stops attaching, warns in the execution log, and records the overage count. Runs are idempotent — run again to continue. |
 | `enabled` | no (default true) | Feature toggle within the rule. |
 
 ### Why validation is strict
@@ -275,9 +281,19 @@ within the time window — lands in exactly one confidence band:
 
 | Band | Score range | What happens |
 |-|-|-|
-| **attach** | `score ≥` effective threshold (see below) | Best candidate becomes the stream's `would_attach_master` (Phase 1B will attach it; Phase 1A only reports it). |
+| **attach** | `score ≥` effective threshold (see below) | Best candidate becomes the stream's `would_attach_master` — a manual run attaches it; the preview reports it. |
 | **ambiguous** | `0.60 ≤ score <` effective threshold | Surfaced for operator review in the preview. **Never auto-attached**, at any score. |
 | **reject** | `score < 0.60`, or a hard-reject rail fired | Never attached. In-window rejected pairs still appear in the preview's candidates table with a machine-readable reject reason (`team_token_conflict`, `numeric_identity_conflict`, `no_parsed_time`, `parse_failure`, `below_ambiguous_floor`); out-of-window pairs (`outside_time_window`) are excluded from candidacy entirely. |
+
+**Contested rail (ti939.2.1)**: even when the best candidate is in the
+attach band, the stream is classified **ambiguous** (machine-readable
+reason `contested_top_candidates`) when more than one candidate lands in
+the attach band, or the runner-up scores within 0.05 of the winner — the
+team-agree boost can tie same-fixture-different-session masters ("Fury
+vs. Usyk" main card vs. its Prelims) at identical scores, and attaching to
+an alphabetical tie-break winner would be wrong half the time. Skip +
+count, never attach. The preview surfaces the reason per stream
+(`ambiguous_reason`).
 
 The "effective threshold" is not always 0.80: without positive team-token
 agreement (the team-token check found no team pair on one side, or the
@@ -358,6 +374,44 @@ picking a different (broader) master group, or a future promotion feature
 (tracked under epic `enhancedchannelmanager-ti939.4`, not built yet) — not
 something to work around today.
 
+### Undo a bad event_sync run
+
+Every live event_sync run captures a **pre-mutation snapshot** that
+includes the master group's channels, so a bad run (a wrong attachment, a
+threshold set too low, a pattern matching the wrong fixtures) is fully
+reversible by execution id:
+
+1. **Find the execution id.** It's in the run response, the executions
+   list (`GET /api/channel-pipeline/executions`), and on every journal
+   entry the run wrote (`batch_id` = execution id).
+2. **Inspect what the run did.** The journal (category `event_sync`,
+   action type `merge_stream`, `batch_id` = the execution id) has one
+   entry per attachment carrying the secondary stream **name**+id, the
+   provider, the master channel **name**+id, and the score / band /
+   time-delta / team-token verdict that justified the match — enough to
+   judge each attachment without replaying the run.
+3. **Roll it back.**
+   `POST /api/channel-pipeline/executions/{id}/rollback` with
+   `confirm=true` (or the UI's rollback on that execution). Because the
+   snapshot restore is an optimistic overwrite of each snapshot channel's
+   stream list, the API refuses without `confirm` and tells you what would
+   be overwritten. The rollback removes every stream the run attached and
+   **never deletes the master channels themselves** — ECM didn't create
+   them and won't remove them. Master channels are restored with a
+   **streams-only** payload: their name / group / EPG linkage stay
+   whatever Dispatcharr currently says (a slot rename that happened after
+   the run is not reverted).
+4. **Fix the rule before the next run.** The matcher is deterministic: a
+   bad match is reversible and non-compounding but **not self-healing** —
+   the same rule against the same names will make the same bad match on
+   the next manual run, every time, until you adjust the rule's pattern
+   or threshold (or the provider renames the stream). Rollback undoes the
+   damage; only a rule change prevents the recurrence.
+
+What the journal shows after the rollback: the run's execution record
+moves to `rolled_back`, and the original per-attach entries remain as the
+historical audit trail (journal entries are never deleted).
+
 ## Pre-flight checks
 
 Before a preview (and later, a run), ECM verifies against Dispatcharr —
@@ -396,6 +450,9 @@ in practice.
   run; master channels are the identity anchor. See [No durable cluster
   state](#no-durable-cluster-state) below.
 * **No auto-run.** Manual-run-only until Phase 2's explicit opt-in flag.
+  Enforced twice: the unattended watermark task excludes event_sync rules
+  from its query, and the engine refuses to execute them for any
+  non-manual trigger (deny-by-default).
 
 ## Previewing matches (Phase 1A)
 
@@ -406,10 +463,42 @@ streams, parse failures grouped by group, and summary counts that
 reconcile exactly with the detail rows. It accepts either a saved rule id
 or an inline `event_sync_config` (so the rule editor can preview before
 saving). Full request/response contract: [`docs/api.md`](api.md). Headless
-mirror: the `preview_event_sync` MCP tool. The preview and the future
-attach path share one resolver (`backend/services/event_sync_resolver.py`),
-so what the preview shows is what Phase 1B would do — dry-run parity by
-construction.
+mirror: the `preview_event_sync` MCP tool. The preview and the attach path
+share one resolver (`backend/services/event_sync_resolver.py`), so what
+the preview shows is what a run does — dry-run parity by construction.
+
+## Running the attach path (Phase 1B)
+
+A **manual** pipeline run (`POST /api/channel-pipeline/run`, a single-rule
+run, or the UI's pipeline Run) executes event_sync rules through a
+dedicated attach phase:
+
+* Every secondary stream resolves through
+  `backend/services/event_sync_resolver.py` — **the same function the
+  preview calls**, so preview decisions and run decisions are identical on
+  identical inputs.
+* **Band semantics:** attach band → the stream is attached to the master
+  channel via the existing merge machinery; ambiguous (band or
+  [contested rail](#threshold-and-bands)) → skipped and counted;
+  reject / unmatched / parse-failed → skipped with reason.
+* **Idempotent:** a stream already on its master channel is a no-op, so
+  re-running after every refresh is safe and is the intended usage.
+* **Journal provenance:** every attach writes a journal entry (category
+  `event_sync`, batch_id = execution id) carrying names alongside IDs —
+  secondary stream name+id, provider, master channel name+id — plus score,
+  band, time delta and team-token verdict.
+* **Run summary line** in the execution log and on the execution record:
+  `event_sync: X attached, Y ambiguous skipped, Z unmatched, W parse
+  failures` — the operator's drift detector. A silently broken parse
+  pattern shows up here as a parse-failure spike within a day.
+* **Attach cap:** on `max_attach_per_run` overage the run stops attaching,
+  warns in the execution log, and records the overage count on the
+  execution record's warnings.
+* **Rollback:** the run's pre-mutation snapshot includes the master
+  group's channels, so the standard execution rollback / snapshot restore
+  undoes attaches. Master channels are restored **streams-only** (never
+  their Dispatcharr-owned name/group/EPG metadata) and are never deleted.
+  Step-by-step: [Undo a bad event_sync run](#undo-a-bad-event_sync-run).
 
 ## Developer reference
 
@@ -486,9 +575,9 @@ in this module.
 
 Event Sync persists **no new database tables** for match state. The only
 durable state is the nullable `event_sync_config` JSON column on
-`auto_creation_rules` (the rule's own configuration) plus journal
-provenance rows once the attach path ships. Every preview (and, later,
-every run) **recomputes matching from scratch** against live Dispatcharr
+`auto_creation_rules` (the rule's own configuration) plus the journal
+provenance rows the attach path writes per attach. Every preview and every run
+**recomputes matching from scratch** against live Dispatcharr
 data — master channels are identified by **name**, never by ID, and the
 matcher/resolver modules never see, cache, or return a channel ID.
 
@@ -570,4 +659,4 @@ no versioned API reference beyond the `event-sync-preview` entry in
 - `backend/channel_pipeline_schema.py` `validate_event_sync_config` — the config validator (single source of truth for defaults/clamps, imported from the matcher).
 - `backend/tests/fixtures/event_sync/matcher_corpus.jsonl` — the frozen regression corpus.
 - `frontend/src/components/channelPipeline/eventSyncShippedPatterns.json` — the shipped pattern definitions consumed by both the frontend picker and a backend test that pins each pattern's example against the real parser.
-- Epic `enhancedchannelmanager-ti939` — Event Sync overall (Phase 1A preview-only, Phase 1B attach, Phase 2 automation, Phase 3 evidence-driven promotion).
+- Epic `enhancedchannelmanager-ti939` — Event Sync overall (Phase 1A preview, Phase 1B attach — shipped, Phase 2 automation, Phase 3 evidence-driven promotion).

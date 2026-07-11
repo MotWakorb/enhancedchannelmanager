@@ -180,6 +180,85 @@ class TestCaptureSerialization:
         finally:
             session.close()
 
+    def test_include_auto_created_group_ids_captures_event_masters(
+        self, db_session_factory
+    ):
+        """ti939.2.1: auto-created channels in the event_sync MASTER groups
+        ARE captured (the attach phase mutates their stream lists, so
+        rollback/restore needs the pre-run state); every other auto-created
+        channel stays §D3-excluded."""
+        execution_id = _make_execution(db_session_factory)
+
+        client = MagicMock()
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = [
+            # Event master (auto-created, group 10) — captured via the
+            # include set.
+            {"id": 1, "name": "Master Event", "auto_created": True,
+             "channel_group_id": 10, "streams": [100]},
+            # Unrelated auto-created (group 4) — still excluded.
+            {"id": 2, "name": "Auto B", "auto_created": True,
+             "channel_group_id": 4, "streams": [200]},
+            # Manual — captured as always.
+            {"id": 3, "name": "Manual C", "channel_group_id": 3,
+             "streams": [300]},
+        ]
+
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
+            asyncio.get_event_loop().run_until_complete(
+                engine._capture_snapshot(
+                    execution_id, include_auto_created_group_ids={10},
+                )
+            )
+
+        session = db_session_factory()
+        try:
+            row = session.query(ChannelPipelineSnapshot).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
+            ).first()
+            channels = row.get_channels_data()["channels"]
+            ids = {c["id"] for c in channels}
+            assert ids == {1, 3}
+            by_id = {c["id"]: c for c in channels}
+            assert by_id[1]["stream_ids"] == [100]  # master's PRE-RUN stream set
+            # ti939.2.3 (PR #616 review): the captured MASTER is flagged so
+            # restore_snapshot writes back a streams-only payload; manual
+            # channels carry NO flag (their restore stays byte-identical).
+            assert by_id[1]["event_sync_master"] is True
+            assert "event_sync_master" not in by_id[3]
+        finally:
+            session.close()
+
+    def test_no_include_set_keeps_d3_exclusion_unchanged(
+        self, db_session_factory
+    ):
+        """Back-compat: with no include set (or an empty one), behavior is
+        byte-identical to the pre-ti939.2.1 §D3 filter."""
+        execution_id = _make_execution(db_session_factory)
+
+        client = MagicMock()
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = [
+            {"id": 1, "name": "Auto", "auto_created": True,
+             "channel_group_id": 10, "streams": [100]},
+        ]
+
+        with patch("channel_pipeline_engine.get_session", side_effect=db_session_factory):
+            asyncio.get_event_loop().run_until_complete(
+                engine._capture_snapshot(
+                    execution_id, include_auto_created_group_ids=set(),
+                )
+            )
+
+        session = db_session_factory()
+        try:
+            row = session.query(ChannelPipelineSnapshot).filter(
+                ChannelPipelineSnapshot.execution_id == execution_id
+            ).first()
+            assert row.channel_count == 0
+        finally:
+            session.close()
+
     def test_no_channels_writes_empty_snapshot(self, db_session_factory):
         """An instance with no manual channels still writes a (zero-count) row
         — the run had nothing manual to capture, not a capture failure."""
@@ -296,7 +375,11 @@ class TestRunPipelineDryRunGate:
             engine.run_pipeline(dry_run=False, triggered_by="manual")
         )
 
-        engine._capture_snapshot.assert_awaited_once_with(4242)
+        # ti939.2.1: with no event_sync rules in the run the include set is
+        # empty — §D3 exclusion unchanged.
+        engine._capture_snapshot.assert_awaited_once_with(
+            4242, include_auto_created_group_ids=set()
+        )
 
     def test_dry_run_skips_snapshot(self):
         """dry_run=True → _capture_snapshot is NEVER called (no snapshot for a

@@ -122,6 +122,43 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
+  describe('max_attach_per_run pass-through (ti939.2.1)', () => {
+    it('preserves an API-set attach cap across a UI edit save', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          max_attach_per_run: 25,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.max_attach_per_run).toBe(25);
+    });
+
+    it('omits the cap when the rule never had one (backend default applies)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config).not.toHaveProperty(
+        'max_attach_per_run'
+      );
+    });
+  });
+
   describe('live auto-sync guidance (never toggles Dispatcharr settings)', () => {
     it('warns with enable-it-yourself guidance when the master group has auto-sync OFF', async () => {
       seedGroups();

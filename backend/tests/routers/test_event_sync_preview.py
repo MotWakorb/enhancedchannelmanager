@@ -24,52 +24,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from models import ChannelPipelineRule
-
-MASTER_GROUP_ID = 10
-SECONDARY_A = 20
-SECONDARY_B = 30
-
-GROUP_NAMES = {
-    MASTER_GROUP_ID: "Peacock Events",
-    SECONDARY_A: "Fubo Events",
-    SECONDARY_B: "DAZN Events",
-}
-
-MASTER_CHANNELS = [
-    {"id": 55, "name": "Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
-     "channel_group_id": MASTER_GROUP_ID},
-    {"id": 56, "name": "Peacock 11: IMSA CTMP Qualifying @ 11 Jul 03:55 PM ET",
-     "channel_group_id": MASTER_GROUP_ID},
-    {"id": 57, "name": "Peacock 40: NO EVENT",
-     "channel_group_id": MASTER_GROUP_ID},
-]
-
-# Group A: one attach + one ambiguous. Group B: one unmatched + one parse fail.
-SECONDARY_STREAMS = {
-    "Fubo Events": [
-        {"id": 201, "name": "WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
-         "m3u_account": 1},
-        {"id": 202, "name": "IMSA TV 03 : IMSA VPRC at CTMP R2 @ 11 Jul 03:55 PM ET",
-         "m3u_account": 1},
-    ],
-    "DAZN Events": [
-        {"id": 301, "name": "DAZN 05: Fury vs. Usyk @ 11 Jul 11:00 PM ET",
-         "m3u_account": 2},
-        {"id": 302, "name": "DAZN 09: NO EVENT", "m3u_account": 2},
-    ],
-}
-
-M3U_ACCOUNTS = [
-    {"id": 1, "name": "FuboProvider"},
-    {"id": 2, "name": "DaznProvider"},
-]
-
-# All groups correctly configured: master auto-sync ON, secondaries OFF.
-GROUP_SETTINGS_OK = {
-    MASTER_GROUP_ID: {"auto_channel_sync": True},
-    SECONDARY_A: {"auto_channel_sync": False},
-    SECONDARY_B: {"auto_channel_sync": False},
-}
+from tests.event_sync_fixtures import (
+    GROUP_NAMES,
+    GROUP_SETTINGS_OK,
+    M3U_ACCOUNTS,
+    MASTER_CHANNELS,
+    MASTER_GROUP_ID,
+    SECONDARY_A,
+    SECONDARY_B,
+    SECONDARY_STREAMS,
+)
 
 
 def _config(**overrides) -> dict:
