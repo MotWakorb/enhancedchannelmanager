@@ -1512,3 +1512,129 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] reset_channel_pipeline_circuit_breaker failed: %s", e)
             return f"Error resetting circuit breaker: {e}"
+
+    @mcp.tool()
+    async def preview_event_sync(
+        rule_id: int | None = None,
+        event_sync_config: dict | None = None,
+        max_rows: int = 50,
+    ) -> str:
+        """Dry-run Event Sync matching against live master channels — ZERO writes.
+
+        Mirrors POST /api/channel-pipeline/event-sync-preview (bead
+        ti939.1.4, Event Sync Phase 1A): runs the read-only pre-flight
+        (master group auto-sync ON, secondaries OFF), fetches the master
+        group's channels and the secondary groups' streams from Dispatcharr,
+        and scores every stream through the EXACT resolver the future attach
+        path will use. Nothing is merged, mutated, or toggled.
+
+        Provide EXACTLY ONE of:
+            rule_id: Preview a saved event_sync rule.
+            event_sync_config: Preview an inline config before saving —
+                {"master_group_id": int, "secondary_group_ids": [int, ...],
+                 optional "patterns"/"group_patterns"/"time_window_minutes"/
+                 "attach_threshold"}.
+
+        Args:
+            rule_id: Saved channel-pipeline rule id (event_sync kind).
+            event_sync_config: Inline event_sync config object.
+            max_rows: Cap on per-stream detail lines in the text report
+                (summary counts always cover everything).
+        """
+        if (rule_id is None) == (event_sync_config is None):
+            return (
+                "Error: provide exactly one of rule_id (saved rule) or "
+                "event_sync_config (inline config)."
+            )
+        try:
+            client = get_ecm_client()
+            body = (
+                {"rule_id": rule_id} if rule_id is not None
+                else {"event_sync_config": event_sync_config}
+            )
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_event_sync_preview"], body=body, timeout=120.0
+            )
+            if not isinstance(result, dict):
+                return f"Unexpected response: {result!r}"
+
+            lines = ["Event Sync PREVIEW (dry-run, zero writes):"]
+
+            preflight = result.get("preflight") or {}
+            if preflight.get("ok"):
+                lines.append("Pre-flight: OK")
+            else:
+                lines.append("Pre-flight: FAILED — fix in Dispatcharr "
+                             "(ECM never toggles group settings for you):")
+                for f in preflight.get("failures", []):
+                    lines.append(
+                        f"  - group {f.get('group_id')} ({f.get('role')}): "
+                        f"{f.get('message')}"
+                    )
+
+            s = result.get("summary") or {}
+            lines.append(
+                f"Summary: {s.get('secondary_streams', 0)} secondary streams -> "
+                f"{s.get('would_attach', 0)} would attach, "
+                f"{s.get('ambiguous_skipped', 0)} ambiguous (operator review), "
+                f"{s.get('unmatched', 0)} unmatched, "
+                f"{s.get('parse_failed', 0)} parse failed | "
+                f"{s.get('master_channels', 0)} master channels "
+                f"({s.get('master_channels_unparsed', 0)} unparsable)"
+            )
+            if result.get("truncated"):
+                lines.append("NOTE: fetch caps hit — results are truncated.")
+
+            for group in result.get("parse_failures", []):
+                lines.append(
+                    f"PARSE FAILURES in group {group.get('group_id')} "
+                    f"('{group.get('group_name')}'), reason="
+                    f"{group.get('reason')}: {group.get('count')} stream(s), "
+                    f"e.g. {group.get('stream_names', [])[:3]}"
+                )
+
+            shown = 0
+            for row in result.get("streams", []):
+                if shown >= max_rows:
+                    lines.append(
+                        f"  ... and {len(result.get('streams', [])) - shown} "
+                        f"more stream(s)"
+                    )
+                    break
+                shown += 1
+                if row.get("disposition") == "would_attach":
+                    master = row.get("would_attach_master") or {}
+                    top = (row.get("candidates") or [{}])[0]
+                    lines.append(
+                        f"  ATTACH  [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' -> channel "
+                        f"{master.get('channel_id')} '{master.get('name')}' "
+                        f"(score={top.get('score')}, "
+                        f"teams={top.get('team_verdict')}, "
+                        f"dt={top.get('time_delta_minutes')}m)"
+                    )
+                elif row.get("disposition") == "ambiguous":
+                    top = (row.get("candidates") or [{}])[0]
+                    lines.append(
+                        f"  REVIEW  [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' ~ "
+                        f"'{top.get('master_channel_name')}' "
+                        f"(score={top.get('score')} — ambiguous, never "
+                        f"auto-attached)"
+                    )
+                elif row.get("disposition") == "unmatched":
+                    lines.append(
+                        f"  UNMATCHED [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' (no master within the "
+                        f"time window — master-as-ceiling)"
+                    )
+                else:
+                    lines.append(
+                        f"  PARSE-FAIL [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' "
+                        f"({row.get('unmatchable_reason')})"
+                    )
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] preview_event_sync failed: %s", e)
+            return f"Error previewing event sync: {e}"
