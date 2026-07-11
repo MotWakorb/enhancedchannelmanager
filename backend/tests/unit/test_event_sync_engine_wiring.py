@@ -188,7 +188,7 @@ class TestPass12Exclusion:
              patch.object(self.engine, "_save_execution", new=AsyncMock()), \
              patch.object(self.engine, "_process_streams", new=fake_process_streams):
             result = asyncio.get_event_loop().run_until_complete(
-                self.engine.run_pipeline(dry_run=True)
+                self.engine.run_pipeline(dry_run=True, triggered_by="manual")
             )
 
         assert result["success"] is True
@@ -199,6 +199,33 @@ class TestPass12Exclusion:
         # ti939.2.1: on a manual run the event_sync rule is routed to the
         # dedicated attach phase instead (threaded as event_sync_rules).
         assert [r.name for r in captured["event_sync_rules"]] == ["Event Rule"]
+
+    def test_unspecified_default_trigger_never_reaches_event_sync(
+        self, test_session
+    ):
+        """PR #616 review (bead ti939.2.2): run_pipeline's triggered_by
+        defaults to the DENIED sentinel — a caller that forgets to identify
+        its trigger can never execute event_sync rules by accident."""
+        from channel_pipeline_engine import (
+            EVENT_SYNC_ALLOWED_TRIGGERS,
+            TRIGGERED_BY_UNSPECIFIED,
+        )
+
+        # The structural rail: the sentinel is not an allowed trigger.
+        assert TRIGGERED_BY_UNSPECIFIED not in EVENT_SYNC_ALLOWED_TRIGGERS
+
+        rule = _make_rule("Event Rule", event_sync=True)
+        test_session.add(rule)
+        test_session.commit()
+
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
+            result = asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=True)  # no triggered_by
+            )
+
+        assert result["success"] is True
+        assert "manual-run-only" in result["message"]
+        self.client.get_streams.assert_not_awaited()
 
 
 class TestPass4HardBypass:

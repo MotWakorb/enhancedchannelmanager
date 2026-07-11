@@ -59,6 +59,15 @@ logger = logging.getLogger(__name__)
 # set is treated as unattended.
 EVENT_SYNC_ALLOWED_TRIGGERS = frozenset({"manual", "api"})
 
+# Deny-by-default sentinel for run_pipeline/run_rule's triggered_by
+# (PR #616 review, bead ti939.2.2): a caller that does not IDENTIFY its
+# trigger runs as "unspecified", which is deliberately NOT in
+# EVENT_SYNC_ALLOWED_TRIGGERS — a future call site that forgets to thread
+# triggered_by can never execute event_sync rules by accident. Every
+# production caller passes its trigger explicitly (the routers pass "api",
+# the watermark task passes "m3u_refresh").
+TRIGGERED_BY_UNSPECIFIED = "unspecified"
+
 # Upper bound on secondary streams fetched per event_sync rule — a fetch
 # guard, not a decision knob (per-stream decisions are independent, so
 # truncation only defers later streams to the next idempotent run; it is
@@ -201,7 +210,7 @@ class ChannelPipelineEngine:
     async def run_pipeline(
         self,
         dry_run: bool = False,
-        triggered_by: str = "manual",
+        triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
         m3u_account_ids: list[int] = None,
         rule_ids: list[int] = None,
         execution_id: int | None = None,
@@ -211,7 +220,12 @@ class ChannelPipelineEngine:
 
         Args:
             dry_run: If True, only simulate changes without applying
-            triggered_by: How the pipeline was triggered (manual, scheduled, m3u_refresh)
+            triggered_by: How the pipeline was triggered (manual, api,
+                scheduled, m3u_refresh). Defaults to the DENIED sentinel
+                ``TRIGGERED_BY_UNSPECIFIED`` (PR #616 review): an
+                unidentified trigger runs standard rules normally but can
+                never execute event_sync rules — callers must identify
+                themselves to reach the manual-run-only attach phase.
             m3u_account_ids: Optional list of M3U account IDs to process (None = all)
             rule_ids: Optional list of rule IDs to run (None = all enabled)
             execution_id: Optional pre-created execution record id. When the
@@ -499,7 +513,7 @@ class ChannelPipelineEngine:
         self,
         rule_id: int,
         dry_run: bool = False,
-        triggered_by: str = "manual",
+        triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
         execution_id: int | None = None,
     ) -> dict:
         """
@@ -508,7 +522,9 @@ class ChannelPipelineEngine:
         Args:
             rule_id: ID of the rule to run
             dry_run: If True, only simulate changes
-            triggered_by: How the rule was triggered
+            triggered_by: How the rule was triggered. Defaults to the DENIED
+                sentinel ``TRIGGERED_BY_UNSPECIFIED`` — see
+                :meth:`run_pipeline`.
             execution_id: Optional pre-created execution record id, threaded
                 through to ``run_pipeline`` (see its docstring for the
                 bd-enfsy 202+poll background-task pattern).
@@ -1670,7 +1686,7 @@ class ChannelPipelineEngine:
         rules: list[ChannelPipelineRule],
         execution: ChannelPipelineExecution,
         dry_run: bool,
-        triggered_by: str = "manual",
+        triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
         event_sync_rules: list[ChannelPipelineRule] = None,
     ) -> dict:
         """
@@ -2578,7 +2594,11 @@ class ChannelPipelineEngine:
                     else (resp or [])
                 )
                 for s in batch:
-                    if not s.get("name"):
+                    # id guard beside the name guard (PR #616 review): a
+                    # stream with a name but NO id would resolve normally and
+                    # then append None to a master channel's stream list at
+                    # attach time — skip it here instead.
+                    if not s.get("name") or s.get("id") is None:
                         continue
                     secondary_streams.append(SecondaryStream(
                         name=s["name"],

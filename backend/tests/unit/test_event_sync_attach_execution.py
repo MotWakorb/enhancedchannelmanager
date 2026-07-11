@@ -527,6 +527,26 @@ class TestEnginePhase:
         assert len(capped_entries) == 1
         assert client.update_channel.await_count == 1
 
+    def test_stream_with_name_but_no_id_is_never_attached(self):
+        """PR #616 review (bead ti939.2.2): the secondary-stream fetch has an
+        id guard beside the name guard — a stream that would otherwise match
+        but has NO id must not append None to a master's stream list."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [
+            {"name": STREAM_MERCURY, "m3u_account": 1},  # no "id" key
+            {"id": None, "name": STREAM_MERCURY, "m3u_account": 1},
+        ]
+        engine, executor, client = _engine_with_client(channels, batch)
+        results = _results()
+
+        _run(engine._run_event_sync_rules(
+            [_event_rule()], executor, results, dry_run=False,
+            triggered_by="manual", channels_touched_ids=set(),
+        ))
+
+        client.update_channel.assert_not_awaited()
+        assert results["event_sync"][0]["secondary_streams"] == 0
+
     def test_invalid_stored_config_is_skipped_loudly(self):
         engine, executor, client = _engine_with_client([], [])
         results = _results()
