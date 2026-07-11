@@ -17,6 +17,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useChannelPipelineRules } from '../../hooks/useChannelPipelineRules';
 import { useChannelPipelineExecution } from '../../hooks/useChannelPipelineExecution';
 import { RuleBuilder } from './RuleBuilder';
+import { EventSyncRuleEditor } from './EventSyncRuleEditor';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 import { CircuitBreakerBanner } from './CircuitBreakerBanner';
 import * as channelPipelineApi from '../../services/channelPipelineApi';
@@ -112,6 +113,9 @@ export function ChannelPipelineTab() {
   // Modal states
   const [showRuleBuilder, setShowRuleBuilder] = useState(false);
   const [editingRule, setEditingRule] = useState<ChannelPipelineRule | null>(null);
+  // Rule kind chosen when creating (epic ti939): null = chooser step shown.
+  // When editing, the kind is derived from the rule's event_sync_config.
+  const [createRuleKind, setCreateRuleKind] = useState<'standard' | 'event_sync' | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<ChannelPipelineRule | null>(null);
   const [showRollbackConfirm, setShowRollbackConfirm] = useState<ChannelPipelineExecution | null>(null);
   // Snapshot-restore state (ADR-010 §D5 / uc51o.7)
@@ -220,11 +224,13 @@ export function ChannelPipelineTab() {
   // Handlers
   const handleCreateRule = useCallback(() => {
     setEditingRule(null);
+    setCreateRuleKind(null);
     setShowRuleBuilder(true);
   }, []);
 
   const handleEditRule = useCallback((rule: ChannelPipelineRule) => {
     setEditingRule(rule);
+    setCreateRuleKind(null);
     setShowRuleBuilder(true);
   }, []);
 
@@ -239,6 +245,7 @@ export function ChannelPipelineTab() {
       }
       setShowRuleBuilder(false);
       setEditingRule(null);
+      setCreateRuleKind(null);
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Channel Pipeline');
     }
@@ -247,6 +254,7 @@ export function ChannelPipelineTab() {
   const handleCancelRuleBuilder = useCallback(() => {
     setShowRuleBuilder(false);
     setEditingRule(null);
+    setCreateRuleKind(null);
   }, []);
 
   const handleDeleteClick = useCallback((rule: ChannelPipelineRule) => {
@@ -865,7 +873,17 @@ export function ChannelPipelineTab() {
                         </span>
                       </td>
                       <td className="col-name">
-                        <div className="rule-name">{rule.name}</div>
+                        <div className="rule-name">
+                          {rule.name}
+                          {rule.event_sync_config && (
+                            <span
+                              className="badge badge-sm badge-info rule-kind-badge"
+                              title="Event Sync rule — preview-only in this phase; excluded from pipeline runs"
+                            >
+                              Event Sync
+                            </span>
+                          )}
+                        </div>
                         {rule.description && (
                           <div className="rule-description">{rule.description}</div>
                         )}
@@ -879,26 +897,33 @@ export function ChannelPipelineTab() {
                       <td className="col-matches">{rule.match_count || 0}</td>
                       <td className="col-actions">
                         <div className="rule-actions-row">
-                          <button
-                            className="action-btn"
-                            onClick={() => handleRunSingleRule(rule.id, false)}
-                            disabled={runningSingleRule === rule.id || runningPipeline}
-                            aria-label={`Run ${rule.name}`}
-                            title="Run rule"
-                          >
-                            <span className={`material-icons ${runningSingleRule === rule.id ? 'spinning' : ''}`}>
-                              {runningSingleRule === rule.id ? 'sync' : 'play_arrow'}
-                            </span>
-                          </button>
-                          <button
-                            className="action-btn"
-                            onClick={() => handleRunSingleRule(rule.id, true)}
-                            disabled={runningSingleRule === rule.id || runningPipeline}
-                            aria-label={`Test ${rule.name}`}
-                            title="Test (dry run)"
-                          >
-                            <span className="material-icons">visibility</span>
-                          </button>
+                          {/* event_sync rules are excluded from pipeline
+                              execution entirely in Phase 1A (preview-only) —
+                              the preview lives inside the editor. */}
+                          {!rule.event_sync_config && (
+                            <>
+                              <button
+                                className="action-btn"
+                                onClick={() => handleRunSingleRule(rule.id, false)}
+                                disabled={runningSingleRule === rule.id || runningPipeline}
+                                aria-label={`Run ${rule.name}`}
+                                title="Run rule"
+                              >
+                                <span className={`material-icons ${runningSingleRule === rule.id ? 'spinning' : ''}`}>
+                                  {runningSingleRule === rule.id ? 'sync' : 'play_arrow'}
+                                </span>
+                              </button>
+                              <button
+                                className="action-btn"
+                                onClick={() => handleRunSingleRule(rule.id, true)}
+                                disabled={runningSingleRule === rule.id || runningPipeline}
+                                aria-label={`Test ${rule.name}`}
+                                title="Test (dry run)"
+                              >
+                                <span className="material-icons">visibility</span>
+                              </button>
+                            </>
+                          )}
                           <button
                             className="action-btn"
                             onClick={() => handleToggleEnabled(rule)}
@@ -1061,29 +1086,74 @@ export function ChannelPipelineTab() {
       />
 
       {/* Rule Builder Modal */}
-      {showRuleBuilder && (
-        <ModalOverlay onClose={handleCancelRuleBuilder} role="dialog" aria-modal="true" aria-labelledby="rule-builder-title">
-          <div className="modal-container modal-lg rule-builder-modal">
-            <div className="modal-header">
-              <h2 id="rule-builder-title">
-                {editingRule ? 'Edit Rule' : 'Create Rule'}
-              </h2>
-              <button
-                className="modal-close-btn"
-                onClick={handleCancelRuleBuilder}
-                aria-label="Close"
-              >
-                <span className="material-icons">close</span>
-              </button>
+      {showRuleBuilder && (() => {
+        // Editing derives the kind from the rule; creating uses the chooser.
+        const isEventSync = editingRule
+          ? Boolean(editingRule.event_sync_config)
+          : createRuleKind === 'event_sync';
+        const showKindChooser = !editingRule && createRuleKind === null;
+        const title = showKindChooser
+          ? 'Create Rule'
+          : `${editingRule ? 'Edit' : 'Create'}${isEventSync ? ' Event Sync' : ''} Rule`;
+        return (
+          <ModalOverlay onClose={handleCancelRuleBuilder} role="dialog" aria-modal="true" aria-labelledby="rule-builder-title">
+            <div className="modal-container modal-lg rule-builder-modal">
+              <div className="modal-header">
+                <h2 id="rule-builder-title">{title}</h2>
+                <button
+                  className="modal-close-btn"
+                  onClick={handleCancelRuleBuilder}
+                  aria-label="Close"
+                >
+                  <span className="material-icons">close</span>
+                </button>
+              </div>
+              {showKindChooser ? (
+                <div className="rule-kind-chooser" data-testid="rule-kind-chooser">
+                  <button
+                    type="button"
+                    className="rule-kind-option"
+                    onClick={() => setCreateRuleKind('standard')}
+                  >
+                    <span className="material-icons" aria-hidden="true">rule</span>
+                    <span className="rule-kind-option-text">
+                      <strong>Standard rule</strong>
+                      <span>Conditions + actions: create channels, merge streams, sort, assign.</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="rule-kind-option"
+                    onClick={() => setCreateRuleKind('event_sync')}
+                  >
+                    <span className="material-icons" aria-hidden="true">sync_alt</span>
+                    <span className="rule-kind-option-text">
+                      <strong>Event Sync rule</strong>
+                      <span>
+                        One channel per live event across providers — match
+                        secondary streams to a master group&apos;s channels.
+                        Preview-only in this phase.
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              ) : isEventSync ? (
+                <EventSyncRuleEditor
+                  rule={editingRule || undefined}
+                  onSave={handleSaveRule}
+                  onCancel={handleCancelRuleBuilder}
+                />
+              ) : (
+                <RuleBuilder
+                  rule={editingRule || undefined}
+                  onSave={handleSaveRule}
+                  onCancel={handleCancelRuleBuilder}
+                />
+              )}
             </div>
-            <RuleBuilder
-              rule={editingRule || undefined}
-              onSave={handleSaveRule}
-              onCancel={handleCancelRuleBuilder}
-            />
-          </div>
-        </ModalOverlay>
-      )}
+          </ModalOverlay>
+        );
+      })()}
 
       {/* Delete Confirmation Dialog */}
       {showDeleteConfirm && (
