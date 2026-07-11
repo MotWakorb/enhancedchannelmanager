@@ -8,6 +8,8 @@ mask them in every response — these tests assert the MCP tools never echo a
 full plaintext credential value back, only whatever the (already-masking)
 backend response contains.
 """
+import re
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -182,7 +184,11 @@ class TestListSyncTargets:
 
         text = _text(result)
         assert "DR Site" in text
-        assert "dr.example.com" in text
+        # Anchored regex (dots escaped) rather than a substring check so the
+        # rendered base_url is matched exactly — also keeps CodeQL's
+        # py/incomplete-url-substring-sanitization from misreading a test
+        # assertion on prose tool output as URL sanitization.
+        assert re.search(r"https://dr\.example\.com", text)
         assert "success" in text
 
     @pytest.mark.asyncio
