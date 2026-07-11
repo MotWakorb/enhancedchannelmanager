@@ -668,6 +668,33 @@ async def cancel_probe():
     return prober.cancel_probe()
 
 
+@router.post("/probe/pause")
+async def pause_probe():
+    """Pause an in-progress probe operation.
+
+    The StreamProber's probe loops (sequential and parallel) already honor
+    ``_probe_paused`` internally (bd-vdrku: this endpoint was the missing
+    HTTP wiring for pre-existing, already-integrated prober pause support).
+    """
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/pause")
+    prober = ensure_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.pause_probe()
+
+
+@router.post("/probe/resume")
+async def resume_probe():
+    """Resume a paused probe operation."""
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/resume")
+    prober = ensure_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.resume_probe()
+
+
 @router.post("/probe/reset")
 async def reset_probe_state():
     """Force reset the probe state if it gets stuck."""

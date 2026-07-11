@@ -665,6 +665,7 @@ def register(mcp: FastMCP):
         skip_struck_streams: bool = False,
         orphan_action: str = "delete",
         quality_tie_break_order: str | None = None,
+        quality_m3u_tie_break_enabled: bool | None = None,
         match_scope_target_group: bool | None = None,
         allow_manual_channel_merge: bool | None = None,
     ) -> str:
@@ -783,6 +784,11 @@ def register(mcp: FastMCP):
             orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
             quality_tie_break_order: Tie-break order ('asc' or 'desc') when two streams
                 have equal quality during quality-based M3U sorting (backend default 'desc')
+            quality_m3u_tie_break_enabled: When True (backend default), M3U
+                account priority breaks ties between streams of otherwise-equal
+                quality during quality-based sorting. Set False to disable that
+                M3U-priority tie-break and fall through to
+                quality_tie_break_order instead.
             match_scope_target_group: When True, restrict the existing-channel name
                 lookup (for merge/skip decisions) to the rule's target group
                 instead of searching all groups (backend default True)
@@ -828,6 +834,8 @@ def register(mcp: FastMCP):
             # CreateAutoCreationRuleRequest and persisted by the create handler.
             if quality_tie_break_order is not None:
                 payload["quality_tie_break_order"] = quality_tie_break_order
+            if quality_m3u_tie_break_enabled is not None:
+                payload["quality_m3u_tie_break_enabled"] = quality_m3u_tie_break_enabled
             if match_scope_target_group is not None:
                 payload["match_scope_target_group"] = match_scope_target_group
             # enhancedchannelmanager-zrte6: per-rule manual-channel isolation
@@ -866,6 +874,7 @@ def register(mcp: FastMCP):
         skip_struck_streams: bool = False,
         orphan_action: str = "delete",
         quality_tie_break_order: str | None = None,
+        quality_m3u_tie_break_enabled: bool | None = None,
         match_scope_target_group: bool | None = None,
         allow_manual_channel_merge: bool | None = None,
     ) -> str:
@@ -896,6 +905,7 @@ def register(mcp: FastMCP):
             skip_struck_streams=skip_struck_streams,
             orphan_action=orphan_action,
             quality_tie_break_order=quality_tie_break_order,
+            quality_m3u_tie_break_enabled=quality_m3u_tie_break_enabled,
             match_scope_target_group=match_scope_target_group,
             allow_manual_channel_merge=allow_manual_channel_merge,
         )
@@ -922,6 +932,7 @@ def register(mcp: FastMCP):
         normalization_group_ids: list[int] | None = None,
         skip_struck_streams: bool | None = None,
         orphan_action: str | None = None,
+        quality_m3u_tie_break_enabled: bool | None = None,
         allow_manual_channel_merge: bool | None = None,
     ) -> str:
         """Update an existing auto-creation rule. Only provided fields are changed.
@@ -949,6 +960,11 @@ def register(mcp: FastMCP):
             normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
             skip_struck_streams: Skip streams with consecutive probe failures
             orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
+            quality_m3u_tie_break_enabled: When True (backend default), M3U
+                account priority breaks ties between streams of otherwise-equal
+                quality during quality-based sorting. Set False to disable that
+                M3U-priority tie-break and fall through to
+                quality_tie_break_order instead.
             allow_manual_channel_merge: When True, this rule may merge into /
                 adopt hand-built MANUAL channels (each adoption is journaled).
                 When False (backend default) manual channels are protected: a
@@ -971,6 +987,7 @@ def register(mcp: FastMCP):
                 ("sort_regex", sort_regex), ("stream_sort_field", stream_sort_field),
                 ("stream_sort_order", stream_sort_order), ("normalization_group_ids", normalization_group_ids),
                 ("skip_struck_streams", skip_struck_streams), ("orphan_action", orphan_action),
+                ("quality_m3u_tie_break_enabled", quality_m3u_tie_break_enabled),
                 ("allow_manual_channel_merge", allow_manual_channel_merge),
             ]:
                 if value is not None:
@@ -1010,6 +1027,7 @@ def register(mcp: FastMCP):
         normalization_group_ids: list[int] | None = None,
         skip_struck_streams: bool | None = None,
         orphan_action: str | None = None,
+        quality_m3u_tie_break_enabled: bool | None = None,
         allow_manual_channel_merge: bool | None = None,
     ) -> str:
         """[DEPRECATED — use update_channel_pipeline_rule instead] Update an existing auto-creation rule. Only provided fields are changed.
@@ -1038,6 +1056,7 @@ def register(mcp: FastMCP):
             normalization_group_ids=normalization_group_ids,
             skip_struck_streams=skip_struck_streams,
             orphan_action=orphan_action,
+            quality_m3u_tie_break_enabled=quality_m3u_tie_break_enabled,
             allow_manual_channel_merge=allow_manual_channel_merge,
         )
 
@@ -1402,3 +1421,67 @@ def register(mcp: FastMCP):
     async def get_auto_creation_debug_bundle() -> str:
         """[DEPRECATED — use get_channel_pipeline_debug_bundle instead] Get info about the auto-creation debug bundle for troubleshooting."""
         return await get_channel_pipeline_debug_bundle()
+
+    @mcp.tool()
+    async def get_channel_pipeline_circuit_breaker() -> str:
+        """Get the run-on-refresh circuit-breaker state (bd-rv5w1 / bd-exo4j).
+
+        ``disabled=true`` means a previous auto-fire run was abandoned
+        (likely an OOM crash) and the startup crash-sentinel tripped the
+        breaker: run-on-refresh auto-fire is paused until an operator clears
+        it via reset_channel_pipeline_circuit_breaker. Manual runs
+        (run_channel_pipeline) are NEVER gated by this breaker.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["channel_pipeline_circuit_breaker"])
+            disabled = result.get("disabled", False) if isinstance(result, dict) else False
+            reason = result.get("reason") if isinstance(result, dict) else None
+
+            if not disabled:
+                return "Circuit breaker is clear — run-on-refresh will auto-fire normally."
+            return (
+                f"Circuit breaker is TRIPPED (reason={reason or 'unknown'}) — "
+                "run-on-refresh auto-fire is paused after M3U refresh. "
+                "Use reset_channel_pipeline_circuit_breaker to clear it."
+            )
+        except Exception as e:
+            logger.error("[MCP] get_channel_pipeline_circuit_breaker failed: %s", e)
+            return f"Error getting circuit breaker state: {e}"
+
+    @mcp.tool()
+    async def reset_channel_pipeline_circuit_breaker(confirm: bool = False) -> str:
+        """Clear the run-on-refresh circuit breaker (bd-rv5w1 / bd-exo4j).
+
+        A DELIBERATE operator act — re-enables the post-refresh auto-fire
+        chain that the startup crash-sentinel disabled after an abandoned
+        (OOM-killed) run. The breaker never auto-resets on its own; this is
+        the only in-band recovery path. Idempotent: clearing an already-clear
+        breaker is a no-op success.
+
+        CONFIRM GATING: the first call (confirm=False, the default) fetches
+        the current breaker state and returns a preview — it resets NOTHING.
+        Re-invoke with confirm=True to actually clear it.
+
+        Args:
+            confirm: Set True on the second call to perform the reset.
+        """
+        try:
+            client = get_ecm_client()
+            if not confirm:
+                state = await client.call_endpoint(ENDPOINTS["channel_pipeline_circuit_breaker"])
+                disabled = state.get("disabled", False) if isinstance(state, dict) else False
+                if not disabled:
+                    return "Circuit breaker is already clear — nothing to reset."
+                return (
+                    "Circuit breaker is TRIPPED. Re-invoke with confirm=True to clear it "
+                    "and re-enable run-on-refresh auto-fire."
+                )
+            result = await client.call_endpoint(ENDPOINTS["channel_pipeline_reset_circuit_breaker"])
+            was_disabled = result.get("was_disabled", False) if isinstance(result, dict) else False
+            if not was_disabled:
+                return "Circuit breaker was already clear."
+            return "Circuit breaker cleared — run-on-refresh auto-fire is re-enabled."
+        except Exception as e:
+            logger.error("[MCP] reset_channel_pipeline_circuit_breaker failed: %s", e)
+            return f"Error resetting circuit breaker: {e}"

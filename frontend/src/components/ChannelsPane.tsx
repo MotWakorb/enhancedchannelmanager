@@ -6211,6 +6211,7 @@ export function ChannelsPane({
       {/* Find Duplicates Modal */}
       {findDuplicatesModal.isOpen && (
         <FindDuplicatesModal
+          channelIds={Array.from(selectedChannelIds)}
           onClose={() => findDuplicatesModal.close()}
           onMerged={() => {
             findDuplicatesModal.close();

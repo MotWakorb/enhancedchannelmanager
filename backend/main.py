@@ -139,7 +139,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0061",
+    version="0.17.6-0062",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -530,6 +530,50 @@ async def auth_middleware(request: Request, call_next):
                         content={"detail": "Not authenticated"},
                         headers={"WWW-Authenticate": "Bearer"},
                     )
+
+    return await call_next(request)
+
+
+_DEPRECATED_ADMIN_ROUTER_PREFIX = "/api/admin"
+
+
+@app.middleware("http")
+async def deprecated_admin_router_middleware(request: Request, call_next):
+    """WARNING-log every hit on the legacy, duplicate ``/api/admin/*`` router.
+
+    ``auth.admin_routes`` (main.py:608) fully duplicates the canonical
+    ``/api/auth/admin/*`` user-CRUD surface (``auth/routes.py``); the
+    frontend exclusively calls the canonical path, so this router is live,
+    unreached attack surface. Step 1 of a two-step deprecation
+    (bd-d53lz): log every hit — path, method, client IP, and the
+    authenticated user if the request carries a decodeable token — so a
+    follow-on bead can confirm a zero-traffic observation window before
+    deleting the router outright. Never logs the token/credentials
+    themselves, only the resolved username.
+
+    Registered AFTER ``auth_middleware`` (later registration = more OUTER
+    layer, same Starlette add_middleware-prepends reasoning documented on
+    ``observability_middleware`` below) so this fires even when
+    ``auth_middleware`` or the route's own ``get_current_active_admin``
+    dependency rejects the request with 401/403 — an unauthenticated hit on
+    a deprecated admin surface is exactly the signal this log exists to
+    catch, not a case to skip.
+    """
+    if request.url.path.startswith(_DEPRECATED_ADMIN_ROUTER_PREFIX):
+        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (
+            request.client.host if request.client else "unknown"
+        )
+        username = None
+        token = get_token_from_request(request)
+        if token:
+            payload = decode_token_safe(token)
+            if payload:
+                username = payload.get("username")
+        logger.warning(
+            "[DEPRECATED-ADMIN-ROUTER] %s %s client_ip=%s user=%s "
+            "(duplicate legacy router — canonical path is /api/auth/admin/*, bd-d53lz)",
+            request.method, request.url.path, client_ip, username or "anonymous",
+        )
 
     return await call_next(request)
 

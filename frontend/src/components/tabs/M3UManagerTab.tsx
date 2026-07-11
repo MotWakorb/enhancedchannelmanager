@@ -5,6 +5,8 @@ import * as api from '../../services/api';
 import { naturalCompare } from '../../utils/naturalSort';
 import { M3UAccountModal } from '../M3UAccountModal';
 import { M3UGroupsModal } from '../M3UGroupsModal';
+import { ServerGroupsModal } from '../ServerGroupsModal';
+import { StreamProfilesListModal } from '../StreamProfilesListModal';
 import { M3UFiltersModal } from '../M3UFiltersModal';
 import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
@@ -21,6 +23,7 @@ interface M3UManagerTabProps {
   streamProfiles?: StreamProfile[];
   onChannelGroupsChange?: () => void;
   onAccountsChange?: () => void;  // Called when M3U accounts are added/deleted/modified
+  onStreamProfilesChange?: () => void;  // Called when a stream profile is created (bead hq3de.j)
   hideM3uUrls?: boolean;
   // bd-dgs64 (GH #591): when true, the Manage Groups modal no longer locks a
   // group's auto-sync controls just because another M3U account already
@@ -37,11 +40,13 @@ interface M3UAccountRowProps {
   onManageGroups: (account: M3UAccount) => void;
   onManageFilters: (account: M3UAccount) => void;
   onManageProfiles: (account: M3UAccount) => void;
+  onRefreshVod: (account: M3UAccount) => void;
   linkedAccountNames?: string[];  // Names of accounts linked to this one
   hideM3uUrls?: boolean;
   priority?: number;  // Sort priority for this account (higher = better)
   onPriorityChange?: (accountId: number, priority: number) => void;
   isBeingRefreshed?: boolean;  // Whether we're tracking this account as still refreshing
+  isRefreshingVod?: boolean;
 }
 
 function M3UAccountRow({
@@ -53,11 +58,13 @@ function M3UAccountRow({
   onManageGroups,
   onManageFilters,
   onManageProfiles,
+  onRefreshVod,
   linkedAccountNames,
   hideM3uUrls = false,
   priority = 0,
   onPriorityChange,
   isBeingRefreshed = false,
+  isRefreshingVod = false,
 }: M3UAccountRowProps) {
   // Consider refreshing if status says so OR if we're tracking it as refreshing
   const isRefreshing = isBeingRefreshed || account.status === 'fetching' || account.status === 'parsing';
@@ -225,6 +232,19 @@ function M3UAccountRow({
         >
           <span className="material-icons" aria-hidden="true">refresh</span>
         </button>
+        {account.account_type === 'XC' && (
+          <button
+            className="action-btn"
+            onClick={() => onRefreshVod(account)}
+            title="Refresh VOD"
+            aria-label="Refresh VOD content"
+            disabled={!account.is_active || isRefreshingVod || account.locked}
+          >
+            <span className={`material-icons ${isRefreshingVod ? 'spinning' : ''}`} aria-hidden="true">
+              {isRefreshingVod ? 'sync' : 'video_library'}
+            </span>
+          </button>
+        )}
         <button
           className="action-btn"
           onClick={() => onManageGroups(account)}
@@ -279,6 +299,7 @@ export function M3UManagerTab({
   streamProfiles = [],
   onChannelGroupsChange,
   onAccountsChange,
+  onStreamProfilesChange,
   hideM3uUrls = false,
   allowMultiProviderAutoSync = false,
 }: M3UManagerTabProps) {
@@ -314,6 +335,17 @@ export function M3UManagerTab({
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [pendingPriorities, setPendingPriorities] = useState<Record<string, number>>({});
   const [savingPriorities, setSavingPriorities] = useState(false);
+  // Server groups CRUD (enhancedchannelmanager-hq3de.c) — distinct from
+  // `groupsModalOpen` above, which is M3UGroupsModal (a single account's
+  // channel groups).
+  const [serverGroupsModalOpen, setServerGroupsModalOpen] = useState(false);
+  // Stream profiles (enhancedchannelmanager-hq3de.j) — create-only UI.
+  const [streamProfilesModalOpen, setStreamProfilesModalOpen] = useState(false);
+  // Refresh VOD (enhancedchannelmanager-hq3de.d) — fire-and-forget per XC
+  // account; the backend kicks Dispatcharr's VOD refresh and returns
+  // immediately, so this only tracks a brief in-flight spinner, not a
+  // pollable completion state (no status field for it on M3UAccount).
+  const [refreshingVodIds, setRefreshingVodIds] = useState<Set<number>>(new Set());
 
   const loadData = useCallback(async () => {
     try {
@@ -460,6 +492,23 @@ export function M3UManagerTab({
     } catch (err) {
       logger.error('M3UManagerTab: failed to refresh M3U account', err);
       notifications.error('Failed to refresh M3U account', 'M3U Manager');
+    }
+  };
+
+  const handleRefreshVod = async (account: M3UAccount) => {
+    setRefreshingVodIds((prev) => new Set(prev).add(account.id));
+    try {
+      await api.refreshM3UVod(account.id);
+      notifications.success(`VOD refresh started for "${account.name}"`, 'M3U Manager');
+    } catch (err) {
+      logger.error('M3UManagerTab: failed to refresh VOD', err);
+      notifications.error('Failed to refresh VOD', 'M3U Manager');
+    } finally {
+      setRefreshingVodIds((prev) => {
+        const next = new Set(prev);
+        next.delete(account.id);
+        return next;
+      });
     }
   };
 
@@ -734,6 +783,22 @@ export function M3UManagerTab({
                 ]}
               />
             )}
+            <button
+              className="btn-secondary"
+              onClick={() => setServerGroupsModalOpen(true)}
+              title="Create, rename, or delete server groups"
+            >
+              <span className="material-icons">workspaces</span>
+              Server Groups
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => setStreamProfilesModalOpen(true)}
+              title="View and create stream profiles"
+            >
+              <span className="material-icons">settings_input_component</span>
+              Stream Profiles
+            </button>
             <button className="btn-secondary" onClick={() => setLinkedAccountsModalOpen(true)}>
               <span className="material-icons">link</span>
               Manage Links
@@ -793,6 +858,8 @@ export function M3UManagerTab({
                 onManageGroups={handleManageGroups}
                 onManageFilters={handleManageFilters}
                 onManageProfiles={handleManageProfiles}
+                onRefreshVod={handleRefreshVod}
+                isRefreshingVod={refreshingVodIds.has(account.id)}
                 linkedAccountNames={linkedAccountNamesMap.get(account.id)}
                 hideM3uUrls={hideM3uUrls}
                 priority={pendingPriorities[String(account.id)] ?? 0}
@@ -844,6 +911,21 @@ export function M3UManagerTab({
           onClose={() => setProfilesModalOpen(false)}
           onSaved={handleProfilesSaved}
           account={profilesAccount}
+        />
+      )}
+
+      {serverGroupsModalOpen && (
+        <ServerGroupsModal
+          onClose={() => setServerGroupsModalOpen(false)}
+          onChanged={loadData}
+        />
+      )}
+
+      {streamProfilesModalOpen && (
+        <StreamProfilesListModal
+          streamProfiles={streamProfiles}
+          onClose={() => setStreamProfilesModalOpen(false)}
+          onChanged={() => onStreamProfilesChange?.()}
         />
       )}
 

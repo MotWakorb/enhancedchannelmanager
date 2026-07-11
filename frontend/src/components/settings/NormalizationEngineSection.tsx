@@ -127,6 +127,7 @@ function SortableRuleItem({
   onToggleEnabled,
   onEdit,
   onDelete,
+  matchStat,
 }: {
   rule: NormalizationRule;
   isSelected: boolean;
@@ -135,6 +136,7 @@ function SortableRuleItem({
   onToggleEnabled: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  matchStat?: api.NormalizationRuleStat | null;
 }) {
   const {
     attributes,
@@ -177,6 +179,14 @@ function SortableRuleItem({
             <>{rule.condition_type}: "{rule.condition_value}"</>
           )}
         </span>
+        {matchStat && (
+          <span
+            className="norm-engine-rule-match-badge"
+            title={`Matched ${matchStat.match_count} of ${matchStat.match_count > 0 ? 'the tested' : 'tested'} streams (${matchStat.match_percentage}%)`}
+          >
+            {matchStat.match_count} match{matchStat.match_count === 1 ? '' : 'es'}
+          </span>
+        )}
       </div>
       <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
         <label className="norm-engine-toggle small">
@@ -312,6 +322,12 @@ export function NormalizationEngineSection() {
 
   // Live preview state
   const [previewResult, setPreviewResult] = useState<TestRuleResult | null>(null);
+
+  // Rule-match stats (enhancedchannelmanager-hq3de.e) — on-demand only
+  // (GET /rule-stats tests every enabled rule against a sample of live
+  // stream names, so it's not cheap enough to run on every render).
+  const [ruleStats, setRuleStats] = useState<Map<number, api.NormalizationRuleStat> | null>(null);
+  const [loadingRuleStats, setLoadingRuleStats] = useState(false);
 
   // Import/Export state
   const [showImportModal, setShowImportModal] = useState(false);
@@ -824,6 +840,25 @@ export function NormalizationEngineSection() {
     e.target.value = '';
   }, []);
 
+  // Rule-match stats (enhancedchannelmanager-hq3de.e). Toggle: load on first
+  // click, clear (hide badges) on a second click rather than re-fetching —
+  // an operator re-checking numbers clicks it again explicitly.
+  const handleToggleRuleStats = useCallback(async () => {
+    if (ruleStats) {
+      setRuleStats(null);
+      return;
+    }
+    setLoadingRuleStats(true);
+    try {
+      const result = await api.getNormalizationRuleStats();
+      setRuleStats(new Map(result.rule_stats.map((s) => [s.rule_id, s])));
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to load rule stats', 'Normalization');
+    } finally {
+      setLoadingRuleStats(false);
+    }
+  }, [ruleStats, notifications]);
+
   // ------------------------------------------------------------------
   // Apply-to-channels handlers (GH-104)
   // ------------------------------------------------------------------
@@ -1108,6 +1143,19 @@ export function NormalizationEngineSection() {
           </button>
           <button
             className="norm-engine-btn"
+            onClick={handleToggleRuleStats}
+            type="button"
+            disabled={loadingRuleStats}
+            title={ruleStats ? 'Hide rule match counts' : 'Show how many streams each rule matches'}
+            data-testid="rule-stats-btn"
+          >
+            <span className={`material-icons ${loadingRuleStats ? 'spinning' : ''}`}>
+              {loadingRuleStats ? 'sync' : 'insights'}
+            </span>
+            {loadingRuleStats ? 'Loading stats...' : ruleStats ? 'Hide Rule Stats' : 'Rule Stats'}
+          </button>
+          <button
+            className="norm-engine-btn"
             onClick={() => setIsReorderMode((v) => !v)}
             type="button"
             title={isReorderMode ? 'Exit reorder mode' : 'Reorder groups and rules'}
@@ -1328,6 +1376,7 @@ export function NormalizationEngineSection() {
                           onToggleEnabled={() => toggleRuleEnabled(rule)}
                           onEdit={() => openEditRuleEditor(rule)}
                           onDelete={() => deleteRule(rule)}
+                          matchStat={ruleStats?.get(rule.id)}
                         />
                       ))}
                     </SortableContext>
@@ -1435,6 +1484,14 @@ export function NormalizationEngineSection() {
                               <>{rule.condition_type}: "{rule.condition_value}"</>
                             )}
                           </span>
+                          {ruleStats?.get(rule.id) && (
+                            <span
+                              className="norm-engine-rule-match-badge"
+                              title={`Matched ${ruleStats.get(rule.id)!.match_count} of tested streams (${ruleStats.get(rule.id)!.match_percentage}%)`}
+                            >
+                              {ruleStats.get(rule.id)!.match_count} match{ruleStats.get(rule.id)!.match_count === 1 ? '' : 'es'}
+                            </span>
+                          )}
                         </div>
                         <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
                           <label className="norm-engine-toggle small">

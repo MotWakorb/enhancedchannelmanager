@@ -93,7 +93,7 @@ import type {
   DummyEPGChannelAssignment,
 } from '../types';
 import { logger } from '../utils/logger';
-import { fetchJson, fetchText, buildQuery } from './httpClient';
+import { fetchJson, fetchText, buildQuery, HttpError } from './httpClient';
 import {
   type TimezonePreference,
   type NumberSeparator,
@@ -371,9 +371,10 @@ export interface BulkMergeResponse {
   results: { target_channel_id: number; target_name?: string; sources_deleted?: number; total_streams?: number; success: boolean; error?: string }[];
 }
 
-export async function findDuplicateChannels(): Promise<FindDuplicatesResponse> {
+export async function findDuplicateChannels(channelIds?: number[]): Promise<FindDuplicatesResponse> {
   return fetchJson(`${API_BASE}/channels/find-duplicates`, {
     method: 'POST',
+    ...(channelIds !== undefined ? { body: JSON.stringify({ channel_ids: channelIds }) } : {}),
   });
 }
 
@@ -638,6 +639,37 @@ export async function clearAutoCreatedFlag(groupIds: number[]): Promise<{
   });
 }
 
+/** Diagnostic report shape from `build_channel_groups_diagnostic` (backend/routers/channel_groups.py). */
+export interface ChannelGroupsDiagnostic {
+  dispatcharr_group_count: number;
+  duplicate_group_names: Record<string, number>;
+  hidden_records: Array<{ id: number; stored_name: string; live_name: string | null; status: string }>;
+  channel_count: number;
+  channels_by_group_id: Record<string, { live_name: string | null; count: number; sample: string[] }>;
+  channels_by_group_name_count: Record<string, number>;
+  orphaned_channel_group_id_count: number;
+  orphaned_sample: Array<{ id: number; name: string; channel_number: number | null; channel_group_name: string | null; channel_group_id: number }>;
+  null_id_with_name_count: number;
+  null_id_with_name_sample: Array<{ id: number; name: string; channel_number: number | null; channel_group_name: string | null }>;
+}
+
+/**
+ * Run the Channel Manager group/channel diagnostic (bd-hq3de.b). Read-only —
+ * same computation the debug-bundle generator uses for
+ * channel_groups_diagnostic.json.
+ */
+export async function getChannelGroupsDiagnostic(): Promise<ChannelGroupsDiagnostic> {
+  return fetchJson(`${API_BASE}/channel-groups/diagnostic`);
+}
+
+/** Channel groups that have at least one channel with a stream (probeable groups). */
+export async function getChannelGroupsWithStreams(): Promise<{
+  groups: { id: number; name: string }[];
+  total_groups: number;
+}> {
+  return fetchJson(`${API_BASE}/channel-groups/with-streams`);
+}
+
 // Streams
 export async function getStreams(params?: {
   page?: number;
@@ -835,6 +867,36 @@ export async function updateM3UGroupSettings(
 // Server Groups
 export async function getServerGroups(): Promise<ServerGroup[]> {
   return fetchJson(`${API_BASE}/m3u/server-groups`);
+}
+
+export async function createServerGroup(data: { name: string; account_ids?: number[] }): Promise<ServerGroup> {
+  return fetchJson(`${API_BASE}/m3u/server-groups`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateServerGroup(
+  groupId: number,
+  data: { name?: string; account_ids?: number[] },
+): Promise<ServerGroup> {
+  return fetchJson(`${API_BASE}/m3u/server-groups/${groupId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteServerGroup(groupId: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/server-groups/${groupId}`, {
+    method: 'DELETE',
+  });
+}
+
+/** Refresh VOD content for an XtreamCodes M3U account (enhancedchannelmanager-hq3de.d). */
+export async function refreshM3UVod(accountId: number): Promise<Record<string, unknown>> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/refresh-vod`, {
+    method: 'POST',
+  });
 }
 
 // Health check
@@ -1767,6 +1829,21 @@ export async function getStreamProfiles(): Promise<StreamProfile[]> {
   return fetchJson(`${API_BASE}/stream-profiles`);
 }
 
+export interface StreamProfileCreateRequest {
+  name: string;
+  command: string;
+  parameters: string;
+  is_active?: boolean;
+}
+
+/** Create a new stream profile in Dispatcharr (enhancedchannelmanager-hq3de.j). */
+export async function createStreamProfile(data: StreamProfileCreateRequest): Promise<StreamProfile> {
+  return fetchJson(`${API_BASE}/stream-profiles`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 // Channel Profiles
 export async function getChannelProfiles(): Promise<ChannelProfile[]> {
   return fetchJson(`${API_BASE}/channel-profiles`);
@@ -1807,6 +1884,29 @@ export async function updateProfileChannel(
   return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/${channelId}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Bulk enable/disable a batch of channels for a profile in one call
+ * (enhancedchannelmanager-hq3de.i).
+ *
+ * NOTE: per dispatcharr_client.bulk_update_profile_channels, the underlying
+ * Dispatcharr bulk endpoint only UPDATES existing ChannelProfileMembership
+ * rows — it does not create new ones for a channel the profile has never
+ * tracked before. `updateProfileChannel` (individual PATCH, used by
+ * ChannelProfilesListModal's "Save Changes") is the safe path when new
+ * memberships may need to be created. Prefer this bulk call only for
+ * channels already known to the profile.
+ */
+export async function bulkUpdateProfileChannels(
+  profileId: number,
+  channelIds: number[],
+  enabled: boolean,
+): Promise<Record<string, unknown>> {
+  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/bulk-update`, {
+    method: 'PATCH',
+    body: JSON.stringify({ channel_ids: channelIds, enabled }),
   });
 }
 
@@ -1865,6 +1965,14 @@ export async function getJournalStats(): Promise<JournalStats> {
   return fetchJson(`${API_BASE}/journal/stats`);
 }
 
+/** Delete journal entries older than `days` (enhancedchannelmanager-hq3de.a). */
+export async function purgeJournalEntries(days: number): Promise<{ deleted: number; days: number }> {
+  const query = buildQuery({ days });
+  return fetchJson(`${API_BASE}/journal/purge${query}`, {
+    method: 'DELETE',
+  });
+}
+
 // =============================================================================
 // Stats & Monitoring
 // =============================================================================
@@ -1900,6 +2008,36 @@ export async function stopChannel(channelId: number | string): Promise<{ success
   return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop`, {
     method: 'POST',
   });
+}
+
+/**
+ * Stop a specific client connection on a channel (enhancedchannelmanager-hq3de.h).
+ *
+ * NOTE: Dispatcharr's underlying `/proxy/ts/stop_client/{channel_id}` is
+ * channel-scoped, not client-id-scoped — there is no per-client identifier in
+ * the request. Calling this stops "a" client connected to the channel (per
+ * Dispatcharr's own selection), not guaranteed to be the specific row the
+ * operator clicked. Callers should word confirmation copy accordingly.
+ */
+export async function stopClient(channelId: number | string): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop-client`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Get detailed stats for a specific channel (enhancedchannelmanager-hq3de.g):
+ * per-client info, buffer status, codec details.
+ *
+ * NOTE endpoint id-type mismatch: this router path is typed `channel_id: int`
+ * (backend/routers/stats.py get_channel_stats_detail) while its `/proxy/ts/*`
+ * siblings (stop / stop-client) are typed `str` and take the stream UUID seen
+ * in ChannelStatsResponse.channels[].channel_id. Passing a UUID here 422s.
+ * Callers should pass the resolved integer Channel.id (from GET /channels),
+ * not the Active-Channels-list channel_id, which may be a UUID.
+ */
+export async function getChannelStatsDetail(channelId: number): Promise<Record<string, unknown>> {
+  return fetchJson(`${API_BASE}/stats/channels/${channelId}`);
 }
 
 /**
@@ -1978,6 +2116,23 @@ export async function getTrendingChannels(
   limit: number = 10
 ): Promise<import('../types').ChannelPopularityScore[]> {
   return fetchJson(`${API_BASE}/stats/popularity/trending?direction=${direction}&limit=${limit}`);
+}
+
+/**
+ * Get the popularity score for a single channel, keyed by the channel UUID
+ * (enhancedchannelmanager-hq3de.g) — same `channel_id` shape as
+ * ChannelStatsResponse.channels[].channel_id, NOT the integer Channel.id.
+ * Returns null when no score has been calculated yet for the channel.
+ */
+export async function getChannelPopularity(
+  channelId: string
+): Promise<import('../types').ChannelPopularityScore | null> {
+  try {
+    return await fetchJson(`${API_BASE}/stats/popularity/channel/${channelId}`);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 /**
@@ -2809,6 +2964,32 @@ export async function testNormalizationBatch(texts: string[]): Promise<Normaliza
   });
 }
 
+export interface NormalizationRuleStat {
+  rule_id: number;
+  rule_name: string;
+  group_id: number;
+  group_name: string;
+  enabled: boolean;
+  match_count: number;
+  match_percentage: number;
+}
+
+export interface NormalizationRuleStatsResponse {
+  rule_stats: NormalizationRuleStat[];
+  total_streams_tested: number;
+  total_rules: number;
+}
+
+/**
+ * Get per-rule match counts against a sample of current Dispatcharr stream
+ * names (enhancedchannelmanager-hq3de.e). Expensive (tests every enabled
+ * rule against up to `limit` streams) — call on demand, not on every render.
+ */
+export async function getNormalizationRuleStats(limit = 500): Promise<NormalizationRuleStatsResponse> {
+  const query = buildQuery({ limit });
+  return fetchJson(`${API_BASE}/normalization/rule-stats${query}`);
+}
+
 /**
  * Normalize texts through all enabled rules (simple result)
  */
@@ -2954,6 +3135,25 @@ export async function importTagsYaml(yamlContent: string, overwrite: boolean = f
   return fetchJson(`${API_BASE}/tags/import`, {
     method: 'POST',
     body: JSON.stringify({ yaml_content: yamlContent, overwrite }),
+  });
+}
+
+export interface TestTagsResult {
+  text: string;
+  group_id: number;
+  group_name: string;
+  matches: Array<{ tag_id: number; value: string; case_sensitive: boolean }>;
+  match_count: number;
+}
+
+/**
+ * Test text against a tag group's enabled tags (enhancedchannelmanager-hq3de.f).
+ * Mirrors the normalization engine's test UX (testNormalizationRule).
+ */
+export async function testTags(groupId: number, text: string): Promise<TestTagsResult> {
+  return fetchJson(`${API_BASE}/tags/test`, {
+    method: 'POST',
+    body: JSON.stringify({ group_id: groupId, text }),
   });
 }
 
@@ -3825,6 +4025,8 @@ export interface SavedBackup {
   filename: string;
   size_bytes: number;
   created_at: string;
+  /** "zip" (full on-demand or DBAS backup) or "yaml" (scheduled section export). */
+  type: 'zip' | 'yaml';
 }
 
 export async function listSavedBackups(): Promise<SavedBackup[]> {
@@ -3930,55 +4132,44 @@ export async function startDbasRestore(
   return response.json();
 }
 
-// ── Status / Monitoring API ────────────────────────────────────────
-
-import type { ServiceWithStatus, ServiceAlertRule } from '../types';
-
-export async function getServices(): Promise<ServiceWithStatus[]> {
-  return fetchJson(`${API_BASE}/services`);
-}
-
-export async function enableService(serviceId: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/services/${serviceId}/enable`, { method: 'POST' });
-}
-
-export async function disableService(serviceId: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/services/${serviceId}/disable`, { method: 'POST' });
-}
-
-export async function restartService(serviceId: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/services/${serviceId}/restart`, { method: 'POST' });
-}
-
-export async function triggerHealthCheck(serviceId: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/services/${serviceId}/health-check`, { method: 'POST' });
-}
-
-export async function getServiceAlertRules(): Promise<ServiceAlertRule[]> {
-  return fetchJson(`${API_BASE}/services/alert-rules`);
-}
-
-export async function createServiceAlertRule(
-  data: Omit<ServiceAlertRule, 'id'>
-): Promise<ServiceAlertRule> {
-  return fetchJson(`${API_BASE}/services/alert-rules`, {
+/**
+ * Restore ECM configuration from an on-disk SAVED backup ZIP (legacy full-
+ * archive format written by POST /backup/save or the scheduled YAML backup
+ * task). Synchronous — the same shape as `restoreBackup` (upload path), just
+ * addressed by filename instead of a File. Human-admin only server-side
+ * (enhancedchannelmanager-rzhid).
+ *
+ * NOTE: `GET /backup/saved` cannot distinguish this legacy ZIP format from a
+ * DBAS-format artifact — both share the `ecm-backup-<ts>.zip` naming
+ * convention. Callers should let the operator pick the matching restore
+ * action (this one, or `restoreDbasBackupSaved`) rather than guessing.
+ */
+export async function restoreSavedBackup(filename: string): Promise<RestoreResult> {
+  return fetchJson(`${API_BASE}/backup/restore-saved`, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({ filename }),
   });
 }
 
-export async function updateServiceAlertRule(
-  ruleId: number,
-  data: Partial<ServiceAlertRule>
-): Promise<ServiceAlertRule> {
-  return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
+/**
+ * Trigger an async DBAS restore from an on-disk SAVED artifact (bead
+ * enhancedchannelmanager-rzhid). SAVED-file analogue of `startDbasRestore`
+ * (upload path) — same dry-run-by-default contract (`confirmApply=false`
+ * makes zero mutation), addressed by filename instead of a File.
+ */
+export async function restoreDbasBackupSaved(
+  filename: string,
+  confirmApply = false,
+  passphrase?: string,
+): Promise<DbasRestoreStartResult> {
+  return fetchJson(`${API_BASE}/backup/restore-dbas-saved`, {
+    method: 'POST',
+    body: JSON.stringify({
+      filename,
+      confirm_apply: confirmApply,
+      ...(passphrase ? { passphrase } : {}),
+    }),
   });
-}
-
-export async function deleteServiceAlertRule(ruleId: number): Promise<void> {
-  return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, { method: 'DELETE' });
 }
 
 // ── Alert Methods API ───────────────────────────────────────────────
@@ -4033,6 +4224,18 @@ export async function updateAlertMethod(methodId: number, data: AlertMethodUpdat
   return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
+  });
+}
+
+export async function deleteAlertMethod(methodId: number): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function testAlertMethod(methodId: number): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}/test`, {
+    method: 'POST',
   });
 }
 

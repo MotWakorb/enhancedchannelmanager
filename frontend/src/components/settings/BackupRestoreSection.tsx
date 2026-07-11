@@ -3,6 +3,8 @@ import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { BackupRestoreModal } from '../BackupRestoreModal';
 import { DbasRestoreModal } from '../DbasRestoreModal';
+import { DbasRestoreSavedModal } from '../DbasRestoreSavedModal';
+import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
 import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { SyncTargetsCard } from './SyncTargetsCard';
 import { CloudTargetsCard } from './CloudTargetsCard';
@@ -32,6 +34,15 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [savedBackups, setSavedBackups] = useState<api.SavedBackup[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
+
+  // Restore-from-saved (bead rzhid): legacy full-ZIP restore-saved confirm
+  // dialog target, and DBAS-format restore-dbas-saved modal target. GET
+  // /backup/saved can't tell the two .zip formats apart (same naming
+  // convention) — both actions are offered on every saved .zip row, and the
+  // operator picks the one matching how the file was produced.
+  const [restoringLegacySaved, setRestoringLegacySaved] = useState<string | null>(null);
+  const [legacySavedBusy, setLegacySavedBusy] = useState(false);
+  const [dbasSavedTarget, setDbasSavedTarget] = useState<string | null>(null);
 
   const loadSavedBackups = useCallback(async () => {
     setLoadingSaved(true);
@@ -155,6 +166,23 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       notifications.error(err instanceof Error ? err.message : 'Restore failed', 'Restore Failed');
     } finally {
       setRestoring(false);
+    }
+  };
+
+  const handleConfirmLegacyRestore = async () => {
+    if (!restoringLegacySaved) return;
+    setLegacySavedBusy(true);
+    try {
+      const result = await api.restoreSavedBackup(restoringLegacySaved);
+      notifications.success(`Restored ${result.restored_files.length} files from ${restoringLegacySaved}`);
+      setRestoringLegacySaved(null);
+      setTimeout(() => {
+        window.location.reload();
+      }, 3000);
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Restore failed', 'Restore Failed');
+    } finally {
+      setLegacySavedBusy(false);
     }
   };
 
@@ -301,6 +329,26 @@ export function BackupRestoreSection({ isAdmin }: Props) {
                   </div>
                 </div>
                 <div className="saved-backup-actions">
+                  {backup.type === 'zip' && (
+                    <>
+                      <button
+                        className="btn-secondary saved-backup-btn"
+                        onClick={() => setRestoringLegacySaved(backup.filename)}
+                        aria-label="Restore as legacy full backup"
+                        title="Restore as legacy full backup (pre-v0.18.0 format)"
+                      >
+                        <span className="material-icons" aria-hidden="true">settings_backup_restore</span>
+                      </button>
+                      <button
+                        className="btn-secondary saved-backup-btn"
+                        onClick={() => setDbasSavedTarget(backup.filename)}
+                        aria-label="Restore as DBAS backup"
+                        title="Restore as DBAS backup (v0.18.0+ format, dry-run first)"
+                      >
+                        <span className="material-icons" aria-hidden="true">restore</span>
+                      </button>
+                    </>
+                  )}
                   <a
                     href={api.getSavedBackupDownloadUrl(backup.filename)}
                     className="btn-secondary saved-backup-btn"
@@ -444,6 +492,31 @@ export function BackupRestoreSection({ isAdmin }: Props) {
 
       {showDbasRestoreModal && (
         <DbasRestoreModal onClose={() => setShowDbasRestoreModal(false)} />
+      )}
+
+      {restoringLegacySaved && (
+        <TypeToConfirmDialog
+          title="Restore Saved Backup"
+          message={
+            <>
+              This replaces all current settings, database records, and uploaded files with the
+              contents of <strong>{restoringLegacySaved}</strong>. The page reloads automatically
+              once the restore completes. This cannot be undone.
+            </>
+          }
+          confirmText={restoringLegacySaved}
+          confirmLabel="Restore this backup"
+          busy={legacySavedBusy}
+          onCancel={() => setRestoringLegacySaved(null)}
+          onConfirm={handleConfirmLegacyRestore}
+        />
+      )}
+
+      {dbasSavedTarget && (
+        <DbasRestoreSavedModal
+          filename={dbasSavedTarget}
+          onClose={() => setDbasSavedTarget(null)}
+        />
       )}
     </div>
   );

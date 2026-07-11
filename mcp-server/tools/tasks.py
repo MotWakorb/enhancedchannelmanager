@@ -160,6 +160,7 @@ def register(mcp: FastMCP):
         enabled: bool = True,
         name: str | None = None,
         timezone: str | None = None,
+        parameters: dict | None = None,
     ) -> str:
         """Create a new schedule for a task.
 
@@ -179,6 +180,10 @@ def register(mcp: FastMCP):
             timezone: IANA timezone name for the schedule (e.g. 'America/Chicago',
                 'Europe/London'). Defaults to 'UTC'. Schedules stored as UTC will
                 fire at the wrong local time if the operator is in a different zone.
+            parameters: Task-specific parameters passed to the task on each
+                scheduled run (e.g. channel_groups, batch_size — shape depends
+                on task_id; see GET /api/tasks/{task_id}/parameter-schema via
+                the ECM UI for the accepted keys of a given task).
         """
         try:
             client = get_ecm_client()
@@ -197,6 +202,8 @@ def register(mcp: FastMCP):
                 payload["day_of_month"] = day_of_month
             if name is not None:
                 payload["name"] = name
+            if parameters is not None:
+                payload["parameters"] = parameters
 
             result = await client.call_endpoint(
                 ENDPOINTS["tasks_create_schedule"], path_args={"task_id": task_id}, body=payload,

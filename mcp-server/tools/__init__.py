@@ -17,6 +17,10 @@ from . import (
     normalization,
     dedup,
     emby,
+    logos,
+    tags,
+    sync_targets,
+    channels_csv,
 )
 
 _MODULES = [
@@ -35,6 +39,10 @@ _MODULES = [
     normalization,
     dedup,
     emby,
+    logos,
+    tags,
+    sync_targets,
+    channels_csv,
 ]
 
 

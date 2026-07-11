@@ -112,6 +112,11 @@ export function JournalTab() {
   // Expanded row state
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  // Journal purge control (enhancedchannelmanager-hq3de.a) — matches the
+  // DELETE /api/journal/purge default of 90 days.
+  const [purgeDays, setPurgeDays] = useState(90);
+  const [purging, setPurging] = useState(false);
+
   // Load entries
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -181,6 +186,27 @@ export function JournalTab() {
     setExpandedId(expandedId === id ? null : id);
   };
 
+  const handlePurge = async () => {
+    if (purgeDays < 1) {
+      notifications.error('Enter a day count of 1 or more', 'Journal');
+      return;
+    }
+    if (!confirm(`Delete journal entries older than ${purgeDays} day${purgeDays === 1 ? '' : 's'}? This cannot be undone.`)) {
+      return;
+    }
+    setPurging(true);
+    try {
+      const result = await api.purgeJournalEntries(purgeDays);
+      notifications.success(`Purged ${result.deleted} journal entr${result.deleted === 1 ? 'y' : 'ies'} older than ${purgeDays} days`, 'Journal');
+      loadEntries();
+      loadStats();
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to purge journal entries', 'Journal');
+    } finally {
+      setPurging(false);
+    }
+  };
+
   // Render loading state
   if (loading && entries.length === 0) {
     return (
@@ -230,6 +256,29 @@ export function JournalTab() {
           )}
         </div>
         <div className="header-actions">
+          <div className="journal-purge-control">
+            <input
+              type="number"
+              className="journal-purge-days-input"
+              min={1}
+              value={purgeDays}
+              onChange={(e) => setPurgeDays(parseInt(e.target.value, 10) || 0)}
+              aria-label="Days to keep"
+              disabled={purging}
+            />
+            <span className="journal-purge-label">days</span>
+            <button
+              className="btn-secondary journal-purge-btn"
+              onClick={handlePurge}
+              disabled={purging || purgeDays < 1}
+              title="Delete journal entries older than the given number of days"
+            >
+              <span className={`material-icons ${purging ? 'spinning' : ''}`}>
+                {purging ? 'sync' : 'delete_sweep'}
+              </span>
+              {purging ? 'Purging…' : 'Purge Old Entries'}
+            </button>
+          </div>
           <button className="btn-secondary" onClick={handleRefresh} disabled={loading}>
             <span className="material-icons">refresh</span>
             Refresh
