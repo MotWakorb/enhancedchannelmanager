@@ -482,10 +482,55 @@ async def preview_epg_batch(req: BatchPreviewRequest, db: Session = Depends(get_
         results = await run_cpu_bound(
             preview_pipeline_batch, config, req.sample_names[:100], lookups=lookups,  # Cap at 100
         )
+        _annotate_event_sync_start_validity(results, config)
         return results
     except Exception as e:
         logger.warning("[DUMMY-EPG] Batch preview failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _annotate_event_sync_start_validity(results: list, config: dict) -> None:
+    """Stamp ``event_sync_start_valid`` onto each batch-preview result.
+
+    bead hirm6: the Event Sync Test Patterns panel drives this endpoint, and
+    its 'Parsed' verdict must mean "the Event Sync matcher would actually
+    build a start time from these groups" — group PRESENCE alone lets
+    'A vs B @ 45 Jul 06:00 PM ET' (day 45) or a garbage month show as
+    parsed while being unmatchable at preview/run time. The flag delegates
+    to ``services.event_sync_matcher.groups_would_build_start`` (the exact
+    ``_groups_have_complete_time`` + ``_build_start`` semantics — valid
+    month name, hour <= 23, a real calendar date, never guessed).
+
+    Read-only annotation of an already-computed response — the endpoint
+    stays zero-write. One shared ``now`` anchors year inference across the
+    batch so rows are judged consistently. Imported lazily: the matcher
+    module (rapidfuzz) stays off this router's import path for every other
+    endpoint.
+    """
+    from datetime import datetime
+
+    import pytz
+
+    from services.event_sync_matcher import (
+        DEFAULT_EVENT_TIMEZONE,
+        groups_would_build_start,
+    )
+
+    event_timezone = config.get("event_timezone") or DEFAULT_EVENT_TIMEZONE
+    try:
+        now = datetime.now(pytz.timezone(event_timezone))
+    except pytz.UnknownTimeZoneError:
+        event_timezone = DEFAULT_EVENT_TIMEZONE
+        now = datetime.now(pytz.timezone(event_timezone))
+    for result in results:
+        result["event_sync_start_valid"] = (
+            bool(result.get("matched"))
+            and groups_would_build_start(
+                result.get("groups"),
+                event_timezone=event_timezone,
+                now=now,
+            )
+        )
 
 
 def _build_preview_config(req) -> dict:

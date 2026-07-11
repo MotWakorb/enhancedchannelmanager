@@ -7,8 +7,11 @@
  * endpoint (`POST /api/dummy-epg/preview/batch`) — the same
  * `extract_groups` → `safe_regex` machinery the Event Sync matcher uses at
  * preview/run time, so what this table shows is what the matcher sees.
- * Names with an incomplete date/time are flagged: Event Sync never guesses
- * start times, so those names would be parse failures.
+ * The "Parsed" verdict comes from the backend's matcher-level
+ * `event_sync_start_valid` flag (bead hirm6): Event Sync never guesses
+ * start times, so a name whose date/time groups are missing, OR captured
+ * but invalid ("45 Jul", a garbage month, hour past 23), is flagged as a
+ * parse failure — never shown as parsed.
  */
 import { useId, useState } from 'react';
 import type { EventSyncPattern } from '../../types/eventSync';
@@ -40,7 +43,13 @@ interface PatternRow {
   title: string | null;
   date: string | null;
   time: string | null;
-  complete: boolean;
+  /** All of title + date + time groups were captured. */
+  hasAllParts: boolean;
+  /**
+   * Backend matcher-level verdict: the matcher would actually build a
+   * start time (valid month, hour <= 23, real calendar date).
+   */
+  startValid: boolean;
 }
 
 interface PatternResult {
@@ -132,7 +141,8 @@ export function EventSyncTestPatternsPanel({
               title,
               date,
               time,
-              complete: Boolean(title && date && time),
+              hasAllParts: Boolean(title && date && time),
+              startValid: Boolean(p.event_sync_start_valid),
             };
           });
           return { label, rows };
@@ -235,10 +245,17 @@ export function EventSyncTestPatternsPanel({
                   <td>{row.date ?? '—'}</td>
                   <td>{row.time ?? '—'}</td>
                   <td>
-                    {row.complete ? (
+                    {row.matched && row.startValid ? (
                       <span className="test-patterns-status">
                         <span className="material-icons" aria-hidden="true">check_circle</span>
                         Parsed
+                      </span>
+                    ) : row.matched && row.hasAllParts ? (
+                      <span className="test-patterns-status">
+                        <span className="material-icons" aria-hidden="true">warning</span>
+                        Invalid date/time — not a real calendar date/time, so
+                        this would be a parse failure (start times are never
+                        guessed)
                       </span>
                     ) : row.matched ? (
                       <span className="test-patterns-status">
