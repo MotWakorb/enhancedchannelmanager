@@ -1988,6 +1988,18 @@ class ChannelPipelineRule(Base):
     # channels; each adoption is journaled for audit.
     allow_manual_channel_merge = Column(Boolean, default=False, nullable=False)
 
+    # Event Sync (enhancedchannelmanager-ti939.1.3, epic ti939). JSON config
+    # for the event_sync rule KIND: master_group_id, secondary_group_ids[],
+    # optional parse patterns (shared or per-group title/time/date regexes),
+    # time_window_minutes, attach_threshold, enabled. A rule with a non-NULL
+    # value IS an event_sync rule (see is_event_sync()); NULL = standard rule,
+    # so every pre-feature row keeps its exact prior behavior. Validated at
+    # write time by channel_pipeline_schema.validate_event_sync_config().
+    # Alembic 0031. PO decision (stateless recompute): NO new tables — this
+    # one nullable column plus journal provenance rows is the feature's entire
+    # durable state; channel IDs are never persisted across runs.
+    event_sync_config = Column(Text, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -2065,6 +2077,31 @@ class ChannelPipelineRule(Base):
         """Set normalization_group_ids from list of ints."""
         self.normalization_group_ids = json.dumps(sorted(set(ids))) if ids else None
 
+    def get_event_sync_config(self) -> dict | None:
+        """Parse event_sync_config JSON into a dict (None when unset/corrupt)."""
+        if not self.event_sync_config:
+            return None
+        try:
+            parsed = json.loads(self.event_sync_config)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def set_event_sync_config(self, config: dict | None) -> None:
+        """Set event_sync_config from a dict (None/empty clears it)."""
+        self.event_sync_config = json.dumps(config) if config else None
+
+    def is_event_sync(self) -> bool:
+        """True when this rule is the event_sync KIND (ti939.1.3).
+
+        Kind is determined by the RAW column being set — not by parse
+        success — so a rule whose stored config is corrupt still counts as
+        event_sync and stays excluded from Pass 1/2 evaluation and Pass 4
+        orphan reconciliation, rather than falling back to running as a
+        standard rule against Dispatcharr-owned channels.
+        """
+        return bool(self.event_sync_config)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -2093,6 +2130,7 @@ class ChannelPipelineRule(Base):
             "match_scope_target_group": self.match_scope_target_group or False,
             "match_scope_group_id": self.match_scope_group_id,
             "allow_manual_channel_merge": self.allow_manual_channel_merge or False,
+            "event_sync_config": self.get_event_sync_config(),
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),
             "match_count": self.match_count or 0,

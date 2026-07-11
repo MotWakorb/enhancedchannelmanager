@@ -22,6 +22,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -38,7 +39,22 @@ def upgrade() -> None:
     backfill existing rows (SQLite requires a default for a NOT NULL column
     add), then drop the server-side default so the drift test sees no default
     clause — the ORM supplies False for new rows via the Python-side default.
+
+    bd-5w6jz idempotency (guard added alongside 0031): if the column already
+    exists — fast-path stamp raced by create_all(), or a forced re-run
+    against an already-complete schema — skip rather than rebuild. The
+    unguarded batch_alter_table re-run only ever "worked" while this was the
+    LAST column on auto_creation_rules; once 0031 appended
+    event_sync_config, the batch rebuild's column reordering raised
+    CircularDependencyError on re-runs.
     """
+    conn = op.get_bind()
+    insp = inspect(conn)
+    if insp.has_table("auto_creation_rules"):
+        existing = {c["name"] for c in insp.get_columns("auto_creation_rules")}
+        if "allow_manual_channel_merge" in existing:
+            return
+
     with op.batch_alter_table("auto_creation_rules", schema=None) as batch_op:
         batch_op.add_column(
             sa.Column(

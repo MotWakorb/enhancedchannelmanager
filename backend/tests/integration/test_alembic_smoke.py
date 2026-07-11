@@ -1768,6 +1768,13 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE user_sessions "
                     "ADD COLUMN rotated_at DATETIME"
                 ))
+                # 0031 (enhancedchannelmanager-ti939.1.3): event_sync rule
+                # config on the pre-0005 auto_creation_rules table — same
+                # create_all() limitation, add the nullable column by hand.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN event_sync_config TEXT"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.
