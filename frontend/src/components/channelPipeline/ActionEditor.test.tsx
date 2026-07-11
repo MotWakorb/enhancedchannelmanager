@@ -451,6 +451,138 @@ describe('ActionEditor', () => {
     });
   });
 
+  describe('sort_group action', () => {
+    it('renders order, starting number, and normalization fields', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group', order: 'asc' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText('Order')).toBeInTheDocument();
+      expect(screen.getByLabelText(/starting channel number/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/ignore channel numbers in names when sorting/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/ignore country prefix when sorting/i)).toBeInTheDocument();
+    });
+
+    it('defaults order to ascending, strip_numbers to true, ignore_country to false on type select', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'skip' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole('combobox', { name: /action type/i }));
+      await user.click(screen.getByRole('option', { name: /sort group/i }));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sort_group',
+          order: 'asc',
+          strip_numbers: true,
+          ignore_country: false,
+        })
+      );
+    });
+
+    it('shows ascending option selected by default', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group', order: 'asc' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/A → Z \(ascending\)/)).toBeInTheDocument();
+    });
+
+    it('switches to descending order', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group', order: 'asc' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // CustomSelect renders its trigger as a plain button (not role=combobox)
+      // — open it via its current value text, then pick the option.
+      await user.click(screen.getByRole('button', { name: /A → Z \(ascending\)/ }));
+      await user.click(screen.getByRole('option', { name: /Z → A \(descending\)/ }));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'sort_group', order: 'desc' })
+      );
+    });
+
+    it('updates starting_number as a number', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.type(screen.getByLabelText(/starting channel number/i), '5');
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalledWith(
+          expect.objectContaining({ starting_number: expect.any(Number) })
+        );
+      });
+    });
+
+    it('toggles strip_numbers and ignore_country checkboxes', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group', strip_numbers: true, ignore_country: false }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByLabelText(/ignore channel numbers in names when sorting/i));
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ strip_numbers: false })
+      );
+
+      await user.click(screen.getByLabelText(/ignore country prefix when sorting/i));
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ ignore_country: true })
+      );
+    });
+
+    it('shows the once-per-group help text', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/runs once per group after all streams are processed/i)).toBeInTheDocument();
+    });
+  });
+
   describe('skip action', () => {
     it('renders with minimal UI', () => {
       render(

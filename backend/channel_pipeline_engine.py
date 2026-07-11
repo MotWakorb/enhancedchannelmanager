@@ -45,6 +45,7 @@ from channel_pipeline_executor import (
     ActionExecutor,
     ExecutionContext,
 )
+from channel_pipeline_sort import sort_channels_by_name
 
 
 logger = logging.getLogger(__name__)
@@ -1407,6 +1408,142 @@ class ChannelPipelineEngine:
                             channel_name, e
                         )
 
+    async def _sort_channel_groups(
+        self,
+        sort_group_requests: dict,
+        executor: ActionExecutor,
+        results: dict,
+        dry_run: bool,
+        settings=None,
+    ):
+        """
+        Pass 3.6: Alphabetically sort + renumber channels within a group.
+
+        Queued by the ``sort_group`` action
+        (``channel_pipeline_executor.ActionExecutor._execute_sort_group``)
+        — one entry per distinct group touched this run, already
+        deduplicated by the engine's per-stream aggregation
+        (``results["sort_group_requests"]``, a dict keyed by group_id) so a
+        group with N matched streams is sorted exactly ONCE regardless of N.
+
+        Sort semantics are a backend port of the manual Sort & Renumber
+        modal's comparator (``frontend/src/utils/channelSort.ts``,
+        ``frontend/src/components/ChannelsPane.tsx``) — see
+        ``channel_pipeline_sort.py``. Keep both sides in lock-step; a
+        behavior change on one side without the other means automated and
+        manual sorting silently diverge.
+
+        Reads channels from ``executor._channel_by_id`` (not
+        ``self._existing_channels``) because that cache is kept live for
+        every channel touched THIS run, including ones created by an
+        earlier action in the same stream's pipeline pass — the engine's
+        own ``self._existing_channels`` is a pre-run snapshot that never
+        gets appended to (see engine/executor cache split, bd-vy4fl
+        investigation). Reading the executor's cache directly mirrors the
+        existing precedent elsewhere in this module (e.g.
+        ``executor._channel_by_id`` in the EPG-retry and reconcile passes).
+
+        Runs AFTER Pass 3 (rule-level ``sort_field`` renumber) so an
+        explicit ``sort_group`` action — a more specific, per-action
+        request — wins if a rule configures both mechanisms for the same
+        channels.
+        """
+        if not sort_group_requests:
+            return
+
+        for group_id, params in sort_group_requests.items():
+            channels = [
+                ch for ch in executor._channel_by_id.values()
+                if ch.get("channel_group_id") == group_id
+            ]
+            if len(channels) < 2:
+                continue
+
+            group_name = executor._group_by_id.get(group_id, {}).get("name", f"Group #{group_id}")
+            order = params.get("order", "asc")
+            strip_numbers = params.get("strip_numbers", True)
+            ignore_country = params.get("ignore_country", False)
+            requested_starting_number = params.get("starting_number")
+
+            sorted_channels = sort_channels_by_name(
+                channels,
+                name_key=lambda ch: ch.get("name", ""),
+                strip_numbers=strip_numbers,
+                ignore_country=ignore_country,
+                order=order,
+            )
+            channel_ids = [ch["id"] for ch in sorted_channels]
+
+            # Default starting number: the group's current lowest channel
+            # number, or 1 if no channel in the group has one assigned yet
+            # — mirrors the manual modal's default
+            # (ChannelsPane.tsx handleOpenSortRenumber).
+            if requested_starting_number is not None:
+                starting_number = requested_starting_number
+            else:
+                existing_numbers = [
+                    ch.get("channel_number") for ch in channels
+                    if ch.get("channel_number") is not None
+                ]
+                starting_number = min(existing_numbers) if existing_numbers else 1
+
+            mode_label = f"alphabetical ({order})"
+
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-ENGINE] {group_name}",
+                    "rule_id": None,
+                    "rule_name": None,
+                    "action": f"Would sort {len(channel_ids)} channels in '{group_name}' "
+                              f"{mode_label} starting at #{starting_number}",
+                    "would_create": False,
+                    "would_modify": True
+                })
+                continue
+
+            try:
+                await self.client.assign_channel_numbers(channel_ids, starting_number)
+                rename_count = await _auto_rename_after_renumber(
+                    self.client, channel_ids, starting_number, settings
+                )
+                rename_note = f", renamed {rename_count} channel names" if rename_count else ""
+                desc = (
+                    f"Sorted {len(channel_ids)} channels in '{group_name}' "
+                    f"{mode_label}, renumbered starting at #{starting_number}{rename_note}"
+                )
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-ENGINE] {group_name}",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "sort_group",
+                        "description": desc,
+                        "success": True,
+                        "entity_id": group_id,
+                        "error": None
+                    }]
+                })
+                logger.info("[AUTO-CREATE-ENGINE] %s", desc)
+            except Exception as e:
+                logger.error(
+                    "[AUTO-CREATE-ENGINE] Failed to sort group '%s': %s", group_name, e
+                )
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-ENGINE] {group_name}",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "sort_group",
+                        "description": f"Failed to sort group: {e}",
+                        "success": False,
+                        "entity_id": group_id,
+                        "error": str(e)
+                    }]
+                })
+
     # =========================================================================
     # Stream Processing
     # =========================================================================
@@ -1600,6 +1737,14 @@ class ChannelPipelineEngine:
             "rule_match_counts": {},
             "probe_stream_ids": set(),
             "streams_probed": 0,
+            # enhancedchannelmanager-vy4fl: group_id -> sort_group params,
+            # aggregated from every matched stream's exec_ctx this run (see
+            # the aggregation site below). A dict keyed by group_id so N
+            # streams landing in the same group still produce ONE entry —
+            # consumed once by Pass 3.6 (_sort_channel_groups) then deleted
+            # before the results dict is returned (transient control-flow
+            # data, same treatment as probe_stream_ids).
+            "sort_group_requests": {},
             # bd-h2xnl / bd-exo4j created-channel cap state. Resolved here so
             # the Pass 2 soft-abort and the run summary share one value.
             "channel_cap": max(0, getattr(
@@ -1986,6 +2131,13 @@ class ChannelPipelineEngine:
             results["created_entities"].extend(exec_ctx.created_entities)
             results["modified_entities"].extend(exec_ctx.modified_entities)
             results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
+            # enhancedchannelmanager-vy4fl: last-write-wins per group_id if
+            # two DIFFERENT sort_group actions (different rules, or the
+            # same rule fired with different params across streams) target
+            # the same group — an edge case, since a rule's sort_group
+            # action params are static for the whole run. Whichever stream
+            # is processed LAST this run decides the group's sort params.
+            results["sort_group_requests"].update(exec_ctx.sort_group_requests)
 
             # Track channel ID for Pass 3 renumber.
             # Only include channels this rule actually OWNS — either just
@@ -2159,6 +2311,17 @@ class ChannelPipelineEngine:
                 settings=settings, stream_m3u_map=stream_m3u_map,
                 custom_stream_ids=custom_stream_ids,
             )
+
+            # =================================================================
+            # Pass 3.6: Sort + renumber channels within a group (sort_group
+            # action, enhancedchannelmanager-vy4fl)
+            # =================================================================
+            logger.debug("[AUTO-CREATE-ENGINE] Starting sort_group post-run pass")
+            await self._sort_channel_groups(
+                results["sort_group_requests"], executor, results, dry_run,
+                settings=settings,
+            )
+            del results["sort_group_requests"]
 
             # =================================================================
             # Pass 4: Reconcile — clean up orphaned channels

@@ -53,11 +53,15 @@ async def _poll_sleep(seconds: float) -> None:
 # consumes as ints.
 _ACTION_BOOL_KEYS = frozenset({
     "remove_non_matching", "loose_name_match", "allow_no_callsign", "set_tvg_id",
+    # sort_group (enhancedchannelmanager-vy4fl):
+    "strip_numbers", "ignore_country",
 })
 _ACTION_NUMBER_KEYS = frozenset({"min_score"})
 _ACTION_INT_KEYS = frozenset({
     "max_candidates", "epg_id", "profile_id",
     "max_streams", "max_streams_per_channel",
+    # sort_group (enhancedchannelmanager-vy4fl):
+    "starting_number", "group_id",
 })
 _ACTION_INT_LIST_KEYS = frozenset({
     "target_channel_in_group", "target_channel_not_in_group", "channel_profile_ids",
@@ -761,6 +765,29 @@ def register(mcp: FastMCP):
                   remove_from_channel — remove stream from current channel
                   set_stream_priority — params: value
                   probe_streams — trigger probe
+                  sort_group — GROUP-level post-run pass (NOT per-stream):
+                    alphabetically sorts and renumbers ALL channels in a
+                    group, once per group per run, after every stream has
+                    been processed — the automated equivalent of the
+                    manual Channel Manager "Sort & Renumber" tool. Params
+                    (all optional): order ("asc"/"desc", default "asc"),
+                    starting_number (int >= 1; default = the group's
+                    current lowest channel number, or 1 if none is set),
+                    strip_numbers (bool, default true — ignore embedded
+                    channel numbers in names when sorting, e.g. "209 |
+                    A&E"), ignore_country (bool, default false — ignore a
+                    leading country prefix like "US | " / "UK: " when
+                    sorting), group_id (int, optional explicit target
+                    group — otherwise resolved from the current stream's
+                    channel/group context, falling back to the rule's
+                    target_group_id). Sort order is natural (case-
+                    insensitive, "Channel 2" before "Channel 10") and
+                    matches the manual Sort & Renumber tool exactly. If
+                    the group can't be resolved (e.g. sort_group is the
+                    rule's ONLY action with no target_group_id set and no
+                    prior create_channel/merge_streams action), the
+                    action fails for that stream with an explanatory
+                    error — it does not silently no-op.
                   skip — skip this stream
                   stop_processing — stop processing further rules
                   log_match — log when matched
