@@ -256,6 +256,187 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
+  describe('API-authored multi-pattern round-trip (z4y4a)', () => {
+    /** A hand-/API-authored config the UI cannot fully express: two shared
+     * custom patterns (the editor edits only the first) plus a two-pattern
+     * per-group override list (the editor edits only patterns[0]). */
+    const API_CONFIG = {
+      master_group_id: 1,
+      secondary_group_ids: [2],
+      patterns: [
+        {
+          name: 'api-primary',
+          title_pattern: '^(?P<title>.+?)\\s*@',
+          time_pattern: '(?P<hour>\\d{1,2}):(?P<minute>\\d{2})',
+          date_pattern: '(?P<day>\\d{1,2})\\s+(?P<month>[A-Za-z]{3,9})',
+        },
+        // Nameless second shared pattern — no editor control can express it.
+        { title_pattern: '^(?P<title>.+)$' },
+      ],
+      group_patterns: {
+        '2': [
+          { name: 'g2-first', title_pattern: 'x(?P<title>.+)' },
+          { name: 'g2-extra', title_pattern: 'y(?P<title>.+)' },
+        ],
+      },
+      time_window_minutes: 45,
+      attach_threshold: 0.9,
+      enabled: true,
+    };
+
+    const apiRule: Partial<ChannelPipelineRule> = {
+      ...EXISTING_RULE,
+      event_sync_config: API_CONFIG,
+    };
+
+    it('survives open → save byte-identically when nothing was edited', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={apiRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      // The whole config round-trips content-identically...
+      expect(saved).toEqual(API_CONFIG);
+      // ...and the arrays the UI cannot express are passed through VERBATIM
+      // (same objects — not a re-built lossy approximation).
+      expect(saved.patterns).toBe(API_CONFIG.patterns);
+      expect(saved.group_patterns['2']).toBe(API_CONFIG.group_patterns['2']);
+      expect(JSON.stringify(saved.patterns)).toBe(JSON.stringify(API_CONFIG.patterns));
+      expect(JSON.stringify(saved.group_patterns)).toBe(
+        JSON.stringify(API_CONFIG.group_patterns)
+      );
+    });
+
+    it('does NOT silently re-add built-ins to an all-custom config', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={apiRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      // The built-in checkboxes reflect the saved selection: none selected.
+      expect(screen.getByRole('checkbox', { name: /day-first date \(built-in\)/i }))
+        .not.toBeChecked();
+      expect(screen.getByRole('checkbox', { name: /month-first date \(built-in\)/i }))
+        .not.toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      const savedNames = saved.patterns.map((p: { name?: string }) => p.name);
+      expect(savedNames).not.toContain('slot-title-day-first-date');
+      expect(savedNames).not.toContain('slot-title-month-first-date');
+      expect(saved.patterns).toHaveLength(2);
+    });
+
+    it('preserves the inexpressible extras (and their names) when the editable first custom IS edited', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={apiRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      // Edit the first custom shared pattern's title regex.
+      await user.click(screen.getByText('Custom shared pattern (regex fallback)'));
+      const titleInput = screen.getAllByLabelText('Title pattern')
+        .find(el => el.id.includes('-custom-title'))!;
+      await user.clear(titleInput);
+      await user.type(titleInput, '^EDITED (?P<title>.+)$');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      // Edited first custom keeps its API-authored name; the trailing extra
+      // survives untouched; nothing re-ordered around it, no built-ins added.
+      expect(saved.patterns).toEqual([
+        {
+          name: 'api-primary',
+          title_pattern: '^EDITED (?P<title>.+)$',
+          time_pattern: '(?P<hour>\\d{1,2}):(?P<minute>\\d{2})',
+          date_pattern: '(?P<day>\\d{1,2})\\s+(?P<month>[A-Za-z]{3,9})',
+        },
+        { title_pattern: '^(?P<title>.+)$' },
+      ]);
+      // Untouched group_patterns still round-trip verbatim.
+      expect(saved.group_patterns).toEqual(API_CONFIG.group_patterns);
+    });
+
+    it('preserves per-group extras when the editable override is edited', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={apiRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      // Open the secondary group's override editor and change its title.
+      await user.click(screen.getByText(/Secondary Events/, { selector: 'summary' }));
+      const overrideTitle = screen.getAllByLabelText('Title pattern')
+        .find(el => el.id.includes('-ov-2-'))!;
+      await user.clear(overrideTitle);
+      await user.type(overrideTitle, 'z(?P<title>.+)');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      expect(saved.group_patterns['2']).toEqual([
+        { name: 'g2-first', title_pattern: 'z(?P<title>.+)' },
+        { name: 'g2-extra', title_pattern: 'y(?P<title>.+)' },
+      ]);
+      // Untouched shared patterns still round-trip verbatim.
+      expect(saved.patterns).toEqual(API_CONFIG.patterns);
+    });
+
+    it('surfaces the preserved inexpressible patterns with a read-only indicator', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={apiRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Custom shared pattern (regex fallback)'));
+      const sharedIndicator = screen.getByTestId('custom-shared-extras');
+      expect(sharedIndicator).toHaveTextContent(/preserved as saved/i);
+
+      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText(/Secondary Events/, { selector: 'summary' }));
+      const groupIndicator = screen.getByTestId('group-override-extras-2');
+      expect(groupIndicator).toHaveTextContent(/preserved as saved/i);
+      expect(groupIndicator).toHaveTextContent('g2-extra');
+    });
+
+    it('a UI-authored single-custom config still saves exactly as before (no extras machinery)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Custom shared pattern (regex fallback)'));
+      const customTitle = screen.getAllByLabelText('Title pattern')
+        .find(el => el.id.includes('-custom-title'))!;
+      await user.type(customTitle, '^(?P<title>.+?)\\s*@');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      // Built-in defaults still selected + one new custom → shipped verbatim
+      // then the UI-named custom, exactly the pre-z4y4a shape.
+      const names = saved.patterns.map((p: { name?: string }) => p.name);
+      expect(names).toEqual([
+        'slot-title-day-first-date',
+        'slot-title-month-first-date',
+        'custom-shared',
+      ]);
+      expect(saved.patterns[2].title_pattern).toBe('^(?P<title>.+?)\\s*@');
+    });
+  });
+
   it('has NO apply or attach control anywhere (Phase 1A hard constraint)', async () => {
     seedGroups();
     stubGroupSettings({ 1: true, 2: false });

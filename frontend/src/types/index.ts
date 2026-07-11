@@ -1948,6 +1948,14 @@ export interface DummyEPGPreviewResult {
   matched: boolean;
   matched_variant: string | null;
   groups: Record<string, string> | null;
+  /**
+   * Batch endpoint only (bead hirm6): true when the Event Sync matcher
+   * would actually build a start time from the captured groups — valid
+   * month name, hour <= 23, a real calendar date ("45 Jul" is captured
+   * but invalid). Computed server-side from the matcher's own semantics;
+   * drives the Test Patterns panel's honest "Parsed" verdict.
+   */
+  event_sync_start_valid?: boolean;
   time_variables: Record<string, string> | null;
   rendered: {
     title: string;

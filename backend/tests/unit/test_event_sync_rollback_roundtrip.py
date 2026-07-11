@@ -17,6 +17,14 @@ assuming the pre-existing snapshot machinery covers the new path:
   guarantee Dispatcharr self-heals before the source stream next changes.
   Unflagged channels (standard-rule snapshots, legacy pre-flag snapshots)
   keep the full-payload restore byte-identical.
+* **Surgical unmerge preferred over snapshot full-replace** (bead sfysz):
+  when the journal (category=event_sync, batch_id=execution id) fully
+  covers the run's attaches, a confirmed rollback removes ONLY the stream
+  ids the run added — preserving Dispatcharr's own stream churn between
+  run and rollback, which the snapshot full-replace would clobber with
+  stale ids Dispatcharr never self-heals. Falls back to the snapshot
+  restore when coverage cannot be proven (missing/partial journal, mixed
+  runs, non-merge modifications). Confirm gating is unchanged.
 * **No group-settings writes** — an AST scan of every event_sync code path
   proves no code writes Dispatcharr group settings (Phase 1 never toggles
   ``auto_channel_sync``; snapshot restore therefore never needs to either).
@@ -255,6 +263,217 @@ class TestSnapshotRollbackRoundTrip:
         assert state.stream_ids_of(100) == [9001]
         # Dispatcharr-owned metadata untouched by the revert.
         assert state.channels[100]["name"] == renamed
+
+
+def _journal_capture_and_serve():
+    """A (log_entries side_effect, get_entries side_effect) pair backed by one
+    in-memory list — the run's buffered journal writes become readable by the
+    rollback's coverage check and surgical unmerge, end to end."""
+    entries: list[dict] = []
+
+    def _log_entries(entries_arg=None, **kwargs):
+        entries.extend(entries_arg or kwargs.get("entries") or [])
+        return True
+
+    def _get_entries(page=1, page_size=50, category=None, action_type=None,
+                     batch_id=None, **kwargs):
+        results = [
+            e for e in entries
+            if (category is None or e.get("category") == category)
+            and (action_type is None or e.get("action_type") == action_type)
+            and (batch_id is None or e.get("batch_id") == batch_id)
+        ]
+        return {
+            "count": len(results), "page": page, "page_size": page_size,
+            "total_pages": 1, "results": results,
+        }
+
+    return entries, _log_entries, _get_entries
+
+
+class TestSurgicalUnmergePreferredOverSnapshot:
+    """bead sfysz: a confirmed rollback of an event_sync attach run whose
+    journal FULLY covers its attaches performs the surgical unmerge (remove
+    only the run-added stream ids) instead of the snapshot full-replace —
+    Dispatcharr never resets stream lists, so a stale id written by
+    full-replace would NOT self-heal."""
+
+    def _attach_run_with_journal(self, db_session_factory):
+        """Same live attach run as TestSnapshotRollbackRoundTrip, but with
+        the journal captured so rollback can read the run's merge entries."""
+        _add_event_rule(db_session_factory)
+        state = FakeDispatcharrState(
+            channels=[
+                {"id": 100, "name": MASTER_MERCURY,
+                 "channel_group_id": MASTER_GROUP_ID,
+                 "auto_created": True, "epg_data_id": 77, "tvg_id": "evt.1",
+                 "streams": [9001]},
+                {"id": 50, "name": "My Manual", "channel_group_id": 3,
+                 "auto_created": False, "epg_data_id": 88, "tvg_id": "man.1",
+                 "streams": [601]},
+            ],
+            secondary_streams={SECONDARY_GROUP_NAME: [
+                {"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1},
+            ]},
+        )
+        client = make_stateful_client(state)
+        engine = ChannelPipelineEngine(client)
+        journal_entries, log_side_effect, get_side_effect = (
+            _journal_capture_and_serve()
+        )
+        with patch("channel_pipeline_engine.get_session",
+                   side_effect=db_session_factory), \
+             patch("journal.log_entries", side_effect=log_side_effect):
+            result = _run(engine.run_pipeline(
+                dry_run=False, triggered_by="manual"
+            ))
+        assert result["success"] is True
+        assert result["event_sync"][0]["attached"] == 1
+        assert state.stream_ids_of(100) == [9001, 7001]
+        # The run journaled its attach under the event_sync category.
+        assert [e["category"] for e in journal_entries
+                if e["action_type"] == "merge_stream"] == ["event_sync"]
+        return engine, state, client, result["execution_id"], get_side_effect
+
+    def test_surgical_path_removes_only_run_added_ids_and_preserves_churn(
+        self, db_session_factory
+    ):
+        """THE scenario the surgical path exists for: Dispatcharr adds a new
+        master stream AFTER the run; the confirmed rollback removes ONLY the
+        run's attachment and keeps the churned stream — where the snapshot
+        full-replace would have written back the stale pre-run list."""
+        engine, state, client, execution_id, get_entries = (
+            self._attach_run_with_journal(db_session_factory)
+        )
+        # Dispatcharr churn between run and rollback: the master provider
+        # swapped in an extra stream (the sync task never resets stream
+        # lists, so ECM must not either).
+        state.channels[100]["streams"] = [9001, 7001, 9002]
+        pre_rollback_patch_count = len(state.update_channel_calls)
+
+        with patch("channel_pipeline_engine.get_session",
+                   side_effect=db_session_factory), \
+             patch("channel_pipeline_engine.journal.get_entries",
+                   side_effect=get_entries):
+            result = _run(engine.rollback_execution(
+                execution_id, confirm=True
+            ))
+
+        assert result["success"] is True
+        assert result["surgical_unmerge"] is True
+        # Only the run-added 7001 removed; pre-run 9001 AND post-run churn
+        # 9002 both survive.
+        assert state.stream_ids_of(100) == [9001, 9002]
+        # Masters are never deleted (ECM never created them).
+        client.delete_channel.assert_not_awaited()
+        assert 100 in state.channels
+        # Surgical means surgical: exactly ONE write, to the master, with
+        # a streams-only payload. The manual channel (id 50) — which the
+        # snapshot full-replace would have re-written — is untouched.
+        surgical_calls = state.update_channel_calls[pre_rollback_patch_count:]
+        assert surgical_calls == [(100, {"streams": [9001, 9002]})]
+        assert state.stream_ids_of(50) == [601]
+
+        session = db_session_factory()
+        try:
+            execution = session.get(ChannelPipelineExecution, execution_id)
+            assert execution.status == "rolled_back"
+        finally:
+            session.close()
+
+        assert_never_touched_group_settings(client)
+
+    def test_confirm_gating_is_unchanged_on_the_surgical_path(
+        self, db_session_factory
+    ):
+        """Full journal coverage does NOT relax the snapshot confirm gate —
+        an unconfirmed rollback is still refused with the overwrite warning
+        and touches nothing."""
+        engine, state, _, execution_id, get_entries = (
+            self._attach_run_with_journal(db_session_factory)
+        )
+        pre_rollback_patch_count = len(state.update_channel_calls)
+
+        with patch("channel_pipeline_engine.get_session",
+                   side_effect=db_session_factory), \
+             patch("channel_pipeline_engine.journal.get_entries",
+                   side_effect=get_entries):
+            result = _run(engine.rollback_execution(execution_id))
+
+        assert result["success"] is False
+        assert result["requires_confirm"] is True
+        assert result["has_snapshot"] is True
+        assert state.update_channel_calls[pre_rollback_patch_count:] == []
+        assert state.stream_ids_of(100) == [9001, 7001]
+
+    def test_falls_back_to_snapshot_restore_without_journal_coverage(
+        self, db_session_factory
+    ):
+        """No journal entries for the batch (legacy run / journal write
+        failed) → coverage cannot be proven → the confirmed rollback still
+        works, via the snapshot full-replace."""
+        engine, state, client, execution_id = (
+            TestSnapshotRollbackRoundTrip()._attach_run(db_session_factory)
+        )
+
+        def _no_entries(**kwargs):
+            return {"count": 0, "page": 1, "page_size": 1000,
+                    "total_pages": 0, "results": []}
+
+        with patch("channel_pipeline_engine.get_session",
+                   side_effect=db_session_factory), \
+             patch("channel_pipeline_engine.journal.get_entries",
+                   side_effect=_no_entries):
+            result = _run(engine.rollback_execution(
+                execution_id, confirm=True
+            ))
+
+        # The restore_snapshot shape, not the surgical one.
+        assert result["success"] is True
+        assert "surgical_unmerge" not in result
+        assert result["restored_channels"] == 2
+        assert result["failed_channels"] == []
+        assert state.stream_ids_of(100) == [9001]
+        assert state.stream_ids_of(50) == [601]
+        client.delete_channel.assert_not_awaited()
+
+    def test_falls_back_when_the_run_had_non_event_sync_merges(
+        self, db_session_factory
+    ):
+        """A mixed run (standard-rule merge journaled under auto_creation
+        alongside the event_sync attach) is NOT fully covered — the rollback
+        must take the snapshot path, keeping the standard-rule rollback
+        byte-identical."""
+        engine, state, _, execution_id, get_entries = (
+            self._attach_run_with_journal(db_session_factory)
+        )
+
+        def _mixed_entries(**kwargs):
+            page = get_entries(**kwargs)
+            page["results"] = page["results"] + [{
+                "category": "auto_creation",
+                "action_type": "merge_stream",
+                "entity_id": 50,
+                "batch_id": kwargs.get("batch_id"),
+                "before_value": {"stream_ids": [601]},
+                "after_value": {"stream_ids": [601, 602]},
+            }]
+            page["count"] = len(page["results"])
+            return page
+
+        with patch("channel_pipeline_engine.get_session",
+                   side_effect=db_session_factory), \
+             patch("channel_pipeline_engine.journal.get_entries",
+                   side_effect=_mixed_entries):
+            result = _run(engine.rollback_execution(
+                execution_id, confirm=True
+            ))
+
+        assert result["success"] is True
+        assert "surgical_unmerge" not in result
+        assert result["restored_channels"] == 2
+        # Snapshot full-replace semantics applied.
+        assert state.stream_ids_of(100) == [9001]
 
 
 class TestRestorePayloadShapes:

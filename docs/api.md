@@ -675,7 +675,7 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `POST /api/channel-pipeline/run` | Run the full pipeline (execute or dry_run) |
 | `GET /api/channel-pipeline/executions` | Get execution history (paginated) |
 | `GET /api/channel-pipeline/executions/{id}` | Get execution details (optional log/entities) |
-| `POST /api/channel-pipeline/executions/{id}/rollback` | Rollback an execution |
+| `POST /api/channel-pipeline/executions/{id}/rollback` | Rollback an execution. With a pre-run snapshot it requires `confirm=true` (409 otherwise); once confirmed, an event_sync attach run whose journal fully covers its attaches is reverted SURGICALLY (only the run-added stream ids removed, post-run Dispatcharr churn preserved; response carries `surgical_unmerge: true`), otherwise it delegates to the full snapshot restore |
 | `POST /api/channel-pipeline/validate` | Validate a rule definition |
 | `GET /api/channel-pipeline/export/yaml` | Export all rules as YAML |
 | `POST /api/channel-pipeline/import/yaml` | Import rules from YAML |
@@ -901,7 +901,7 @@ To reconstruct one batch:
 | `DELETE /api/dummy-epg/profiles/{id}` | Delete dummy EPG profile |
 | `POST /api/dummy-epg/generate` | Generate dummy EPG data |
 | `POST /api/dummy-epg/preview` | Preview dummy EPG output |
-| `POST /api/dummy-epg/preview/batch` | Batch preview dummy EPG |
+| `POST /api/dummy-epg/preview/batch` | Batch preview dummy EPG (zero-write). Each result also carries `event_sync_start_valid` — true only when the Event Sync matcher would build a real start time from the captured groups (valid month, hour ≤ 23, real calendar date; never guessed) |
 | `GET /api/dummy-epg/xmltv` | Get combined XMLTV output |
 | `GET /api/dummy-epg/xmltv/{id}` | Get XMLTV output for a profile |
 | `GET /api/dummy-epg/profiles/export/yaml` | Export profiles as YAML |
