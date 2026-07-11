@@ -343,8 +343,10 @@ export function EventSyncRuleEditor({
       <div className="event-sync-editor-content">
         <p className="form-hint event-sync-quick-path">
           Quick path: pick the master group, pick the secondary groups, keep
-          the default patterns, then Preview. This phase is preview-only —
-          nothing attaches until a later phase.
+          the default patterns, then Preview. Preview never writes; a manual
+          pipeline Run attaches matched streams to master channels — capped
+          per run, journaled, and reversible via execution rollback. Event
+          Sync never runs from the unattended refresh task.
         </p>
 
         {/* Basic Info */}

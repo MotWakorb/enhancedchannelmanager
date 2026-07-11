@@ -197,8 +197,9 @@ export function EventSyncPreviewPanel({
         </button>
         <span className="form-hint">
           Read-only dry run against live Dispatcharr data — nothing is written
-          and no group settings are touched. The attach path ships in a later
-          phase.
+          and no group settings are touched. A manual pipeline Run attaches
+          what the preview shows (same resolver) — capped per run, journaled,
+          and reversible via execution rollback.
         </span>
       </div>
 

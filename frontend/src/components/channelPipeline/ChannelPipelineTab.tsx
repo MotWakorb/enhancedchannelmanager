@@ -878,7 +878,7 @@ export function ChannelPipelineTab() {
                           {rule.event_sync_config && (
                             <span
                               className="badge badge-sm badge-info rule-kind-badge"
-                              title="Event Sync rule — preview-only in this phase; excluded from pipeline runs"
+                              title="Event Sync rule — attaches streams on MANUAL pipeline runs only (never on unattended refresh); attaches are journaled and reversible via rollback"
                             >
                               Event Sync
                             </span>
@@ -897,9 +897,10 @@ export function ChannelPipelineTab() {
                       <td className="col-matches">{rule.match_count || 0}</td>
                       <td className="col-actions">
                         <div className="rule-actions-row">
-                          {/* event_sync rules are excluded from pipeline
-                              execution entirely in Phase 1A (preview-only) —
-                              the preview lives inside the editor. */}
+                          {/* event_sync rules hide the per-rule Run/Test
+                              icons — they execute via the pipeline-level
+                              manual Run or the single-rule API; the preview
+                              lives inside the editor. */}
                           {!rule.event_sync_config && (
                             <>
                               <button
@@ -1132,7 +1133,7 @@ export function ChannelPipelineTab() {
                       <span>
                         One channel per live event across providers — match
                         secondary streams to a master group&apos;s channels.
-                        Preview-only in this phase.
+                        Preview first; manual runs attach.
                       </span>
                     </span>
                   </button>
