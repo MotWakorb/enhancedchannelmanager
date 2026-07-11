@@ -25,16 +25,25 @@ import pytest
 import pytz
 
 from services.event_sync_matcher import (
+    BAND_AMBIGUOUS,
+    BAND_ATTACH,
+    BAND_REJECT,
     DEFAULT_EVENT_TIMEZONE,
+    MasterCandidate,
+    ParsedEvent,
     REJECT_NO_PARSED_TIME,
     REJECT_PARSE_FAILURE,
+    StreamMatchResult,
 )
 from services.event_sync_resolver import (
+    AMBIGUOUS_REASON_BAND,
+    AMBIGUOUS_REASON_CONTESTED,
     DISPOSITION_AMBIGUOUS,
     DISPOSITION_PARSE_FAILED,
     DISPOSITION_UNMATCHED,
     DISPOSITION_WOULD_ATTACH,
     SecondaryStream,
+    _classify,
     effective_patterns,
     resolve_event_sync,
 )
@@ -238,3 +247,135 @@ class TestThresholdClamp:
         resolution = resolve_event_sync(config, MASTERS, streams, now=NOW)
         (resolved,) = resolution.resolved
         assert resolved.disposition == DISPOSITION_AMBIGUOUS
+
+
+class TestContestedRail:
+    """PR #613 review rail (bead ti939.2.1): a stream whose top candidates
+    cannot be confidently separated is AMBIGUOUS — skip + count, never an
+    attach to an alphabetical tie-break winner."""
+
+    def test_same_fixture_different_session_tie_is_contested(self):
+        # The exact review scenario: the team-agree boost ties the main card
+        # and the prelims at identical scores against either stream. Without
+        # the rail the alphabetical tie-break would attach to "PPV 01" — the
+        # wrong master half the time.
+        masters = [
+            "PPV 01: Fury vs. Usyk @ 11 Jul 08:00 PM ET",
+            "PPV 02: Fury vs. Usyk Prelims @ 11 Jul 08:00 PM ET",
+        ]
+        streams = [SecondaryStream(
+            name="BOX HD: Fury vs. Usyk @ 11 Jul 08:00 PM ET",
+            group_id=20, stream_id=201, provider="BoxProvider",
+        )]
+        resolution = resolve_event_sync(_config(), masters, streams, now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_AMBIGUOUS
+        assert resolved.ambiguous_reason == AMBIGUOUS_REASON_CONTESTED
+        assert resolved.best is None
+        # Both candidates really did land in the attach band (the trap).
+        assert len(resolved.result.candidates) >= 2
+        assert resolved.result.candidates[0].band == BAND_ATTACH
+        assert resolved.result.candidates[1].band == BAND_ATTACH
+
+    def test_single_attach_candidate_still_attaches(self):
+        # Removing the second session removes the contest — same stream, one
+        # master, clean attach. Proves the rail keys on the candidate SET,
+        # not on the stream.
+        masters = ["PPV 01: Fury vs. Usyk @ 11 Jul 08:00 PM ET"]
+        streams = [SecondaryStream(
+            name="BOX HD: Fury vs. Usyk @ 11 Jul 08:00 PM ET",
+            group_id=20, stream_id=201,
+        )]
+        resolution = resolve_event_sync(_config(), masters, streams, now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.ambiguous_reason is None
+        assert resolved.best.master_name == masters[0]
+
+    def test_distant_runner_up_does_not_contest(self):
+        # A runner-up far below the winner (different fixture, reject band,
+        # outside CONTESTED_SCORE_EPSILON) must not block the attach.
+        masters = [
+            "Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            "Peacock 15: Sparks vs. Liberty @ 11 Jul 06:00 PM ET",
+        ]
+        streams = [SecondaryStream(
+            name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            group_id=20, stream_id=201,
+        )]
+        resolution = resolve_event_sync(_config(), masters, streams, now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.best.master_name == masters[0]
+
+    def test_band_ambiguous_top_candidate_carries_band_reason(self):
+        streams = [SecondaryStream(
+            name=AMBIGUOUS_STREAM_NAME, group_id=20, stream_id=202,
+        )]
+        resolution = resolve_event_sync(_config(), MASTERS, streams, now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_AMBIGUOUS
+        assert resolved.ambiguous_reason == AMBIGUOUS_REASON_BAND
+
+    def test_epsilon_near_tie_is_contested_unit(self):
+        # Unit-level epsilon proof against _classify with synthetic
+        # candidates: winner in the attach band, runner-up BELOW the band
+        # but within CONTESTED_SCORE_EPSILON — still contested.
+        top = _candidate("PPV 01: A vs. B", score=0.82, band=BAND_ATTACH)
+        near = _candidate("PPV 02: A vs. C", score=0.79, band=BAND_AMBIGUOUS)
+        result = StreamMatchResult(
+            stream_name="s", parsed=top.parsed, candidates=(top, near),
+        )
+        disposition, best, reason = _classify(result)
+        assert disposition == DISPOSITION_AMBIGUOUS
+        assert best is None
+        assert reason == AMBIGUOUS_REASON_CONTESTED
+
+    def test_outside_epsilon_runner_up_is_not_contested_unit(self):
+        top = _candidate("PPV 01: A vs. B", score=0.90, band=BAND_ATTACH)
+        far = _candidate("PPV 02: A vs. C", score=0.70, band=BAND_AMBIGUOUS)
+        result = StreamMatchResult(
+            stream_name="s", parsed=top.parsed, candidates=(top, far),
+        )
+        disposition, best, reason = _classify(result)
+        assert disposition == DISPOSITION_WOULD_ATTACH
+        assert best is top
+        assert reason is None
+
+    def test_second_attach_band_candidate_contests_even_outside_epsilon(self):
+        # Two attach-band candidates always contest, no matter the gap.
+        top = _candidate("PPV 01: A vs. B", score=1.0, band=BAND_ATTACH)
+        second = _candidate("PPV 02: A vs. C", score=0.81, band=BAND_ATTACH)
+        result = StreamMatchResult(
+            stream_name="s", parsed=top.parsed, candidates=(top, second),
+        )
+        disposition, best, reason = _classify(result)
+        assert disposition == DISPOSITION_AMBIGUOUS
+        assert reason == AMBIGUOUS_REASON_CONTESTED
+
+    def test_attach_band_runner_hidden_below_higher_scored_reject_contests(self):
+        # Band is NOT monotonic in score: a no-teams-rail REJECT can outscore
+        # a lower attach-band candidate. The attach-band scan must cover ALL
+        # runners, not stop at the first non-contesting one.
+        top = _candidate("PPV 01: A vs. B", score=0.95, band=BAND_ATTACH)
+        reject = _candidate("PPV 02: Some Show", score=0.88, band=BAND_REJECT)
+        hidden = _candidate("PPV 03: A vs. C", score=0.85, band=BAND_ATTACH)
+        result = StreamMatchResult(
+            stream_name="s", parsed=top.parsed,
+            candidates=(top, reject, hidden),
+        )
+        disposition, best, reason = _classify(result)
+        assert disposition == DISPOSITION_AMBIGUOUS
+        assert reason == AMBIGUOUS_REASON_CONTESTED
+
+
+def _candidate(master_name: str, *, score: float, band: str) -> MasterCandidate:
+    """Synthetic MasterCandidate for unit-level _classify proofs."""
+    parsed = ParsedEvent(
+        raw_name=master_name, title=master_name, start=NOW, teams=None,
+        matched_pattern="synthetic",
+    )
+    return MasterCandidate(
+        master_name=master_name, parsed=parsed, score=score, band=band,
+        team_verdict="agree", time_delta_minutes=0.0, reject_reasons=(),
+    )

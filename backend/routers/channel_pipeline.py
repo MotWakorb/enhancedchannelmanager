@@ -2565,6 +2565,11 @@ async def preview_event_sync(
             "matched_pattern": r.result.parsed.matched_pattern,
             "disposition": r.disposition,
             "unmatchable_reason": r.result.unmatchable_reason,
+            # ti939.2.1: machine-readable reason when disposition is
+            # "ambiguous" — "contested_top_candidates" (the PR #613 contested
+            # rail) or "top_candidate_ambiguous_band". Preview inherits the
+            # rail automatically (same resolver as the attach path).
+            "ambiguous_reason": r.ambiguous_reason,
             "would_attach_master": (
                 {
                     "channel_id": name_to_id.get(r.best.master_name),

@@ -40,6 +40,12 @@ export interface EventSyncConfig {
   time_window_minutes?: number;
   /** Hard-clamped >= 0.80 by the backend schema; backend default 0.80. */
   attach_threshold?: number;
+  /**
+   * Per-run attach cap (1..1000; backend default 100) — Phase 1B blast-radius
+   * control (bead ti939.2.1). No editor UI yet; preserved on save so an
+   * API-set value survives a UI edit.
+   */
+  max_attach_per_run?: number;
   enabled?: boolean;
 }
 

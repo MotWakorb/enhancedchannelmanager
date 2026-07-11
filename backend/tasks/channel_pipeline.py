@@ -195,12 +195,18 @@ class ChannelPipelineTask(TaskScheduler):
             )
 
         # (c) At least one enabled run_on_refresh rule. Only this rule set runs.
+        # event_sync rules are EXPLICITLY excluded (ti939.2.1): they are
+        # manual-run-only in this phase and must NEVER fire from this
+        # unattended watermark path, even if an operator sets run_on_refresh
+        # on one. The engine's triggered_by gate ("m3u_refresh" is not an
+        # allowed event_sync trigger) is the second, independent layer.
         self._set_progress(status="loading_rules")
         session = get_session()
         try:
             rules_to_run = session.query(ChannelPipelineRule).filter(
                 ChannelPipelineRule.enabled == True,
                 ChannelPipelineRule.run_on_refresh == True,
+                ChannelPipelineRule.event_sync_config.is_(None),
             ).all()
             rule_ids = [r.id for r in rules_to_run]
             rule_names = [r.name for r in rules_to_run]

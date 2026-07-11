@@ -268,6 +268,35 @@ class TestMatchingKnobs:
         errors = validate_event_sync_config(_valid_config(enabled=bad))
         assert any("enabled" in e for e in errors)
 
+    # --- max_attach_per_run (bead ti939.2.1 — per-run attach cap) --------
+
+    def test_max_attach_per_run_default_filled(self):
+        from services.event_sync_resolver import DEFAULT_MAX_ATTACH_PER_RUN
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert config["max_attach_per_run"] == DEFAULT_MAX_ATTACH_PER_RUN
+
+    @pytest.mark.parametrize("good", [1, 100, 1000])
+    def test_max_attach_per_run_valid_values(self, good):
+        config = _valid_config(max_attach_per_run=good)
+        assert validate_event_sync_config(config) == []
+        assert config["max_attach_per_run"] == good
+
+    @pytest.mark.parametrize("bad", [True, False, "100", 0, -1, 1001, 1.5])
+    def test_max_attach_per_run_invalid_rejected(self, bad):
+        errors = validate_event_sync_config(
+            _valid_config(max_attach_per_run=bad)
+        )
+        assert any("max_attach_per_run" in e for e in errors)
+
+    def test_max_attach_per_run_ceiling_error_teaches(self):
+        errors = validate_event_sync_config(
+            _valid_config(max_attach_per_run=99999)
+        )
+        assert len(errors) == 1
+        assert "1000" in errors[0]
+        assert "cap" in errors[0]
+
 
 class TestTeachingErrorFormat:
     """Errors must teach: field, got, expected, doc link."""

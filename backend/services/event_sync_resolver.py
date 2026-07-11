@@ -11,8 +11,10 @@ disposition:
 
 * ``would_attach`` — best candidate is in the matcher's ATTACH band; Phase
   1B attaches the stream to that master (preview only reports it).
-* ``ambiguous`` — best candidate is in the AMBIGUOUS band: surfaced for
-  operator review, never auto-attached.
+* ``ambiguous`` — best candidate is in the AMBIGUOUS band, OR the attach
+  decision is CONTESTED (more than one attach-band candidate / runner-up
+  within ``CONTESTED_SCORE_EPSILON`` of the winner — the PR #613 rail):
+  surfaced for operator review, never auto-attached.
 * ``unmatched`` — parses fine but no candidate survives (master-as-ceiling
   hedge: this list is the evidence base for any Phase 3 promotion feature).
 * ``parse_failed`` — no complete parsed identity (title or start time
@@ -47,6 +49,10 @@ from services.event_sync_matcher import (
 )
 
 __all__ = [
+    "AMBIGUOUS_REASON_BAND",
+    "AMBIGUOUS_REASON_CONTESTED",
+    "CONTESTED_SCORE_EPSILON",
+    "DEFAULT_MAX_ATTACH_PER_RUN",
     "DISPOSITION_AMBIGUOUS",
     "DISPOSITION_PARSE_FAILED",
     "DISPOSITION_UNMATCHED",
@@ -63,6 +69,36 @@ DISPOSITION_WOULD_ATTACH = "would_attach"
 DISPOSITION_AMBIGUOUS = "ambiguous"
 DISPOSITION_UNMATCHED = "unmatched"
 DISPOSITION_PARSE_FAILED = "parse_failed"
+
+# Machine-readable reasons for an AMBIGUOUS disposition (preview response +
+# journal contract, bead ti939.2.1).
+#
+# ``contested_top_candidates`` is the CONTESTED RAIL mandated by the PR #613
+# review: the matcher's team-agree boost can tie same-fixture-different-
+# session masters at identical scores ("Fury vs. Usyk" main card and
+# "Fury vs. Usyk Prelims" both score 1.0 against either stream), and a
+# classification that only looks at candidates[0] would let the alphabetical
+# tie-break pick the attach target — Phase 1B would attach to the WRONG
+# master. When more than one candidate lands in the attach band, or the
+# runner-up is within ``CONTESTED_SCORE_EPSILON`` of the winner, the stream
+# is AMBIGUOUS (skip + count) — never attached. Precision over recall
+# (1,341-incident trust benchmark).
+AMBIGUOUS_REASON_CONTESTED = "contested_top_candidates"
+# The pre-existing ambiguous case: the single best candidate itself scored
+# into the matcher's AMBIGUOUS band.
+AMBIGUOUS_REASON_BAND = "top_candidate_ambiguous_band"
+
+# Runner-up-within-epsilon-of-winner ⇒ contested. Deliberately generous
+# (more contested = fewer attaches = the conservative direction): two
+# distinct real-world events that both survive the time-window block and
+# score within 0.05 of each other are not a confident single match.
+CONTESTED_SCORE_EPSILON: float = 0.05
+
+# Default per-run attach cap for the Phase 1B attach executor
+# (event_sync_config.max_attach_per_run; validated by
+# channel_pipeline_schema.validate_event_sync_config). Blast-radius control:
+# the existing created-channel cap does not cover merge/attach operations.
+DEFAULT_MAX_ATTACH_PER_RUN: int = 100
 
 
 @dataclass(frozen=True)
@@ -85,12 +121,17 @@ class ResolvedStream:
 
     ``best`` is the winning ATTACH-band candidate when the disposition is
     ``would_attach``, else ``None`` — the exact master Phase 1B attaches to.
+
+    ``ambiguous_reason`` is the machine-readable reason when the disposition
+    is ``ambiguous`` (``AMBIGUOUS_REASON_CONTESTED`` /
+    ``AMBIGUOUS_REASON_BAND``), else ``None``.
     """
 
     stream: SecondaryStream
     result: StreamMatchResult
     disposition: str
     best: MasterCandidate | None
+    ambiguous_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,18 +162,53 @@ def effective_patterns(config: dict, group_id: int) -> list[dict] | None:
     return config.get("patterns")
 
 
-def _classify(result: StreamMatchResult) -> tuple[str, MasterCandidate | None]:
-    """Disposition of one match result (candidates arrive best-first)."""
+def _is_contested(candidates: tuple[MasterCandidate, ...]) -> bool:
+    """True when the winner's attach decision is CONTESTED (PR #613 rail).
+
+    Contested means EITHER of (candidates arrive best-first):
+
+    * a second candidate also landed in the ATTACH band, or
+    * the runner-up's score is within ``CONTESTED_SCORE_EPSILON`` of the
+      winner's (whatever band the runner-up fell into — a near-tie means the
+      matcher could not confidently separate two masters).
+
+    Only meaningful when ``candidates[0]`` is in the attach band; the caller
+    guarantees that.
+    """
+    top = candidates[0]
+    # The epsilon check only needs candidates[1] (best-first ordering), but
+    # the attach-band check must scan ALL runners: band is NOT monotonic in
+    # score (e.g. a no-teams-rail REJECT can outscore a lower attach-band
+    # candidate), so an attach-band contender can sit below a reject.
+    if len(candidates) > 1 \
+            and top.score - candidates[1].score <= CONTESTED_SCORE_EPSILON:
+        return True
+    return any(runner.band == BAND_ATTACH for runner in candidates[1:])
+
+
+def _classify(
+    result: StreamMatchResult,
+) -> tuple[str, MasterCandidate | None, str | None]:
+    """Disposition of one match result (candidates arrive best-first).
+
+    Returns ``(disposition, best, ambiguous_reason)``. ``best`` is only set
+    for ``would_attach``; ``ambiguous_reason`` only for ``ambiguous``.
+    """
     if result.unmatchable_reason is not None:
-        return DISPOSITION_PARSE_FAILED, None
+        return DISPOSITION_PARSE_FAILED, None, None
     if not result.candidates:
-        return DISPOSITION_UNMATCHED, None
+        return DISPOSITION_UNMATCHED, None, None
     top = result.candidates[0]
     if top.band == BAND_ATTACH:
-        return DISPOSITION_WOULD_ATTACH, top
+        # CONTESTED RAIL (PR #613 review, bead ti939.2.1): a stream whose
+        # top candidates cannot be confidently separated is AMBIGUOUS —
+        # skip + count, never attach to an alphabetical tie-break winner.
+        if _is_contested(result.candidates):
+            return DISPOSITION_AMBIGUOUS, None, AMBIGUOUS_REASON_CONTESTED
+        return DISPOSITION_WOULD_ATTACH, top, None
     if top.band == BAND_AMBIGUOUS:
-        return DISPOSITION_AMBIGUOUS, None
-    return DISPOSITION_UNMATCHED, None
+        return DISPOSITION_AMBIGUOUS, None, AMBIGUOUS_REASON_BAND
+    return DISPOSITION_UNMATCHED, None, None
 
 
 def resolve_event_sync(
@@ -200,12 +276,13 @@ def resolve_event_sync(
             now=now,
         )
         for stream, result in zip(streams, results):
-            disposition, best = _classify(result)
+            disposition, best, ambiguous_reason = _classify(result)
             resolved.append(ResolvedStream(
                 stream=stream,
                 result=result,
                 disposition=disposition,
                 best=best,
+                ambiguous_reason=ambiguous_reason,
             ))
 
     return EventSyncResolution(
