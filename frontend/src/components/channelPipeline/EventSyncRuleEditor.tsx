@@ -238,6 +238,12 @@ export function EventSyncRuleEditor({
       attach_threshold: clampAttachThreshold(parseFloat(thresholdText)),
       enabled: config?.enabled ?? true,
     };
+    // ti939.2.1: the per-run attach cap has no editor control yet — preserve
+    // an existing (API-set) value so a UI edit does not silently reset it to
+    // the backend default.
+    if (config?.max_attach_per_run != null) {
+      built.max_attach_per_run = config.max_attach_per_run;
+    }
 
     // Selection == exactly the built-ins and no custom pattern → omit the
     // `patterns` key so the backend's own defaults apply (future matcher

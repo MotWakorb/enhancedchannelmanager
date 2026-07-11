@@ -35,6 +35,9 @@ def _event_sync_config(**overrides) -> dict:
         "secondary_group_ids": [20, 30],
         "time_window_minutes": 30,
         "attach_threshold": 0.80,
+        # ti939.2.1: the write-time validator default-fills the per-run
+        # attach cap, so a round-tripped stored config carries it explicitly.
+        "max_attach_per_run": 100,
         "enabled": True,
     }
     config.update(overrides)

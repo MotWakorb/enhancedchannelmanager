@@ -51,6 +51,31 @@ from channel_pipeline_sort import sort_channels_by_name
 logger = logging.getLogger(__name__)
 
 
+# enhancedchannelmanager-ti939.2.1 (Event Sync Phase 1B): the ONLY
+# triggered_by values allowed to execute event_sync rules. Manual-run-only is
+# a Phase 1 hard constraint — event_sync rules must NEVER fire from the
+# unattended watermark task ("m3u_refresh") or any scheduled path until Phase
+# 2's explicit opt-in auto-run flag. Deny-by-default: anything not in this
+# set is treated as unattended.
+EVENT_SYNC_ALLOWED_TRIGGERS = frozenset({"manual", "api"})
+
+# Deny-by-default sentinel for run_pipeline/run_rule's triggered_by
+# (PR #616 review, bead ti939.2.2): a caller that does not IDENTIFY its
+# trigger runs as "unspecified", which is deliberately NOT in
+# EVENT_SYNC_ALLOWED_TRIGGERS — a future call site that forgets to thread
+# triggered_by can never execute event_sync rules by accident. Every
+# production caller passes its trigger explicitly (the routers pass "api",
+# the watermark task passes "m3u_refresh").
+TRIGGERED_BY_UNSPECIFIED = "unspecified"
+
+# Upper bound on secondary streams fetched per event_sync rule — a fetch
+# guard, not a decision knob (per-stream decisions are independent, so
+# truncation only defers later streams to the next idempotent run; it is
+# logged loudly).
+EVENT_SYNC_MAX_SECONDARY_STREAMS = 5000
+_EVENT_SYNC_FETCH_PAGE_SIZE = 500
+
+
 # Keys carrying the verbose per-stream evaluation trace. Dropped from each
 # retained entry on non-dry-run so peak RSS does not scale with
 # streams×rules×conditions (bd-sjdsq). The Rule Analyzer re-evaluates rules
@@ -185,7 +210,7 @@ class ChannelPipelineEngine:
     async def run_pipeline(
         self,
         dry_run: bool = False,
-        triggered_by: str = "manual",
+        triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
         m3u_account_ids: list[int] = None,
         rule_ids: list[int] = None,
         execution_id: int | None = None,
@@ -195,7 +220,12 @@ class ChannelPipelineEngine:
 
         Args:
             dry_run: If True, only simulate changes without applying
-            triggered_by: How the pipeline was triggered (manual, scheduled, m3u_refresh)
+            triggered_by: How the pipeline was triggered (manual, api,
+                scheduled, m3u_refresh). Defaults to the DENIED sentinel
+                ``TRIGGERED_BY_UNSPECIFIED`` (PR #616 review): an
+                unidentified trigger runs standard rules normally but can
+                never execute event_sync rules — callers must identify
+                themselves to reach the manual-run-only attach phase.
             m3u_account_ids: Optional list of M3U account IDs to process (None = all)
             rule_ids: Optional list of rule IDs to run (None = all enabled)
             execution_id: Optional pre-created execution record id. When the
@@ -219,16 +249,25 @@ class ChannelPipelineEngine:
         rules = await self._load_rules(rule_ids)
 
         # ---------------------------------------------------------------------
-        # event_sync exclusion (bead ti939.1.3 — Phase 1A, NO execution path).
+        # event_sync routing (bead ti939.1.3 exclusion + ti939.2.1 attach path).
         #
         # event_sync rules are a different KIND: they match secondary-provider
         # streams onto Dispatcharr-owned master channels via the isolated
         # matcher service (services/event_sync_matcher.py), not via per-stream
-        # condition/action evaluation. In this phase they are preview-only, so
-        # they are excluded from Pass 1/Pass 2 entirely. Pass 4 orphan
-        # reconciliation is ALSO hard-bypassed for them (see
-        # _reconcile_orphans) — belt and braces, since the filter here already
-        # keeps them out of the rules list Pass 4 receives.
+        # condition/action evaluation. They are ALWAYS excluded from Pass
+        # 1/Pass 2 evaluation; Pass 4 orphan reconciliation is ALSO
+        # hard-bypassed for them (see _reconcile_orphans) — belt and braces,
+        # since the filter here already keeps them out of the rules list Pass
+        # 4 receives.
+        #
+        # Phase 1B (ti939.2.1): event_sync rules now EXECUTE via the dedicated
+        # attach phase (_run_event_sync_rules → executor.execute_event_sync_
+        # rule), but ONLY on manually-triggered runs (EVENT_SYNC_ALLOWED_
+        # TRIGGERS). Unattended paths — the watermark task ("m3u_refresh"),
+        # "scheduled", anything unrecognized — never run them (Phase 2 adds an
+        # explicit opt-in auto-run flag). The task layer additionally filters
+        # event_sync rules out of its run_on_refresh query (belt) — this gate
+        # is the braces.
         #
         # VERIFIED NON-WORK (do not "fix" these — they were checked):
         # * No bypass of the auto_creation_exclude_auto_sync_groups global
@@ -246,21 +285,34 @@ class ChannelPipelineEngine:
         #   (services/event_sync_preflight.py) surfaces the misconfiguration.
         # ---------------------------------------------------------------------
         event_sync_rules = [r for r in rules if r.is_event_sync()]
+        event_sync_to_run: list = []
         if event_sync_rules:
             rules = [r for r in rules if not r.is_event_sync()]
-            logger.info(
-                "[AUTO-CREATE-ENGINE] Excluded %s event_sync rule(s) from "
-                "pipeline evaluation (preview-only phase): %s",
-                len(event_sync_rules),
-                [r.id for r in event_sync_rules],
-            )
+            if triggered_by in EVENT_SYNC_ALLOWED_TRIGGERS:
+                event_sync_to_run = event_sync_rules
+                logger.info(
+                    "[AUTO-CREATE-ENGINE] %s event_sync rule(s) excluded from "
+                    "Pass 1/2 evaluation; will run via the event_sync attach "
+                    "phase (triggered_by=%s): %s",
+                    len(event_sync_rules), triggered_by,
+                    [r.id for r in event_sync_rules],
+                )
+            else:
+                logger.info(
+                    "[AUTO-CREATE-ENGINE] Excluded %s event_sync rule(s) from "
+                    "this run entirely — event_sync is manual-run-only in "
+                    "this phase and never fires from unattended runs "
+                    "(triggered_by=%s): %s",
+                    len(event_sync_rules), triggered_by,
+                    [r.id for r in event_sync_rules],
+                )
 
-        if not rules:
+        if not rules and not event_sync_to_run:
             if event_sync_rules:
                 message = (
-                    "Only event_sync rules are in scope — event_sync is "
-                    "preview-only in this phase and never runs in the "
-                    "pipeline"
+                    "Only event_sync rules are in scope — event_sync rules "
+                    "are manual-run-only in this phase and never fire from "
+                    "unattended runs"
                 )
             else:
                 message = "No enabled rules to process"
@@ -285,8 +337,14 @@ class ChannelPipelineEngine:
             await self._detect_disabled_normalization_group_warnings(rules)
         )
 
-        # Fetch streams from M3U accounts
-        streams = await self._fetch_streams(m3u_account_ids, rules)
+        # Fetch streams from M3U accounts. Skipped when ONLY event_sync rules
+        # run (ti939.2.1): the event_sync attach phase fetches its OWN
+        # secondary-group streams, and _fetch_streams with an empty rules
+        # list would pull every account's full catalog for nothing.
+        if rules:
+            streams = await self._fetch_streams(m3u_account_ids, rules)
+        else:
+            streams = []
         logger.info("[AUTO-CREATE-ENGINE] Fetched %s streams to evaluate against %s rules", len(streams), len(rules))
 
         # Enrich streams with channel_id from existing channels
@@ -340,12 +398,29 @@ class ChannelPipelineEngine:
         # storage. This runs AFTER _load_existing_data (the in-memory channel
         # list is already populated — no N+1) and BEFORE _process_streams
         # (the single call that performs all mutation).
+        #
+        # ti939.2.1: when event_sync rules will run, their MASTER groups'
+        # channels are INCLUDED in the snapshot even though they are
+        # Dispatcharr-auto-created (normally §D3-excluded) — the attach phase
+        # mutates their stream lists, so rollback/restore needs their pre-run
+        # state to undo attaches.
         if not dry_run:
-            await self._capture_snapshot(execution.id)
+            event_sync_master_group_ids: set[int] = set()
+            for r in event_sync_to_run:
+                cfg = r.get_event_sync_config()
+                if cfg and cfg.get("master_group_id") is not None:
+                    event_sync_master_group_ids.add(cfg["master_group_id"])
+            await self._capture_snapshot(
+                execution.id,
+                include_auto_created_group_ids=event_sync_master_group_ids,
+            )
 
-        # Process streams through rules
+        # Process streams through rules (+ the event_sync attach phase,
+        # ti939.2.1 — runs inside _process_streams so its merges share the
+        # same executor, journal buffer/flush and results plumbing).
         results = await self._process_streams(
-            streams, rules, execution, dry_run, triggered_by=triggered_by
+            streams, rules, execution, dry_run, triggered_by=triggered_by,
+            event_sync_rules=event_sync_to_run,
         )
 
         # Prepend exclusion log entries and set streams_excluded count
@@ -391,16 +466,25 @@ class ChannelPipelineEngine:
         execution.set_execution_log(results["execution_log"])
         # Persist disabled-normalization-group warnings so the polled record and
         # the executions UI can surface them (enhancedchannelmanager-e8p1h).
-        execution.set_warnings(normalization_warnings)
+        # ti939.2.1: event_sync run warnings (attach-cap overage, skipped
+        # invalid configs) ride the same surface — popped from results so the
+        # transient list is not duplicated on the API response (the persisted
+        # record and the structured results["event_sync"] summaries carry it).
+        run_warnings = list(normalization_warnings) + results.pop(
+            "event_sync_warnings", []
+        )
+        execution.set_warnings(run_warnings)
 
         if dry_run:
             execution.set_dry_run_results(results["dry_run_results"])
 
         await self._save_execution(execution)
 
-        # Update rule stats
+        # Update rule stats. event_sync rules that ran get last_run_at /
+        # match_count too (ti939.2.1) — _run_event_sync_rules recorded their
+        # attach counts in results["rule_match_counts"].
         if not dry_run:
-            await self._update_rule_stats(rules, results)
+            await self._update_rule_stats(rules + event_sync_to_run, results)
 
         removed = results.get('channels_removed', 0)
         moved = results.get('channels_moved', 0)
@@ -429,7 +513,7 @@ class ChannelPipelineEngine:
         self,
         rule_id: int,
         dry_run: bool = False,
-        triggered_by: str = "manual",
+        triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
         execution_id: int | None = None,
     ) -> dict:
         """
@@ -438,7 +522,9 @@ class ChannelPipelineEngine:
         Args:
             rule_id: ID of the rule to run
             dry_run: If True, only simulate changes
-            triggered_by: How the rule was triggered
+            triggered_by: How the rule was triggered. Defaults to the DENIED
+                sentinel ``TRIGGERED_BY_UNSPECIFIED`` — see
+                :meth:`run_pipeline`.
             execution_id: Optional pre-created execution record id, threaded
                 through to ``run_pipeline`` (see its docstring for the
                 bd-enfsy 202+poll background-task pattern).
@@ -664,7 +750,10 @@ class ChannelPipelineEngine:
           3. For each snapshot channel, full-REPLACE its stream set
              (``update_channel(streams=[ids])`` — the §D1 IDs-only primitive)
              and restore key metadata (name, channel_group_id, epg_data_id,
-             tvg_id) in one PATCH.
+             tvg_id) in one PATCH. Channels flagged ``event_sync_master`` at
+             capture time get a STREAMS-ONLY payload instead (bead
+             ti939.2.3): Dispatcharr owns their metadata, and the attach run
+             only ever changed their stream list.
           4. Idempotent: re-running re-issues the same PATCHes / deletes →
              same end state. A second call after a clean first call finds the
              created channels already gone (delete 404 swallowed by
@@ -762,13 +851,31 @@ class ChannelPipelineEngine:
                     # overwrite the entire stream set to the snapshot order;
                     # the metadata keys restore drift on name / group / epg /
                     # tvg.
-                    payload = {
-                        "streams": list(ch.get("stream_ids") or []),
-                        "name": channel_name,
-                        "channel_group_id": ch.get("channel_group_id"),
-                        "epg_data_id": ch.get("epg_data_id"),
-                        "tvg_id": ch.get("tvg_id"),
-                    }
+                    #
+                    # EXCEPT event_sync master channels (flagged at capture
+                    # time — PR #616 review / bead ti939.2.3): Dispatcharr
+                    # owns their metadata and updates it in place across
+                    # refreshes (slot renames, EPG re-links). The attach run
+                    # only ever changed their STREAM list, so the restore
+                    # writes back ONLY the stream list — restoring the
+                    # captured metadata would revert Dispatcharr-owned state
+                    # to stale pre-run values, and Dispatcharr is not
+                    # guaranteed to self-heal until the source stream next
+                    # changes. Unflagged channels (every standard-rule
+                    # snapshot, all pre-flag legacy snapshots) keep the
+                    # full-payload behavior byte-identical.
+                    if ch.get("event_sync_master"):
+                        payload = {
+                            "streams": list(ch.get("stream_ids") or []),
+                        }
+                    else:
+                        payload = {
+                            "streams": list(ch.get("stream_ids") or []),
+                            "name": channel_name,
+                            "channel_group_id": ch.get("channel_group_id"),
+                            "epg_data_id": ch.get("epg_data_id"),
+                            "tvg_id": ch.get("tvg_id"),
+                        }
                     await self.client.update_channel(channel_id, payload)
                     restored_channels += 1
                 except Exception as e:
@@ -1600,7 +1707,8 @@ class ChannelPipelineEngine:
         rules: list[ChannelPipelineRule],
         execution: ChannelPipelineExecution,
         dry_run: bool,
-        triggered_by: str = "manual",
+        triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
+        event_sync_rules: list[ChannelPipelineRule] = None,
     ) -> dict:
         """
         Process streams through the rules pipeline.
@@ -1615,6 +1723,10 @@ class ChannelPipelineEngine:
                 through to ``ActionExecutor`` so the BD-F bulk-M3U
                 dedup hook in ``_execute_create_channel`` only fires
                 for the M3U-refresh path per ADR-008 §D1.
+            event_sync_rules: event_sync-kind rules cleared to run by
+                ``run_pipeline``'s manual-run-only gate (ti939.2.1).
+                Executed by the dedicated attach phase after Pass 2 —
+                NEVER through Pass 1/2 condition/action evaluation.
 
         Returns:
             Dict with processing results
@@ -2235,6 +2347,22 @@ class ChannelPipelineEngine:
                 continue
 
         # =====================================================================
+        # Event Sync attach phase (bead ti939.2.1 — Phase 1B).
+        # Runs AFTER Pass 2 so its merges share the same executor (journal
+        # buffer + flush-in-finally) and results plumbing, and BEFORE the
+        # channels_touched derivation at Pass 2.75 so attach merges count.
+        # Rides the existing per-stream merge internals — no new engine pass
+        # semantics: each secondary stream independently resolves to at most
+        # one master channel.
+        # =====================================================================
+        if event_sync_rules:
+            await self._run_event_sync_rules(
+                event_sync_rules, executor, results, dry_run,
+                triggered_by=triggered_by,
+                channels_touched_ids=channels_touched_ids,
+            )
+
+        # =====================================================================
         # Pass 2.5: Verify EPG assignments on newly created channels
         # =====================================================================
         if not dry_run:
@@ -2444,6 +2572,302 @@ class ChannelPipelineEngine:
             # pass raises. The flush helper no-ops on empty buffers and logs its
             # own failures so it does not mask the original exception.
             executor._flush_journal_buffer()
+
+    # =========================================================================
+    # Event Sync attach phase (bead ti939.2.1 — Phase 1B)
+    # =========================================================================
+
+    async def _fetch_event_sync_secondary_streams(
+        self, config: dict, account_names: dict
+    ) -> list:
+        """Fetch one event_sync rule's secondary-group streams (paginated).
+
+        Returns ``services.event_sync_resolver.SecondaryStream`` objects —
+        the exact input shape the shared resolver (and therefore the preview
+        endpoint) consumes. Groups whose channel-group name cannot be
+        resolved are skipped loudly (mirrors the preview endpoint). The fetch
+        is bounded by ``EVENT_SYNC_MAX_SECONDARY_STREAMS`` as a guard; the
+        run is idempotent, so a truncated run picks up the rest next run.
+        """
+        from services.event_sync_resolver import SecondaryStream
+        from stream_prober import extract_m3u_account_id
+
+        secondary_streams: list = []
+        truncated = False
+        for gid in config["secondary_group_ids"]:
+            gname = await self.client._channel_group_name_for_id(gid)
+            if not gname:
+                logger.warning(
+                    "[EVENT-SYNC] Secondary group %s has no resolvable "
+                    "channel-group name; skipping fetch", gid,
+                )
+                continue
+            if truncated:
+                break
+            page = 1
+            while True:
+                resp = await self.client.get_streams(
+                    page=page, page_size=_EVENT_SYNC_FETCH_PAGE_SIZE,
+                    channel_group_name=gname,
+                )
+                batch = (
+                    resp.get("results", []) if isinstance(resp, dict)
+                    else (resp or [])
+                )
+                for s in batch:
+                    # id guard beside the name guard (PR #616 review): a
+                    # stream with a name but NO id would resolve normally and
+                    # then append None to a master channel's stream list at
+                    # attach time — skip it here instead.
+                    if not s.get("name") or s.get("id") is None:
+                        continue
+                    secondary_streams.append(SecondaryStream(
+                        name=s["name"],
+                        group_id=gid,
+                        stream_id=s.get("id"),
+                        provider=account_names.get(
+                            extract_m3u_account_id(s.get("m3u_account"))
+                        ),
+                    ))
+                if len(secondary_streams) >= EVENT_SYNC_MAX_SECONDARY_STREAMS:
+                    secondary_streams = secondary_streams[
+                        :EVENT_SYNC_MAX_SECONDARY_STREAMS]
+                    truncated = True
+                    logger.warning(
+                        "[EVENT-SYNC] Secondary stream fetch truncated at "
+                        "%s streams (guard) — remaining streams will be "
+                        "picked up by the next idempotent run",
+                        EVENT_SYNC_MAX_SECONDARY_STREAMS,
+                    )
+                    break
+                if not isinstance(resp, dict) or not resp.get("next"):
+                    break
+                page += 1
+        return secondary_streams
+
+    async def _run_event_sync_rules(
+        self,
+        event_sync_rules: list,
+        executor: "ActionExecutor",
+        results: dict,
+        dry_run: bool,
+        triggered_by: str,
+        channels_touched_ids: set,
+    ) -> None:
+        """Execute the event_sync attach phase (bead ti939.2.1 — Phase 1B).
+
+        For each event_sync rule cleared by ``run_pipeline``'s manual-run
+        gate: re-validate the stored config (a config predating a schema rail
+        must not run under stale semantics), fetch the secondary groups'
+        streams, and hand off to ``executor.execute_event_sync_rule`` — which
+        resolves through ``services.event_sync_resolver.resolve_event_sync``,
+        the SAME function the preview endpoint calls (dry-run parity by
+        construction), and attaches via the existing merge internals.
+
+        Per rule this phase writes: per-attach execution-log entries, the
+        operator's one-line drift detector
+        ("event_sync: X attached, Y ambiguous skipped, Z unmatched, W parse
+        failures") into the execution log, a structured summary into
+        ``results["event_sync"]``, and cap-overage / invalid-config warnings
+        into ``results["event_sync_warnings"]`` (persisted onto the execution
+        record by ``run_pipeline``).
+
+        NEVER: creates/deletes channels, touches managed_channel_ids, or
+        toggles Dispatcharr group settings.
+        """
+        from channel_pipeline_schema import validate_event_sync_config
+
+        # Defense in depth: run_pipeline already gates unattended triggers
+        # out; if a future caller reaches this phase directly with an
+        # unattended trigger, refuse rather than attach (manual-run-only is
+        # a Phase 1 hard constraint).
+        if triggered_by not in EVENT_SYNC_ALLOWED_TRIGGERS:
+            logger.warning(
+                "[EVENT-SYNC] Attach phase invoked with unattended "
+                "triggered_by=%r — refusing to run %s event_sync rule(s) "
+                "(manual-run-only phase)",
+                triggered_by, len(event_sync_rules),
+            )
+            return
+
+        results.setdefault("event_sync", [])
+        results.setdefault("event_sync_warnings", [])
+
+        # Provider display names, fetched once for the whole phase.
+        try:
+            accounts = await self.client.get_m3u_accounts() or []
+        except Exception as e:
+            logger.warning(
+                "[EVENT-SYNC] Failed to fetch M3U accounts for provider "
+                "names (journal provenance will carry provider=None): %s", e,
+            )
+            accounts = []
+        account_names = {a.get("id"): a.get("name") for a in accounts}
+
+        for rule in event_sync_rules:
+            config = rule.get_event_sync_config()
+            errors = (
+                ["event_sync_config is missing or corrupt"]
+                if config is None else validate_event_sync_config(config)
+            )
+            if errors:
+                # Loud skip: a stored config that no longer validates must
+                # surface as a warning, never run under stale semantics and
+                # never silently disappear from the run.
+                logger.warning(
+                    "[EVENT-SYNC] Rule '%s' (id=%s): config failed "
+                    "re-validation; skipped: %s",
+                    rule.name, rule.id, errors,
+                )
+                results["event_sync_warnings"].append({
+                    "type": "event_sync_invalid_config",
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "message": (
+                        f"event_sync rule '{rule.name}' skipped: stored "
+                        f"config failed re-validation ({'; '.join(errors)})"
+                    ),
+                })
+                continue
+            if not config.get("enabled", True):
+                logger.info(
+                    "[EVENT-SYNC] Rule '%s' (id=%s): event_sync_config."
+                    "enabled is false — skipped", rule.name, rule.id,
+                )
+                continue
+
+            try:
+                secondary_streams = (
+                    await self._fetch_event_sync_secondary_streams(
+                        config, account_names
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "[EVENT-SYNC] Rule '%s' (id=%s): secondary stream fetch "
+                    "failed; rule skipped this run: %s",
+                    rule.name, rule.id, e,
+                )
+                results["event_sync_warnings"].append({
+                    "type": "event_sync_fetch_failed",
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "message": (
+                        f"event_sync rule '{rule.name}' skipped: secondary "
+                        f"stream fetch failed ({e})"
+                    ),
+                })
+                continue
+
+            exec_ctx = ExecutionContext(dry_run=dry_run)
+            summary = await executor.execute_event_sync_rule(
+                rule.id, rule.name, config, secondary_streams, exec_ctx
+            )
+
+            # Aggregate the executor context exactly like Pass 2 does so
+            # streams_merged / channels_touched / modified_entities (legacy
+            # rollback state) stay consistent across every merge path.
+            results["streams_merged"] += exec_ctx.streams_merged
+            results["streams_skipped"] += exec_ctx.streams_skipped
+            results["modified_entities"].extend(exec_ctx.modified_entities)
+            channels_touched_ids.update(exec_ctx.merged_channel_ids)
+            results["rule_match_counts"][rule.id] = summary["attached"]
+
+            # Per-attach execution-log entries (bounded by the shared
+            # BoundedExecutionLog chokepoint).
+            attach_entries = summary.pop("attach_entries")
+            for entry in attach_entries:
+                match = entry.get("match") or {}
+                results["execution_log"].append({
+                    "stream_id": match.get("secondary_stream_id"),
+                    "stream_name": match.get("secondary_stream_name"),
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [entry],
+                })
+                if dry_run:
+                    results["dry_run_results"].append({
+                        "stream_id": match.get("secondary_stream_id"),
+                        "stream_name": match.get("secondary_stream_name"),
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "action": entry["description"],
+                        "would_create": False,
+                        "would_modify": not entry.get("skipped", False),
+                    })
+
+            # Attach-cap overage: WARN surface on the execution record
+            # (the executor already logger.warning'd when the cap tripped).
+            if summary["capped"]:
+                cap_message = (
+                    f"event_sync rule '{rule.name}': per-run attach cap "
+                    f"({summary['cap']}) reached — {summary['cap_overage']} "
+                    f"would-attach stream(s) were NOT attached this run. "
+                    f"event_sync is idempotent: run it again to continue, "
+                    f"or raise max_attach_per_run on the rule."
+                )
+                results["event_sync_warnings"].append({
+                    "type": "event_sync_attach_capped",
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "cap": summary["cap"],
+                    "overage": summary["cap_overage"],
+                    "message": cap_message,
+                })
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": f"[EVENT-SYNC] {rule.name}: attach cap reached",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "event_sync_capped",
+                        "description": cap_message,
+                        "success": True,
+                        "entity_id": None,
+                        "error": None,
+                    }],
+                })
+
+            # The operator's one-line drift detector — a silently broken
+            # parse pattern must be visible in one line within a day.
+            summary_line = (
+                f"event_sync: {summary['attached']} attached, "
+                f"{summary['ambiguous_skipped']} ambiguous skipped, "
+                f"{summary['unmatched']} unmatched, "
+                f"{summary['parse_failed']} parse failures"
+            )
+            extras = []
+            if summary["already_attached"]:
+                extras.append(f"{summary['already_attached']} already attached")
+            if summary["capped"]:
+                extras.append(
+                    f"capped at {summary['cap']}, "
+                    f"{summary['cap_overage']} deferred"
+                )
+            if summary["attach_errors"]:
+                extras.append(f"{summary['attach_errors']} attach errors")
+            if extras:
+                summary_line += f" ({'; '.join(extras)})"
+            summary["summary_line"] = summary_line
+
+            logger.info(
+                "[EVENT-SYNC] Rule '%s' (id=%s): %s",
+                rule.name, rule.id, summary_line,
+            )
+            results["execution_log"].append({
+                "stream_id": None,
+                "stream_name": f"[EVENT-SYNC] {rule.name}",
+                "m3u_account_id": None,
+                "rules_evaluated": [],
+                "actions_executed": [{
+                    "type": "event_sync_summary",
+                    "description": summary_line,
+                    "success": True,
+                    "entity_id": None,
+                    "error": None,
+                }],
+            })
+            results["event_sync"].append(summary)
 
     # =========================================================================
     # Pass 6: Batch probe streams queued by probe_streams actions
@@ -3216,7 +3640,11 @@ class ChannelPipelineEngine:
         finally:
             session.close()
 
-    async def _capture_snapshot(self, execution_id: int) -> None:
+    async def _capture_snapshot(
+        self,
+        execution_id: int,
+        include_auto_created_group_ids: set | None = None,
+    ) -> None:
         """Persist a pre-run ChannelPipelineSnapshot for ``execution_id`` (ADR-010).
 
         Serializes the manual (non-Dispatcharr-auto-created) channel<->stream
@@ -3233,16 +3661,28 @@ class ChannelPipelineEngine:
         bloat the snapshot. The filter mirrors ``channels.py:614``'s
         ``not ch.get("auto_created", False)``.
 
+        ``include_auto_created_group_ids`` (ti939.2.1) is the narrow event_sync
+        exception to §D3: auto-created channels in these groups — the event
+        MASTER groups of the event_sync rules that will run — ARE captured,
+        because the attach phase mutates their stream lists and a rollback /
+        restore must be able to write back the pre-run stream-set. Dispatcharr
+        preserves foreign streams across refreshes (verified in the ti939
+        feasibility read), so restoring these stream-sets does not fight
+        Dispatcharr's sync the way restoring its regenerable metadata would.
+
         Capture-failure policy (ADR-010 §D2, uc51o.2 v1 default):
         LOG-AND-PROCEED. A capture failure must NOT abort the mutating run —
         it logs a WARNING and the run continues with NO snapshot (the run is
         still revertible via the legacy entity-rollback). It does NOT raise.
         """
+        include_group_ids = include_auto_created_group_ids or set()
         try:
             channels = []
             for ch in (self._existing_channels or []):
-                # §D3: exclude Dispatcharr-auto-created-from-groups channels.
-                if ch.get("auto_created", False):
+                # §D3: exclude Dispatcharr-auto-created-from-groups channels —
+                # EXCEPT event_sync master-group channels (see docstring).
+                if ch.get("auto_created", False) \
+                        and ch.get("channel_group_id") not in include_group_ids:
                     continue
                 # §D1: stream IDs only. Match the executor's own coercion
                 # (executor.py:918) — Dispatcharr embeds streams as a list of
@@ -3251,14 +3691,26 @@ class ChannelPipelineEngine:
                     s["id"] if isinstance(s, dict) else s
                     for s in ch.get("streams", [])
                 ]
-                channels.append({
+                entry = {
                     "id": ch.get("id"),
                     "name": ch.get("name"),
                     "channel_group_id": ch.get("channel_group_id"),
                     "epg_data_id": ch.get("epg_data_id"),
                     "tvg_id": ch.get("tvg_id"),
                     "stream_ids": stream_ids,
-                })
+                }
+                if ch.get("auto_created", False):
+                    # Only reachable via the include set: an event_sync
+                    # MASTER-group channel. Flag it so restore_snapshot
+                    # writes back ONLY the stream list (PR #616 review /
+                    # bead ti939.2.3): ECM's attach phase mutates nothing
+                    # but streams on these Dispatcharr-owned channels, and
+                    # restoring their captured name/group/epg/tvg would
+                    # revert Dispatcharr's own in-place updates (e.g. a
+                    # "TBD vs TBD" -> real-matchup slot rename) to stale
+                    # pre-run values ECM never touched.
+                    entry["event_sync_master"] = True
+                channels.append(entry)
 
             session = get_session()
             try:
