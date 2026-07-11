@@ -242,16 +242,36 @@ describe('ChannelPipelineTab', () => {
   });
 
   describe('create rule', () => {
-    it('opens rule builder when create button clicked', async () => {
+    it('opens the rule-kind chooser, then the rule builder for a standard rule', async () => {
       const user = userEvent.setup();
       renderWithProviders(<ChannelPipelineTab />);
 
       await user.click(screen.getByRole('button', { name: /create rule/i }));
 
+      // Kind chooser first (epic ti939): standard vs event sync
       await waitFor(() => {
         expect(screen.getByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByTestId('rule-kind-chooser')).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /standard rule/i }));
+
+      await waitFor(() => {
         expect(screen.getByLabelText(/rule name/i)).toHaveValue('');
       });
+    });
+
+    it('opens the event sync editor when the Event Sync kind is chosen', async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await user.click(screen.getByRole('button', { name: /create rule/i }));
+      await user.click(await screen.findByRole('button', { name: /event sync rule/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('event-sync-editor')).toBeInTheDocument();
+      });
+      // Phase 1A hard constraint: no apply/attach control anywhere
+      expect(screen.queryByRole('button', { name: /apply|attach/i })).toBeNull();
     });
 
     it('adds new rule to list after creation', async () => {
@@ -259,6 +279,7 @@ describe('ChannelPipelineTab', () => {
       renderWithProviders(<ChannelPipelineTab />);
 
       await user.click(screen.getByRole('button', { name: /create rule/i }));
+      await user.click(await screen.findByRole('button', { name: /standard rule/i }));
 
       // Fill in the form
       await user.type(screen.getByLabelText(/rule name/i), 'Brand New Rule');

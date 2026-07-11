@@ -1,0 +1,84 @@
+/**
+ * EventSyncTestPatternsPanel styles
+ *
+ * Uses common.css for: .btn-primary, .btn-secondary, .form-group, .form-hint,
+ * .warning-message, .spinning
+ */
+
+.event-sync-test-patterns {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.event-sync-test-patterns textarea {
+  width: 100%;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: monospace;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.test-patterns-fetch-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.test-patterns-fetch-select {
+  flex: 1;
+  min-width: 220px;
+}
+
+.test-patterns-result {
+  overflow-x: auto;
+}
+
+.test-patterns-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.test-patterns-table caption {
+  caption-side: top;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 8px 0 4px;
+}
+
+.test-patterns-table th,
+.test-patterns-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-primary);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+
+.test-patterns-table th {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.test-patterns-raw {
+  font-family: monospace;
+  word-break: break-word;
+  max-width: 320px;
+}
+
+.test-patterns-status {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.test-patterns-status .material-icons {
+  font-size: 16px;
+}

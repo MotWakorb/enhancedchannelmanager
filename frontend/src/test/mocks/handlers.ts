@@ -556,6 +556,12 @@ export const handlers = [
     return HttpResponse.json(providers)
   }),
 
+  http.get(`${API_BASE}/providers/group-settings`, () => {
+    // Event Sync editor fetches live auto-sync status per group (ti939.1.5).
+    // Empty by default; tests stub richer settings via server.use().
+    return HttpResponse.json({})
+  }),
+
   http.get(`${API_BASE}/channels/:id`, ({ params }) => {
     const channel = mockDataStore.channels.find(c => c.id === Number(params.id))
     if (!channel) {
