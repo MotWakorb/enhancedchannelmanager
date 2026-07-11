@@ -277,7 +277,7 @@ within the time window — lands in exactly one confidence band:
 |-|-|-|
 | **attach** | `score ≥` effective threshold (see below) | Best candidate becomes the stream's `would_attach_master` (Phase 1B will attach it; Phase 1A only reports it). |
 | **ambiguous** | `0.60 ≤ score <` effective threshold | Surfaced for operator review in the preview. **Never auto-attached**, at any score. |
-| **reject** | `score < 0.60`, or a hard-reject rail fired | Not a candidate. The reject reason is machine-readable (`team_token_conflict`, `numeric_identity_conflict`, `outside_time_window`, `no_parsed_time`, `parse_failure`, `below_ambiguous_floor`). |
+| **reject** | `score < 0.60`, or a hard-reject rail fired | Never attached. In-window rejected pairs still appear in the preview's candidates table with a machine-readable reject reason (`team_token_conflict`, `numeric_identity_conflict`, `no_parsed_time`, `parse_failure`, `below_ambiguous_floor`); out-of-window pairs (`outside_time_window`) are excluded from candidacy entirely. |
 
 The "effective threshold" is not always 0.80: without positive team-token
 agreement (the team-token check found no team pair on one side, or the
@@ -286,11 +286,13 @@ has to clear a higher bar than lexical overlap corroborated by matching
 team names. A team-token *conflict* is a hard reject regardless of score.
 
 **Why the floor is 0.80 and can only go up, never down**: 0.80 is the
-calibrated default the PO set for this feature, and the schema hard-clamps
-any per-rule override to be ≥ 0.80 — a request for 0.50 silently becomes
-0.80 behavior, it does not error. This mirrors the philosophy behind the
-M1 callsign hard-reject rail elsewhere in the pipeline: precision over
-recall everywhere, because of what a wrong attach costs:
+calibrated default the PO set for this feature. The schema rejects any
+per-rule threshold below 0.80 with a teaching error at save/preview time,
+and the matcher's runtime admission policy additionally clamps — so even
+a stored legacy value below the floor behaves as 0.80. This mirrors the
+philosophy behind the M1 callsign hard-reject rail elsewhere in the
+pipeline: precision over recall everywhere, because of what a wrong
+attach costs:
 
 Wrong attachments are reversible and non-compounding, but not self-healing — the matcher is deterministic, so a bad match repeats every run until you adjust a pattern or threshold, or the provider renames the stream.
 
