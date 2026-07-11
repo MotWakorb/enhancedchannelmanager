@@ -94,6 +94,10 @@ class CreateChannelPipelineRuleRequest(BaseModel):
     # Manual-channel isolation (enhancedchannelmanager-orzck / W1). Default False
     # protects hand-built manual channels from being adopted as merge targets.
     allow_manual_channel_merge: bool = False
+    # Event Sync (ti939.1.3). Non-null makes the rule the event_sync KIND
+    # (preview-only this phase — excluded from pipeline execution). Validated
+    # by channel_pipeline_schema.validate_event_sync_config().
+    event_sync_config: Optional[dict] = None
 
 
 class UpdateChannelPipelineRuleRequest(BaseModel):
@@ -127,6 +131,11 @@ class UpdateChannelPipelineRuleRequest(BaseModel):
     match_scope_group_id: Optional[int] = None
     # enhancedchannelmanager-orzck (W1): None = leave unchanged.
     allow_manual_channel_merge: Optional[bool] = None
+    # Event Sync (ti939.1.3). None is MEANINGFUL (clears the config, reverting
+    # the rule to the standard kind), so the update handler distinguishes
+    # "field present" from "field absent" via ``model_fields_set`` — the same
+    # convention as match_scope_group_id above.
+    event_sync_config: Optional[dict] = None
 
 
 class BulkUpdateChannelPipelineRulesRequest(UpdateChannelPipelineRuleRequest):
@@ -142,11 +151,17 @@ class BulkUpdateChannelPipelineRulesRequest(UpdateChannelPipelineRuleRequest):
         update request, but the handler does not apply them — silently dropping
         them is the wrong default for an API contract. Reject the request so
         callers route conditions/actions edits through PUT /rules/{id} instead.
+        event_sync_config (ti939.1.3) is rejected for the same reason: it is
+        rule logic, not a scalar, and the bulk handler does not apply it.
         """
-        if isinstance(data, dict) and ("conditions" in data or "actions" in data):
+        if isinstance(data, dict) and (
+            "conditions" in data
+            or "actions" in data
+            or "event_sync_config" in data
+        ):
             raise ValueError(
-                "conditions and actions are not supported in bulk-update; "
-                "use PUT /rules/{id}"
+                "conditions, actions and event_sync_config are not supported "
+                "in bulk-update; use PUT /rules/{id}"
             )
         return data
 
@@ -597,6 +612,18 @@ async def create_auto_creation_rule(request: CreateChannelPipelineRuleRequest, _
                 "errors": validation["errors"]
             })
 
+        # ti939.1.3: write-time validation of the event_sync config. Also
+        # fills defaults (time_window_minutes/attach_threshold/enabled) in
+        # place so the stored JSON is explicit.
+        if request.event_sync_config is not None:
+            from channel_pipeline_schema import validate_event_sync_config
+            es_errors = validate_event_sync_config(request.event_sync_config)
+            if es_errors:
+                raise HTTPException(status_code=400, detail={
+                    "message": "Invalid rule configuration",
+                    "errors": es_errors
+                })
+
         session = get_session()
         try:
             # bd-j5p4k: write-time FK validation for normalization_group_ids.
@@ -639,6 +666,10 @@ async def create_auto_creation_rule(request: CreateChannelPipelineRuleRequest, _
                 match_scope_target_group=request.match_scope_target_group,
                 match_scope_group_id=request.match_scope_group_id,
                 allow_manual_channel_merge=request.allow_manual_channel_merge,
+                event_sync_config=(
+                    json.dumps(request.event_sync_config)
+                    if request.event_sync_config else None
+                ),
             )
             session.add(rule)
             session.commit()
@@ -718,6 +749,23 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateChannelPipeline
                 rule.conditions = json.dumps(request.conditions)
             if request.actions is not None:
                 rule.actions = json.dumps(request.actions)
+
+            # ti939.1.3: event_sync_config. Delta-on-write (bd-i75ax
+            # convention): only a SUBMITTED config is validated — stored
+            # configs on unrelated PUTs (e.g. a rename) are left alone.
+            # ``model_fields_set`` lets an explicit null through (clears the
+            # config, reverting the rule to the standard kind), same
+            # convention as match_scope_group_id.
+            if "event_sync_config" in request.model_fields_set:
+                if request.event_sync_config is not None:
+                    from channel_pipeline_schema import validate_event_sync_config
+                    es_errors = validate_event_sync_config(request.event_sync_config)
+                    if es_errors:
+                        raise HTTPException(status_code=400, detail={
+                            "message": "Invalid rule configuration",
+                            "errors": es_errors
+                        })
+                rule.set_event_sync_config(request.event_sync_config)
 
             session.commit()
             session.refresh(rule)
@@ -1026,6 +1074,10 @@ async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnable
                 match_scope_target_group=rule.match_scope_target_group,
                 match_scope_group_id=rule.match_scope_group_id,
                 allow_manual_channel_merge=rule.allow_manual_channel_merge,
+                # ti939.1.3: keep the KIND on duplication — dropping the
+                # config would silently turn the copy into a standard rule
+                # that executes in the pipeline.
+                event_sync_config=rule.event_sync_config,
             )
             session.add(new_rule)
             session.commit()
@@ -1753,6 +1805,11 @@ async def export_auto_creation_rules_yaml():
                     "match_scope_target_group": rule.match_scope_target_group or False,
                     "match_scope_group_id": rule.match_scope_group_id,
                     "allow_manual_channel_merge": rule.allow_manual_channel_merge or False,
+                    # ti939.1.3 (PR #612 review): export the event_sync KIND —
+                    # omitting it would make an export→import round-trip
+                    # resurrect the rule as a standard rule whose dormant
+                    # conditions/actions execute.
+                    "event_sync_config": rule.get_event_sync_config(),
                 }
 
                 # Add group_name to actions that have group_id
@@ -1891,6 +1948,24 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                     })
                     continue
 
+                # ti939.1.3 (PR #612 review): an imported event_sync_config
+                # MUST route through the same write-time validator as
+                # POST/PUT — an unvalidated import path would bypass the
+                # schema-enforced scoping rail. Invalid configs reject the
+                # rule with the standard import error shape. Also fills
+                # defaults in place so the stored JSON is explicit.
+                event_sync_config = rule_data.get("event_sync_config")
+                if event_sync_config is not None:
+                    from channel_pipeline_schema import validate_event_sync_config
+                    es_errors = validate_event_sync_config(event_sync_config)
+                    if es_errors:
+                        errors.append({
+                            "rule_index": i,
+                            "rule_name": rule_data.get("name", f"Rule {i}"),
+                            "errors": es_errors
+                        })
+                        continue
+
                 # Check if rule with same name exists
                 existing = session.query(ChannelPipelineRule).filter(
                     ChannelPipelineRule.name == rule_data.get("name")
@@ -1925,6 +2000,11 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         existing.match_scope_target_group = rule_data.get("match_scope_target_group", True)
                         existing.match_scope_group_id = rule_data.get("match_scope_group_id")
                         existing.allow_manual_channel_merge = rule_data.get("allow_manual_channel_merge", False)
+                        # ti939.1.3: preserve (or clear) the event_sync KIND
+                        # on overwrite-import. Import-update overwrites every
+                        # field unconditionally, so an exported standard rule
+                        # correctly imports as standard (None clears).
+                        existing.set_event_sync_config(event_sync_config)
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
@@ -1961,6 +2041,12 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         match_scope_target_group=rule_data.get("match_scope_target_group", True),
                         match_scope_group_id=rule_data.get("match_scope_group_id"),
                         allow_manual_channel_merge=rule_data.get("allow_manual_channel_merge", False),
+                        # ti939.1.3: keep the event_sync KIND on import-create
+                        # (validated above; None = standard kind).
+                        event_sync_config=(
+                            json.dumps(event_sync_config)
+                            if event_sync_config else None
+                        ),
                     )
                     session.add(rule)
                     logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)

@@ -217,8 +217,54 @@ class ChannelPipelineEngine:
 
         # Load enabled rules
         rules = await self._load_rules(rule_ids)
+
+        # ---------------------------------------------------------------------
+        # event_sync exclusion (bead ti939.1.3 — Phase 1A, NO execution path).
+        #
+        # event_sync rules are a different KIND: they match secondary-provider
+        # streams onto Dispatcharr-owned master channels via the isolated
+        # matcher service (services/event_sync_matcher.py), not via per-stream
+        # condition/action evaluation. In this phase they are preview-only, so
+        # they are excluded from Pass 1/Pass 2 entirely. Pass 4 orphan
+        # reconciliation is ALSO hard-bypassed for them (see
+        # _reconcile_orphans) — belt and braces, since the filter here already
+        # keeps them out of the rules list Pass 4 receives.
+        #
+        # VERIFIED NON-WORK (do not "fix" these — they were checked):
+        # * No bypass of the auto_creation_exclude_auto_sync_groups global
+        #   filter is needed for event_sync. Secondary event groups have
+        #   auto_channel_sync OFF, so they already pass the filter built in
+        #   _apply_global_filters (the auto_sync_group_ids set below, ~L1017-
+        #   1063 collects only auto-sync-ON groups). The MASTER group's
+        #   streams never need to enter the pipeline at all — Dispatcharr has
+        #   already attached them to the master channels it owns.
+        # * Known edge, documented rather than coded around: Dispatcharr
+        #   groups are GLOBAL BY NAME (bd-dgs64, config.py ~L104-117). A
+        #   secondary provider publishing the SAME group name as the master
+        #   would share the group ID and be excluded by that filter. Real
+        #   event groups are provider-distinct-named; the pre-flight check
+        #   (services/event_sync_preflight.py) surfaces the misconfiguration.
+        # ---------------------------------------------------------------------
+        event_sync_rules = [r for r in rules if r.is_event_sync()]
+        if event_sync_rules:
+            rules = [r for r in rules if not r.is_event_sync()]
+            logger.info(
+                "[AUTO-CREATE-ENGINE] Excluded %s event_sync rule(s) from "
+                "pipeline evaluation (preview-only phase): %s",
+                len(event_sync_rules),
+                [r.id for r in event_sync_rules],
+            )
+
         if not rules:
-            logger.info("[AUTO-CREATE-ENGINE] No enabled rules found")
+            if event_sync_rules:
+                message = (
+                    "Only event_sync rules are in scope — event_sync is "
+                    "preview-only in this phase and never runs in the "
+                    "pipeline"
+                )
+            else:
+                message = "No enabled rules to process"
+            logger.info("[AUTO-CREATE-ENGINE] %s", message)
             # If a pre-created execution exists, mark it completed so it does
             # not stay in "running" forever (otherwise the frontend poll would
             # spin indefinitely on a no-op run).
@@ -226,7 +272,7 @@ class ChannelPipelineEngine:
                 await self._finalize_no_op_execution(execution_id)
             return {
                 "success": True,
-                "message": "No enabled rules to process",
+                "message": message,
                 "streams_evaluated": 0,
                 "streams_matched": 0
             }
@@ -2878,6 +2924,29 @@ class ChannelPipelineEngine:
         session = get_session()
         try:
             for rule in rules:
+                # HARD BYPASS for event_sync rules (bead ti939.1.3; epic
+                # ti939 PO decision 6). Dispatcharr owns the master channels'
+                # lifecycle (creates/updates/deletes them from the master
+                # auto-sync group, preserving UUIDs); ECM never owns any
+                # channel under an event_sync rule. managed_channel_ids must
+                # therefore NEVER be populated for this rule kind — a
+                # half-populated set against Dispatcharr-owned channels would
+                # make this pass "reconcile" (delete/move) channels ECM does
+                # not own. Note this is stricter than orphan_action="none",
+                # which still records managed_channel_ids below; event_sync
+                # skips even that, forcing orphan-action semantics to none.
+                # run_pipeline already filters event_sync rules out of the
+                # list this method receives — this guard is belt-and-braces
+                # for any direct caller.
+                if rule.is_event_sync():
+                    logger.debug(
+                        "[AUTO-CREATE-ENGINE] Rule '%s': event_sync kind — "
+                        "orphan reconciliation hard-bypassed "
+                        "(Dispatcharr owns master-channel lifecycle)",
+                        rule.name,
+                    )
+                    continue
+
                 orphan_action = getattr(rule, 'orphan_action', 'delete') or 'delete'
                 logger.debug(
                     "[AUTO-CREATE-ENGINE] Rule '%s': orphan_action=%s, "

@@ -357,6 +357,8 @@ class TestAutoCreationYAMLAPI:
         mock_rule.match_scope_target_group = False
         mock_rule.match_scope_group_id = None
         mock_rule.allow_manual_channel_merge = False
+        # ti939.1.3: exported field — a bare MagicMock is not YAML-serializable.
+        mock_rule.get_event_sync_config.return_value = None
         mock_db_session.query.return_value.order_by.return_value.all.return_value = [mock_rule]
 
         response = test_client.get("/api/auto-creation/export/yaml")
