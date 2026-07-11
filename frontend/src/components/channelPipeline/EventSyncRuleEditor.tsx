@@ -10,6 +10,14 @@
  *
  * There is NO apply/attach control anywhere: saving stores the config on the
  * rule; the only action against live data is the zero-write preview.
+ *
+ * API-authored configs round-trip (bead z4y4a): the full patterns /
+ * group_patterns arrays pass through the editor state — an untouched save
+ * emits the saved arrays verbatim, and pattern entries the UI cannot express
+ * (a second+ custom shared pattern, a group's second+ override pattern) are
+ * preserved unchanged behind the editable ones (with a read-only indicator),
+ * never dropped or reordered. Built-ins are recognized by VERBATIM equality
+ * and are never silently re-added to an all-custom selection.
  */
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { ChannelPipelineRule, CreateRuleData } from '../../types/channelPipeline';
@@ -52,27 +60,65 @@ const EMPTY_GROUP_PATTERN: GroupPatternDraft = {
   date_pattern: '',
 };
 
-/** Initial shipped-pattern selection for an existing rule's config. */
-function initialPatternIds(config: EventSyncConfig | null | undefined): string[] {
-  if (!config || !config.patterns) return DEFAULT_PATTERN_IDS;
-  const shippedIds = new Set(SHIPPED_EVENT_SYNC_PATTERNS.map(p => p.id));
-  const ids = config.patterns
-    .map(p => p.name)
-    .filter((name): name is string => Boolean(name && shippedIds.has(name)));
-  return ids.length > 0 ? ids : DEFAULT_PATTERN_IDS;
+/**
+ * True when a saved pattern is VERBATIM one of the shipped patterns —
+ * name AND all three regexes (bead z4y4a). Name-only matching would let a
+ * hand-authored pattern that happens to reuse a shipped id be silently
+ * replaced by the shipped regexes on resave.
+ */
+function isShippedVerbatim(pattern: EventSyncPattern): boolean {
+  return SHIPPED_EVENT_SYNC_PATTERNS.some(
+    shipped =>
+      pattern.name === shipped.id &&
+      pattern.title_pattern === shipped.pattern.title_pattern &&
+      (pattern.time_pattern ?? null) === (shipped.pattern.time_pattern ?? null) &&
+      (pattern.date_pattern ?? null) === (shipped.pattern.date_pattern ?? null)
+  );
 }
 
-/** Custom shared patterns = saved patterns that aren't shipped ones. */
-function initialCustomShared(config: EventSyncConfig | null | undefined): GroupPatternDraft {
-  const shippedIds = new Set(SHIPPED_EVENT_SYNC_PATTERNS.map(p => p.id));
-  const custom = config?.patterns?.find(p => !p.name || !shippedIds.has(p.name));
-  return custom
-    ? {
-        title_pattern: custom.title_pattern || '',
-        time_pattern: custom.time_pattern || '',
-        date_pattern: custom.date_pattern || '',
-      }
-    : EMPTY_GROUP_PATTERN;
+/**
+ * Initial shipped-pattern selection for an existing rule's config.
+ *
+ * bead z4y4a: an all-custom saved `patterns` array yields an EMPTY
+ * selection — the built-ins must NOT be silently re-added on resave. Only
+ * a config with no `patterns` key at all (backend defaults apply) starts
+ * from the default selection.
+ */
+function initialPatternIds(config: EventSyncConfig | null | undefined): string[] {
+  if (!config || !config.patterns) return DEFAULT_PATTERN_IDS;
+  return config.patterns
+    .filter(isShippedVerbatim)
+    .map(p => p.name)
+    .filter((name): name is string => Boolean(name));
+}
+
+/**
+ * The saved custom (non-shipped) shared patterns, split into what the UI
+ * can edit and what it must preserve (bead z4y4a): the FIRST custom
+ * pattern maps onto the editor's single custom-shared draft (its
+ * API-authored name is kept for resave); every further custom pattern is
+ * inexpressible in this editor and rides along verbatim, never dropped.
+ */
+function initialCustomSharedState(config: EventSyncConfig | null | undefined): {
+  draft: GroupPatternDraft;
+  name: string | undefined;
+  existed: boolean;
+  extras: EventSyncPattern[];
+} {
+  const customs = (config?.patterns ?? []).filter(p => !isShippedVerbatim(p));
+  const first = customs[0];
+  return {
+    draft: first
+      ? {
+          title_pattern: first.title_pattern || '',
+          time_pattern: first.time_pattern || '',
+          date_pattern: first.date_pattern || '',
+        }
+      : EMPTY_GROUP_PATTERN,
+    name: first?.name,
+    existed: Boolean(first),
+    extras: customs.slice(1),
+  };
 }
 
 function initialGroupOverrides(
@@ -91,6 +137,20 @@ function initialGroupOverrides(
     }
   }
   return overrides;
+}
+
+function sameDraft(a: GroupPatternDraft, b: GroupPatternDraft): boolean {
+  return (
+    a.title_pattern === b.title_pattern &&
+    a.time_pattern === b.time_pattern &&
+    a.date_pattern === b.date_pattern
+  );
+}
+
+/** Selection equality is set-like: toggling a box off and back on again is
+ * not an edit. */
+function sameIds(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every(id => b.includes(id));
 }
 
 export function EventSyncRuleEditor({
@@ -116,15 +176,25 @@ export function EventSyncRuleEditor({
   );
   const [secondarySearch, setSecondarySearch] = useState('');
 
-  // Patterns
+  // Patterns. `initial` keeps the untouched-open values so save can detect a
+  // pristine patterns section and round-trip the saved arrays VERBATIM
+  // (bead z4y4a); `customSharedMeta` carries what the UI cannot edit — the
+  // first custom pattern's API-authored name and every further custom
+  // pattern (preserved read-only, never dropped).
+  const [initial] = useState(() => ({
+    patternIds: initialPatternIds(config),
+    customShared: initialCustomSharedState(config),
+    groupOverrides: initialGroupOverrides(config),
+  }));
+  const customSharedMeta = initial.customShared;
   const [selectedPatternIds, setSelectedPatternIds] = useState<string[]>(
-    initialPatternIds(config)
+    initial.patternIds
   );
   const [customShared, setCustomShared] = useState<GroupPatternDraft>(
-    initialCustomShared(config)
+    customSharedMeta.draft
   );
   const [groupOverrides, setGroupOverrides] = useState<Record<number, GroupPatternDraft>>(
-    initialGroupOverrides(config)
+    initial.groupOverrides
   );
 
   // Advanced knobs. Threshold is kept as text while typing and clamped to the
@@ -187,15 +257,38 @@ export function EventSyncRuleEditor({
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [channelGroups, masterGroupId, secondarySearch]);
 
+  /** The custom-shared draft as a pattern object, or null when empty. The
+   * API-authored name of the first custom pattern is preserved (z4y4a);
+   * only a UI-created custom gets the 'custom-shared' name. */
+  const buildCustomSharedPattern = (): EventSyncPattern | null => {
+    if (!customShared.title_pattern.trim()) return null;
+    const name = customSharedMeta.existed
+      ? customSharedMeta.name
+      : 'custom-shared';
+    return {
+      ...(name !== undefined ? { name } : {}),
+      title_pattern: customShared.title_pattern.trim(),
+      ...(customShared.time_pattern.trim()
+        ? { time_pattern: customShared.time_pattern.trim() }
+        : {}),
+      ...(customShared.date_pattern.trim()
+        ? { date_pattern: customShared.date_pattern.trim() }
+        : {}),
+    };
+  };
+
   const effectivePatterns: LabeledEventSyncPattern[] = useMemo(() => {
-    const shipped = SHIPPED_EVENT_SYNC_PATTERNS
+    const patterns = SHIPPED_EVENT_SYNC_PATTERNS
       .filter(p => selectedPatternIds.includes(p.id))
       .map(p => ({ label: p.label, pattern: p.pattern }));
     if (customShared.title_pattern.trim()) {
-      shipped.push({
+      const name = customSharedMeta.existed
+        ? customSharedMeta.name
+        : 'custom-shared';
+      patterns.push({
         label: 'Custom shared pattern',
         pattern: {
-          name: 'custom-shared',
+          ...(name !== undefined ? { name } : {}),
           title_pattern: customShared.title_pattern.trim(),
           ...(customShared.time_pattern.trim()
             ? { time_pattern: customShared.time_pattern.trim() }
@@ -206,8 +299,18 @@ export function EventSyncRuleEditor({
         },
       });
     }
-    return shipped;
-  }, [selectedPatternIds, customShared]);
+    // Preserved API-authored extras participate in testing/preview too —
+    // they ARE part of the rule's effective pattern list.
+    customSharedMeta.extras.forEach((pattern, i) => {
+      patterns.push({
+        label: pattern.name
+          ? `API pattern: ${pattern.name}`
+          : `API pattern ${i + 2}`,
+        pattern,
+      });
+    });
+    return patterns;
+  }, [selectedPatternIds, customShared, customSharedMeta]);
 
   /** Groups in scope (master + secondaries) — for live samples + overrides. */
   const scopedGroups = useMemo(() => {
@@ -245,34 +348,87 @@ export function EventSyncRuleEditor({
       built.max_attach_per_run = config.max_attach_per_run;
     }
 
-    // Selection == exactly the built-ins and no custom pattern → omit the
-    // `patterns` key so the backend's own defaults apply (future matcher
-    // improvements flow through without editing saved rules).
+    // --- Shared patterns (bead z4y4a: full round-trip) -------------------
+    // Untouched patterns section + a saved `patterns` array → pass the
+    // saved array through VERBATIM: an API-authored config the UI cannot
+    // fully express (several customs, custom ordering, names) must survive
+    // open → save byte-identically. Only an actual edit rebuilds the array
+    // — and even then the inexpressible extras are appended unchanged, in
+    // their saved order, never dropped.
     const hasCustomShared = Boolean(customShared.title_pattern.trim());
-    if (!selectionIsBuiltinDefaults(selectedPatternIds) || hasCustomShared) {
-      built.patterns = effectivePatterns.map(p => p.pattern);
+    const sharedPristine =
+      sameIds(selectedPatternIds, initial.patternIds) &&
+      sameDraft(customShared, customSharedMeta.draft);
+    if (config?.patterns && sharedPristine) {
+      built.patterns = config.patterns;
+    } else if (
+      !selectionIsBuiltinDefaults(selectedPatternIds) ||
+      hasCustomShared ||
+      customSharedMeta.extras.length > 0
+    ) {
+      // Selection == exactly the built-ins with no custom and no extras →
+      // this branch is skipped and the `patterns` key stays omitted so the
+      // backend's own defaults apply (future matcher improvements flow
+      // through without editing saved rules).
+      const customPattern = buildCustomSharedPattern();
+      built.patterns = [
+        ...SHIPPED_EVENT_SYNC_PATTERNS
+          .filter(p => selectedPatternIds.includes(p.id))
+          .map(p => p.pattern),
+        ...(customPattern ? [customPattern] : []),
+        ...customSharedMeta.extras,
+      ];
     }
 
-    const overrideEntries = Object.entries(groupOverrides).filter(
-      ([groupId, draft]) =>
-        draft.title_pattern.trim() &&
-        (parseInt(groupId, 10) === masterGroupId ||
-          secondaryGroupIds.includes(parseInt(groupId, 10)))
-    );
-    if (overrideEntries.length > 0) {
-      built.group_patterns = Object.fromEntries(
-        overrideEntries.map(([groupId, draft]) => [
-          groupId,
-          [
-            {
-              name: `custom-group-${groupId}`,
-              title_pattern: draft.title_pattern.trim(),
-              ...(draft.time_pattern.trim() ? { time_pattern: draft.time_pattern.trim() } : {}),
-              ...(draft.date_pattern.trim() ? { date_pattern: draft.date_pattern.trim() } : {}),
-            } satisfies EventSyncPattern,
-          ],
-        ])
-      );
+    // --- Per-group overrides (same round-trip discipline) ----------------
+    // The schema rejects group_patterns keys outside the rule's scope, so
+    // overrides for de-scoped groups are still filtered out; everything
+    // else round-trips: an untouched group keeps its saved list verbatim,
+    // an edited group keeps its saved name and its inexpressible extra
+    // patterns (patterns[1..]) unchanged behind the edited first pattern.
+    const scopedIds = new Set<number>([
+      ...(masterGroupId != null ? [masterGroupId] : []),
+      ...secondaryGroupIds,
+    ]);
+    const groupPatternsOut: Record<string, EventSyncPattern[]> = {};
+    const savedGroupPatterns = config?.group_patterns ?? {};
+    for (const [key, savedList] of Object.entries(savedGroupPatterns)) {
+      const groupId = parseInt(key, 10);
+      if (Number.isNaN(groupId) || !scopedIds.has(groupId)) continue;
+      const draft = groupOverrides[groupId] ?? EMPTY_GROUP_PATTERN;
+      const initialDraft = initial.groupOverrides[groupId] ?? EMPTY_GROUP_PATTERN;
+      if (sameDraft(draft, initialDraft)) {
+        groupPatternsOut[key] = savedList;
+        continue;
+      }
+      const extras = savedList.slice(1);
+      const savedName = savedList[0]?.name;
+      const edited: EventSyncPattern[] = draft.title_pattern.trim()
+        ? [{
+            ...(savedName !== undefined ? { name: savedName } : {}),
+            title_pattern: draft.title_pattern.trim(),
+            ...(draft.time_pattern.trim() ? { time_pattern: draft.time_pattern.trim() } : {}),
+            ...(draft.date_pattern.trim() ? { date_pattern: draft.date_pattern.trim() } : {}),
+          }]
+        : [];
+      const list = [...edited, ...extras];
+      if (list.length > 0) groupPatternsOut[key] = list;
+    }
+    for (const [key, draft] of Object.entries(groupOverrides)) {
+      const groupId = parseInt(key, 10);
+      if (String(groupId) in savedGroupPatterns) continue; // handled above
+      if (!scopedIds.has(groupId) || !draft.title_pattern.trim()) continue;
+      groupPatternsOut[String(groupId)] = [
+        {
+          name: `custom-group-${groupId}`,
+          title_pattern: draft.title_pattern.trim(),
+          ...(draft.time_pattern.trim() ? { time_pattern: draft.time_pattern.trim() } : {}),
+          ...(draft.date_pattern.trim() ? { date_pattern: draft.date_pattern.trim() } : {}),
+        } satisfies EventSyncPattern,
+      ];
+    }
+    if (Object.keys(groupPatternsOut).length > 0) {
+      built.group_patterns = groupPatternsOut;
     }
 
     return built;
@@ -583,6 +739,21 @@ export function EventSyncRuleEditor({
                   disabled={isLoading}
                 />
               </div>
+              {customSharedMeta.extras.length > 0 && (
+                <span
+                  className="form-hint"
+                  data-testid="custom-shared-extras"
+                >
+                  {customSharedMeta.extras.length} additional API-authored
+                  shared pattern{customSharedMeta.extras.length === 1 ? '' : 's'}{' '}
+                  ({customSharedMeta.extras
+                    .map((p, i) => p.name || `#${i + 2}`)
+                    .join(', ')}) {customSharedMeta.extras.length === 1 ? 'is' : 'are'}{' '}
+                  preserved as saved — this editor can edit only the first
+                  custom pattern; the rest are applied after it and never
+                  dropped on save.
+                </span>
+              )}
             </div>
           </details>
         </section>
@@ -655,6 +826,9 @@ export function EventSyncRuleEditor({
                 ) : (
                   scopedGroups.map(group => {
                     const draft = groupOverrides[group.id] ?? EMPTY_GROUP_PATTERN;
+                    const savedExtras = (
+                      config?.group_patterns?.[String(group.id)] ?? []
+                    ).slice(1);
                     return (
                       <details key={group.id} className="event-sync-details event-sync-override">
                         <summary>
@@ -693,6 +867,23 @@ export function EventSyncRuleEditor({
                               disabled={isLoading}
                             />
                           </div>
+                          {savedExtras.length > 0 && (
+                            <span
+                              className="form-hint"
+                              data-testid={`group-override-extras-${group.id}`}
+                            >
+                              {savedExtras.length} additional API-authored
+                              pattern{savedExtras.length === 1 ? '' : 's'} for
+                              this group (
+                              {savedExtras
+                                .map((p, i) => p.name || `#${i + 2}`)
+                                .join(', ')}
+                              ) {savedExtras.length === 1 ? 'is' : 'are'}{' '}
+                              preserved as saved — this editor edits only the
+                              group&apos;s first pattern; the rest are applied
+                              after it and never dropped on save.
+                            </span>
+                          )}
                         </div>
                       </details>
                     );

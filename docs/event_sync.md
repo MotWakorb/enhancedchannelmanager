@@ -106,6 +106,14 @@ that name's start time — it will show up as a `parse_failed` stream in
 the preview, not a mismatch. That's expected for placeholder/filler slots
 that haven't been assigned an event yet.
 
+**Parsed** means the matcher would actually build a start time — not just
+that the date/time groups were captured. A name like
+`A vs B @ 45 Jul 06:00 PM ET` (day 45) or a custom pattern that captures a
+garbage month shows its extracted parts in the table but is flagged
+**Invalid date/time**: it too would be a `parse_failed` stream, because
+Event Sync validates the month name, the hour (≤ 23), and that the result
+is a real calendar date before it ever compares times.
+
 ### 7. Read the Preview
 
 Click **Preview matches**. The response is a zero-write dry run against
@@ -242,8 +250,8 @@ the rule.
 |-|-|-|
 | `master_group_id` | yes | The ONE Dispatcharr group whose channels Dispatcharr owns (`auto_channel_sync` ON). Positive integer group ID. |
 | `secondary_group_ids` | yes, non-empty | The secondary event groups (`auto_channel_sync` OFF) whose streams get matched onto master channels. Must NOT contain `master_group_id`. |
-| `patterns` | no | Shared parse-pattern variants (title/time/date regexes with named capture groups, same shape as the built-in defaults in `backend/services/event_sync_matcher.py`). Omit to use the built-in defaults. |
-| `group_patterns` | no | Per-group pattern overrides, keyed by group ID (master or a secondary). A group with an override uses ONLY its own patterns for parsing; other groups keep the shared `patterns` selection. |
+| `patterns` | no | Shared parse-pattern variants (title/time/date regexes with named capture groups, same shape as the built-in defaults in `backend/services/event_sync_matcher.py`). Omit to use the built-in defaults. API-authored arrays survive UI resaves: the rule editor round-trips the full array (an untouched save emits it verbatim; patterns beyond the one custom slot the UI can edit are preserved read-only, and built-ins are never silently re-added to an all-custom selection). |
+| `group_patterns` | no | Per-group pattern overrides, keyed by group ID (master or a secondary). A group with an override uses ONLY its own patterns for parsing; other groups keep the shared `patterns` selection. Multi-pattern lists round-trip through the UI the same way as `patterns` (the editor edits only the first pattern per group; the rest are preserved). |
 | `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. Capped at 1440 (24 hours). |
 | `attach_threshold` | no (default 0.80) | Auto-attach score floor on the parsed-title score. **Hard-clamped ≥ 0.80** — it can be raised per rule, never lowered. |
 | `max_attach_per_run` | no (default 100) | Per-run attach cap (1–1000). On overage the run stops attaching, warns in the execution log, and records the overage count. Runs are idempotent — run again to continue. |
@@ -392,15 +400,22 @@ reversible by execution id:
    judge each attachment without replaying the run.
 3. **Roll it back.**
    `POST /api/channel-pipeline/executions/{id}/rollback` with
-   `confirm=true` (or the UI's rollback on that execution). Because the
-   snapshot restore is an optimistic overwrite of each snapshot channel's
-   stream list, the API refuses without `confirm` and tells you what would
-   be overwritten. The rollback removes every stream the run attached and
+   `confirm=true` (or the UI's rollback on that execution). The API
+   refuses without `confirm` and tells you what could be overwritten.
+   Once confirmed, the rollback prefers a **surgical un-merge**: when the
+   run's journal entries fully cover its attaches (the normal case for an
+   event_sync run), it removes **only the stream ids the run added** from
+   each master's *current* stream list — master-stream churn Dispatcharr
+   made after the run survives untouched, and the response carries
+   `surgical_unmerge: true`. When coverage can't be proven (legacy runs,
+   a failed journal write, mixed runs), it falls back to the snapshot
+   restore — an optimistic overwrite of each snapshot channel's stream
+   list. Either way the rollback removes the streams the run attached and
    **never deletes the master channels themselves** — ECM didn't create
-   them and won't remove them. Master channels are restored with a
-   **streams-only** payload: their name / group / EPG linkage stay
-   whatever Dispatcharr currently says (a slot rename that happened after
-   the run is not reverted).
+   them and won't remove them. On the snapshot path, master channels are
+   restored with a **streams-only** payload: their name / group / EPG
+   linkage stay whatever Dispatcharr currently says (a slot rename that
+   happened after the run is not reverted).
 4. **Fix the rule before the next run.** The matcher is deterministic: a
    bad match is reversible and non-compounding but **not self-healing** —
    the same rule against the same names will make the same bad match on

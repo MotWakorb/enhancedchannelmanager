@@ -14,7 +14,7 @@ import json
 import logging
 import re
 import resource
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Optional
 
@@ -551,17 +551,33 @@ class ChannelPipelineEngine:
         UNIFIED REVERT. This is the single revert entry point and chooses its
         behaviour from whether the execution has a pre-run snapshot:
 
-        * **Snapshot present** — delegates to :meth:`restore_snapshot` for the
-          FULL whole-run revert (re-adds streams the run removed, removes
-          streams it added, restores drifted metadata). This is an OPTIMISTIC
-          OVERWRITE (ADR-010 §D5) that can clobber edits made AFTER the run, so
-          it requires ``confirm=True`` — the same acknowledgement the
-          ``/restore-snapshot`` endpoint demands. Without it, the call is
-          refused with ``requires_confirm=True`` and ``has_snapshot=True`` so
-          the router can surface the overwrite warning (HTTP 409). This is the
-          ONLY behaviour change for existing callers, and it ONLY affects runs
-          that have a snapshot (i.e. runs created after the snapshot feature
-          shipped).
+        * **Snapshot present** — requires ``confirm=True`` (the same
+          acknowledgement the ``/restore-snapshot`` endpoint demands); without
+          it, the call is refused with ``requires_confirm=True`` and
+          ``has_snapshot=True`` so the router can surface the overwrite
+          warning (HTTP 409). Once confirmed, the revert mechanism is chosen
+          by journal coverage (bead sfysz):
+
+          - When the journal PROVES every mutation the run made was an
+            event_sync stream attach (category=event_sync merge_stream
+            entries with batch_id=execution id fully covering the run's
+            modified entities — see :meth:`_event_sync_journal_covers_run`),
+            the SURGICAL :meth:`_journal_driven_unmerge` runs instead:
+            it removes ONLY the stream ids the run added from each master's
+            CURRENT stream list, preserving Dispatcharr's own master-stream
+            churn between run and rollback. Dispatcharr never resets stream
+            lists, so a stale id written by a full-replace would NOT
+            self-heal — the full restore is strictly worse whenever the
+            surgical revert suffices. Returns the legacy
+            ``entities_removed``/``entities_restored`` shape plus
+            ``surgical_unmerge: True``.
+          - Otherwise (standard-rule runs, mixed runs, legacy runs,
+            missing/partial journal), delegates to :meth:`restore_snapshot`
+            for the FULL whole-run revert (re-adds streams the run removed,
+            removes streams it added, restores drifted metadata) — an
+            OPTIMISTIC OVERWRITE (ADR-010 §D5) that can clobber edits made
+            AFTER the run, which is exactly why the confirm gate above is
+            required either way.
 
         * **No snapshot** — the legacy delete-created-only path, BYTE-COMPATIBLE
           with the pre-uc51o.5 behaviour: deletes run-created entities, prefers
@@ -633,8 +649,49 @@ class ChannelPipelineEngine:
                             f"/restore-snapshot) to acknowledge."
                         ),
                     }
-                # Confirmed: delegate to the full snapshot-restore. Close this
-                # session first — restore_snapshot opens its own.
+                # Confirmed. Prefer the SURGICAL journal-driven unmerge when
+                # the journal fully covers the run's attaches (bead sfysz):
+                # it removes ONLY the run-added stream ids and preserves
+                # Dispatcharr's own master-stream churn between run and
+                # rollback, which the snapshot full-replace would clobber
+                # with stale ids Dispatcharr never self-heals.
+                if self._event_sync_journal_covers_run(execution):
+                    handled, touched = await self._journal_driven_unmerge(
+                        execution_id
+                    )
+                    if handled:
+                        execution.status = "rolled_back"
+                        execution.rolled_back_at = datetime.utcnow()
+                        execution.rolled_back_by = rolled_back_by
+                        session.commit()
+                        logger.info(
+                            "[AUTO-CREATE-ENGINE] Rollback of execution %s "
+                            "completed via surgical journal-driven unmerge "
+                            "(%s channel(s) touched; snapshot restore "
+                            "skipped)",
+                            execution_id, touched,
+                        )
+                        return {
+                            "success": True,
+                            "execution_id": execution_id,
+                            "rule_name": (execution.rule_name
+                                          or f"Execution {execution_id}"),
+                            "entities_removed": 0,
+                            "entities_restored": touched,
+                            "surgical_unmerge": True,
+                        }
+                    # Coverage said yes but the entries vanished between the
+                    # check and the unmerge read — fall through to the full
+                    # restore rather than declaring a rollback that did
+                    # nothing.
+                    logger.warning(
+                        "[AUTO-CREATE-ENGINE] Surgical unmerge of execution "
+                        "%s found no journal entries after a positive "
+                        "coverage check — falling back to snapshot restore",
+                        execution_id,
+                    )
+                # Delegate to the full snapshot-restore. Close this session
+                # first — restore_snapshot opens its own.
                 logger.info(
                     "[AUTO-CREATE-ENGINE] Rollback of execution %s delegating "
                     "to snapshot-restore (snapshot present, confirmed)",
@@ -3834,6 +3891,70 @@ class ChannelPipelineEngine:
         except (AttributeError, TypeError):
             return []
         return [sid for sid in after if sid not in before]
+
+    def _event_sync_journal_covers_run(self, execution) -> bool:
+        """True when the journal PROVES the run's only mutations were
+        event_sync stream attaches (bead sfysz).
+
+        The surgical :meth:`_journal_driven_unmerge` is a SAFE full revert
+        only when nothing the run did falls outside what the journal's
+        merge entries describe. Coverage therefore requires ALL of:
+
+        * no created entities — event_sync never creates channels/groups;
+        * every modified entity is a channel whose recorded ``previous``
+          state is EXACTLY a stream list (the only mutation the attach path
+          performs — a metadata change would need the snapshot restore);
+        * the batch's ``merge_stream`` journal entries (batch_id =
+          execution id) ALL carry the ``event_sync`` category — a mixed run
+          with standard-rule merges (category ``auto_creation``) is not
+          covered, keeping the standard-rule rollback byte-identical;
+        * entry count and per-channel multiset match the modified entities
+          1:1 — a journal write that failed to flush leaves the run only
+          partially described, so the full restore must run instead.
+
+        Any journal read failure (or an over-page-size batch that cannot be
+        verified in one read) counts as NOT covered: the fallback is the
+        snapshot restore, never a partial surgical revert.
+        """
+        if execution.get_created_entities():
+            return False
+        modified = execution.get_modified_entities()
+        if not modified:
+            return False
+        expected_channel_ids: list = []
+        for entity in modified:
+            if entity.get("type") != "channel":
+                return False
+            previous = entity.get("previous") or {}
+            if set(previous.keys()) != {"streams"}:
+                return False
+            expected_channel_ids.append(entity.get("id"))
+
+        try:
+            page = journal.get_entries(
+                page=1, page_size=1000,
+                action_type="merge_stream",
+                batch_id=str(execution.id),
+            )
+        except Exception as e:
+            logger.warning(
+                "[AUTO-CREATE-ENGINE] Journal read failed for surgical-"
+                "coverage check of execution %s: %s", execution.id, e,
+            )
+            return False
+
+        if not isinstance(page, dict):
+            return False
+        entries = page.get("results", [])
+        if page.get("count", len(entries)) != len(entries):
+            # More entries than one page — cannot verify coverage in full.
+            return False
+        if len(entries) != len(expected_channel_ids):
+            return False
+        if any(e.get("category") != "event_sync" for e in entries):
+            return False
+        return (Counter(e.get("entity_id") for e in entries)
+                == Counter(expected_channel_ids))
 
     async def _journal_driven_unmerge(self, execution_id: int) -> tuple[bool, int]:
         """Surgically un-merge a run's fuzzy stream merges (jnzst Q4).

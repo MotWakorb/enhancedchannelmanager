@@ -540,6 +540,35 @@ def _build_start(groups: dict, tz, event_timezone: str, now: datetime) -> dateti
     return start if isinstance(start, datetime) else None
 
 
+def groups_would_build_start(
+    groups: dict | None,
+    *,
+    event_timezone: str = DEFAULT_EVENT_TIMEZONE,
+    now: datetime | None = None,
+) -> bool:
+    """True when captured pattern groups would yield a REAL start time.
+
+    The public matcher-level validity surface for the Test Patterns panel
+    (bead hirm6): 'Parsed' in the panel must mean "the matcher would
+    actually get a start time", not merely "the date/time groups were
+    captured". Delegates to the EXACT internals :func:`parse_event_name`
+    uses — :func:`_groups_have_complete_time` (all groups present, month
+    resolvable to 1-12) then :func:`_build_start` (hour <= 23 after am/pm
+    normalization, minute <= 59, a real calendar date — 'July 45' and
+    'Feb 30' are rejected, never guessed) — so the panel's flag can never
+    drift from the never-guess semantics.
+
+    ``now`` (tz-aware) anchors year inference for yearless dates, exactly
+    as in :func:`parse_event_name`.
+    """
+    if not groups or not _groups_have_complete_time(groups):
+        return False
+    tz = pytz.timezone(event_timezone)
+    if now is None:
+        now = datetime.now(tz)
+    return _build_start(groups, tz, event_timezone, now) is not None
+
+
 def _cap_title(title: str | None) -> str | None:
     if title is None:
         return None

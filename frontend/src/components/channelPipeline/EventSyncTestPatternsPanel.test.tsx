@@ -3,8 +3,10 @@
  *
  * Pattern extraction runs server-side through POST /api/dummy-epg/preview/batch
  * — these tests pin the RENDERING contract: raw name → extracted title/date/
- * time per pattern, with the never-guess incomplete-date flag and the
- * no-match state as text (not color alone).
+ * time per pattern, with the never-guess incomplete-date flag, the
+ * matcher-level validity verdict (bead hirm6: 'Parsed' ONLY when the backend
+ * says the matcher would build a start time — captured-but-invalid '45 Jul'
+ * shows as a parse failure), and the no-match state as text (not color alone).
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -32,7 +34,7 @@ const PATTERN: LabeledEventSyncPattern = {
 };
 
 /** Batch-preview stub: keyed by sample name so assertions stay explicit. */
-function stubBatchPreview(byName: Record<string, { matched: boolean; groups: Record<string, string | null> | null }>) {
+function stubBatchPreview(byName: Record<string, { matched: boolean; groups: Record<string, string | null> | null; event_sync_start_valid?: boolean }>) {
   server.use(
     http.post('/api/dummy-epg/preview/batch', async ({ request }) => {
       const body = (await request.json()) as { sample_names: string[] };
@@ -65,6 +67,7 @@ describe('EventSyncTestPatternsPanel', () => {
           minute: '00',
           ampm: 'P',
         },
+        event_sync_start_valid: true,
       },
     });
     render(<EventSyncTestPatternsPanel patterns={[PATTERN]} groupOptions={[]} />);
@@ -92,6 +95,7 @@ describe('EventSyncTestPatternsPanel', () => {
       'Big Fight Night': {
         matched: true,
         groups: { title: 'Big Fight Night' },
+        event_sync_start_valid: false,
       },
     });
     render(<EventSyncTestPatternsPanel patterns={[PATTERN]} groupOptions={[]} />);
@@ -102,6 +106,77 @@ describe('EventSyncTestPatternsPanel', () => {
     const table = await screen.findByRole('table');
     expect(
       within(table).getByText(/incomplete date\/time — would be a parse failure/i)
+    ).toBeInTheDocument();
+  });
+
+  it('flags a captured-but-invalid date as a parse failure, never Parsed (bead hirm6)', async () => {
+    // The '45 Jul' garbage-month/day case: every group captured, so the old
+    // group-presence check showed 'Parsed' — but the matcher would never
+    // build a start time (July 45 is not a real date). The backend flag is
+    // authoritative and the panel must render it honestly.
+    const user = userEvent.setup();
+    stubBatchPreview({
+      'A vs B @ 45 Jul 06:00 PM ET': {
+        matched: true,
+        groups: {
+          title: 'A vs B',
+          day: '45',
+          month: 'Jul',
+          hour: '06',
+          minute: '00',
+          ampm: 'P',
+        },
+        event_sync_start_valid: false,
+      },
+    });
+    render(<EventSyncTestPatternsPanel patterns={[PATTERN]} groupOptions={[]} />);
+
+    await user.type(
+      screen.getByLabelText(/sample stream names/i),
+      'A vs B @ 45 Jul 06:00 PM ET'
+    );
+    await user.click(screen.getByRole('button', { name: /test patterns/i }));
+
+    const table = await screen.findByRole('table');
+    const row = within(table).getAllByRole('row')[1];
+    // The extracted parts still render (the operator sees WHAT was captured)...
+    expect(within(row).getAllByRole('cell')[2]).toHaveTextContent('45 Jul');
+    // ...but the verdict is a parse failure with the invalid-date wording.
+    expect(
+      within(row).getByText(/invalid date\/time — not a real calendar date\/time/i)
+    ).toBeInTheDocument();
+    expect(within(row).queryByText('Parsed')).toBeNull();
+  });
+
+  it("renders 'Parsed' only from the backend validity flag, not group presence", async () => {
+    // Same complete-looking groups; only the flag differs.
+    const user = userEvent.setup();
+    stubBatchPreview({
+      'Good @ 11 Jul 06:00 PM ET': {
+        matched: true,
+        groups: { title: 'Good', day: '11', month: 'Jul', hour: '06', minute: '00', ampm: 'P' },
+        event_sync_start_valid: true,
+      },
+      'Bad @ 45 Jul 06:00 PM ET': {
+        matched: true,
+        groups: { title: 'Bad', day: '45', month: 'Jul', hour: '06', minute: '00', ampm: 'P' },
+        event_sync_start_valid: false,
+      },
+    });
+    render(<EventSyncTestPatternsPanel patterns={[PATTERN]} groupOptions={[]} />);
+
+    await user.type(
+      screen.getByLabelText(/sample stream names/i),
+      'Good @ 11 Jul 06:00 PM ET\nBad @ 45 Jul 06:00 PM ET'
+    );
+    await user.click(screen.getByRole('button', { name: /test patterns/i }));
+
+    const table = await screen.findByRole('table');
+    const rows = within(table).getAllByRole('row');
+    expect(within(rows[1]).getByText('Parsed')).toBeInTheDocument();
+    expect(within(rows[2]).queryByText('Parsed')).toBeNull();
+    expect(
+      within(rows[2]).getByText(/would be a parse failure/i)
     ).toBeInTheDocument();
   });
 
