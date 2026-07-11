@@ -108,6 +108,7 @@ const ACTION_TYPES: {
   hasPriority?: boolean;
   hasProfileId?: boolean;
   hasChannelProfileId?: boolean;
+  hasSortGroupConfig?: boolean;
 }[] = [
   // Creation actions
   { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel for the stream', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasChannelNumbering: true, hasNameTransform: true },
@@ -126,6 +127,7 @@ const ACTION_TYPES: {
   { type: 'remove_from_channel', label: 'Remove From Channel', description: 'Remove this stream from its current channel', category: 'management' },
   { type: 'set_stream_priority', label: 'Set Stream Priority', description: 'Move stream to lowest or highest priority in its channel', category: 'management', hasPriority: true },
   { type: 'probe_streams', label: 'Probe Streams', description: 'Queue streams for probing after pipeline completes', category: 'management' },
+  { type: 'sort_group', label: 'Sort Group', description: "Alphabetically sort and renumber a group's channels (runs once per group after processing)", category: 'management', hasSortGroupConfig: true },
   // Control actions
   { type: 'skip', label: 'Skip', description: 'Skip this stream (do not process)', category: 'control' },
   { type: 'stop_processing', label: 'Stop Processing', description: 'Stop processing further rules', category: 'control' },
@@ -345,6 +347,10 @@ export function ActionEditor({
       }
     }
 
+    if (action.type === 'sort_group' && action.starting_number !== undefined && action.starting_number < 1) {
+      return 'Starting number must be at least 1';
+    }
+
     // Validate name transform regex
     if (action.name_transform_pattern) {
       try {
@@ -401,6 +407,14 @@ export function ActionEditor({
     }
     if (newType === 'set_stream_priority') {
       newAction.priority = 'lowest';
+    }
+    if (newType === 'sort_group') {
+      // Defaults mirror the manual Sort & Renumber modal
+      // (ChannelsPane.tsx) and the backend port
+      // (backend/channel_pipeline_sort.py).
+      newAction.order = 'asc';
+      newAction.strip_numbers = true;
+      newAction.ignore_country = false;
     }
 
     onChange(newAction);
@@ -524,6 +538,11 @@ export function ActionEditor({
             )}
             {action.type === 'stop_processing' && (
               <span className="action-hint">No further rules will be applied to this stream</span>
+            )}
+            {action.type === 'sort_group' && (
+              <span className="action-hint">
+                Runs once per group after all streams are processed this run — not per-stream. Matches the manual Sort &amp; Renumber tool&apos;s ordering exactly.
+              </span>
             )}
           </div>
         )}
@@ -1303,6 +1322,66 @@ export function ActionEditor({
               )}
             </div>
           </div>
+        )}
+
+        {/* Sort Group Config for sort_group */}
+        {actionDef?.hasSortGroupConfig && (
+          <>
+            <div className="action-field">
+              <label>Order</label>
+              <CustomSelect
+                value={action.order || 'asc'}
+                onChange={val => onChange({ ...action, order: val as 'asc' | 'desc' })}
+                options={[
+                  { value: 'asc', label: 'A → Z (ascending)' },
+                  { value: 'desc', label: 'Z → A (descending)' },
+                ]}
+                disabled={readonly}
+              />
+            </div>
+            <div className="action-field">
+              <label htmlFor={`${id}-sort-group-start`}>Starting Channel Number</label>
+              <input
+                id={`${id}-sort-group-start`}
+                type="number"
+                className="action-input"
+                value={action.starting_number ?? ''}
+                onChange={e => onChange({
+                  ...action,
+                  starting_number: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                })}
+                min={1}
+                placeholder="Auto (group's current lowest, or 1)"
+                disabled={readonly}
+                aria-label="Starting channel number"
+              />
+              <span className="field-hint">
+                Leave blank to keep the group&apos;s current lowest channel number (or start at 1 if none is set).
+              </span>
+            </div>
+            <div className="action-field">
+              <label className="transform-toggle">
+                <input
+                  type="checkbox"
+                  checked={action.strip_numbers ?? true}
+                  onChange={e => onChange({ ...action, strip_numbers: e.target.checked })}
+                  disabled={readonly}
+                  aria-label="Ignore channel numbers in names when sorting"
+                />
+                Ignore channel numbers in names when sorting
+              </label>
+              <label className="transform-toggle">
+                <input
+                  type="checkbox"
+                  checked={!!action.ignore_country}
+                  onChange={e => onChange({ ...action, ignore_country: e.target.checked })}
+                  disabled={readonly}
+                  aria-label="Ignore country prefix when sorting"
+                />
+                Ignore country prefix when sorting (e.g., &quot;US | &quot;, &quot;UK: &quot;)
+              </label>
+            </div>
+          </>
         )}
 
         {/* Priority Selector for set_stream_priority */}

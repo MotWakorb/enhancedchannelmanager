@@ -511,6 +511,42 @@ class TestAnalyzeRules:
         }
 
 
+class TestSortGroupActionAnalyzerAwareness:
+    """enhancedchannelmanager-vy4fl: the analyzer must not flag a rule using
+    the sort_group action as having an unrecognized/"Unknown" action.
+
+    sort_group is a pure ACTION type — it never appears in
+    channel_pipeline_rule_analyzer._GUARD_TYPES (which classifies
+    CONDITION types only, for the ANDOR_DROPS_GUARD check) and none of
+    the analyzer's per-action checks (_check_merge_streams_no_target_
+    channels, _check_merge_scope_not_target_group) match on
+    "sort_group", so a rule using it produces zero findings from those
+    checks. The analyzer has no generic "unknown action type" finding at
+    all — that validation lives in channel_pipeline_schema.Action.validate
+    (write-time, HTTP 422) — so this test locks the absence of any
+    spurious finding for a rule that legitimately uses sort_group.
+    """
+
+    def test_sort_group_action_produces_no_findings(self):
+        rule = {
+            "id": 10,
+            "name": "Auto-sort Sports group",
+            "conditions": [
+                {"type": "stream_group_contains", "value": "Sports", "connector": "and"},
+            ],
+            "actions": [
+                {"type": "merge_streams", "target": "auto"},
+                {"type": "sort_group", "order": "desc", "starting_number": 100},
+            ],
+            "target_group_id": 5,
+        }
+        findings = analyze_rule(rule)
+        assert findings == []
+
+    def test_sort_group_not_in_guard_types(self):
+        assert "sort_group" not in analyzer._GUARD_TYPES
+
+
 # =========================================================================
 # RuleFinding dataclass plumbing.
 # =========================================================================

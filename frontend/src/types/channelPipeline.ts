@@ -93,6 +93,7 @@ export type ActionType =
   | 'remove_from_channel'
   | 'set_stream_priority'
   | 'probe_streams'
+  | 'sort_group'
   | 'skip'
   | 'stop_processing'
   | 'log_match';
@@ -157,6 +158,21 @@ export interface Action {
   set_tvg_id?: boolean;
   // Stream priority
   priority?: 'lowest' | 'highest';
+  /**
+   * sort_group (enhancedchannelmanager-vy4fl) — GROUP-level post-run pass,
+   * NOT per-stream: alphabetically sorts and renumbers every channel in a
+   * group once per run, after all streams are processed. Sort order
+   * ('asc'/'desc'), starting_number, strip_numbers, and ignore_country
+   * mirror the manual Sort & Renumber modal exactly (shared semantics in
+   * utils/channelSort.ts; backend port in
+   * backend/channel_pipeline_sort.py). ``group_id`` (reusing the field
+   * above) optionally overrides the group resolved from the stream's
+   * current channel/group context or the rule's target_group_id.
+   */
+  order?: 'asc' | 'desc';
+  starting_number?: number;
+  strip_numbers?: boolean;
+  ignore_country?: boolean;
 }
 
 /**

@@ -21,6 +21,7 @@ from channel_pipeline_engine import (
 )
 from channel_pipeline_evaluator import StreamContext
 from channel_pipeline_evaluator import StreamContext
+from channel_pipeline_executor import ActionExecutor
 
 
 class TestChannelPipelineEngineInit:
@@ -1180,6 +1181,129 @@ class TestChannelPipelineEngineStreamReorderUsesChannelNames:
 
         # Should reorder to Alpha, Bravo (ids 1,2) and persist via API.
         self.client.update_channel.assert_awaited_once_with(channel_id, {"streams": [1, 2]})
+
+
+class TestSortChannelGroupsPass:
+    """Tests for Pass 3.6 — the sort_group post-run pass
+    (enhancedchannelmanager-vy4fl)."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.assign_channel_numbers = AsyncMock(return_value={})
+        self.client.get_channel = AsyncMock()
+        self.client.update_channel = AsyncMock()
+        self.engine = ChannelPipelineEngine(self.client)
+        self.channels = [
+            {"id": 1, "name": "Channel 10", "channel_group_id": 5, "channel_number": 10},
+            {"id": 2, "name": "Channel 2", "channel_group_id": 5, "channel_number": 20},
+            {"id": 3, "name": "Other Group Channel", "channel_group_id": 6, "channel_number": 1},
+        ]
+        self.groups = [{"id": 5, "name": "Sports"}, {"id": 6, "name": "News"}]
+        self.executor = ActionExecutor(
+            self.client, existing_channels=self.channels, existing_groups=self.groups,
+        )
+        # Real settings would come from get_settings(); a bare object with
+        # the one attribute _auto_rename_after_renumber reads is enough —
+        # avoids MagicMock's truthy-by-default auto-rename path firing.
+        self.settings = MagicMock()
+        self.settings.auto_rename_channel_number = False
+
+    def test_no_requests_is_a_noop(self):
+        results = {"execution_log": [], "dry_run_results": []}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups({}, self.executor, results, dry_run=False, settings=self.settings)
+        )
+        assert results["execution_log"] == []
+        self.client.assign_channel_numbers.assert_not_called()
+
+    def test_single_channel_group_is_skipped(self):
+        """A group with fewer than 2 channels has nothing to sort."""
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {6: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False}}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, self.executor, results, dry_run=False, settings=self.settings)
+        )
+        self.client.assign_channel_numbers.assert_not_called()
+
+    def test_live_sorts_and_renumbers_ascending(self):
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False}}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, self.executor, results, dry_run=False, settings=self.settings)
+        )
+
+        # "Channel 2" sorts before "Channel 10" (natural sort). Default
+        # starting_number is the group's current lowest (10).
+        self.client.assign_channel_numbers.assert_awaited_once_with([2, 1], 10)
+        assert len(results["execution_log"]) == 1
+        action = results["execution_log"][0]["actions_executed"][0]
+        assert action["type"] == "sort_group"
+        assert action["success"] is True
+        assert "Sports" in action["description"]
+
+    def test_live_sorts_descending(self):
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "desc", "starting_number": 100, "strip_numbers": True, "ignore_country": False}}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, self.executor, results, dry_run=False, settings=self.settings)
+        )
+        self.client.assign_channel_numbers.assert_awaited_once_with([1, 2], 100)
+
+    def test_dry_run_reports_without_mutating(self):
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False}}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, self.executor, results, dry_run=True, settings=self.settings)
+        )
+
+        self.client.assign_channel_numbers.assert_not_called()
+        assert results["execution_log"] == []
+        assert len(results["dry_run_results"]) == 1
+        assert "Would sort" in results["dry_run_results"][0]["action"]
+        assert results["dry_run_results"][0]["would_modify"] is True
+
+    def test_explicit_starting_number_overrides_default(self):
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "asc", "starting_number": 500, "strip_numbers": True, "ignore_country": False}}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, self.executor, results, dry_run=False, settings=self.settings)
+        )
+        self.client.assign_channel_numbers.assert_awaited_once_with([2, 1], 500)
+
+    def test_multiple_groups_each_sorted_once(self):
+        """Per-group dedup at the engine level: two distinct groups in the
+        aggregated dict each get exactly one assign_channel_numbers call."""
+        channels = [
+            {"id": 1, "name": "B", "channel_group_id": 5, "channel_number": 1},
+            {"id": 2, "name": "A", "channel_group_id": 5, "channel_number": 2},
+            {"id": 3, "name": "D", "channel_group_id": 6, "channel_number": 1},
+            {"id": 4, "name": "C", "channel_group_id": 6, "channel_number": 2},
+        ]
+        executor = ActionExecutor(self.client, existing_channels=channels, existing_groups=self.groups)
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {
+            5: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False},
+            6: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False},
+        }
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, executor, results, dry_run=False, settings=self.settings)
+        )
+
+        assert self.client.assign_channel_numbers.await_count == 2
+        assert len(results["execution_log"]) == 2
+
+    def test_failure_is_logged_not_raised(self):
+        self.client.assign_channel_numbers = AsyncMock(side_effect=Exception("boom"))
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False}}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, self.executor, results, dry_run=False, settings=self.settings)
+        )
+
+        assert len(results["execution_log"]) == 1
+        action = results["execution_log"][0]["actions_executed"][0]
+        assert action["success"] is False
+        assert "boom" in action["error"]
 
 
 class TestChannelPipelineEngineExecutionTracking:

@@ -243,6 +243,10 @@ class ActionType(str, Enum):
     SET_STREAM_PRIORITY = "set_stream_priority"
     PROBE_STREAMS = "probe_streams"
 
+    # Group management — post-run pass (not per-stream, see
+    # channel_pipeline_engine.py Pass 3.6 / _sort_channel_groups).
+    SORT_GROUP = "sort_group"
+
     # Control flow
     SKIP = "skip"
     STOP_PROCESSING = "stop_processing"
@@ -612,6 +616,47 @@ class Action:
                     template = self.params.get("template")
                     if not template or not isinstance(template, str):
                         errors.append("set_variable with mode 'literal' requires a 'template'")
+
+        # Validate sort_group (enhancedchannelmanager-vy4fl). This is an
+        # ACTION, not a condition — it never touches
+        # channel_pipeline_rule_analyzer._GUARD_TYPES (which classifies
+        # CONDITION types only). Fires once per group per run (post-run
+        # pass — channel_pipeline_engine.py Pass 3.6), deduplicated by
+        # group_id regardless of how many matched streams land in that
+        # group. Sort semantics are the backend port of the manual
+        # Sort & Renumber modal — see channel_pipeline_sort.py.
+        elif action_type == ActionType.SORT_GROUP:
+            order = self.params.get("order", "asc")
+            if order not in ("asc", "desc"):
+                errors.append("sort_group.order must be 'asc' or 'desc'")
+            if "order" not in self.params:
+                self.params["order"] = "asc"
+
+            starting_number = self.params.get("starting_number")
+            if starting_number is not None:
+                # bool is an int subclass — reject it explicitly, same
+                # convention as target_channel_in_group elsewhere in this
+                # module.
+                if isinstance(starting_number, bool) or not isinstance(starting_number, int):
+                    errors.append("sort_group.starting_number must be an integer")
+                elif starting_number < 1:
+                    errors.append("sort_group.starting_number must be >= 1")
+
+            group_id = self.params.get("group_id")
+            if group_id is not None and (isinstance(group_id, bool) or not isinstance(group_id, int)):
+                errors.append("sort_group.group_id must be an integer")
+
+            strip_numbers = self.params.get("strip_numbers", True)
+            if not isinstance(strip_numbers, bool):
+                errors.append("sort_group.strip_numbers must be a boolean")
+            if "strip_numbers" not in self.params:
+                self.params["strip_numbers"] = True
+
+            ignore_country = self.params.get("ignore_country", False)
+            if not isinstance(ignore_country, bool):
+                errors.append("sort_group.ignore_country must be a boolean")
+            if "ignore_country" not in self.params:
+                self.params["ignore_country"] = False
 
         if errors:
             logger.warning("[AUTO-CREATE-SCHEMA] Action validation errors for type=%s: %s", self.type, errors)
