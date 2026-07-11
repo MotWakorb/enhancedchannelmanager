@@ -331,6 +331,10 @@ class TestChannelPipelineEngineRunPipeline:
         mock_rule.stop_on_first_match = True
         mock_rule.get_conditions.return_value = [{"type": "always"}]
         mock_rule.get_actions.return_value = [{"type": "skip"}]
+        # ti939.1.3: a MagicMock's is_event_sync() is truthy by default,
+        # which would wrongly classify this standard rule as event_sync and
+        # exclude it from the run.
+        mock_rule.is_event_sync.return_value = False
 
         mock_query = MagicMock()
         mock_query.filter.return_value = mock_query
@@ -1582,6 +1586,10 @@ class TestChannelPipelineEngineIntegration:
         mock_rule.get_actions.return_value = [
             {"type": "create_channel", "params": {"name_template": "{stream_name}"}}
         ]
+        # ti939.1.3: a MagicMock's is_event_sync() is truthy by default,
+        # which would wrongly classify this standard rule as event_sync and
+        # exclude it from the run.
+        mock_rule.is_event_sync.return_value = False
 
         # Rules query
         mock_query = MagicMock()

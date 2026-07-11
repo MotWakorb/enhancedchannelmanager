@@ -260,7 +260,11 @@ class TestRunPipelineDryRunGate:
         engine = ChannelPipelineEngine(client)
 
         engine._load_existing_data = AsyncMock()
-        engine._load_rules = AsyncMock(return_value=[MagicMock(id=1)])
+        # ti939.1.3: a MagicMock's is_event_sync() is truthy by default, which
+        # would classify the stub rule as event_sync and short-circuit the run.
+        stub_rule = MagicMock(id=1)
+        stub_rule.is_event_sync.return_value = False
+        engine._load_rules = AsyncMock(return_value=[stub_rule])
         engine._fetch_streams = AsyncMock(return_value=[])
         engine._apply_global_filters = AsyncMock(return_value=([], []))
         engine._capture_snapshot = AsyncMock()

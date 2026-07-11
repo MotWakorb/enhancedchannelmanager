@@ -1,0 +1,148 @@
+"""Unit tests for the Event Sync pre-flight check (bead ti939.1.3).
+
+``check_event_sync_group_settings`` verifies against MOCKED Dispatcharr
+group settings that the master group has auto_channel_sync ON and every
+secondary has it OFF, and that a disabled master surfaces as an explicit
+failure (otherwise it is a silent whole-feature failure — no master
+channels ever exist).
+
+The helper is READ-ONLY by contract: the client mock exposes ONLY
+``get_all_m3u_group_settings`` (spec-pinned), so any write/toggle attempt
+raises AttributeError and fails the test.
+"""
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import pytest
+
+from services.event_sync_preflight import (
+    CHECK_GROUP_SETTINGS_FOUND,
+    CHECK_MASTER_AUTO_SYNC_ON,
+    CHECK_SECONDARY_AUTO_SYNC_OFF,
+    check_event_sync_group_settings,
+)
+
+
+class _ReadOnlyClient:
+    """Client double exposing ONLY the read method the helper may use.
+
+    Any other attribute access (e.g. update_m3u_group_settings) raises
+    AttributeError — pinning the helper's never-writes contract.
+    """
+
+    def __init__(self, settings_by_group_id: dict):
+        self.get_all_m3u_group_settings = AsyncMock(
+            return_value=settings_by_group_id
+        )
+
+
+def _group(auto_sync: bool) -> dict:
+    return {"enabled": True, "auto_channel_sync": auto_sync}
+
+
+def _config(master=10, secondaries=(20, 30)) -> dict:
+    return {"master_group_id": master, "secondary_group_ids": list(secondaries)}
+
+
+class TestPreflightPasses:
+    async def test_master_on_secondaries_off_passes(self):
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=True),
+            20: _group(auto_sync=False),
+            30: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(client, _config())
+        assert result == {"ok": True, "failures": []}
+
+    async def test_only_the_read_method_is_called(self):
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=True),
+            20: _group(auto_sync=False),
+            30: _group(auto_sync=False),
+        })
+        await check_event_sync_group_settings(client, _config())
+        client.get_all_m3u_group_settings.assert_awaited_once_with()
+
+
+class TestPreflightFailures:
+    async def test_master_auto_sync_off_fails(self):
+        """A disabled master auto-sync is otherwise a silent feature failure."""
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=False),
+            20: _group(auto_sync=False),
+            30: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(client, _config())
+        assert result["ok"] is False
+        assert len(result["failures"]) == 1
+        failure = result["failures"][0]
+        assert failure["group_id"] == 10
+        assert failure["role"] == "master"
+        assert failure["check"] == CHECK_MASTER_AUTO_SYNC_ON
+        assert failure["expected"] == "auto_channel_sync ON"
+        assert failure["got"] == "auto_channel_sync OFF"
+        assert "never toggles" in failure["message"]
+
+    async def test_secondary_auto_sync_on_fails(self):
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=True),
+            20: _group(auto_sync=True),   # misconfigured
+            30: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(client, _config())
+        assert result["ok"] is False
+        assert len(result["failures"]) == 1
+        failure = result["failures"][0]
+        assert failure["group_id"] == 20
+        assert failure["role"] == "secondary"
+        assert failure["check"] == CHECK_SECONDARY_AUTO_SYNC_OFF
+
+    async def test_missing_master_group_fails(self):
+        client = _ReadOnlyClient({
+            20: _group(auto_sync=False),
+            30: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(client, _config())
+        assert result["ok"] is False
+        failure = result["failures"][0]
+        assert failure["group_id"] == 10
+        assert failure["role"] == "master"
+        assert failure["check"] == CHECK_GROUP_SETTINGS_FOUND
+
+    async def test_missing_secondary_group_fails(self):
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=True),
+            20: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(client, _config())
+        assert result["ok"] is False
+        failures = result["failures"]
+        assert len(failures) == 1
+        assert failures[0]["group_id"] == 30
+        assert failures[0]["role"] == "secondary"
+        assert failures[0]["check"] == CHECK_GROUP_SETTINGS_FOUND
+
+    async def test_multiple_failures_all_surface(self):
+        """Every failing group is reported — not just the first."""
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=False),  # master OFF
+            20: _group(auto_sync=True),   # secondary ON
+            # 30 missing entirely
+        })
+        result = await check_event_sync_group_settings(client, _config())
+        assert result["ok"] is False
+        checks = {(f["group_id"], f["check"]) for f in result["failures"]}
+        assert checks == {
+            (10, CHECK_MASTER_AUTO_SYNC_ON),
+            (20, CHECK_SECONDARY_AUTO_SYNC_OFF),
+            (30, CHECK_GROUP_SETTINGS_FOUND),
+        }
+
+    async def test_never_writes_group_settings(self):
+        """The read-only contract: no write method exists on the double, and
+        the helper completes without needing one even when every check fails."""
+        client = _ReadOnlyClient({})
+        result = await check_event_sync_group_settings(client, _config())
+        assert result["ok"] is False
+        assert not hasattr(client, "update_m3u_group_settings")
