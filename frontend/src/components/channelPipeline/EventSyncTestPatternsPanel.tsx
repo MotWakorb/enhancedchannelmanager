@@ -227,8 +227,9 @@ export function EventSyncTestPatternsPanel({
               </tr>
             </thead>
             <tbody>
-              {result.rows.map(row => (
-                <tr key={row.name}>
+              {/* Key includes the index: pasted sample names may repeat. */}
+              {result.rows.map((row, rowIndex) => (
+                <tr key={`${rowIndex}-${row.name}`}>
                   <td className="test-patterns-raw">{row.name}</td>
                   <td>{row.title ?? '—'}</td>
                   <td>{row.date ?? '—'}</td>

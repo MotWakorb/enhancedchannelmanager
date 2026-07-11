@@ -1,0 +1,55 @@
+{
+  "_comment": "Single source of truth for the Event Sync SHIPPED parse patterns (bead ti939.1.5; blocker fix PR #614 review). Consumed by BOTH frontend/src/components/channelPipeline/eventSyncDefaults.ts (via resolveJsonModule) and backend/tests/services/test_event_sync_shipped_frontend_patterns.py, which runs every entry's example through the real parse_event_name with now=pinned_now and asserts expected_title/expected_start — so a shipped pattern that cannot parse its own example can never ship again, and the builtin entries are pinned verbatim against DEFAULT_EVENT_PATTERNS in backend/services/event_sync_matcher.py.",
+  "pinned_now": "2026-07-01T12:00:00-04:00",
+  "event_timezone": "America/New_York",
+  "patterns": [
+    {
+      "id": "slot-title-day-first-date",
+      "builtin": true,
+      "label": "Title @ Day-first date (built-in)",
+      "description": "Optional \"Slot NN :\" prefix, then title, then \"@ <day> <month> <time>\". Matches the most common live shape.",
+      "example": "Fubo Sports Network 07 : Yankees vs Red Sox @ 11 Jul 06:00 PM ET",
+      "expected_title": "Yankees vs Red Sox",
+      "expected_start": "2026-07-11T18:00:00-04:00",
+      "title_pattern": "^(?:[^@:]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*)?\\s*(?P<title>.+?)\\s*(?:@\\s*(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{1,2}:\\d{2}|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}).*)?$",
+      "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?\\s*(?:E[SD]?T)?\\s*$",
+      "date_pattern": "@\\s*(?P<day>\\d{1,2})\\s+(?P<month>[A-Za-z]{3,9})\\s+\\d{1,2}:\\d{2}"
+    },
+    {
+      "id": "slot-title-month-first-date",
+      "builtin": true,
+      "label": "Title @ Month-first date (built-in)",
+      "description": "Optional \"Slot NN :\" prefix, then title, then \"@ <month> <day> [year] <time>\".",
+      "example": "Peacock 14: Lyon vs Marseille @ Jan 17 02:45 PM ET",
+      "expected_title": "Lyon vs Marseille",
+      "expected_start": "2026-01-17T14:45:00-05:00",
+      "title_pattern": "^(?:[^@:]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*)?\\s*(?P<title>.+?)\\s*(?:@\\s*(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{1,2}:\\d{2}|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}).*)?$",
+      "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?\\s*(?:E[SD]?T)?\\s*$",
+      "date_pattern": "@\\s*(?P<month>[A-Za-z]{3,9})\\.?\\s+(?P<day>\\d{1,2})(?:\\s*,?\\s*(?P<year>\\d{4}))?\\s+\\d{1,2}:\\d{2}"
+    },
+    {
+      "id": "title-day-first-date-no-at",
+      "builtin": false,
+      "label": "Title Day-first date (no \"@\")",
+      "description": "For providers that drop the \"@\" separator: title followed directly by \"<day> <month> <time>\".",
+      "example": "Yankees vs Red Sox 11 Jul 06:00 PM ET",
+      "expected_title": "Yankees vs Red Sox",
+      "expected_start": "2026-07-11T18:00:00-04:00",
+      "title_pattern": "^(?:[^@:]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*(?!\\d))?\\s*(?P<title>.+?)\\s*(?:(?:@\\s*)?(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{1,2}:\\d{2}|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}).*)?$",
+      "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?\\s*(?:E[SD]?T)?\\s*$",
+      "date_pattern": "(?P<day>\\d{1,2})\\s+(?P<month>[A-Za-z]{3,9})\\s+\\d{1,2}:\\d{2}"
+    },
+    {
+      "id": "title-month-first-date-no-at",
+      "builtin": false,
+      "label": "Title Month-first date (no \"@\")",
+      "description": "For providers that drop the \"@\" separator: title followed directly by \"<month> <day> [year] <time>\".",
+      "example": "Lyon vs Marseille Jan 17 02:45 PM ET",
+      "expected_title": "Lyon vs Marseille",
+      "expected_start": "2026-01-17T14:45:00-05:00",
+      "title_pattern": "^(?:[^@:]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*(?!\\d))?\\s*(?P<title>.+?)\\s*(?:(?:@\\s*)?(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{1,2}:\\d{2}|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}).*)?$",
+      "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?\\s*(?:E[SD]?T)?\\s*$",
+      "date_pattern": "(?P<month>[A-Za-z]{3,9})\\.?\\s+(?P<day>\\d{1,2})(?:\\s*,?\\s*(?P<year>\\d{4}))?\\s+\\d{1,2}:\\d{2}"
+    }
+  ]
+}

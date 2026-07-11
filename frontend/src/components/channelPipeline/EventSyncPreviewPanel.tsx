@@ -333,8 +333,9 @@ export function EventSyncPreviewPanel({
                   — {group.count} stream{group.count === 1 ? '' : 's'}
                   {group.reason && ` (${group.reason})`}
                   <ul>
-                    {group.stream_names.map(name => (
-                      <li key={name} className="event-sync-raw-name">{name}</li>
+                    {/* Key includes the index: sample names may repeat. */}
+                    {group.stream_names.map((name, nameIndex) => (
+                      <li key={`${nameIndex}-${name}`} className="event-sync-raw-name">{name}</li>
                     ))}
                   </ul>
                 </div>
@@ -349,8 +350,9 @@ export function EventSyncPreviewPanel({
                 can never be attach targets
               </summary>
               <ul>
-                {preview.unparsed_master_channels.map(name => (
-                  <li key={name} className="event-sync-raw-name">{name}</li>
+                {/* Key includes the index: channel names may repeat. */}
+                {preview.unparsed_master_channels.map((name, nameIndex) => (
+                  <li key={`${nameIndex}-${name}`} className="event-sync-raw-name">{name}</li>
                 ))}
               </ul>
             </details>
