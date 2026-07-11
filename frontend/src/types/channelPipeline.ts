@@ -4,6 +4,7 @@
  * These types mirror the backend schema and are used throughout the frontend
  * for type safety when working with channel pipeline rules, conditions, and actions.
  */
+import type { EventSyncConfig } from './eventSync';
 
 // =============================================================================
 // Condition Types
@@ -269,6 +270,13 @@ export interface ChannelPipelineRule {
   // log) and the rule may create a new auto channel instead. True = this
   // rule may merge into manual channels; each adoption is journaled.
   allow_manual_channel_merge?: boolean;
+  /**
+   * Event Sync rule kind (epic ti939). Non-null = this rule IS an event_sync
+   * rule: its conditions/actions are placeholders ignored by the engine, and
+   * it is excluded from pipeline execution entirely in Phase 1A
+   * (preview-only — see docs/event_sync.md).
+   */
+  event_sync_config?: EventSyncConfig | null;
   last_run_at?: string;
   match_count: number;
   created_at: string;
@@ -305,6 +313,9 @@ export interface CreateRuleData {
   match_scope_group_id?: number | null;
   // Allow this rule to merge into hand-built manual channels (default false).
   allow_manual_channel_merge?: boolean;
+  // Event Sync rule kind (epic ti939). Validated by the backend's
+  // validate_event_sync_config at save time; null explicitly clears the kind.
+  event_sync_config?: EventSyncConfig | null;
 }
 
 /**

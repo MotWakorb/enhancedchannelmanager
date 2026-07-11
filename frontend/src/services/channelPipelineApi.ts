@@ -22,6 +22,10 @@ import type {
   TemplateVariableSchema,
   YAMLImportResponse,
 } from '../types/channelPipeline';
+import type {
+  EventSyncPreviewRequest,
+  EventSyncPreviewResponse,
+} from '../types/eventSync';
 import { fetchJson as _fetchJson, fetchText as _fetchText, buildQuery } from './httpClient';
 
 const API_BASE = '/api';
@@ -102,6 +106,28 @@ export async function bulkUpdateChannelPipelineRules(
   return fetchJson<BulkUpdateRulesResponse>(`${API_BASE}/channel-pipeline/rules/bulk-update`, {
     method: 'POST',
     body: JSON.stringify({ rule_ids: ruleIds, ...patch }),
+  });
+}
+
+// =============================================================================
+// Event Sync preview (epic ti939, Phase 1A — preview only)
+// =============================================================================
+
+/**
+ * Dry-run event matching against live master channels — ZERO writes.
+ *
+ * Accepts either a saved rule id or an inline event_sync_config (so the rule
+ * editor can preview before saving). The backend never mutates channels,
+ * never merges streams, and never toggles Dispatcharr group settings.
+ * A pre-flight failure does NOT fail the preview — it is surfaced in the
+ * response's `preflight.failures` alongside the match results.
+ */
+export async function previewEventSync(
+  request: EventSyncPreviewRequest
+): Promise<EventSyncPreviewResponse> {
+  return fetchJson<EventSyncPreviewResponse>(`${API_BASE}/channel-pipeline/event-sync-preview`, {
+    method: 'POST',
+    body: JSON.stringify(request),
   });
 }
 
