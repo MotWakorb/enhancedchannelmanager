@@ -193,9 +193,15 @@ _TEAM_AGREE_FLOOR: float = 0.90
 # lookbehind) or "Formula 1:" (1 digit) — those are part of the event
 # identity; the old greedy any-digits strip collapsed "UFC 317: Early
 # Prelims" and "Bellator 300: Early Prelims" to the same title. Residual
-# risk: a provider using unpadded 1-digit or 3-digit slot numbers keeps its
-# slot prefix inside the title (fuzzy score degrades gracefully; per-rule
-# pattern overrides cover such providers).
+# risk (PR #611 review nit — empirically verified): a provider using
+# unpadded 1-digit or 3-digit slot numbers keeps its slot prefix inside the
+# parsed title, where it rides into the team-token split. When BOTH sides
+# retain such prefixes ("Peacock 5: Lyon vs. Marseille" / "Fubo 3 : Lyon
+# vs. Marseille") the provider tokens land on opposite team sides and the
+# pair HARD team-token-CONFLICTS (score 0.0) — a SILENT FALSE NEGATIVE,
+# not graceful degradation. One-sided retention only dilutes the fuzzy
+# score. The escape hatch for such providers is a per-rule pattern
+# override (event_sync_config.patterns / group_patterns).
 #
 # Date-delimiter "@" vs team-separator "@" (PR #611 review, finding 2): a
 # title may itself contain "@" as a home/away separator ("Rangers @
@@ -714,6 +720,11 @@ def _numeric_identity_conflict(title_a: str, title_b: str) -> bool:
     provider that omits the series number ('Topuria vs Oliveira') or adds
     a year ('Tour de France 2026: Stage 8' vs 'Tour de France: Stage 8')
     must not be rejected by this rail.
+
+    Known false-negative class: cross-provider numbering schemes for the
+    SAME event — "F1 Round 12: British GP Qualifying" vs "Formula 1
+    British Grand Prix Qualifying" carry disjoint number sets ({12} vs
+    {1}) and hard-reject despite denoting one session.
     """
     nums_a = set(_NUMERIC_TOKEN_RE.findall(
         clean_name(title_a, mode=NameCleanMode.LOCALS)
@@ -918,6 +929,7 @@ def match_streams(
     master_names: Sequence[str],
     *,
     patterns: Sequence[dict] | None = None,
+    master_patterns: Sequence[dict] | None = None,
     window_minutes: int = DEFAULT_TIME_WINDOW_MINUTES,
     threshold: float = EVENT_ATTACH_FLOOR,
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
@@ -930,6 +942,14 @@ def match_streams(
     ±``window_minutes``); each candidate is scored and banded, ordered
     best-first (score desc, then master name asc for determinism).
 
+    ``patterns`` parses the secondary stream names; ``master_patterns``
+    (when given) parses the master names instead of ``patterns`` — the
+    per-group pattern override surface (event_sync_config.group_patterns,
+    bead ti939.1.4): a master group and a secondary group may ship
+    different name shapes, and parsing masters with the secondary group's
+    override would silently fail or mis-title them. ``None`` keeps the
+    original behavior (both sides share ``patterns``).
+
     Masters are identified by NAME only — the caller re-resolves channel
     IDs against Dispatcharr on every run.
     """
@@ -937,8 +957,13 @@ def match_streams(
     if now is None:
         now = datetime.now(tz)
 
+    effective_master_patterns = (
+        master_patterns if master_patterns is not None else patterns
+    )
     parsed_masters = [
-        parse_event_name(m, patterns, event_timezone=event_timezone, now=now)
+        parse_event_name(
+            m, effective_master_patterns, event_timezone=event_timezone, now=now
+        )
         for m in master_names
     ]
     # Only masters with a complete parsed identity can ever be candidates.

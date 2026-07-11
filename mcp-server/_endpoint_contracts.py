@@ -349,6 +349,14 @@ ENDPOINTS: dict[str, Endpoint] = {
             {"group_ids", "min_score", "allow_no_callsign", "page", "page_size"}
         ),
     ),
+    # enhancedchannelmanager-ti939.1.4: Event Sync Phase 1A dry-run preview.
+    # ZERO writes — the preview_event_sync tool reads from here only.
+    "ac_event_sync_preview": Endpoint(
+        name="ac_event_sync_preview",
+        method="POST",
+        path="/api/channel-pipeline/event-sync-preview",
+        request_fields=frozenset({"rule_id", "event_sync_config"}),
+    ),
     "ac_list_executions": Endpoint(
         name="ac_list_executions",
         method="GET",
