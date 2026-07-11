@@ -688,6 +688,7 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `POST /api/channel-pipeline/debug-bundle` | Start a diagnostic-bundle build; returns `{job_id, status: "running"}` immediately and dispatches a supervised background task |
 | `GET /api/channel-pipeline/debug-bundle/{job_id}` | Poll a bundle build: JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). Job is evicted on successful read; abandoned jobs pruned after 30 min |
 | `GET /api/channel-pipeline/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
+| `POST /api/channel-pipeline/event-sync-preview` | Event Sync dry-run: match secondary-group streams against live master channels with ZERO writes (bead ti939.1.4). Admin-gated. See notes below and `docs/event_sync.md`. |
 
 ---
 
@@ -762,6 +763,43 @@ curl -X GET \
   "http://localhost:6100/api/channel-pipeline/fuzzy-preview?group_ids=14&group_ids=22&min_score=0.7&allow_no_callsign=false&page=1&page_size=50" \
   -H "Authorization: Bearer TOKEN"
 ```
+
+---
+
+### `POST /api/channel-pipeline/event-sync-preview`
+
+Event Sync (epic ti939) Phase 1A dry-run: parses and scores every secondary-group stream against the master group's live channels using the exact resolver the future attach path will use (`backend/services/event_sync_resolver.py` → `backend/services/event_sync_matcher.py`), so preview scoring and attach scoring cannot diverge. **Zero writes** — no merges, no channel mutations, and Dispatcharr group settings are never toggled. Feature guide: `docs/event_sync.md`.
+
+**Authentication:** `RequireAdminIfEnabled` (admin token required when auth is enabled).
+
+**Request body — exactly one of:**
+
+| Field | Type | Meaning |
+|-|-|-|
+| `rule_id` | integer | Preview a saved event_sync rule (`404` if missing, `400` if the rule has no `event_sync_config`). |
+| `event_sync_config` | object | Preview an inline config before saving (validated by the same `validate_event_sync_config` rail set as rule save; validation errors return `400` with teaching messages). |
+
+**Response: `200 OK`** — a pre-flight failure does NOT fail the preview; the operator must see the misconfiguration alongside the match results.
+
+| Key | Contents |
+|-|-|
+| `preflight` | `{ok, failures[]}` from the read-only group-settings check (master auto-sync ON, secondaries OFF, groups exist). |
+| `summary` | `secondary_streams`, `would_attach`, `ambiguous_skipped`, `unmatched`, `parse_failed` (the four dispositions sum to `secondary_streams` and reconcile exactly with `streams`), plus `master_channels` / `master_channels_unparsed`. |
+| `streams` | One row per secondary stream: raw name, provider, group, parsed title + start, disposition, `would_attach_master` (name + current channel id, re-resolved this call), and up to 10 scored candidates (master name/id, parsed title/start, score, band, team-token verdict, time delta, machine-readable reject reason). |
+| `unmatched_streams` | Streams with no master in the time window (the master-as-ceiling visibility hedge; evidence base for any future promotion feature). |
+| `parse_failures` | Failures grouped by `(group, reason)` with counts and sample names — a silently broken pattern is loud here. |
+| `unparsed_master_channels` | Master channel names with no complete parsed identity (they can never be attach targets). |
+| `truncated` | `true` when the fetch ceilings (2,000 streams / 2,000 channels) were hit. |
+
+**Example:**
+
+```bash
+curl -X POST "http://localhost:6100/api/channel-pipeline/event-sync-preview" \
+  -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" \
+  -d '{"event_sync_config": {"master_group_id": 12, "secondary_group_ids": [34, 56]}}'
+```
+
+MCP mirror: the `preview_event_sync` tool (`mcp-server/tools/channel_pipeline.py`) wraps this endpoint for headless use.
 
 ---
 

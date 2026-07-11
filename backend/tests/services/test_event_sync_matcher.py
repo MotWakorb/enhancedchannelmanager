@@ -46,6 +46,7 @@ from services.event_sync_matcher import (
     TEAM_VERDICT_CONFLICT,
     is_event_attachable,
     match_stream_to_masters,
+    match_streams,
     parse_event_name,
     score_pair,
 )
@@ -665,6 +666,32 @@ class TestMatchStreamToMasters:
         scores = [c.score for c in result.candidates]
         assert scores[0] == scores[1]
         assert [c.master_name for c in result.candidates] == sorted(masters)
+
+    def test_master_patterns_parse_masters_independently(self):
+        # ti939.1.4: per-group pattern overrides mean masters and secondaries
+        # may carry different name shapes. master_patterns parses ONLY the
+        # master side; ``patterns`` (here None -> built-in defaults) parses
+        # the streams.
+        master_patterns = [{
+            "name": "master-shape",
+            "title_pattern": r"^MASTER\s*\|\s*(?P<title>.+?)\s*\|.*$",
+            "time_pattern": r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>[AP])M\s*$",
+            "date_pattern": r"\|\s*(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3})\s+\d{1,2}:\d{2}",
+        }]
+        masters = ["MASTER | Mercury vs. Aces | 11 Jul 06:00 PM"]
+        stream = "Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET"
+
+        # Without master_patterns the default patterns cannot extract a
+        # complete date+time from the master shape -> no candidates.
+        without = match_streams([stream], masters, now=_NOW)[0]
+        assert without.candidates == ()
+
+        with_master = match_streams(
+            [stream], masters, master_patterns=master_patterns, now=_NOW
+        )[0]
+        assert with_master.candidates
+        assert with_master.candidates[0].band == BAND_ATTACH
+        assert with_master.candidates[0].master_name == masters[0]
 
 
 # ---------------------------------------------------------------------------
