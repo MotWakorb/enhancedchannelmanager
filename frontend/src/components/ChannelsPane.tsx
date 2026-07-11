@@ -38,6 +38,7 @@ import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModa
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { FindDuplicatesModal } from './FindDuplicatesModal';
 import { naturalCompare } from '../utils/naturalSort';
+import { compareChannelNames, type ChannelSortOrder } from '../utils/channelSort';
 import { getDateLocale } from '../utils/formatting';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -1545,6 +1546,10 @@ export function ChannelsPane({
   const [sortRenumberStartingNumber, setSortRenumberStartingNumber] = useState<string>('');
   const [sortStripNumbers, setSortStripNumbers] = useState<boolean>(true);
   const [sortIgnoreCountry, setSortIgnoreCountry] = useState<boolean>(false);
+  // enhancedchannelmanager-hf8t9: asc/desc order toggle. Semantics shared
+  // with the sort_group pipeline action (backend/channel_pipeline_sort.py)
+  // via frontend/src/utils/channelSort.ts.
+  const [sortRenumberOrder, setSortRenumberOrder] = useState<ChannelSortOrder>('asc');
   const [sortRenumberUpdateNames, setSortRenumberUpdateNames] = useState<boolean>(true);
 
   // Mass Renumber modal state
@@ -3217,49 +3222,11 @@ export function ChannelsPane({
     onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber);
   };
 
-  // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
-  // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
-  // Memoized with useCallback - no dependencies as it's a pure function
-  const getNameForSorting = useCallback((channelName: string): string => {
-    // Try stripping mid-position number first: "US | 5034 - Name" -> "US - Name"
-    const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)\d+(?:\.\d+)?\s*([-:]\s*.+)$/);
-    if (midMatch) {
-      return (midMatch[1] + midMatch[2]).trim();
-    }
-
-    // Try stripping prefix: "123 | Name" or "123-Name" or "123.Name" or "123 Name"
-    const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*[|\-.\s]\s*(.+)$/);
-    if (prefixMatch) {
-      return prefixMatch[2].trim();
-    }
-
-    // Try stripping suffix: "Name | 123"
-    const suffixMatch = channelName.match(/^(.+)\s*[|\-.]\s*(\d+(?:\.\d+)?)$/);
-    if (suffixMatch) {
-      return suffixMatch[1].trim();
-    }
-
-    // No number prefix/suffix found, return as-is
-    return channelName;
-  }, []);
-
-  // Helper function to strip country prefix from channel name for sorting
-  // Common patterns: "US | Name", "UK: Name", "CA - Name", "AU Name"
-  // Country codes are typically 2-3 uppercase letters at the start
-  const stripCountryPrefix = useCallback((channelName: string): string => {
-    // Match country code (2-3 uppercase letters) followed by separator and the rest
-    // Supports: "US | Name", "UK: Name", "CA - Name", "USA | Name", etc.
-    const match = channelName.match(/^[A-Z]{2,3}\s*[|:-]\s*(.+)$/);
-    if (match) {
-      return match[1].trim();
-    }
-    // Also try without separator: "US Name" (2-3 uppercase followed by space and uppercase)
-    const noSepMatch = channelName.match(/^[A-Z]{2,3}\s+([A-Z].+)$/);
-    if (noSepMatch) {
-      return noSepMatch[1].trim();
-    }
-    return channelName;
-  }, []);
+  // getNameForSorting / stripCountryPrefix used to live here as local
+  // useCallback pure functions — extracted to frontend/src/utils/
+  // channelSort.ts (enhancedchannelmanager-hf8t9) so the Channel Pipeline
+  // sort_group action's backend port (backend/channel_pipeline_sort.py)
+  // has one frontend source of truth to mirror. Imported above.
 
   // Handle editing channel number
   const handleStartEditNumber = (e: React.MouseEvent, channel: Channel) => {
@@ -4896,6 +4863,7 @@ export function ChannelsPane({
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
     setSortIgnoreCountry(false);
+    setSortRenumberOrder('asc');
   };
 
   const handleSortRenumberConfirm = () => {
@@ -4904,23 +4872,17 @@ export function ChannelsPane({
     const startingNumber = parseInt(sortRenumberStartingNumber, 10);
     if (isNaN(startingNumber) || startingNumber < 1) return;
 
-    // Sort channels alphabetically by name (case-insensitive, natural sort for numbers)
-    // Apply optional transformations for sorting
-    const sortedChannels = [...sortRenumberData.channels].sort((a, b) => {
-      let nameA = a.name;
-      let nameB = b.name;
-      // Strip channel numbers if enabled
-      if (sortStripNumbers) {
-        nameA = getNameForSorting(nameA);
-        nameB = getNameForSorting(nameB);
-      }
-      // Strip country prefix if enabled
-      if (sortIgnoreCountry) {
-        nameA = stripCountryPrefix(nameA);
-        nameB = stripCountryPrefix(nameB);
-      }
-      return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
-    });
+    // Sort channels alphabetically by name (case-insensitive, natural sort
+    // for numbers), applying the same optional transforms + order as the
+    // sort_group pipeline action (backend/channel_pipeline_sort.py) —
+    // shared semantics live in utils/channelSort.ts.
+    const sortedChannels = [...sortRenumberData.channels].sort((a, b) =>
+      compareChannelNames(a.name, b.name, {
+        stripNumbers: sortStripNumbers,
+        ignoreCountry: sortIgnoreCountry,
+        order: sortRenumberOrder,
+      })
+    );
 
     // Start a batch for the entire operation
     if (sortedChannels.length > 1 && onStartBatch) {
@@ -6677,6 +6639,33 @@ export function ChannelsPane({
                   </span>
                 )}
               </div>
+              <div className="sort-renumber-field sort-renumber-order-field">
+                <label id="sort-renumber-order-label">Sort Order</label>
+                <div
+                  className="sort-renumber-order"
+                  role="radiogroup"
+                  aria-labelledby="sort-renumber-order-label"
+                >
+                  <label className="sort-renumber-checkbox">
+                    <input
+                      type="radio"
+                      name="sort-renumber-order"
+                      checked={sortRenumberOrder === 'asc'}
+                      onChange={() => setSortRenumberOrder('asc')}
+                    />
+                    <span>Ascending (A → Z)</span>
+                  </label>
+                  <label className="sort-renumber-checkbox">
+                    <input
+                      type="radio"
+                      name="sort-renumber-order"
+                      checked={sortRenumberOrder === 'desc'}
+                      onChange={() => setSortRenumberOrder('desc')}
+                    />
+                    <span>Descending (Z → A)</span>
+                  </label>
+                </div>
+              </div>
               <label className="sort-renumber-checkbox">
                 <input
                   type="checkbox"
@@ -6705,22 +6694,16 @@ export function ChannelsPane({
 
             {/* Preview of sorted order */}
             <div className="sort-renumber-preview">
-              <label>Preview (sorted A–Z)</label>
+              <label>Preview (sorted {sortRenumberOrder === 'desc' ? 'Z–A' : 'A–Z'})</label>
               <ul className="sort-renumber-preview-list">
                 {[...sortRenumberData.channels]
-                  .sort((a, b) => {
-                    let nameA = a.name;
-                    let nameB = b.name;
-                    if (sortStripNumbers) {
-                      nameA = getNameForSorting(nameA);
-                      nameB = getNameForSorting(nameB);
-                    }
-                    if (sortIgnoreCountry) {
-                      nameA = stripCountryPrefix(nameA);
-                      nameB = stripCountryPrefix(nameB);
-                    }
-                    return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
-                  })
+                  .sort((a, b) =>
+                    compareChannelNames(a.name, b.name, {
+                      stripNumbers: sortStripNumbers,
+                      ignoreCountry: sortIgnoreCountry,
+                      order: sortRenumberOrder,
+                    })
+                  )
                   .slice(0, 5)
                   .map((ch, index) => {
                     const startNum = parseInt(sortRenumberStartingNumber, 10) || 1;
