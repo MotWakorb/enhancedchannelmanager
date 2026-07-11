@@ -500,6 +500,67 @@ dedicated attach phase:
   their Dispatcharr-owned name/group/EPG metadata) and are never deleted.
   Step-by-step: [Undo a bad event_sync run](#undo-a-bad-event_sync-run).
 
+## Testing & pre-release verification
+
+### What the automated E2E covers (and what it honestly cannot)
+
+`backend/tests/e2e/test_event_sync.py` runs the happy path against the
+live container: configure a rule with the shipped default patterns → the
+Test Patterns endpoint parses every shipped pattern's own example → the
+preview returns match cards with exactly-reconciling summary counts → a
+manual single-rule run (`POST /api/channel-pipeline/rules/{id}/run`,
+`triggered_by="api"`) completes with the `event_sync:` summary line in the
+execution log → journal provenance is queryable by category + batch_id.
+The test picks a master group with **zero channels**, so the execute-mode
+run is attach-nothing **by construction** and safe against live data.
+
+What it cannot cover live: the actual multi-provider attachment. The dev
+instance has no event group with `auto_channel_sync` ON, and ECM never
+toggles that Dispatcharr setting (hard rail, this whole page) — so no live
+master channels exist to attach to. The attach behavior itself (streams
+from multiple providers landing on master channels, per-attach journal
+provenance, idempotent re-runs, refresh survival, rollback) is covered
+against a mocked Dispatcharr in
+`backend/tests/unit/test_event_sync_attach_execution.py` and
+`backend/tests/unit/test_event_sync_lifecycle.py`.
+
+### Pre-release manual script — multi-provider attach segment
+
+Recorded reason for this being a manual script rather than automated E2E
+(bead ti939.2.4): demonstrating real attachment requires a Dispatcharr
+event group with `auto_channel_sync` ON, which only exists on an
+operator's real deployment — the test environment cannot create one
+without crossing the never-toggle-group-settings rail.
+
+Run this on a deployment that has a real auto-sync master event group,
+before cutting a release that touches event_sync:
+
+1. **Configure**: Channel Pipeline → Create Rule → Event Sync rule. Pick
+   the auto-sync master group and ≥ 2 secondary groups from **different
+   providers**. Keep the shipped default patterns.
+2. **Test Patterns**: fetch live samples from a secondary group and run
+   the test — event-shaped names must show parsed title + date + time
+   (`Parsed` status).
+3. **Preview**: `would_attach` must be > 0 and the pre-flight banner must
+   be clean (master auto-sync ON, secondaries OFF). Spot-check a few match
+   cards for correct pairings — this is the precision gate; a wrong
+   pairing here means STOP (adjust patterns/threshold, re-preview).
+4. **Manual run**: Save, then run the rule (pipeline Run button or
+   `POST /api/channel-pipeline/rules/{id}/run`). The execution record must
+   show the `event_sync: N attached, …` summary line with N > 0 and
+   `channels_created` = 0.
+5. **Multi-provider check**: open a matched master channel in Channel
+   Manager — its stream list must show streams from ≥ 2 providers (the
+   master's own plus attached secondaries).
+6. **Journal provenance**: Journal → filter category `event_sync` (or
+   `GET /api/journal?category=event_sync&batch_id=<execution_id>`) — one
+   entry per attach carrying stream/channel names+ids, provider, score,
+   band, time delta, team verdict.
+7. **Undo check** (optional but recommended once per release): roll the
+   execution back and confirm the attached streams are gone from the
+   master channels and the channels themselves are untouched
+   ([Undo a bad event_sync run](#undo-a-bad-event_sync-run)).
+
 ## Developer reference
 
 ### Matcher layering
