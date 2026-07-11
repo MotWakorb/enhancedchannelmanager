@@ -1006,12 +1006,18 @@ def validate_event_sync_config(config: Any) -> list[str]:
         config["time_window_minutes"] = DEFAULT_TIME_WINDOW_MINUTES
     elif (isinstance(time_window_minutes, bool)
             or not isinstance(time_window_minutes, int)
-            or time_window_minutes < 1):
+            or not (1 <= time_window_minutes <= 1440)):
+        # Ceiling 1440 = 24h (PR #612 review): the time window is the rail
+        # that keeps same-teams-different-day fixtures apart — an oversized
+        # window re-opens that false-positive class, and the frozen corpus
+        # only proves the trap at sane windows.
         errors.append(_event_sync_error(
             "time_window_minutes", time_window_minutes,
-            f"a positive integer number of minutes (default "
+            f"an integer number of minutes between 1 and 1440 (default "
             f"{DEFAULT_TIME_WINDOW_MINUTES}) — parsed start times must be "
-            f"within ± this window to become candidate pairs",
+            f"within ± this window to become candidate pairs; a window "
+            f"over 24h would re-admit same-teams-different-day pairs the "
+            f"matcher's precision guarantees do not cover",
         ))
 
     attach_threshold = config.get("attach_threshold")

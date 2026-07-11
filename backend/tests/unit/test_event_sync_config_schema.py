@@ -220,12 +220,26 @@ class TestGroupPatterns:
 
 
 class TestMatchingKnobs:
-    @pytest.mark.parametrize("bad", [True, "30", 0, -5, 1.5])
+    @pytest.mark.parametrize("bad", [True, "30", 0, -5, 1.5, 1441, 100000])
     def test_time_window_minutes_invalid(self, bad):
         errors = validate_event_sync_config(
             _valid_config(time_window_minutes=bad)
         )
         assert any("time_window_minutes" in e for e in errors)
+
+    def test_time_window_ceiling_is_1440(self):
+        """PR #612 review: an oversized window re-opens the same-teams-
+        different-day false-positive class — capped at 24h, and the error
+        teaches why."""
+        assert validate_event_sync_config(
+            _valid_config(time_window_minutes=1440)
+        ) == []
+        errors = validate_event_sync_config(
+            _valid_config(time_window_minutes=1441)
+        )
+        assert len(errors) == 1
+        assert "1440" in errors[0]
+        assert "same-teams-different-day" in errors[0]
 
     @pytest.mark.parametrize("bad", [True, "0.9", -0.1, 1.1])
     def test_attach_threshold_invalid(self, bad):

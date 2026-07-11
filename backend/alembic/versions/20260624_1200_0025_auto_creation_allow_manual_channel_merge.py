@@ -47,6 +47,11 @@ def upgrade() -> None:
     LAST column on auto_creation_rules; once 0031 appended
     event_sync_config, the batch rebuild's column reordering raised
     CircularDependencyError on re-runs.
+
+    Known residual (accepted): a crash BETWEEN the two batch ops leaves the
+    column with server_default='0' still attached, and a re-run's guard then
+    skips the second (default-dropping) alter. The drift test
+    (tests/unit/test_alembic_baseline.py) would flag the lingering default.
     """
     conn = op.get_bind()
     insp = inspect(conn)
