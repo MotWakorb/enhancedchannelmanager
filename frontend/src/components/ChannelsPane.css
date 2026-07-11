@@ -4416,6 +4416,19 @@
   font-size: 0.85rem;
 }
 
+.sort-renumber-order-field {
+  margin-top: 0.75rem;
+}
+
+.sort-renumber-order {
+  display: flex;
+  gap: 1.25rem;
+}
+
+.sort-renumber-order .sort-renumber-checkbox {
+  margin-top: 0;
+}
+
 .sort-renumber-checkbox {
   display: flex;
   align-items: center;
@@ -4426,7 +4439,8 @@
   font-size: 0.9rem;
 }
 
-.sort-renumber-checkbox input[type="checkbox"] {
+.sort-renumber-checkbox input[type="checkbox"],
+.sort-renumber-checkbox input[type="radio"] {
   width: 16px;
   height: 16px;
   margin: 0;

@@ -1029,6 +1029,83 @@ class TestTemplateExpandWithCustomVariables:
         assert result == "Channel {var:unknown}"
 
 
+class TestSortGroupActionValidation:
+    """Tests for Action.validate() on the sort_group action
+    (enhancedchannelmanager-vy4fl)."""
+
+    def test_valid_bare_sort_group(self):
+        """Bare sort_group (no params) is valid — defaults apply."""
+        action = Action(type="sort_group")
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_defaults_applied_after_validate(self):
+        """Missing order/strip_numbers/ignore_country get their defaults
+        written back onto params (matches merge_streams's pattern of
+        normalizing params during validate())."""
+        action = Action(type="sort_group")
+        action.validate()
+        assert action.params["order"] == "asc"
+        assert action.params["strip_numbers"] is True
+        assert action.params["ignore_country"] is False
+
+    def test_valid_full_params(self):
+        action = Action(
+            type="sort_group",
+            params={
+                "order": "desc",
+                "starting_number": 100,
+                "strip_numbers": False,
+                "ignore_country": True,
+                "group_id": 7,
+            },
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_invalid_order(self):
+        action = Action(type="sort_group", params={"order": "sideways"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "order" in errors[0]
+
+    def test_invalid_starting_number_type(self):
+        action = Action(type="sort_group", params={"starting_number": "5"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "starting_number" in errors[0]
+
+    def test_starting_number_bool_rejected(self):
+        """bool is an int subclass — must not masquerade as a starting number."""
+        action = Action(type="sort_group", params={"starting_number": True})
+        errors = action.validate()
+        assert len(errors) > 0
+
+    def test_invalid_starting_number_below_one(self):
+        action = Action(type="sort_group", params={"starting_number": 0})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "starting_number" in errors[0]
+
+    def test_invalid_group_id_type(self):
+        action = Action(type="sort_group", params={"group_id": "7"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "group_id" in errors[0]
+
+    def test_invalid_strip_numbers_type(self):
+        action = Action(type="sort_group", params={"strip_numbers": "yes"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "strip_numbers" in errors[0]
+
+    def test_invalid_ignore_country_type(self):
+        action = Action(type="sort_group", params={"ignore_country": "no"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "ignore_country" in errors[0]
+
+
 class TestActionTypes:
     """Tests for ActionType enum."""
 
@@ -1042,6 +1119,7 @@ class TestActionTypes:
         assert ActionType.SET_VARIABLE.value == "set_variable"
         assert ActionType.SKIP.value == "skip"
         assert ActionType.STOP_PROCESSING.value == "stop_processing"
+        assert ActionType.SORT_GROUP.value == "sort_group"
 
 
 class TestSafeRegexMigrationWriteTimeValidation:

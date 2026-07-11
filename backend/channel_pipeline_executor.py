@@ -92,6 +92,14 @@ class ExecutionContext:
     # Stream IDs queued for post-pipeline probing
     probe_stream_ids: list[int] = field(default_factory=list)
 
+    # enhancedchannelmanager-vy4fl: group_id -> sort_group params, queued by
+    # the sort_group action for the post-run Pass 3.6 (see
+    # channel_pipeline_engine.py _sort_channel_groups). A dict (not a list)
+    # so the engine's per-stream aggregation (results["sort_group_requests"]
+    # .update(...)) naturally dedupes to ONE entry per group regardless of
+    # how many matched streams in this run resolved to that group.
+    sort_group_requests: dict[int, dict] = field(default_factory=dict)
+
     # BD-F (bd-a5lb2): per-stream count of pending_merges rows
     # enqueued by the bulk-M3U dedup hook (ADR-008 §D1). One per
     # would-be channel creation deferred to operator review. The
@@ -566,6 +574,8 @@ class ActionExecutor:
                 action_type=action.type,
                 description="Stream queued for probing after pipeline"
             )
+        elif action_type == ActionType.SORT_GROUP:
+            result = self._execute_sort_group(action, exec_ctx, rule_target_group_id)
         elif action_type == ActionType.SKIP:
             result = ActionResult(
                 success=True,
@@ -2611,6 +2621,77 @@ class ActionExecutor:
                 description="Failed to set channel number",
                 error=str(e)
             )
+
+    # =========================================================================
+    # Sort Group (enhancedchannelmanager-vy4fl)
+    # =========================================================================
+
+    def _execute_sort_group(
+        self, action: Action, exec_ctx: ExecutionContext,
+        rule_target_group_id: Optional[int],
+    ) -> ActionResult:
+        """Queue the resolved group for the post-run alphabetical sort pass.
+
+        Does NOT touch any channel directly — it only records the group
+        (and this action's params) into ``exec_ctx.sort_group_requests``.
+        The engine aggregates these across every matched stream this run
+        (``results["sort_group_requests"]``, a dict keyed by group_id, so
+        N streams landing in the same group still produce ONE entry) and
+        performs the actual sort+renumber once per group in Pass 3.6
+        (``channel_pipeline_engine.py`` — ``_sort_channel_groups``).
+
+        Group resolution precedence (mirrors create_channel's group_id
+        fallback chain at ``_execute_create_channel``):
+          1. explicit ``group_id`` action param
+          2. ``exec_ctx.current_group_id`` (set by a prior create_group
+             action this stream ran through)
+          3. the channel_group_id of ``exec_ctx.current_channel_id``'s
+             channel (set by a prior create_channel/merge_streams action)
+          4. the rule's ``target_group_id``
+
+        If a stream reaches this action with none of the above resolved
+        (e.g. a rule whose ONLY action is sort_group, with no target
+        group configured anywhere), the action fails loudly rather than
+        silently no-op'ing.
+        """
+        params = action.params
+
+        group_id = params.get("group_id")
+        if group_id is None:
+            group_id = exec_ctx.current_group_id
+        if group_id is None and exec_ctx.current_channel_id:
+            channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
+            group_id = channel.get("channel_group_id")
+        if group_id is None:
+            group_id = rule_target_group_id
+
+        if group_id is None:
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="sort_group could not resolve a target group",
+                error=(
+                    "No group_id could be resolved — provide an explicit "
+                    "group_id param, run this after create_channel/"
+                    "create_group/merge_streams, or set the rule's target "
+                    "group"
+                ),
+            )
+
+        exec_ctx.sort_group_requests[group_id] = {
+            "order": params.get("order", "asc"),
+            "starting_number": params.get("starting_number"),
+            "strip_numbers": params.get("strip_numbers", True),
+            "ignore_country": params.get("ignore_country", False),
+        }
+
+        return ActionResult(
+            success=True,
+            action_type=action.type,
+            description=f"Queued group {group_id} for alphabetical sort ({params.get('order', 'asc')})",
+            entity_type="group",
+            entity_id=group_id,
+        )
 
     # =========================================================================
     # Set Variable

@@ -119,6 +119,24 @@ class TestCoerceActions:
         assert coerced["epg_id"] == 42
         assert coerced["set_tvg_id"] is False
 
+    def test_sort_group_stringified_params_coerced(self):
+        """sort_group (bd-vy4fl): starting_number/group_id are ints,
+        strip_numbers/ignore_country are bools — order stays a plain
+        string enum ("asc"/"desc"), untouched by coercion."""
+        [coerced] = _coerce_actions([{
+            "type": "sort_group",
+            "order": "desc",
+            "starting_number": "100",
+            "group_id": "5",
+            "strip_numbers": "false",
+            "ignore_country": "true",
+        }])
+        assert coerced["order"] == "desc"
+        assert coerced["starting_number"] == 100
+        assert coerced["group_id"] == 5
+        assert coerced["strip_numbers"] is False
+        assert coerced["ignore_country"] is True
+
     def test_min_score_integral_string_stays_valid(self):
         [coerced] = _coerce_actions([{"type": "merge_streams", "min_score": "1"}])
         assert coerced["min_score"] == 1

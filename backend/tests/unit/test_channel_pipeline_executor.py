@@ -1329,6 +1329,144 @@ class TestActionExecutorPropertyActions:
         self.client.update_channel.assert_called_with(1, {"channel_number": 999})
 
 
+class TestSortGroupAction:
+    """Tests for the sort_group action (enhancedchannelmanager-vy4fl).
+
+    sort_group never calls the client directly — it only queues the
+    resolved group_id + params onto exec_ctx.sort_group_requests for the
+    engine's post-run Pass 3.6 to consume. These tests lock the group
+    resolution precedence and the queuing behavior.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.channels = [
+            {"id": 1, "name": "ESPN", "channel_group_id": 10, "auto_created": True},
+        ]
+        self.groups = [{"id": 10, "name": "Sports"}, {"id": 20, "name": "News"}]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            existing_groups=self.groups,
+        )
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="ESPN HD",
+            m3u_account_id=1,
+        )
+
+    def test_resolves_group_from_explicit_group_id_param(self):
+        action = {"type": "sort_group", "group_id": 20}
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert exec_ctx.sort_group_requests == {
+            20: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False}
+        }
+
+    def test_resolves_group_from_current_group_id(self):
+        action = {"type": "sort_group"}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_group_id = 20
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert 20 in exec_ctx.sort_group_requests
+
+    def test_resolves_group_from_current_channel_id(self):
+        action = {"type": "sort_group"}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1  # channel 1 is in group 10
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert 10 in exec_ctx.sort_group_requests
+
+    def test_resolves_group_from_rule_target_group_id_fallback(self):
+        action = {"type": "sort_group"}
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx, rule_target_group_id=30)
+        )
+
+        assert result.success is True
+        assert 30 in exec_ctx.sort_group_requests
+
+    def test_no_resolvable_group_fails(self):
+        action = {"type": "sort_group"}
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is False
+        assert "No group_id" in result.error
+        assert exec_ctx.sort_group_requests == {}
+
+    def test_explicit_group_id_takes_precedence_over_current_channel(self):
+        action = {"type": "sort_group", "group_id": 20}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1  # would resolve to group 10 otherwise
+
+        asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert exec_ctx.sort_group_requests == {
+            20: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False}
+        }
+
+    def test_queues_custom_params(self):
+        action = {
+            "type": "sort_group",
+            "group_id": 20,
+            "order": "desc",
+            "starting_number": 500,
+            "strip_numbers": False,
+            "ignore_country": True,
+        }
+        exec_ctx = ExecutionContext()
+
+        asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert exec_ctx.sort_group_requests[20] == {
+            "order": "desc",
+            "starting_number": 500,
+            "strip_numbers": False,
+            "ignore_country": True,
+        }
+
+    def test_dedupes_across_two_streams_in_same_run(self):
+        """Two matched streams landing in the SAME channel/group only
+        produce ONE entry in sort_group_requests (dict keyed by group_id) —
+        the per-group dedup the bead requires."""
+        action = {"type": "sort_group", "group_id": 20}
+        exec_ctx = ExecutionContext()
+
+        asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+        asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert len(exec_ctx.sort_group_requests) == 1
+
+
 class TestSimulatedChannelStateAfterActions:
     """Regression tests for PR #483 — action handlers must update the in-memory
     simulated channel (``_channel_by_id``) after a successful API update, so a
