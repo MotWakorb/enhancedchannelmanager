@@ -783,8 +783,14 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "group_patterns",
     "time_window_minutes",
     "attach_threshold",
+    "max_attach_per_run",
     "enabled",
 })
+
+# Ceiling for event_sync_config.max_attach_per_run. The cap is a blast-radius
+# control (bead ti939.2.1) — an effectively-unbounded value would defeat it,
+# so the config cannot raise it past this.
+_EVENT_SYNC_MAX_ATTACH_CEILING = 1000
 
 # Keys accepted inside one parse-pattern variant (mirrors the shape of
 # services.event_sync_matcher.DEFAULT_EVENT_PATTERNS entries, which is what
@@ -915,6 +921,7 @@ def validate_event_sync_config(config: Any) -> list[str]:
         DEFAULT_TIME_WINDOW_MINUTES,
         EVENT_ATTACH_FLOOR,
     )
+    from services.event_sync_resolver import DEFAULT_MAX_ATTACH_PER_RUN
 
     errors: list[str] = []
 
@@ -923,7 +930,7 @@ def validate_event_sync_config(config: Any) -> list[str]:
             "", config,
             "a JSON object with master_group_id, secondary_group_ids and "
             "optional patterns/group_patterns/time_window_minutes/"
-            "attach_threshold/enabled",
+            "attach_threshold/max_attach_per_run/enabled",
         )]
 
     unknown = sorted(set(config) - _EVENT_SYNC_ALLOWED_KEYS)
@@ -1040,6 +1047,25 @@ def validate_event_sync_config(config: Any) -> list[str]:
             f"the floor is hard-clamped (precision over recall; "
             f"1,341-incident trust benchmark) and cannot be lowered "
             f"per rule",
+        ))
+
+    # Per-run attach cap (bead ti939.2.1 — Phase 1B blast-radius control).
+    # The existing created-channel cap does not cover merge/attach
+    # operations, so the attach path carries its own. Default lives in
+    # services.event_sync_resolver (single source of truth, lazily imported
+    # above alongside the matcher constants).
+    max_attach_per_run = config.get("max_attach_per_run")
+    if max_attach_per_run is None:
+        config["max_attach_per_run"] = DEFAULT_MAX_ATTACH_PER_RUN
+    elif (isinstance(max_attach_per_run, bool)
+            or not isinstance(max_attach_per_run, int)
+            or not (1 <= max_attach_per_run <= _EVENT_SYNC_MAX_ATTACH_CEILING)):
+        errors.append(_event_sync_error(
+            "max_attach_per_run", max_attach_per_run,
+            f"an integer between 1 and {_EVENT_SYNC_MAX_ATTACH_CEILING} "
+            f"(default {DEFAULT_MAX_ATTACH_PER_RUN}) — the per-run attach "
+            f"cap; on overage the run stops attaching, warns in the "
+            f"execution log and records the overage count",
         ))
 
     enabled = config.get("enabled")

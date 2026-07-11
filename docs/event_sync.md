@@ -10,10 +10,13 @@ channel (parse → time-window blocking → fuzzy scoring of parsed titles →
 team-token check) and, in a later phase, attaches the stream to the
 matched channel. **ECM never creates or deletes channels in this feature.**
 
-> **Phase status:** preview-only (Phase 1A). event_sync rules are excluded
-> from pipeline execution entirely — no attach path exists yet. The attach
-> path (Phase 1B) ships only after match quality is validated on real
-> provider data.
+> **Phase status:** attach path implemented (Phase 1B, bead ti939.2.1),
+> **manual-run-only**. event_sync rules stay excluded from the pipeline's
+> per-stream Pass 1/2 evaluation; on a manually triggered run they execute
+> via a dedicated attach phase that resolves matches through the same
+> resolver the preview uses and attaches streams via the existing merge
+> internals. They never fire from the unattended post-refresh task or any
+> scheduled path (auto-run is a Phase 2 explicit opt-in).
 
 ## Rule configuration (`event_sync_config`)
 
@@ -51,6 +54,7 @@ the rule.
 | `group_patterns` | no | Per-group pattern overrides, keyed by group ID (master or a secondary). |
 | `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. Capped at 1440 (24 hours). |
 | `attach_threshold` | no (default 0.80) | Auto-attach score floor on the parsed-title score. **Hard-clamped ≥ 0.80** — it can be raised per rule, never lowered. |
+| `max_attach_per_run` | no (default 100) | Per-run attach cap (1–1000). On overage the run stops attaching, warns in the execution log, and records the overage count. Runs are idempotent — run again to continue. |
 | `enabled` | no (default true) | Feature toggle within the rule. |
 
 ### Why validation is strict
@@ -87,10 +91,39 @@ streams, parse failures grouped by group, and summary counts that
 reconcile exactly with the detail rows. It accepts either a saved rule id
 or an inline `event_sync_config` (so the rule editor can preview before
 saving). Full request/response contract: `docs/api.md`. Headless mirror:
-the `preview_event_sync` MCP tool. The preview and the future attach path
-share one resolver (`backend/services/event_sync_resolver.py`), so what
-the preview shows is what Phase 1B would do — dry-run parity by
-construction.
+the `preview_event_sync` MCP tool. The preview and the attach path share
+one resolver (`backend/services/event_sync_resolver.py`), so what the
+preview shows is what a run does — dry-run parity by construction.
+
+## Running the attach path (Phase 1B)
+
+A **manual** pipeline run (the Run button / `POST /api/channel-pipeline/run`
+or a single-rule run) executes event_sync rules through a dedicated attach
+phase:
+
+* Every secondary stream resolves through
+  `backend/services/event_sync_resolver.py` — **the same function the
+  preview calls**, so preview decisions and run decisions are identical on
+  identical inputs.
+* **Band semantics:** attach band → the stream is attached to the master
+  channel via the existing merge machinery; ambiguous → skipped and
+  counted (including the **contested rail**: more than one attach-band
+  candidate, or a runner-up within 0.05 of the winner, is ambiguous —
+  never an attach to an alphabetical tie-break); reject / unmatched /
+  parse-failed → skipped with reason.
+* **Idempotent:** a stream already on its master channel is a no-op, so
+  re-running after every refresh is safe and is the intended usage.
+* **Journal provenance:** every attach writes a journal entry (category
+  `event_sync`, batch_id = execution id) carrying names alongside IDs —
+  secondary stream name+id, provider, master channel name+id — plus score,
+  band, time delta and team-token verdict.
+* **Run summary line** in the execution log and on the execution record:
+  `event_sync: X attached, Y ambiguous skipped, Z unmatched, W parse
+  failures` — the operator's drift detector. A silently broken parse
+  pattern shows up here as a parse-failure spike within a day.
+* **Rollback:** the run's pre-mutation snapshot includes the master
+  group's channels, so the standard execution rollback / snapshot restore
+  undoes attaches.
 
 ## Pre-flight checks
 
@@ -121,6 +154,9 @@ setting and which group failed.
   run; master channels are the identity anchor. Any state that must
   survive refreshes keys on event identity, never channel/stream IDs.
 * **No auto-run.** Manual-run-only until Phase 2's explicit opt-in flag.
+  Enforced twice: the unattended watermark task excludes event_sync rules
+  from its query, and the engine refuses to execute them for any
+  non-manual trigger (deny-by-default).
 
 ## Operator caveats
 

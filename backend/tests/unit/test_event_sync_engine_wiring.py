@@ -111,22 +111,37 @@ class TestPass12Exclusion:
         self.client.get_streams = AsyncMock(return_value={"count": 0, "results": []})
         self.engine = ChannelPipelineEngine(self.client)
 
-    def test_only_event_sync_rules_returns_preview_only_message(self, test_session):
-        """A run scoped ONLY to event_sync rules is an explicit no-op that
-        says WHY, not a silent 'no rules' shrug."""
+    def test_only_event_sync_rules_unattended_run_is_noop(self, test_session):
+        """ti939.2.1: on an UNATTENDED trigger a run scoped ONLY to
+        event_sync rules is an explicit no-op that says WHY (manual-run-only
+        phase), not a silent 'no rules' shrug — and never executes them."""
         rule = _make_rule("Event Rule", event_sync=True)
         test_session.add(rule)
         test_session.commit()
 
         with patch("channel_pipeline_engine.get_session", return_value=test_session):
             result = asyncio.get_event_loop().run_until_complete(
-                self.engine.run_pipeline(dry_run=True)
+                self.engine.run_pipeline(dry_run=True, triggered_by="m3u_refresh")
             )
 
         assert result["success"] is True
-        assert "preview-only" in result["message"]
+        assert "manual-run-only" in result["message"]
         assert result["streams_evaluated"] == 0
         assert result["streams_matched"] == 0
+
+    def test_only_event_sync_rules_scheduled_trigger_is_noop(self, test_session):
+        """Deny-by-default: 'scheduled' is not an allowed event_sync trigger."""
+        rule = _make_rule("Event Rule", event_sync=True)
+        test_session.add(rule)
+        test_session.commit()
+
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
+            result = asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=True, triggered_by="scheduled")
+            )
+
+        assert result["success"] is True
+        assert "manual-run-only" in result["message"]
 
     def test_no_rules_message_unchanged(self, test_session):
         with patch("channel_pipeline_engine.get_session", return_value=test_session):
@@ -146,8 +161,10 @@ class TestPass12Exclusion:
         captured: dict = {}
 
         async def fake_process_streams(streams, rules, execution, dry_run,
-                                       triggered_by="manual"):
+                                       triggered_by="manual",
+                                       event_sync_rules=None):
             captured["rules"] = list(rules)
+            captured["event_sync_rules"] = list(event_sync_rules or [])
             return {
                 "streams_evaluated": 0, "streams_matched": 0,
                 "channels_created": 0, "channels_updated": 0,
@@ -179,6 +196,9 @@ class TestPass12Exclusion:
         assert rule_names == ["Standard Rule"], (
             "event_sync rule leaked into Pass 1/2 evaluation"
         )
+        # ti939.2.1: on a manual run the event_sync rule is routed to the
+        # dedicated attach phase instead (threaded as event_sync_rules).
+        assert [r.name for r in captured["event_sync_rules"]] == ["Event Rule"]
 
 
 class TestPass4HardBypass:
