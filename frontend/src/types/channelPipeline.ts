@@ -552,6 +552,13 @@ export interface RollbackResponse {
   success: boolean;
   entities_removed: number;
   entities_restored: number;
+  /**
+   * True when a confirmed rollback of an event_sync attach run ran as the
+   * surgical journal-driven unmerge (bead sfysz): only the run-added stream
+   * ids were removed, post-run Dispatcharr churn preserved. Absent on the
+   * legacy no-snapshot path and on snapshot full-restores.
+   */
+  surgical_unmerge?: boolean;
   error?: string;
 }
 

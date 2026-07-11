@@ -44,6 +44,7 @@ from services.event_sync_matcher import (
     TEAM_VERDICT_ABSENT,
     TEAM_VERDICT_AGREE,
     TEAM_VERDICT_CONFLICT,
+    groups_would_build_start,
     is_event_attachable,
     match_stream_to_masters,
     match_streams,
@@ -692,6 +693,71 @@ class TestMatchStreamToMasters:
         assert with_master.candidates
         assert with_master.candidates[0].band == BAND_ATTACH
         assert with_master.candidates[0].master_name == masters[0]
+
+
+# ---------------------------------------------------------------------------
+# groups_would_build_start — the matcher-level validity surface the Test
+# Patterns panel consumes (bead hirm6). Must agree with parse_event_name's
+# never-guess semantics by construction (it IS _groups_have_complete_time +
+# _build_start), so these tests pin the contract at the public boundary.
+# ---------------------------------------------------------------------------
+
+
+class TestGroupsWouldBuildStart:
+    def _valid_groups(self, **overrides):
+        groups = {
+            "title": "Mercury vs. Aces",
+            "day": "11",
+            "month": "Jul",
+            "hour": "06",
+            "minute": "00",
+            "ampm": "P",
+        }
+        groups.update(overrides)
+        return groups
+
+    def test_true_for_a_complete_real_date_time(self):
+        assert groups_would_build_start(self._valid_groups(), now=_NOW) is True
+
+    def test_false_for_none_or_missing_time_groups(self):
+        assert groups_would_build_start(None, now=_NOW) is False
+        assert groups_would_build_start({}, now=_NOW) is False
+        assert groups_would_build_start(
+            {"title": "Big Fight Night"}, now=_NOW
+        ) is False
+
+    def test_false_for_garbage_month_name(self):
+        # A custom pattern capturing a non-month token: complete-looking
+        # groups, but no month → the matcher would never build a start.
+        assert groups_would_build_start(
+            self._valid_groups(month="Foo"), now=_NOW
+        ) is False
+
+    def test_false_for_day_45_jul_not_a_real_calendar_date(self):
+        # The PR #614 review case: 'A vs B @ 45 Jul 06:00 PM ET' shows all
+        # date/time groups captured, yet July 45 does not exist.
+        assert groups_would_build_start(
+            self._valid_groups(day="45"), now=_NOW
+        ) is False
+
+    def test_false_for_hour_past_23(self):
+        assert groups_would_build_start(
+            self._valid_groups(hour="25", ampm=None), now=_NOW
+        ) is False
+
+    def test_false_for_feb_30_even_with_explicit_year(self):
+        assert groups_would_build_start(
+            self._valid_groups(day="30", month="Feb", year="2027"), now=_NOW
+        ) is False
+
+    def test_agrees_with_parse_event_name_on_the_45_jul_case(self):
+        # The whole point: the panel's flag can never say 'Parsed' where the
+        # matcher would record a parse failure (start=None).
+        parsed = parse_event_name("A vs B @ 45 Jul 06:00 PM ET", now=_NOW)
+        assert parsed.start is None
+        assert groups_would_build_start(
+            self._valid_groups(title="A vs B", day="45"), now=_NOW
+        ) is False
 
 
 # ---------------------------------------------------------------------------

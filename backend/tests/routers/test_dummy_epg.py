@@ -548,6 +548,109 @@ class TestPreview:
 
 
 # =============================================================================
+# Batch preview — matcher-level validity flag (bead hirm6)
+# =============================================================================
+
+
+class TestPreviewBatchEventSyncStartValid:
+    """POST /api/dummy-epg/preview/batch annotates every result with
+    ``event_sync_start_valid`` — True ONLY when the Event Sync matcher would
+    actually build a start time from the captured groups (valid month name,
+    hour <= 23 after am/pm, a real calendar date). Group-presence alone
+    ('45 Jul' captured a day and a month) is NOT enough: the Test Patterns
+    panel must never show 'Parsed' for a name the matcher would record as a
+    parse failure. Runs the REAL extraction machinery end to end (no engine
+    mock) and stays zero-write."""
+
+    # The shipped 'slot-title-day-first-date' pattern set VERBATIM
+    # (frontend/src/components/channelPipeline/eventSyncShippedPatterns.json)
+    # — exactly what the panel sends for its default selection.
+    _PATTERNS = {
+        "title_pattern": (
+            r"^(?:[^@:]{0,40}?(?<!\d)\d{2}\s*:\s*)?\s*(?P<title>.+?)\s*"
+            r"(?:@\s*(?:\d{1,2}\s+[A-Za-z]{3,9}\s+\d{1,2}:\d{2}"
+            r"|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:\s*,?\s*\d{4})?\s+\d{1,2}:\d{2})"
+            r".*)?$"
+        ),
+        "time_pattern": (
+            r"(?P<hour>\d{1,2}):(?P<minute>\d{2})"
+            r"(?:\s*(?P<ampm>[AaPp])\.?[Mm]?\.?)?\s*(?:E[SD]?T)?\s*$"
+        ),
+        "date_pattern": r"@\s*(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})\s+\d{1,2}:\d{2}",
+    }
+
+    async def _batch(self, async_client, sample_names, patterns=None):
+        response = await async_client.post("/api/dummy-epg/preview/batch", json={
+            "sample_names": sample_names,
+            # The matcher's own default zone: the request-model default
+            # ("US/Eastern") is a legacy tzdata alias that not every
+            # environment ships (this CI image resolves only canonical
+            # names), and this suite runs the REAL engine unmocked.
+            "event_timezone": "America/New_York",
+            **(patterns or self._PATTERNS),
+        })
+        assert response.status_code == 200
+        return response.json()
+
+    @pytest.mark.asyncio
+    async def test_valid_complete_date_time_is_flagged_true(self, async_client):
+        results = await self._batch(
+            async_client, ["A vs B @ 11 Jul 06:00 PM ET"]
+        )
+        assert results[0]["matched"] is True
+        assert results[0]["event_sync_start_valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_garbage_day_45_jul_is_flagged_false(self, async_client):
+        """The PR #614 review case: all groups captured, but July 45 is not
+        a real date — the matcher would never get a start time."""
+        results = await self._batch(
+            async_client, ["A vs B @ 45 Jul 06:00 PM ET"]
+        )
+        assert results[0]["matched"] is True
+        groups = results[0]["groups"]
+        assert groups["day"] == "45" and groups["month"] == "Jul"
+        assert results[0]["event_sync_start_valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_garbage_month_name_is_flagged_false(self, async_client):
+        results = await self._batch(
+            async_client, ["A vs B @ 11 Julx 06:00 PM ET"]
+        )
+        assert results[0]["event_sync_start_valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_incomplete_title_only_match_is_flagged_false(
+        self, async_client
+    ):
+        """The shipped pattern title-matches a dateless name; no date/time
+        groups → the matcher never guesses a start."""
+        results = await self._batch(async_client, ["Big Fight Night"])
+        assert results[0]["matched"] is True
+        assert results[0]["event_sync_start_valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_no_match_is_flagged_false(self, async_client):
+        results = await self._batch(
+            async_client, ["no separator here"],
+            patterns={
+                "title_pattern":
+                    r"^(?P<title>.+?)\s*@\s*\d{1,2}\s+[A-Za-z]{3,9}",
+            },
+        )
+        assert results[0]["matched"] is False
+        assert results[0]["event_sync_start_valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_flag_is_per_row_across_the_batch(self, async_client):
+        results = await self._batch(async_client, [
+            "A vs B @ 11 Jul 06:00 PM ET",
+            "A vs B @ 45 Jul 06:00 PM ET",
+        ])
+        assert [r["event_sync_start_valid"] for r in results] == [True, False]
+
+
+# =============================================================================
 # XMLTV Output
 # =============================================================================
 
