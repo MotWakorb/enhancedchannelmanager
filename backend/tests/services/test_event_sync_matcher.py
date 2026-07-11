@@ -187,6 +187,62 @@ class TestParseEventName:
         )
         assert parsed.start == _et(2028, 1, 17, 14, 45)
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # PR #611 finding 1: an EXPLICIT-year calendar-invalid date used
+            # to fall through compute_event_times' "now"-based fallback and
+            # produce a start of TONIGHT — the never-guess rail must return
+            # unmatchable instead.
+            "Slot 01: A vs B @ Feb 30 2027 06:00 PM ET",
+            "Slot 01: A vs B @ Apr 31 2026 06:00 PM ET",
+            # Inferred-year path (already safe, pinned here): no candidate
+            # year makes Feb 30 a real date.
+            "Slot 01: A vs B @ 30 Feb 06:00 PM ET",
+        ],
+    )
+    def test_calendar_invalid_date_is_unmatchable_never_guessed(self, name):
+        parsed = parse_event_name(name, now=_NOW)
+        assert parsed.title == "A vs B"
+        assert parsed.start is None
+
+    def test_at_separator_title_extends_to_the_date_shaped_at(self):
+        # PR #611 finding 2: the "@" home/away separator must not truncate
+        # the title — only the DATE-shaped "@ <day/month> <h:mm>" tail
+        # delimits it.
+        parsed = parse_event_name(
+            "MSG 01: Rangers @ Islanders @ 11 Jul 07:00 PM ET", now=_NOW
+        )
+        assert parsed.title == "Rangers @ Islanders"
+        assert parsed.teams == ("Rangers", "Islanders")
+        assert parsed.start == _et(2026, 7, 11, 19, 0)
+
+    @pytest.mark.parametrize(
+        ("name", "expected_title"),
+        [
+            # PR #611 finding 4: series-identity prefixes are NOT slot
+            # prefixes — 3-digit and 1-digit numbers survive the strip
+            # (slot lists are zero-padded two digits).
+            (
+                "PPV 01: UFC 317: Early Prelims @ 11 Jul 06:00 PM ET",
+                "UFC 317: Early Prelims",
+            ),
+            (
+                "PPV 02: Bellator 300: Early Prelims @ 11 Jul 06:00 PM ET",
+                "Bellator 300: Early Prelims",
+            ),
+            (
+                "Formula 1: Qualifying @ 11 Jul 10:00 AM ET",
+                "Formula 1: Qualifying",
+            ),
+        ],
+    )
+    def test_series_identity_prefixes_survive_slot_prefix_strip(
+        self, name, expected_title
+    ):
+        parsed = parse_event_name(name, now=_NOW)
+        assert parsed.title == expected_title
+
 
 # ---------------------------------------------------------------------------
 # Layer 2 — time-window blocking (including DST edges).
@@ -435,6 +491,86 @@ class TestEventAdmissionPolicy:
         assert result.team_verdict == TEAM_VERDICT_CONFLICT
         assert result.band == BAND_REJECT
         assert result.score == 0.0
+
+    def test_at_separator_teams_reach_the_conflict_rail(self):
+        # PR #611 finding 2: before the fix the first "@" truncated the
+        # title to "Rangers", teams never parsed, and token-set subset
+        # scoring attached this pair at 1.0.
+        result = score_pair(
+            "MSG 01: Rangers @ Islanders @ 11 Jul 07:00 PM ET",
+            "YES 01: Rangers vs. Yankees @ 11 Jul 07:00 PM ET",
+            now=_NOW,
+        )
+        assert result.team_verdict == TEAM_VERDICT_CONFLICT
+        assert result.band == BAND_REJECT
+        assert result.score == 0.0
+        assert REJECT_TEAM_TOKEN_CONFLICT in result.reject_reasons
+
+    def test_at_separator_same_event_attaches(self):
+        result = score_pair(
+            "MSG 01: Rangers @ Islanders @ 11 Jul 07:00 PM ET",
+            "ESPN+ 07 : New York Rangers @ New York Islanders @ 11 Jul 07:00 PM ET",
+            now=_NOW,
+        )
+        assert result.team_verdict == TEAM_VERDICT_AGREE
+        assert result.band == BAND_ATTACH
+
+    def test_near_length_sibling_team_names_are_hard_rejected(self):
+        # PR #611 finding 3: 'austria' is a same-first-letter subsequence
+        # of 'australia' (raw ratio 0.875) — different national teams
+        # sharing an opponent at the same kickoff must conflict, not
+        # auto-attach at 0.94.
+        result = score_pair(
+            "P 01: Australia vs France @ 11 Jul 03:00 PM ET",
+            "Q 01: Austria vs France @ 11 Jul 03:00 PM ET",
+            now=_NOW,
+        )
+        assert result.team_verdict == TEAM_VERDICT_CONFLICT
+        assert result.band == BAND_REJECT
+        assert result.score == 0.0
+
+    def test_disjoint_numeric_identities_hard_reject_teamless_titles(self):
+        # PR #611 finding 4: 'UFC 317' vs 'Bellator 300' — series numbers
+        # are identity for team-less titles.
+        from services.event_sync_matcher import REJECT_NUMERIC_IDENTITY_CONFLICT
+
+        result = score_pair(
+            "PPV 01: UFC 317: Early Prelims @ 11 Jul 06:00 PM ET",
+            "PPV 02: Bellator 300: Early Prelims @ 11 Jul 06:00 PM ET",
+            now=_NOW,
+        )
+        assert result.band == BAND_REJECT
+        assert result.score == 0.0
+        assert REJECT_NUMERIC_IDENTITY_CONFLICT in result.reject_reasons
+
+    def test_one_sided_or_overlapping_numbers_pass_the_numeric_rail(self):
+        # One side without numbers (Session 2 vs Evening Session) and
+        # overlapping sets (Stage 8 vs 2026 ... Stage 8) must not reject.
+        r1 = score_pair(
+            "Sky 08: World Darts Masters: Session 2 @ 11 Jul 02:00 PM ET",
+            "Viaplay 01 : World Darts Masters Evening Session @ 11 Jul 02:00 PM ET",
+            now=_NOW,
+        )
+        assert r1.band == BAND_ATTACH
+        r2 = score_pair(
+            "Peacock 02: Tour de France: Stage 8 @ 11 Jul 06:30 AM ET",
+            "FloSports 01 : Tour de France 2026 Stage 8 @ 11 Jul 06:30 AM ET",
+            now=_NOW,
+        )
+        assert r2.band == BAND_ATTACH
+
+    def test_qualifier_synonyms_are_one_class_across_providers(self):
+        # PR #611 finding 5: "W" and "Women" spell the same women's-side
+        # qualifier — same fixture, same kickoff, must attach.
+        result = score_pair(
+            "DAZN 02: Barcelona W vs. Chelsea W @ 11 Jul 03:00 PM ET",
+            "Sky 11: Barcelona Women vs. Chelsea Women @ 11 Jul 03:00 PM ET",
+            now=_NOW,
+        )
+        assert result.team_verdict == TEAM_VERDICT_AGREE
+        assert result.band == BAND_ATTACH
+        # ...while a class mismatch (women's vs men's) still hard-rejects
+        # (pinned by test_team_token_conflict_is_hard_reject_score_zero).
 
     def test_score_pair_clamps_low_threshold(self):
         # A mid-band pair must land ambiguous even when the caller passes a
