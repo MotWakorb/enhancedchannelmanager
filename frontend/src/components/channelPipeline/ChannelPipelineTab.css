@@ -1144,3 +1144,56 @@
   color: var(--text-primary);
   line-height: 1.6;
 }
+
+/* --- Rule kind (epic ti939: Event Sync) ---------------------------------- */
+
+.rule-kind-badge {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.rule-kind-chooser {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+}
+
+.rule-kind-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 14px 16px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.rule-kind-option:hover {
+  background: var(--bg-tertiary);
+}
+
+.rule-kind-option:focus-visible {
+  outline: 2px solid var(--button-primary-bg);
+  outline-offset: 2px;
+}
+
+.rule-kind-option .material-icons {
+  font-size: 24px;
+  color: var(--text-secondary);
+}
+
+.rule-kind-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rule-kind-option-text span {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
