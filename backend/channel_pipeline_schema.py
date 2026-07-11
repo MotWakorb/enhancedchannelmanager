@@ -770,6 +770,295 @@ class TemplateVariables:
 
 
 # =============================================================================
+# Event Sync config validation (enhancedchannelmanager-ti939.1.3)
+# =============================================================================
+
+# Keys accepted at the top level of event_sync_config. Anything else is
+# rejected — a typo'd optional key ("attach_treshold") would otherwise
+# silently fall back to its default, which for a threshold is a safety knob.
+_EVENT_SYNC_ALLOWED_KEYS = frozenset({
+    "master_group_id",
+    "secondary_group_ids",
+    "patterns",
+    "group_patterns",
+    "time_window_minutes",
+    "attach_threshold",
+    "enabled",
+})
+
+# Keys accepted inside one parse-pattern variant (mirrors the shape of
+# services.event_sync_matcher.DEFAULT_EVENT_PATTERNS entries, which is what
+# parse_event_name() consumes).
+_EVENT_SYNC_PATTERN_KEYS = frozenset({
+    "name",
+    "title_pattern",
+    "time_pattern",
+    "date_pattern",
+})
+
+# Pattern fields that must compile via safe_regex when present. Operator
+# regex is the ReDoS surface (bd-ltjyx precedent) — these execute against
+# untrusted provider strings at preview/run time via
+# dummy_epg_engine.extract_groups → safe_regex, so save-time validation
+# must route through the exact same compiler.
+_EVENT_SYNC_PATTERN_REGEX_FIELDS = ("title_pattern", "time_pattern", "date_pattern")
+
+
+def _event_sync_error(field: str, got: Any, expected: str) -> str:
+    """Teaching validation error: field, got, expected, doc link."""
+    return (
+        f"event_sync_config.{field}: got {got!r}, expected {expected} "
+        f"(see docs/event_sync.md)"
+    )
+
+
+def _validate_event_sync_patterns(patterns: Any, field: str) -> list[str]:
+    """Validate one list of parse-pattern variants (shared or per-group)."""
+    errors: list[str] = []
+    if not isinstance(patterns, list) or not patterns:
+        errors.append(_event_sync_error(
+            field, patterns,
+            "a non-empty list of pattern objects "
+            "(omit the key entirely to use the built-in default patterns)",
+        ))
+        return errors
+
+    for i, variant in enumerate(patterns):
+        vfield = f"{field}[{i}]"
+        if not isinstance(variant, dict):
+            errors.append(_event_sync_error(
+                vfield, variant,
+                "an object with title_pattern (required) and optional "
+                "name/time_pattern/date_pattern",
+            ))
+            continue
+
+        unknown = sorted(set(variant) - _EVENT_SYNC_PATTERN_KEYS)
+        if unknown:
+            errors.append(_event_sync_error(
+                vfield, unknown,
+                f"only the keys {sorted(_EVENT_SYNC_PATTERN_KEYS)}",
+            ))
+
+        name = variant.get("name")
+        if name is not None and not isinstance(name, str):
+            errors.append(_event_sync_error(
+                f"{vfield}.name", name, "a string label",
+            ))
+
+        title_pattern = variant.get("title_pattern")
+        if not title_pattern or not isinstance(title_pattern, str):
+            errors.append(_event_sync_error(
+                f"{vfield}.title_pattern", title_pattern,
+                "a non-empty regex string with a (?P<title>...) capture group",
+            ))
+
+        for key in _EVENT_SYNC_PATTERN_REGEX_FIELDS:
+            pattern = variant.get(key)
+            if pattern is None:
+                continue
+            if not isinstance(pattern, str):
+                errors.append(_event_sync_error(
+                    f"{vfield}.{key}", pattern, "a regex string",
+                ))
+                continue
+            # bd-ltjyx: route through safe_regex.compile so the length cap
+            # and compile-error surface match the runtime path
+            # (dummy_epg_engine.extract_groups → safe_regex).
+            try:
+                safe_regex.compile(pattern)
+            except safe_regex.SafeRegexError as e:
+                errors.append(_event_sync_error(
+                    f"{vfield}.{key}", pattern,
+                    f"a regex that compiles under safe_regex ({e})",
+                ))
+
+    return errors
+
+
+def _is_group_id(value: Any) -> bool:
+    """Positive integer group ID; bool is an int subclass — reject it."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def validate_event_sync_config(config: Any) -> list[str]:
+    """Validate (and default-fill) an event_sync rule config at save time.
+
+    Event Sync (epic ti939): one channel per live event — Dispatcharr owns
+    the MASTER group's channel lifecycle (auto_channel_sync ON); ECM matches
+    SECONDARY groups' streams onto those channels. This validator is the
+    schema-enforced rail set:
+
+    * **Mandatory scoping** — master_group_id present, secondary_group_ids
+      non-empty, master not in secondaries. Scoping is what prevented
+      recurrence of the 1,341 false-positive merge incident: an unscoped
+      event rule is refused at save time, not by convention.
+    * **safe_regex at save time** — operator parse regexes are the ReDoS
+      surface (bd-ltjyx); they compile through the exact compiler the
+      runtime uses.
+    * **attach_threshold hard floor** — never below
+      services.event_sync_matcher.EVENT_ATTACH_FLOOR (0.80). The floor
+      constant is IMPORTED from the matcher — the single source of truth —
+      and the matcher's is_event_attachable() clamps again at runtime, so
+      the schema and execution layers cannot drift apart.
+
+    Mirrors Action.validate()'s convention of filling defaults in place
+    (time_window_minutes, attach_threshold, enabled) so stored configs are
+    explicit. Returns a list of teaching error strings (field, got,
+    expected, doc link) — empty when valid.
+    """
+    # Floor/defaults live in the matcher service (single source of truth —
+    # do NOT redeclare them here). Imported lazily to keep the heavy matcher
+    # module (rapidfuzz, pytz, dummy-EPG engine) off this module's load path,
+    # same pattern as dedup_matcher.CONFIDENCE_FLOOR above.
+    from services.event_sync_matcher import (
+        DEFAULT_TIME_WINDOW_MINUTES,
+        EVENT_ATTACH_FLOOR,
+    )
+
+    errors: list[str] = []
+
+    if not isinstance(config, dict):
+        return [_event_sync_error(
+            "", config,
+            "a JSON object with master_group_id, secondary_group_ids and "
+            "optional patterns/group_patterns/time_window_minutes/"
+            "attach_threshold/enabled",
+        )]
+
+    unknown = sorted(set(config) - _EVENT_SYNC_ALLOWED_KEYS)
+    if unknown:
+        errors.append(_event_sync_error(
+            "", unknown,
+            f"only the keys {sorted(_EVENT_SYNC_ALLOWED_KEYS)}",
+        ))
+
+    # --- Mandatory scoping (the anti-1,341 rail) -------------------------
+    master_group_id = config.get("master_group_id")
+    if not _is_group_id(master_group_id):
+        errors.append(_event_sync_error(
+            "master_group_id", master_group_id,
+            "a positive integer Dispatcharr group ID — the ONE master "
+            "event group whose channels Dispatcharr owns "
+            "(auto_channel_sync ON)",
+        ))
+
+    secondary_group_ids = config.get("secondary_group_ids")
+    if (not isinstance(secondary_group_ids, list)
+            or not secondary_group_ids
+            or not all(_is_group_id(g) for g in secondary_group_ids)):
+        errors.append(_event_sync_error(
+            "secondary_group_ids", secondary_group_ids,
+            "a non-empty list of positive integer group IDs — the "
+            "secondary event groups (auto_channel_sync OFF) whose streams "
+            "attach to master channels; an unscoped event rule is refused",
+        ))
+        secondary_group_ids = []
+    elif _is_group_id(master_group_id) and master_group_id in secondary_group_ids:
+        errors.append(_event_sync_error(
+            "secondary_group_ids", secondary_group_ids,
+            f"a list that does NOT contain master_group_id "
+            f"{master_group_id} — a group cannot be both the master "
+            f"(Dispatcharr-owned channels) and a secondary (stream source)",
+        ))
+
+    # --- Parse patterns (shared and per-group) ---------------------------
+    if "patterns" in config:
+        errors.extend(_validate_event_sync_patterns(
+            config["patterns"], "patterns"
+        ))
+
+    if "group_patterns" in config:
+        group_patterns = config["group_patterns"]
+        if not isinstance(group_patterns, dict):
+            errors.append(_event_sync_error(
+                "group_patterns", group_patterns,
+                "an object mapping group ID -> list of pattern objects",
+            ))
+        else:
+            in_scope = set(secondary_group_ids)
+            if _is_group_id(master_group_id):
+                in_scope.add(master_group_id)
+            for raw_key, patterns in group_patterns.items():
+                # JSON object keys are strings; accept int for dict callers.
+                try:
+                    group_id = int(raw_key)
+                except (TypeError, ValueError):
+                    errors.append(_event_sync_error(
+                        f"group_patterns[{raw_key!r}]", raw_key,
+                        "an integer group ID key",
+                    ))
+                    continue
+                if group_id not in in_scope:
+                    errors.append(_event_sync_error(
+                        f"group_patterns[{raw_key!r}]", group_id,
+                        "a group ID that is the master_group_id or one of "
+                        "secondary_group_ids — per-group patterns for a "
+                        "group outside the rule's scope would never run",
+                    ))
+                errors.extend(_validate_event_sync_patterns(
+                    patterns, f"group_patterns[{raw_key!r}]"
+                ))
+
+    # --- Matching knobs ---------------------------------------------------
+    time_window_minutes = config.get("time_window_minutes")
+    if time_window_minutes is None:
+        config["time_window_minutes"] = DEFAULT_TIME_WINDOW_MINUTES
+    elif (isinstance(time_window_minutes, bool)
+            or not isinstance(time_window_minutes, int)
+            or not (1 <= time_window_minutes <= 1440)):
+        # Ceiling 1440 = 24h (PR #612 review): the time window is the rail
+        # that keeps same-teams-different-day fixtures apart — an oversized
+        # window re-opens that false-positive class, and the frozen corpus
+        # only proves the trap at sane windows.
+        errors.append(_event_sync_error(
+            "time_window_minutes", time_window_minutes,
+            f"an integer number of minutes between 1 and 1440 (default "
+            f"{DEFAULT_TIME_WINDOW_MINUTES}) — parsed start times must be "
+            f"within ± this window to become candidate pairs; a window "
+            f"over 24h would re-admit same-teams-different-day pairs the "
+            f"matcher's precision guarantees do not cover",
+        ))
+
+    attach_threshold = config.get("attach_threshold")
+    if attach_threshold is None:
+        config["attach_threshold"] = EVENT_ATTACH_FLOOR
+    elif (isinstance(attach_threshold, bool)
+            or not isinstance(attach_threshold, (int, float))
+            or not (0.0 <= float(attach_threshold) <= 1.0)):
+        errors.append(_event_sync_error(
+            "attach_threshold", attach_threshold,
+            f"a number in [{EVENT_ATTACH_FLOOR}, 1.0]",
+        ))
+    elif float(attach_threshold) < EVENT_ATTACH_FLOOR:
+        # Hard clamp (PO decision, epic ti939): the floor is not adjustable
+        # downward. The matcher's is_event_attachable() enforces the same
+        # clamp at runtime; rejecting here keeps stored configs honest.
+        errors.append(_event_sync_error(
+            "attach_threshold", attach_threshold,
+            f"a number >= the event attach floor {EVENT_ATTACH_FLOOR} — "
+            f"the floor is hard-clamped (precision over recall; "
+            f"1,341-incident trust benchmark) and cannot be lowered "
+            f"per rule",
+        ))
+
+    enabled = config.get("enabled")
+    if enabled is None:
+        config["enabled"] = True
+    elif not isinstance(enabled, bool):
+        errors.append(_event_sync_error(
+            "enabled", enabled, "a boolean",
+        ))
+
+    if errors:
+        logger.warning(
+            "[AUTO-CREATE-SCHEMA] event_sync_config validation failed with "
+            "%s error(s): %s", len(errors), errors,
+        )
+    return errors
+
+
+# =============================================================================
 # Validation Utilities
 # =============================================================================
 
