@@ -244,6 +244,22 @@
   background-color: var(--info-bg);
 }
 
+/* Bulk apply-to-selected (enhancedchannelmanager-hq3de.i) — a selection
+   distinct from the enable/disable toggle. */
+.channel-item.bulk-selected {
+  background-color: var(--bg-tertiary, rgba(108, 142, 245, 0.12));
+}
+
+.bulk-select-checkbox {
+  flex-shrink: 0;
+}
+
+.bulk-apply-row {
+  background: var(--bg-tertiary, rgba(108, 142, 245, 0.12));
+  border-radius: var(--radius-sm, 4px);
+  padding: 0.4rem 0.75rem;
+}
+
 .channel-item .channel-number {
   min-width: 50px;
   font-size: 0.8rem;

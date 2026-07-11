@@ -320,4 +320,71 @@ describe('JournalTab', () => {
       });
     });
   });
+
+  describe('journal purge (bead hq3de.a)', () => {
+    let confirmSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      confirmSpy = vi.spyOn(window, 'confirm');
+    });
+
+    it('defaults the day count to 90', async () => {
+      renderWithProviders(<JournalTab />);
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      expect(screen.getByLabelText('Days to keep')).toHaveValue(90);
+    });
+
+    it('does not purge when the confirm dialog is declined', async () => {
+      confirmSpy.mockReturnValue(false);
+      renderWithProviders(<JournalTab />);
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /purge old entries/i }));
+
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(api.purgeJournalEntries).not.toHaveBeenCalled();
+    });
+
+    it('purges entries older than the entered day count once confirmed and refreshes', async () => {
+      confirmSpy.mockReturnValue(true);
+      vi.mocked(api.purgeJournalEntries).mockResolvedValue({ deleted: 12, days: 30 });
+
+      renderWithProviders(<JournalTab />);
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByLabelText('Days to keep'), { target: { value: '30' } });
+
+      vi.mocked(api.getJournalEntries).mockClear();
+      vi.mocked(api.getJournalStats).mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: /purge old entries/i }));
+
+      await waitFor(() => {
+        expect(api.purgeJournalEntries).toHaveBeenCalledWith(30);
+      });
+      await waitFor(() => {
+        expect(api.getJournalEntries).toHaveBeenCalled();
+        expect(api.getJournalStats).toHaveBeenCalled();
+      });
+    });
+
+    it('rejects a day count below 1 without calling the API', async () => {
+      renderWithProviders(<JournalTab />);
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByLabelText('Days to keep'), { target: { value: '0' } });
+
+      expect(screen.getByRole('button', { name: /purge old entries/i })).toBeDisabled();
+      expect(api.purgeJournalEntries).not.toHaveBeenCalled();
+    });
+  });
 });

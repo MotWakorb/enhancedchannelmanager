@@ -2369,3 +2369,172 @@ class TestChannelsAdminGating:
         # so the reject override must not turn them into 403s.
         assert list_resp.status_code == 200
         assert dup_resp.status_code != 403
+
+
+class TestFindDuplicateChannelsScope:
+    """Tests for POST /api/channels/find-duplicates optional channel_ids scope
+    (enhancedchannelmanager-uahp6). Two normalized-name duplicate pairs are
+    seeded in every test: 'ESPN' (ids 1, 2) and 'Fox Sports' (ids 3, 4, one
+    lowercased to prove case-insensitive grouping still works)."""
+
+    @staticmethod
+    def _single_page(results):
+        return {"results": results, "count": len(results), "next": None}
+
+    @staticmethod
+    def _channel(cid, name):
+        return {
+            "id": cid,
+            "name": name,
+            "channel_number": cid,
+            "streams": [],
+            "channel_group_id": None,
+            "channel_group_name": "",
+        }
+
+    def _seeded_channels(self):
+        return [
+            self._channel(1, "ESPN"),
+            self._channel(2, "ESPN"),
+            self._channel(3, "Fox Sports"),
+            self._channel(4, "fox sports"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_absent_body_scans_globally(self, async_client):
+        """No JSON body at all -> global scan, both duplicate pairs found."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post("/api/channels/find-duplicates")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 2
+        assert data["total_duplicate_channels"] == 4
+        found_ids = {tuple(sorted(c["id"] for c in g["channels"])) for g in data["groups"]}
+        assert found_ids == {(1, 2), (3, 4)}
+
+    @pytest.mark.asyncio
+    async def test_null_channel_ids_field_scans_globally(self, async_client):
+        """{"channel_ids": null} is equivalent to an absent body -> global."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": None}
+            )
+
+        assert response.status_code == 200
+        assert response.json()["total_groups"] == 2
+
+    @pytest.mark.asyncio
+    async def test_scoped_scan_finds_duplicate_pair_within_given_ids(self, async_client):
+        """Scoping to [1, 2, 3] (both ESPN dupes + one lone Fox Sports) finds
+        exactly the ESPN pair — the lone Fox Sports channel has no partner
+        inside the requested scope."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": [1, 2, 3]}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 1
+        assert data["total_duplicate_channels"] == 2
+        assert sorted(c["id"] for c in data["groups"][0]["channels"]) == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_scoped_scan_excludes_out_of_scope_duplicate_partner(self, async_client):
+        """Scoping to [1, 3] (one member of each dup pair, but not both)
+        must find ZERO groups — the fix's core guarantee that the scan only
+        considers the selected ids, not their unselected duplicates."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": [1, 3]}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 0
+        assert data["groups"] == []
+
+    @pytest.mark.asyncio
+    async def test_empty_channel_ids_list_returns_empty_result_without_fetching(self, async_client):
+        """An explicit empty list is a valid scope of 'nothing' — it must
+        NOT fall back to a global scan (that would silently ignore the
+        caller's scoping intent), and should short-circuit before ever
+        calling Dispatcharr."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": []}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 0
+        assert data["groups"] == []
+        mock_client.get_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_scoped_scan_stops_paginating_once_all_ids_found(self, async_client):
+        """Scoped scan finds its (single-page) targets and does not fetch
+        a second page it doesn't need, even though one exists."""
+        mock_client = AsyncMock()
+
+        async def _side_effect(page=1, page_size=500, search=None):
+            if page == 1:
+                return {
+                    "results": [self._channel(1, "ESPN"), self._channel(2, "ESPN")],
+                    "count": 4,
+                    "next": "page-2",
+                }
+            return {
+                "results": [self._channel(3, "Fox Sports"), self._channel(4, "fox sports")],
+                "count": 4,
+                "next": None,
+            }
+
+        mock_client.get_channels.side_effect = _side_effect
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": [1, 2]}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 1
+        assert mock_client.get_channels.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_scoped_scan_logs_scope_with_counts(self, async_client, caplog):
+        """The scoped log line names both the found count and the requested
+        selection count, distinct from the global log line's wording."""
+        import logging
+
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             caplog.at_level(logging.INFO, logger="routers.channels"):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": [1, 2, 3]}
+            )
+
+        assert response.status_code == 200
+        assert any(
+            "scanning 3 channels (scoped to 3 selected)" in record.message
+            for record in caplog.records
+        )

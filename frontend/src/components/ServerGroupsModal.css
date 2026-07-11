@@ -1,0 +1,56 @@
+.server-groups-hint {
+  color: var(--text-secondary, #888);
+  font-size: 0.85rem;
+  margin: 0 0 0.75rem;
+}
+
+.server-groups-create-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.server-groups-create-row input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary, #1a1a2e);
+  color: var(--text-primary, #ffffff);
+}
+
+.server-groups-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.server-group-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-secondary, #252540);
+}
+
+.server-group-name {
+  color: var(--text-primary, #ffffff);
+}
+
+.server-group-edit-input {
+  flex: 1;
+  margin-right: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary, #1a1a2e);
+  color: var(--text-primary, #ffffff);
+}
+
+.server-group-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}

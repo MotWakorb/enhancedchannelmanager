@@ -248,6 +248,9 @@ def register(mcp: FastMCP):
         name: str,
         channel_number: int | None = None,
         group_id: int | None = None,
+        logo_id: int | None = None,
+        tvg_id: str | None = None,
+        normalize: bool = False,
     ) -> str:
         """Create a new channel.
 
@@ -255,16 +258,25 @@ def register(mcp: FastMCP):
             name: Channel name
             channel_number: Optional channel number
             group_id: Optional channel group ID to assign the channel to
+            logo_id: Optional logo ID (see list_logos / create_logo) to assign
+            tvg_id: Optional EPG tvg_id to assign directly (see also link_channel_epg)
+            normalize: If True, apply enabled normalization rules to ``name``
+                before creating the channel (backend default False — the
+                channel is created with the name AS GIVEN, no normalization).
         """
         try:
             client = get_ecm_client()
-            payload = {"name": name}
+            payload = {"name": name, "normalize": normalize}
             if channel_number is not None:
                 payload["channel_number"] = channel_number
             if group_id is not None:
                 # Backend POST /api/channels expects ``channel_group_id``;
                 # a bare ``group_id`` is silently dropped (bd-7q9l3 / GH #221).
                 payload["channel_group_id"] = group_id
+            if logo_id is not None:
+                payload["logo_id"] = logo_id
+            if tvg_id is not None:
+                payload["tvg_id"] = tvg_id
 
             result = await client.call_endpoint(ENDPOINTS["channels_create"], body=payload)
             # Report the resulting object (not the request) so the caller can
@@ -285,6 +297,9 @@ def register(mcp: FastMCP):
         name: str | None = None,
         channel_number: int | None = None,
         group_id: int | None = None,
+        tvg_id: str | None = None,
+        logo_id: int | None = None,
+        streams: list[int] | None = None,
         confirm: bool = False,
     ) -> str:
         """Update an existing channel.
@@ -302,6 +317,18 @@ def register(mcp: FastMCP):
             name: New channel name
             channel_number: New channel number
             group_id: New channel group ID
+            tvg_id: New EPG tvg_id (pass "" to clear)
+            logo_id: New logo ID (see list_logos / create_logo; pass a falsy
+                     value's absence — omit the arg — to leave unchanged)
+            streams: REPLACE (not append/merge) the channel's full stream list
+                     with this exact set of stream IDs, in this order. This is
+                     NOT a safe way to add/remove a few streams — any current
+                     stream you omit is DETACHED. Prefer
+                     bulk_add_streams_to_channel / remove_stream_from_channel
+                     for incremental changes, or reorder_streams (which
+                     validates the list is a permutation of the current
+                     streams) for pure reordering. Use this only when you
+                     intend to set the complete stream membership at once.
             confirm: Set True to apply a gated rename/group-change on a manual
                      channel (see CONFIRM GATING above).
         """
@@ -317,6 +344,12 @@ def register(mcp: FastMCP):
                 # Dispatcharr, whose channel field is ``channel_group_id``;
                 # a bare ``group_id`` is silently dropped (bd-7q9l3 / GH #221).
                 payload["channel_group_id"] = group_id
+            if tvg_id is not None:
+                payload["tvg_id"] = tvg_id
+            if logo_id is not None:
+                payload["logo_id"] = logo_id
+            if streams is not None:
+                payload["streams"] = streams
 
             if not payload:
                 return "No changes specified."
@@ -1084,19 +1117,33 @@ def register(mcp: FastMCP):
             return f"Error clearing auto-created channels: {e}"
 
     @mcp.tool()
-    async def find_duplicate_channels() -> str:
-        """Scan all channels for duplicates by applying normalization rules to names.
+    async def find_duplicate_channels(channel_ids: list[int] | None = None) -> str:
+        """Scan channels for duplicates by applying normalization rules to names.
 
         Returns groups of channels that resolve to the same normalized name.
         Useful for finding channels like "ESPN" and "◉ ESPN" that should be merged.
+
+        Args:
+            channel_ids: Optional — restrict the scan to these channel ids
+                (enhancedchannelmanager-uahp6). Omitted (None) scans all
+                channels (global, the historical default). An explicit
+                empty list scopes the scan to nothing and returns no
+                duplicates rather than falling back to a global scan.
         """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["channels_find_duplicates"], timeout=120.0)
+            body = {"channel_ids": channel_ids} if channel_ids is not None else None
+            result = await client.call_endpoint(
+                ENDPOINTS["channels_find_duplicates"], body=body, timeout=120.0
+            )
             groups = result.get("groups", [])
 
             if not groups:
-                return "No duplicate channels found."
+                return (
+                    "No duplicate channels found within the given channel_ids."
+                    if channel_ids is not None
+                    else "No duplicate channels found."
+                )
 
             total = result.get("total_duplicate_channels", 0)
             lines = [f"Found {len(groups)} duplicate groups ({total} channels total):\n"]
@@ -1235,8 +1282,10 @@ def register(mcp: FastMCP):
     @mcp.tool()
     async def bulk_commit_channels(
         operations: list[dict],
+        groups_to_create: list[dict] | None = None,
         validate_only: bool = False,
         continue_on_error: bool = False,
+        consolidate: bool = False,
     ) -> str:
         """Commit a batch of channel operations atomically.
 
@@ -1246,8 +1295,18 @@ def register(mcp: FastMCP):
 
         Args:
             operations: List of operation dicts, each with a "type" key and type-specific fields.
+            groups_to_create: Optional list of {"name": <str>, "tempId": <negative int>}
+                dicts. Groups here are created in a first pass, BEFORE
+                ``operations`` are processed, so a ``createChannel`` op can
+                reference one of these via its own ``newGroupName``/``groupId``
+                (temp-id) fields. Use this when a batch creates channels into
+                groups that don't exist yet.
             validate_only: If True, validate without applying changes.
             continue_on_error: If True, keep processing after individual operation failures.
+            consolidate: If True, the backend de-duplicates/merges redundant
+                operations before executing (e.g. multiple updateChannel ops on
+                the same channel are folded into one). Backend default False —
+                operations are executed as given.
         """
         try:
             client = get_ecm_client()
@@ -1255,7 +1314,10 @@ def register(mcp: FastMCP):
                 "operations": operations,
                 "validateOnly": validate_only,
                 "continueOnError": continue_on_error,
+                "consolidate": consolidate,
             }
+            if groups_to_create is not None:
+                payload["groupsToCreate"] = groups_to_create
             # bd-ggxks: helper handles both the validateOnly sync path and
             # the default 202+poll path so this site keeps a single shape.
             result = await _bulk_commit_with_wait(client, payload)
