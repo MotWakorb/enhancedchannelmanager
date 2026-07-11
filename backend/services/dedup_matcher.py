@@ -605,6 +605,17 @@ def _normalize(value: str, mode: NameCleanMode = NameCleanMode.CONSERVATIVE) -> 
     return work
 
 
+def clean_name(value: str, mode: NameCleanMode = NameCleanMode.CONSERVATIVE) -> str:
+    """Public alias of the ONE shared name cleaner (see ``_normalize``).
+
+    Added for cross-service reuse (event_sync_matcher scores parsed event
+    titles with the LOCALS cleaner) so sibling services don't import the
+    underscore-private ``_normalize`` directly. Behavior is byte-for-byte
+    ``_normalize`` — this is a name, not a fork.
+    """
+    return _normalize(value, mode=mode)
+
+
 def extract_callsign(name: str) -> str | None:
     """Thin re-export of the DB-free FCC call-sign extractor.
 

@@ -138,9 +138,11 @@ class TestCorpusIntegrity:
             assert entry["reason"].strip(), f"line {entry['_line']}: empty reason"
 
     def test_no_duplicate_pairs(self, corpus):
+        # Order-insensitive: (A, B) and (B, A) are the same pair — the
+        # matcher is symmetric, so a reversed duplicate adds no coverage.
         seen: dict[tuple[str, str], int] = {}
         for entry in corpus:
-            key = (entry["name_a"], entry["name_b"])
+            key = tuple(sorted((entry["name_a"], entry["name_b"])))
             assert key not in seen, (
                 f"line {entry['_line']} duplicates line {seen[key]}: {key}"
             )

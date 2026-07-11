@@ -63,11 +63,10 @@ from rapidfuzz import fuzz
 
 from dummy_epg_engine import MONTH_NAMES, compute_event_times, extract_groups
 # Reuse the ONE shared name cleaner (LOCALS mode) so parsed-title fuzzy
-# scoring matches the unified scoring core byte-for-byte. ``_normalize`` is
-# the documented single cleaner in the system (see dedup_matcher docstring);
-# importing it from the sibling service is intentional reuse, not a privacy
-# violation.
-from services.dedup_matcher import NameCleanMode, _normalize
+# scoring matches the unified scoring core byte-for-byte. ``clean_name`` is
+# the public alias of the documented single cleaner in the system (see
+# dedup_matcher docstring).
+from services.dedup_matcher import NameCleanMode, clean_name
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +83,7 @@ __all__ = [
     "EVENT_TITLE_MAX_LEN",
     "REJECT_BELOW_AMBIGUOUS_FLOOR",
     "REJECT_NO_PARSED_TIME",
+    "REJECT_NUMERIC_IDENTITY_CONFLICT",
     "REJECT_OUTSIDE_TIME_WINDOW",
     "REJECT_PARSE_FAILURE",
     "REJECT_TEAM_TOKEN_CONFLICT",
@@ -156,6 +156,7 @@ REJECT_PARSE_FAILURE = "parse_failure"
 REJECT_NO_PARSED_TIME = "no_parsed_time"
 REJECT_OUTSIDE_TIME_WINDOW = "outside_time_window"
 REJECT_TEAM_TOKEN_CONFLICT = "team_token_conflict"
+REJECT_NUMERIC_IDENTITY_CONFLICT = "numeric_identity_conflict"
 REJECT_BELOW_AMBIGUOUS_FLOOR = "below_ambiguous_floor"
 
 # Team-token comparison floors (internal). A pair of aligned teams whose
@@ -164,8 +165,14 @@ REJECT_BELOW_AMBIGUOUS_FLOOR = "below_ambiguous_floor"
 # 'everton' 0.38); at or above the agree floor the tokens agree (confidence
 # boost); in between the check is inconclusive ("uncertain") and the pair
 # faces the stricter EVENT_NO_TEAMS_FLOOR for admission.
+#
+# The agree floor sits at 0.90 (PR #611 review, finding 3): every POSITIVE
+# team-identity signal reaches it (exact 1.0, initialism 0.95, bounded
+# abbreviation 0.90, single-typo forms ~0.93) while near-length sibling
+# words that are genuinely different teams do not ('austria' vs 'australia'
+# is 0.875 raw ratio and must NOT count as agreement).
 _TEAM_CONFLICT_CEILING: float = 0.60
-_TEAM_AGREE_FLOOR: float = 0.80
+_TEAM_AGREE_FLOOR: float = 0.90
 
 # ---------------------------------------------------------------------------
 # Default parse patterns (shipped defaults; per-rule overridable).
@@ -174,15 +181,38 @@ _TEAM_AGREE_FLOOR: float = 0.80
 # dummy_epg_engine.extract_groups → safe_regex because per-rule OVERRIDES are
 # operator-authored (untrusted) and both must run through the same machinery.
 #
-# Title: strip an optional slot prefix — any leading run that ends with
-# "<digit>(s) :" (e.g. "Peacock 14:", "Fubo Sports Network 07 :",
-# "NFL Game Pass 01:") — then capture everything up to the "@ <date>"
-# delimiter. Greedy prefix match is self-consistent across providers: a
-# title-internal "<digit>:" (e.g. "Formula 1: Qualifying") is stripped the
-# same way on both sides of a comparison.
+# Title: strip an optional SLOT prefix, then capture everything up to the
+# "@ <date>" delimiter.
+#
+# Slot-prefix shape (PR #611 review, finding 4): anchored, bounded
+# (≤ 40 chars, no ':' or '@' inside), ending in an EXACTLY-two-digit slot
+# number + colon — every live-observed slot list is zero-padded to two
+# digits ("Peacock 14:", "Fubo Sports Network 07 :", "NFL Game Pass 01:").
+# The bound deliberately does NOT strip series-identity prefixes like
+# "UFC 317:" / "Bellator 300:" (3 digits, guarded by the (?<!\d)
+# lookbehind) or "Formula 1:" (1 digit) — those are part of the event
+# identity; the old greedy any-digits strip collapsed "UFC 317: Early
+# Prelims" and "Bellator 300: Early Prelims" to the same title. Residual
+# risk: a provider using unpadded 1-digit or 3-digit slot numbers keeps its
+# slot prefix inside the title (fuzzy score degrades gracefully; per-rule
+# pattern overrides cover such providers).
+#
+# Date-delimiter "@" vs team-separator "@" (PR #611 review, finding 2): a
+# title may itself contain "@" as a home/away separator ("Rangers @
+# Islanders @ 11 Jul 07:00 PM ET"), so the title capture is ".+?" bounded
+# by an explicitly DATE-SHAPED tail — the "@" followed by
+# "<day> <month> <h:mm>" or "<month> <day> [year] <h:mm>" — not by the
+# first "@" in the name. A team-separator "@" can never satisfy the date
+# shape (it is never followed by "<h:mm>" immediately after the day/month
+# tokens), so the title extends through it.
 # ---------------------------------------------------------------------------
 
-_TITLE_PATTERN = r"^(?:[^@]*\d\s*:\s*)?\s*(?P<title>[^@]+?)\s*(?:@.*)?$"
+_TITLE_PATTERN = (
+    r"^(?:[^@:]{0,40}?(?<!\d)\d{2}\s*:\s*)?"
+    r"\s*(?P<title>.+?)\s*"
+    r"(?:@\s*(?:\d{1,2}\s+[A-Za-z]{3,9}\s+\d{1,2}:\d{2}"
+    r"|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:\s*,?\s*\d{4})?\s+\d{1,2}:\d{2}).*)?$"
+)
 
 # Time-of-day at the end of the name: 12h with AM/PM ("06:00 PM ET",
 # "02:45 PM ET") or 24h without ("18:30 ET"). Optional ET/EST/EDT suffix.
@@ -232,14 +262,23 @@ _TEAM_SEPARATOR_RE = re.compile(r"\s+(?:vs\.?|v\.)\s+|\s+@\s+", re.IGNORECASE)
 
 _TEAM_TOKEN_RE = re.compile(r"\w+")
 
-# Gender / age / squad qualifiers. A qualifier-set mismatch between two
-# otherwise-similar team names is a DIFFERENT team (women's vs men's side,
-# U21 vs senior side, reserves vs first team) — hard conflict.
-_TEAM_QUALIFIER_TOKENS = frozenset({
-    "w", "women", "womens", "ladies", "femenil", "femenino",
-    "u16", "u17", "u18", "u19", "u20", "u21", "u23",
-    "reserve", "reserves", "res", "ii", "b", "academy", "youth",
-})
+# Gender / age / squad qualifiers, mapped to CANONICAL CLASSES. A
+# qualifier-CLASS mismatch between two otherwise-similar team names is a
+# DIFFERENT team (women's vs men's side, U21 vs senior side, reserves vs
+# first team) — hard conflict. Synonyms within one class must NOT conflict:
+# "Barcelona W" and "Barcelona Women" are the SAME women's side spelled by
+# two providers (PR #611 review, finding 5). Age groups stay distinct
+# classes (U21 vs U23 are different squads).
+_TEAM_QUALIFIER_CLASSES: dict[str, str] = {
+    "w": "women", "women": "women", "womens": "women", "ladies": "women",
+    "fem": "women", "femenil": "women", "femenino": "women",
+    "u16": "u16", "u17": "u17", "u18": "u18", "u19": "u19",
+    "u20": "u20", "u21": "u21", "u23": "u23",
+    "reserve": "reserves", "reserves": "reserves", "res": "reserves",
+    "ii": "reserves", "b": "reserves",
+    "academy": "youth", "youth": "youth",
+}
+_TEAM_QUALIFIER_TOKENS = frozenset(_TEAM_QUALIFIER_CLASSES)
 
 # Generic club-suffix tokens that carry no identity ("Juventus FC" ==
 # "Juventus"). Kept deliberately small — "AC", "City", "United" etc. ARE
@@ -467,11 +506,29 @@ def _build_start(groups: dict, tz, event_timezone: str, now: datetime) -> dateti
         year = _infer_year(month, day, hour24, minute, tz, now)
         if year is None:
             return None
-        groups = {**groups, "year": str(year)}
+    else:
+        try:
+            year = int(year_raw)
+        except (TypeError, ValueError):
+            return None
+        if year < 100:  # normalize 2-digit years the same way dummy-EPG does
+            year += 2000
 
-    # Delegate the actual datetime construction (incl. 12h→24h and 2-digit
-    # years) to the shared dummy-EPG machinery so event_sync and dummy-EPG
-    # can never disagree about what a captured time means.
+    # NEVER-GUESS rail (PR #611 review, finding 1): validate that
+    # (year, month, day) is a REAL calendar date before delegating.
+    # compute_event_times falls back to a "now"-based guess on a
+    # ValueError ("Feb 30 2027" → tonight) — acceptable for dummy-EPG
+    # filler programming, incident-class for event matching.
+    try:
+        datetime(year, month, day, hour24, minute, 0)
+    except (ValueError, OverflowError):
+        return None
+
+    groups = {**groups, "year": str(year)}
+
+    # Delegate the actual datetime construction (incl. 12h→24h and DST
+    # localization) to the shared dummy-EPG machinery so event_sync and
+    # dummy-EPG can never disagree about what a captured time means.
     time_vars = compute_event_times(groups, event_timezone)
     start = time_vars.get("start_dt")
     return start if isinstance(start, datetime) else None
@@ -506,7 +563,10 @@ def _team_tokens(team: str) -> list[str]:
 
 
 def _qualifiers(tokens: list[str]) -> frozenset[str]:
-    return frozenset(t for t in tokens if t in _TEAM_QUALIFIER_TOKENS)
+    """Canonical qualifier CLASSES present in a team's tokens."""
+    return frozenset(
+        _TEAM_QUALIFIER_CLASSES[t] for t in tokens if t in _TEAM_QUALIFIER_CLASSES
+    )
 
 
 def _identity_tokens(tokens: list[str]) -> list[str]:
@@ -516,9 +576,24 @@ def _identity_tokens(tokens: list[str]) -> list[str]:
     ]
 
 
+# An abbreviation must be SUBSTANTIALLY shorter than the word it
+# abbreviates. Without this bound the subsequence test accepts near-length
+# sibling words — 'austria' is a same-first-letter subsequence of
+# 'australia' (7/9 chars) and would score 0.90 "abbreviation" agreement
+# between two different national teams (PR #611 review, finding 3). Real
+# abbreviations are much shorter than their expansions: man/manchester
+# (0.30), utd/united (0.50), juve/juventus (0.50), inter/internazionale
+# (0.36).
+_ABBREV_MAX_LENGTH_RATIO: float = 0.60
+
+
 def _is_abbrev_of(short: str, long: str) -> bool:
-    """'man'→'manchester', 'utd'→'united': same first letter + subsequence."""
-    if len(short) < 2 or len(short) >= len(long) or short[0] != long[0]:
+    """'man'→'manchester', 'utd'→'united': same first letter + subsequence,
+    with a length-ratio bound so near-length siblings ('austria' ⊆
+    'australia') are NOT treated as abbreviations."""
+    if len(short) < 2 or short[0] != long[0]:
+        return False
+    if len(short) > len(long) * _ABBREV_MAX_LENGTH_RATIO:
         return False
     it = iter(long)
     return all(ch in it for ch in short)
@@ -610,7 +685,43 @@ def _team_pair_verdict(
         return TEAM_VERDICT_CONFLICT, team_score
     if team_score >= _TEAM_AGREE_FLOOR:
         return TEAM_VERDICT_AGREE, team_score
+    # MIXED alignment (PR #611 review, finding 3): one team clearly the
+    # same (>= agree floor) while the other is not — that is the
+    # "different fixture sharing one side" shape ('Australia vs France' /
+    # 'Austria vs France': france 1.0, austria↔australia 0.875). A shared
+    # opponent plus a not-clearly-equal second team is evidence of a
+    # DIFFERENT event, not weak evidence of the same one — hard conflict.
+    if max(best) >= _TEAM_AGREE_FLOOR:
+        return TEAM_VERDICT_CONFLICT, team_score
     return TEAM_VERDICT_UNCERTAIN, team_score
+
+
+# Pure-digit tokens inside a cleaned title ("UFC 317", "Formula 1",
+# "Stage 8"). Module-level raw-literal constant — stdlib ``re`` per
+# docs/style_guide.md#regex.
+_NUMERIC_TOKEN_RE = re.compile(r"\b\d+\b")
+
+
+def _numeric_identity_conflict(title_a: str, title_b: str) -> bool:
+    """True when the titles carry DISJOINT numeric identities.
+
+    Series/edition numbers are identity-bearing for team-less titles:
+    'UFC 317: Early Prelims' vs 'Bellator 300: Early Prelims' and
+    'Formula 1: Qualifying' vs 'Formula 2: Qualifying' share most words
+    while denoting different events (PR #611 review, finding 4). When BOTH
+    cleaned titles contain numeric tokens and the sets share nothing, the
+    pair clearly differs. One-sided or overlapping numbers pass — a
+    provider that omits the series number ('Topuria vs Oliveira') or adds
+    a year ('Tour de France 2026: Stage 8' vs 'Tour de France: Stage 8')
+    must not be rejected by this rail.
+    """
+    nums_a = set(_NUMERIC_TOKEN_RE.findall(
+        clean_name(title_a, mode=NameCleanMode.LOCALS)
+    ))
+    nums_b = set(_NUMERIC_TOKEN_RE.findall(
+        clean_name(title_b, mode=NameCleanMode.LOCALS)
+    ))
+    return bool(nums_a) and bool(nums_b) and not (nums_a & nums_b)
 
 
 # ---------------------------------------------------------------------------
@@ -620,8 +731,8 @@ def _team_pair_verdict(
 
 def _fuzzy_title_score(title_a: str, title_b: str) -> float:
     """RapidFuzz token_set_ratio on LOCALS-cleaned parsed titles."""
-    norm_a = _normalize(title_a, mode=NameCleanMode.LOCALS)
-    norm_b = _normalize(title_b, mode=NameCleanMode.LOCALS)
+    norm_a = clean_name(title_a, mode=NameCleanMode.LOCALS)
+    norm_b = clean_name(title_b, mode=NameCleanMode.LOCALS)
     if not norm_a or not norm_b:
         return 0.0
     if norm_a == norm_b:
@@ -728,9 +839,33 @@ def _score_parsed_pair(
             (REJECT_TEAM_TOKEN_CONFLICT,),
         )
 
+    if verdict != TEAM_VERDICT_AGREE and _numeric_identity_conflict(
+        parsed_a.title, parsed_b.title
+    ):
+        # Numeric-identity rail (PR #611 review, finding 4): with no
+        # positive team corroboration, disjoint series/edition numbers
+        # ('UFC 317' vs 'Bellator 300', 'Formula 1' vs 'Formula 2') mean
+        # different events regardless of shared surrounding words. Team
+        # AGREEMENT deliberately bypasses this rail — a mislabeled week
+        # number must not reject two providers carrying the same fixture.
+        return _result(
+            0.0, BAND_REJECT, verdict, fuzzy, team_score, delta,
+            (REJECT_NUMERIC_IDENTITY_CONFLICT,),
+        )
+
     # Token agreement raises confidence: an agreeing team pair can lift a
     # lexically-distant abbreviation ('MUFC' / 'Manchester United') that
     # pure title fuzz under-scores.
+    #
+    # DESIGN NOTE (PR #611 review, finding 3): because team_score >= 0.80
+    # whenever the verdict is AGREE, this max() means team agreement within
+    # the time window is BY ITSELF sufficient to reach the attach band —
+    # fuzzy corroboration of the full title is not additionally required.
+    # This is intentional: both teams aligning (order-insensitively, with
+    # qualifier equality) at the same parsed kickoff IS the event identity;
+    # the surrounding title text is provider dressing (slot words,
+    # competition labels, language). The rails stay intact — a qualifier
+    # or nickname mismatch is a hard conflict long before this line.
     if verdict == TEAM_VERDICT_AGREE and team_score is not None:
         score = min(1.0, max(fuzzy, team_score))
     else:
