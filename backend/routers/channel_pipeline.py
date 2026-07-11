@@ -2510,7 +2510,11 @@ async def preview_event_sync(
                 )
                 batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
                 for s in batch:
-                    if not s.get("name"):
+                    # Mirror the engine fetch's name+id guard (PR #616
+                    # review) so preview and run see the SAME stream universe
+                    # — a no-id stream is unattachable and must not diverge
+                    # the dry-run parity.
+                    if not s.get("name") or s.get("id") is None:
                         continue
                     secondary_streams.append(SecondaryStream(
                         name=s["name"],

@@ -178,8 +178,14 @@ def _is_contested(candidates: tuple[MasterCandidate, ...]) -> bool:
     top = candidates[0]
     # The epsilon check only needs candidates[1] (best-first ordering), but
     # the attach-band check must scan ALL runners: band is NOT monotonic in
-    # score (e.g. a no-teams-rail REJECT can outscore a lower attach-band
-    # candidate), so an attach-band contender can sit below a reject.
+    # score, because the no-teams floor raises the effective attach threshold
+    # PER CANDIDATE (matcher.is_event_attachable). The natural hidden
+    # contender is an ambiguous-band runner sitting between two attach-band
+    # candidates: a verdict-absent candidate at 0.85 lands AMBIGUOUS (needs
+    # >= EVENT_NO_TEAMS_FLOOR without team agreement) yet outscores a
+    # team-agree attach-band contender at 0.82. (Rejects can never hide a
+    # contender this way — every reject rail forces score 0.0 or sits below
+    # the ambiguous floor.)
     if len(candidates) > 1 \
             and top.score - candidates[1].score <= CONTESTED_SCORE_EPSILON:
         return True
