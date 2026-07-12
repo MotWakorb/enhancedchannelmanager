@@ -164,15 +164,29 @@ the pipeline-level manual Run, or the single-rule run API):
 
 ## Pattern cookbook
 
-The two built-in patterns cover the majority of live-stream naming shapes
-observed across providers. Below are three verified provider name shapes
+The three built-in patterns cover the majority of live-stream naming shapes
+observed across providers. Below are the verified provider name shapes
 and the pattern that parses each — copy-paste consistent with the shipped
 patterns in `frontend/src/components/channelPipeline/eventSyncShippedPatterns.json`
 and the matcher defaults in `backend/services/event_sync_matcher.py`
 (every regex below was run against its example through the real
 `parse_event_name()` while writing this guide).
 
-### 1. Slot-prefixed, month-first date, with "@" (built-in)
+> **The built-ins are tolerant of real-world noise (beads 9c9j7 + numeric
+> dates).** They accept `@`, `|`, **or** `(` as the title/date delimiter, an
+> optional weekday before the date (`| Sun 12 Jul 02:00 EDT`), a **numeric
+> month-first date** (`(7.12 9:15 AM ET)` / `(7/12 12:00 PM ET)`), and —
+> crucially — **any trailing text after the time** (a provider/slot label
+> like `... @ Jul 11 9:30 AM :Flo Racing 03`, or a region marker like
+> `... | Sun 12 Jul 02:00 EDT (US) | US: ESPN+ PPV 40`). A trailing suffix
+> after the time used to cause an "Incomplete date/time — would be a parse
+> failure"; it no longer does. Single-digit hours (`9:30`) parse too.
+>
+> **Still a parse failure by design:** a listing with a time but **no date**
+> (`Boxing 05 : FURY vs HALL 6PM`, `LIVE EVENT 05 - 4:15pm ...`). Event Sync
+> never guesses the date. See [Dateless live listings](#dateless-live-listings).
+
+### 1. Slot-prefixed, month-first date, "@" or "|" (built-in)
 
 ```
 Fubo Sports Network 07 : Chelsea vs. Brentford @ Jan 17 10:00 AM ET
@@ -183,12 +197,12 @@ is the **`slot-title-month-first-date`** built-in — no configuration
 needed, it's pre-selected by default.
 
 ```
-title_pattern: ^(?:[^@:]{0,40}?(?<!\d)\d{2}\s*:\s*)?\s*(?P<title>.+?)\s*(?:@\s*(?:\d{1,2}\s+[A-Za-z]{3,9}\s+\d{1,2}:\d{2}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:\s*,?\s*\d{4})?\s+\d{1,2}:\d{2}).*)?$
+title_pattern: ^(?:[^@:|(]{0,40}?(?<!\d)\d{2}\s*:\s*)?\s*(?P<title>.+?)\s*(?:(?:@|\||\()\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\.?,?\s+)?(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]?\.?)?(?:\s*E[SD]?T)?|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:\s*,?\s*\d{4})?\s+\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]?\.?)?(?:\s*E[SD]?T)?|\d{1,2}[./]\d{1,2}\s+\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]?\.?)?(?:\s*E[SD]?T)?).*)?$
 time_pattern:  (?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<ampm>[AaPp])\.?[Mm]?\.?)?\s*(?:E[SD]?T)?\s*$
-date_pattern:  @\s*(?P<month>[A-Za-z]{3,9})\.?\s+(?P<day>\d{1,2})(?:\s*,?\s*(?P<year>\d{4}))?\s+\d{1,2}:\d{2}
+date_pattern:  (?:@|\||\()\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\.?,?\s+)?(?P<month>[A-Za-z]{3,9})\.?\s+(?P<day>\d{1,2})(?:\s*,?\s*(?P<year>\d{4}))?\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<ampm>[AaPp])\.?[Mm]?\.?)?(?:\s*E[SD]?T)?
 ```
 
-### 2. Slot-prefixed, day-first date, with "@" (built-in)
+### 2. Slot-prefixed, day-first date, "@" or "|" (built-in)
 
 ```
 Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET
@@ -201,12 +215,34 @@ wins, so most rules can leave both on and cover both date shapes without
 any per-provider configuration.
 
 ```
-title_pattern: ^(?:[^@:]{0,40}?(?<!\d)\d{2}\s*:\s*)?\s*(?P<title>.+?)\s*(?:@\s*(?:\d{1,2}\s+[A-Za-z]{3,9}\s+\d{1,2}:\d{2}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:\s*,?\s*\d{4})?\s+\d{1,2}:\d{2}).*)?$
+title_pattern: ^(?:[^@:|(]{0,40}?(?<!\d)\d{2}\s*:\s*)?\s*(?P<title>.+?)\s*(?:(?:@|\||\()\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\.?,?\s+)?(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]?\.?)?(?:\s*E[SD]?T)?|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:\s*,?\s*\d{4})?\s+\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]?\.?)?(?:\s*E[SD]?T)?|\d{1,2}[./]\d{1,2}\s+\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]?\.?)?(?:\s*E[SD]?T)?).*)?$
 time_pattern:  (?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<ampm>[AaPp])\.?[Mm]?\.?)?\s*(?:E[SD]?T)?\s*$
-date_pattern:  @\s*(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})\s+\d{1,2}:\d{2}
+date_pattern:  (?:@|\||\()\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\.?,?\s+)?(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})\.?\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<ampm>[AaPp])\.?[Mm]?\.?)?(?:\s*E[SD]?T)?
 ```
 
-### 3. Slot-prefixed, no "@" separator (shipped, not pre-selected)
+### 3. Slot-prefixed, numeric month-first date (built-in)
+
+Some providers list the date **numerically**, often in parentheses:
+
+```
+PPV EVENT 01: Zenith Racing Series at Road America (7.12 9:15 AM ET)
+PPV EVENT 10: Redstall vs. Courtney (7/12 12:00 PM ET)
+```
+
+Parses to title `Zenith Racing Series at Road America` / `Redstall vs.
+Courtney`, start `Jul 12 09:15 AM ET` / `Jul 12 12:00 PM ET`. This is the
+**`slot-title-numeric-date`** built-in (pre-selected). Numeric dates are
+read **month-first** (US convention, matching the ET default timezone) and
+accept `.` or `/` — a provider that lists numeric dates day-first needs a
+per-rule override. `(`, `@`, and `|` all work as the opener.
+
+```
+date_pattern:  (?:@|\||\()\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\.?,?\s+)?(?P<month>\d{1,2})[./](?P<day>\d{1,2})\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<ampm>[AaPp])\.?[Mm]?\.?)?(?:\s*E[SD]?T)?
+```
+
+(title_pattern and time_pattern are identical across all three built-ins.)
+
+### 4. Slot-prefixed, no "@" separator (shipped, not pre-selected)
 
 Some providers drop the "@" between title and date entirely:
 
@@ -228,10 +264,43 @@ title_pattern (day-first): ^(?:[^@:]{0,40}?(?<!\d)\d{2}\s*:\s*(?!\d))?\s*(?P<tit
 date_pattern (day-first):  (?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})\s+\d{1,2}:\d{2}
 ```
 
-(time_pattern is the same on all four shipped patterns.) If your
-provider's shape doesn't match any of the four, add a custom shared
+(time_pattern is the same on all five shipped patterns.) If your
+provider's shape doesn't match any of them, add a custom shared
 pattern (or a per-group override) in the rule editor's **Advanced**
 section and verify it with Test Patterns before saving — do not guess.
+
+### Dateless live listings
+
+Some providers list a live "today" schedule with a **time but no date**:
+
+```
+Boxing 05 : FURY vs HALL 6PM
+Boxing 6: Fury v Makhmudov 19:00
+LIVE EVENT 05 - 4:15pm Zenith Racing Series Road America
+```
+
+By default these are a **parse failure** — Event Sync's core safety rail is
+that it **never guesses the date** (otherwise it could match yesterday's
+"6PM" to today's), so a listing that omits the date is shown as "Incomplete
+date/time" in the preview rather than guessed onto "today".
+
+If a group **only ever lists the current day** and you accept the cross-day
+risk, set **`assume_current_date: true`** on the rule (in the editor:
+**"Assume today's date for dateless listings"** under Advanced). With it on,
+a listing that carries a time but no date is placed on the **current date**
+(in the rule's timezone) so it becomes matchable. Both the master and
+secondary sides share the same "today", so their times compare on one day.
+The built-in dateless shapes cover `… TITLE 6PM` / `… TITLE 19:00` (time
+last) and `… - 4:15pm TITLE` (time first); a bare time must carry a colon or
+an am/pm marker so a lone number in a title is never mistaken for a time.
+
+**The risk:** a listing that is really for a *different* day (a replay at the
+same time-of-day tomorrow) can mis-match — the ±`time_window_minutes` window
+still applies, but same-time-of-day collisions can slip through. And even a
+correctly-dated listing only attaches when its time lands within the window
+of the master, so a group whose listed times are unreliable (hours off the
+real start) still won't pair. Leave the flag **off** unless the group is a
+genuine same-day live schedule.
 
 ## Rule configuration (`event_sync_config`)
 
@@ -274,6 +343,9 @@ the rule.
 | `enabled` | no (default true) | Feature toggle within the rule. |
 | `auto_run` | no (default **false**) | Phase 2 opt-in (bead ti939.3.1): when true, the rule also runs **unattended** after each M3U refresh (the watermark task). Absent means false — manual-run-only. See [Automatic runs after refresh](#automatic-runs-after-refresh-phase-2-opt-in). |
 | `dummy_epg_profile_id` | no (absent = off) | Phase 2 (bead ti939.3.3): id of a [dummy EPG profile](template_engine.md) auto-assigned to the master group's channels on every run. Must reference an **existing** profile (teaching error otherwise); the key is never default-filled — omit it to disable. See [Automatic guide data for master channels](#automatic-guide-data-for-master-channels-dummy-epg). |
+| `include_master_group_streams` | no (default **false**) | bead 6xxmp: when true, the **master group's own streams** are also matched to the master channels (streams already attached are skipped). The sanctioned path for a same-named cross-provider group — see [Two providers, one group name](#two-providers-one-group-name) below. |
+| `assume_current_date` | no (default **false**) | When true, a listing that carries a **time but no date** is placed on the **current date** so it becomes matchable — deliberately relaxing the never-guess-the-date rail. Accepts the cross-day match risk. See [Dateless live listings](#dateless-live-listings). |
+| `parse_master_from_stream` | no (default **false**) | When true, each master channel's event identity (title + time) is read from its **first attached stream's name** instead of the channel name — so master channels can be named freely. A master with no attached stream is skipped. See [The master channels' date+time must be in their NAMES](#the-master-channels-datetime-must-be-in-their-names). |
 
 ### Why validation is strict
 
@@ -299,6 +371,34 @@ value you sent, what was expected, and a link back to this document.
   regression corpus only proves the matcher's precision at sane windows.
 * **Unknown keys are rejected**, so a typo'd optional key cannot silently
   fall back to its default.
+
+### Two providers, one group name
+
+Dispatcharr channel groups are **global and unique by name**: if two M3U
+providers both carry a group called `Live Events`, their streams land in the
+*same* channel group — one group ID. That means you cannot pick provider A's
+`Live Events` as the master and provider B's `Live Events` as a secondary;
+the group picker shows one entry, and choosing it as master removes it from
+the secondary list (a group cannot be both — the mandatory-scoping rail).
+
+`include_master_group_streams` is the sanctioned path for exactly this case:
+
+1. Leave the shared group as the **master** (`auto_channel_sync` ON) so
+   Dispatcharr owns one channel per event, built from provider A's streams.
+2. Set `include_master_group_streams: true` (in the rule editor: **"Also
+   attach the master group's own streams"** under Advanced).
+
+On each run the master group's own streams are matched to the master
+channels alongside the secondary groups. Streams **already attached** to a
+master channel — provider A's own — are skipped by the resolver, so only
+provider B's still-unattached streams attach. Preview and run stay in
+lockstep (the preview's *would attach* count already excludes the
+already-attached streams), and the master group is **never** added to
+`secondary_group_ids` — that rail is untouched.
+
+If you would rather keep the two providers fully separate, the alternative
+is to **rename one provider's group** in Dispatcharr (a group override) so
+the two names become distinct IDs that pick independently — no flag needed.
 
 ## Threshold and bands
 
@@ -401,6 +501,45 @@ If this list is large and consistently the same events, it's evidence for
 picking a different (broader) master group, or a future promotion feature
 (tracked under epic `enhancedchannelmanager-ti939.4`, not built yet) — not
 something to work around today.
+
+### The master channels' date+time must be in their NAMES
+
+Event Sync reads a master channel's start time by **parsing the channel's
+name** — it does **not** read the time from the stream attached to the
+channel, nor from EPG. A master channel whose name has no complete
+parseable date+time can never be an attach target (it shows up as an
+*unparsed master* in the preview, and every secondary stream for that event
+lands in the unmatched list).
+
+Auto-synced master channels normally inherit the master provider's **stream
+name**, which already carries the time (`… @ Jul 11 9:30 AM`), so this just
+works. The pitfall is a **normalization or naming rule that strips the
+date-time out of the master channel name** — that makes the masters
+unparseable and nothing attaches.
+
+If you *want* to name the master channels freely (a clean name without the
+time), set **`parse_master_from_stream: true`** on the rule (in the editor:
+**"Read master event time from the attached stream"** under Advanced). With
+it on, each master channel's identity is read from its **first attached
+stream's name** instead of the channel name — so the event title+time come
+from the underlying auto-synced stream, and the channel name is yours to
+choose. A master channel with no attached stream is skipped. Otherwise, keep
+the date+time in the master channel names (verify with the preview: the
+master count should be non-zero and the "unparsed masters" count zero).
+
+### Using a Dispatcharr Channel Group Override
+
+A Dispatcharr **Channel Group Override** on an auto-synced M3U group sends
+the auto-created **channels** into a *different* target group, while the
+group's **streams** stay under the original name. Event Sync follows the
+override automatically: **point the master at your auto-synced provider
+group** (the one you normally pick, where `auto_channel_sync` is ON) and ECM
+fetches the master channels from the override's target group for you — both
+in the preview and the run. (Pointing the master at the override *target*
+group directly also works: the pre-flight reads its auto-sync state through
+the source group.) If the preview shows zero master channels for a group you
+know is auto-synced, confirm the override target group has actually been
+populated by a Dispatcharr auto-sync at least once.
 
 ### Undo a bad event_sync run
 

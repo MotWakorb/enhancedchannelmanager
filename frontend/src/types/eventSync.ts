@@ -59,6 +59,29 @@ export interface EventSyncConfig {
    * never default-fills it). Must reference an existing dummy EPG profile.
    */
   dummy_epg_profile_id?: number;
+  /**
+   * bead 6xxmp: when true, the MASTER group's own streams are also matched
+   * to the master channels (the resolver drops those already attached). The
+   * sanctioned path for a single channel group (global, unique-by-name)
+   * carrying two providers' streams — one auto-synced, one not — so the
+   * unsynced provider's streams attach to the synced provider's channels.
+   * Backend default false.
+   */
+  include_master_group_streams?: boolean;
+  /**
+   * bead assume-current-date: when true, a listing that carries a time but
+   * NO date (a dateless "today's schedule") is placed on the CURRENT date so
+   * it becomes matchable — deliberately relaxing the never-guess-the-date
+   * rail, accepting the cross-day match risk. Backend default false.
+   */
+  assume_current_date?: boolean;
+  /**
+   * bead parse-from-stream: when true, each master channel's event identity
+   * (title + time) is read from its FIRST attached stream's name instead of
+   * the channel name — so master channels can be named freely. Backend
+   * default false.
+   */
+  parse_master_from_stream?: boolean;
 }
 
 // =============================================================================

@@ -770,8 +770,12 @@ class TestEnginePhaseAutoRun:
         )
 
     def test_manual_runs_do_not_preflight(self):
-        """Manual behavior is unchanged: no pre-flight call on the manual
-        path (the operator previews; preview carries the pre-flight)."""
+        """Manual behavior is unchanged: no pre-flight GATE on the manual
+        path (the operator previews; preview carries the pre-flight). Proven
+        by attaching even though the master group's auto_channel_sync is OFF
+        — a state the pre-flight would fail-closed on. (Group settings ARE
+        read once for Channel Group Override resolution — bead override — a
+        read-only lookup, not a gate.)"""
         channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
         batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
         engine, executor, client = _engine_with_client(channels, batch)
@@ -785,8 +789,51 @@ class TestEnginePhaseAutoRun:
             triggered_by="manual", channels_touched_ids=set(),
         ))
 
-        client.get_all_m3u_group_settings.assert_not_awaited()
+        # Attached despite master auto-sync OFF => the manual path never
+        # pre-flight-gates (the settings read was override resolution only).
         assert results["event_sync"][0]["attached"] == 1
+
+
+class TestParseMasterFromStream:
+    """bead parse-from-stream: master identity read from the attached stream,
+    so a cleanly-named master channel still matches via its timed stream."""
+
+    def test_flag_reads_identity_from_attached_stream_and_attaches(self):
+        # Channel named cleanly (no time); its attached stream 9001 carries
+        # the timed event that the secondary matches.
+        channels = [_master_channel(100, "Mercury Aces (clean)", streams=[9001])]
+        executor, client = _executor(channels)
+        client.get_streams_by_ids = AsyncMock(
+            return_value=[{"id": 9001, "name": MASTER_MERCURY}]
+        )
+        streams = [SecondaryStream(
+            name=STREAM_MERCURY, group_id=20, stream_id=7001, provider="ProvB",
+        )]
+        exec_ctx = ExecutionContext(dry_run=False)
+        summary = _run(executor.execute_event_sync_rule(
+            1, "Event Rule", _config(parse_master_from_stream=True),
+            streams, exec_ctx,
+        ))
+        assert summary["attached"] == 1
+        client.update_channel.assert_awaited_once_with(
+            100, {"streams": [9001, 7001]}
+        )
+        client.get_streams_by_ids.assert_awaited_once_with([9001])
+
+    def test_without_flag_a_clean_named_master_cannot_match(self):
+        # Same clean channel name, flag OFF: the master name has no time, so
+        # it is an unparsed master and nothing attaches — proves the flag is
+        # what enables the match.
+        channels = [_master_channel(100, "Mercury Aces (clean)", streams=[9001])]
+        executor, client = _executor(channels)
+        streams = [SecondaryStream(
+            name=STREAM_MERCURY, group_id=20, stream_id=7001, provider="ProvB",
+        )]
+        exec_ctx = ExecutionContext(dry_run=False)
+        summary = _run(executor.execute_event_sync_rule(
+            1, "Event Rule", _config(), streams, exec_ctx,
+        ))
+        assert summary["attached"] == 0
 
 
 # =============================================================================

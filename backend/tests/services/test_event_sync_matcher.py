@@ -220,6 +220,126 @@ class TestParseEventName:
         assert parsed.start == _et(2026, 7, 11, 19, 0)
 
     @pytest.mark.parametrize(
+        ("name", "expected_title", "expected_start"),
+        [
+            # bead 9c9j7: a provider/slot label appended AFTER the time used
+            # to break the parse (the end-anchored time pattern rejected the
+            # trailing " :Flo Racing 03"). Folding captured time into the
+            # date pattern lets the tail be ignored. Single-digit hour too.
+            (
+                "Zenith Racing Series at Road America @ Jul 11 9:30 AM :Flo Racing 03",
+                "Zenith Racing Series at Road America",
+                _et(2026, 7, 11, 9, 30),
+            ),
+            # Day-first with a trailing suffix.
+            (
+                "Mercury vs. Aces @ 11 Jul 06:00 PM ET | Peacock 14",
+                "Mercury vs. Aces",
+                _et(2026, 7, 11, 18, 0),
+            ),
+        ],
+    )
+    def test_trailing_suffix_after_time_still_parses(
+        self, name, expected_title, expected_start
+    ):
+        parsed = parse_event_name(name, now=_NOW)
+        assert parsed.title == expected_title
+        assert parsed.start == expected_start
+
+    @pytest.mark.parametrize(
+        ("name", "expected_title", "expected_start"),
+        [
+            # bead: parenthesized NUMERIC month-first date "(7.12 9:15 AM ET)".
+            (
+                "PPV EVENT 01: Zenith Racing Series at Road America "
+                "(7.12 9:15 AM ET)",
+                "Zenith Racing Series at Road America",
+                _et(2026, 7, 12, 9, 15),
+            ),
+            # Slash separator, PM.
+            (
+                "PPV EVENT 10: Redstall vs. Courtney (7/12 12:00 PM ET)",
+                "Redstall vs. Courtney",
+                _et(2026, 7, 12, 12, 0),
+            ),
+        ],
+    )
+    def test_parenthesized_numeric_date_parses(
+        self, name, expected_title, expected_start
+    ):
+        parsed = parse_event_name(name, now=_NOW)
+        assert parsed.title == expected_title
+        assert parsed.start == expected_start
+
+    def test_numeric_date_needs_a_time_after_it(self):
+        # A bare numeric "7.5" with no time must NOT parse a start (never
+        # guessed) — guards the numeric-date pattern against false positives.
+        parsed = parse_event_name("Slot 01: Game 7.5 preview show", now=_NOW)
+        assert parsed.start is None
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Boxing 05 : FURY vs HALL 6PM",
+            "Boxing 6: Fury v Makhmudov 19:00",
+            "LIVE EVENT 05 - 4:15pm Zenith Racing Series Road America",
+        ],
+    )
+    def test_dateless_stays_unmatchable_without_the_flag(self, name):
+        # The never-guess rail: a time with no date is None by default.
+        assert parse_event_name(name, now=_NOW).start is None
+
+    @pytest.mark.parametrize(
+        ("name", "expected_title", "expected_start"),
+        [
+            # am/pm, minutes implied :00, slot stripped.
+            ("Boxing 05 : FURY vs HALL 6PM", "FURY vs HALL",
+             _et(2026, 7, 11, 18, 0)),
+            # 24h, 1-digit colon-less slot stripped.
+            ("Boxing 6: Fury v Makhmudov 19:00", "Fury v Makhmudov",
+             _et(2026, 7, 11, 19, 0)),
+            # time-FIRST layout after "-".
+            ("LIVE EVENT 05 - 4:15pm Zenith Racing Series Road America",
+             "Zenith Racing Series Road America", _et(2026, 7, 11, 16, 15)),
+        ],
+    )
+    def test_dateless_parses_onto_today_with_the_flag(
+        self, name, expected_title, expected_start
+    ):
+        parsed = parse_event_name(name, now=_NOW, assume_current_date=True)
+        assert parsed.title == expected_title
+        assert parsed.start == expected_start
+
+    def test_flag_does_not_override_a_real_parsed_date(self):
+        # A name WITH a date keeps its real date (Jul 11) even when the flag
+        # is on and "today" (Jan 1) is a completely different day.
+        parsed = parse_event_name(
+            "Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            now=_et(2026, 1, 1, 12, 0), assume_current_date=True,
+        )
+        assert (parsed.start.month, parsed.start.day) == (7, 11)
+        assert parsed.start.hour == 18
+
+    def test_flag_still_rejects_a_name_with_no_time(self):
+        parsed = parse_event_name(
+            "Boxing 7: Jake Paul vs Anthony Joshua", now=_NOW,
+            assume_current_date=True,
+        )
+        assert parsed.start is None
+
+    def test_pipe_delimited_name_with_weekday_and_region_marker_parses(self):
+        # bead 9c9j7: live pipe-delimited listing shape that produced
+        # "Incomplete date/time" — "|" delimiter, a "Sun" weekday prefix, a
+        # "(US)" region marker after the timezone, and a trailing provider.
+        parsed = parse_event_name(
+            "NEXT | OTAGO NUGGETS VS. AUCKLAND TUATARA (ROUND 14) "
+            "| Sun 12 Jul 02:00 EDT (US) |  | US: ESPN+ PPV 40",
+            now=_NOW,
+        )
+        assert parsed.start == _et(2026, 7, 12, 2, 0)
+        assert "AUCKLAND TUATARA" in parsed.title
+
+    @pytest.mark.parametrize(
         ("name", "expected_title"),
         [
             # PR #611 finding 4: series-identity prefixes are NOT slot
@@ -673,13 +793,16 @@ class TestMatchStreamToMasters:
         # may carry different name shapes. master_patterns parses ONLY the
         # master side; ``patterns`` (here None -> built-in defaults) parses
         # the streams.
+        # Uses a ">>" delimiter the built-in defaults do NOT recognize (the
+        # defaults accept "@" and "|", bead 9c9j7), so the master shape stays
+        # unparseable without master_patterns and the test's intent survives.
         master_patterns = [{
             "name": "master-shape",
-            "title_pattern": r"^MASTER\s*\|\s*(?P<title>.+?)\s*\|.*$",
+            "title_pattern": r"^MASTER\s*>>\s*(?P<title>.+?)\s*>>.*$",
             "time_pattern": r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>[AP])M\s*$",
-            "date_pattern": r"\|\s*(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3})\s+\d{1,2}:\d{2}",
+            "date_pattern": r">>\s*(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3})\s+\d{1,2}:\d{2}",
         }]
-        masters = ["MASTER | Mercury vs. Aces | 11 Jul 06:00 PM"]
+        masters = ["MASTER >> Mercury vs. Aces >> 11 Jul 06:00 PM"]
         stream = "Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET"
 
         # Without master_patterns the default patterns cannot extract a

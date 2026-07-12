@@ -1533,7 +1533,29 @@ def register(mcp: FastMCP):
             event_sync_config: Preview an inline config before saving —
                 {"master_group_id": int, "secondary_group_ids": [int, ...],
                  optional "patterns"/"group_patterns"/"time_window_minutes"/
-                 "attach_threshold"}.
+                 "attach_threshold"/"max_attach_per_run"/"auto_run"/
+                 "dummy_epg_profile_id"/"include_master_group_streams"/
+                 "assume_current_date"/"parse_master_from_stream"}.
+                include_master_group_streams (bool, default false, bead
+                6xxmp): also match the MASTER group's OWN streams to the
+                master channels — the path for two providers sharing one
+                same-named channel group (Dispatcharr merges same-named
+                groups into one id). Streams already attached are skipped, so
+                only the unsynced provider's streams attach.
+                assume_current_date (bool, default false): place a listing
+                that carries a time but NO date onto the CURRENT date so
+                dateless "today's schedule" feeds become matchable — relaxes
+                the never-guess-the-date rail (cross-day match risk).
+                parse_master_from_stream (bool, default false): read each
+                master channel's event identity (title+time) from its first
+                attached stream's name instead of the channel name, so master
+                channels can be named freely.
+                The built-in parse patterns also accept "|" and "("
+                delimiters, weekday prefixes, trailing suffixes after the
+                time, and numeric month-first dates ("(7.12 9:15 AM ET)"); a
+                Dispatcharr Channel Group Override on the master group is
+                followed automatically (master channels are read from the
+                override's target group). None of those need config keys.
 
         Args:
             rule_id: Saved channel-pipeline rule id (event_sync kind).
