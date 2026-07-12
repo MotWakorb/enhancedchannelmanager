@@ -340,6 +340,98 @@ class TestAutoRunFlag:
         assert stored["auto_run"] is False
 
 
+class TestDummyEpgProfileId:
+    """dummy_epg_profile_id reference (bead ti939.3.3 — dummy EPG
+    auto-assignment for master event channels).
+
+    OPTIONAL: absent means the feature is off, and the key is NOT
+    default-filled. When present it must be a positive int that RESOLVES
+    to an existing DummyEPGProfile row — a dangling reference is refused
+    with a teaching error at save time and by the engine's per-run
+    re-validation. Enabled-ness is deliberately NOT validated (a
+    temporarily disabled profile must not kill the rule's attach path).
+    """
+
+    @pytest.fixture()
+    def profile_db(self, monkeypatch):
+        """In-memory DB with one enabled + one disabled profile; patches
+        database._SessionLocal so the validator's direct get_session()
+        call resolves to it (mirrors conftest.async_client's approach)."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        import database
+        from models import DummyEPGProfile
+
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        database.Base.metadata.create_all(bind=engine)
+        session_local = sessionmaker(
+            autocommit=False, autoflush=False, bind=engine
+        )
+        session = session_local()
+        session.add(DummyEPGProfile(id=7, name="Events EPG", enabled=True))
+        session.add(DummyEPGProfile(id=8, name="Disabled EPG", enabled=False))
+        session.commit()
+        session.close()
+        monkeypatch.setattr(database, "_SessionLocal", session_local)
+        try:
+            yield
+        finally:
+            database.Base.metadata.drop_all(bind=engine)
+            engine.dispose()
+
+    def test_absent_key_is_feature_off_and_not_filled(self):
+        """No dummy_epg_profile_id → valid, and the key is NOT
+        default-filled (absent means OFF, not null)."""
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert "dummy_epg_profile_id" not in config
+
+    def test_existing_profile_id_accepted(self, profile_db):
+        config = _valid_config(dummy_epg_profile_id=7)
+        assert validate_event_sync_config(config) == []
+        assert config["dummy_epg_profile_id"] == 7
+
+    def test_disabled_profile_id_still_validates(self, profile_db):
+        """Enabled-ness is a run-time concern (warning + EPG step skip),
+        never a validation error — otherwise disabling a profile would
+        invalidate the rule and kill its attach path."""
+        config = _valid_config(dummy_epg_profile_id=8)
+        assert validate_event_sync_config(config) == []
+
+    def test_nonexistent_profile_id_rejected_with_teaching_error(
+        self, profile_db
+    ):
+        config = _valid_config(dummy_epg_profile_id=999)
+        errors = validate_event_sync_config(config)
+        assert len(errors) == 1
+        err = errors[0]
+        assert "event_sync_config.dummy_epg_profile_id" in err
+        assert "999" in err
+        assert "EXISTING dummy EPG profile" in err
+        assert "docs/event_sync.md" in err
+
+    @pytest.mark.parametrize("bad", [True, False, 0, -1, "7", 1.5])
+    def test_non_positive_int_rejected(self, bad):
+        """Shape errors are caught WITHOUT a DB lookup (bool is an int
+        subclass — rejected like _is_group_id does)."""
+        config = _valid_config()
+        config["dummy_epg_profile_id"] = bad
+        errors = validate_event_sync_config(config)
+        assert any("dummy_epg_profile_id" in e for e in errors)
+
+    def test_typoed_key_rejected_by_unknown_key_rail(self):
+        config = _valid_config()
+        config["dummy_epg_profile"] = 7  # missing _id suffix
+        errors = validate_event_sync_config(config)
+        assert any("dummy_epg_profile" in e for e in errors)
+
+
 class TestTeachingErrorFormat:
     """Errors must teach: field, got, expected, doc link."""
 

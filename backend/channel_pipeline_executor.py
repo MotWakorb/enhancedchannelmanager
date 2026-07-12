@@ -217,12 +217,27 @@ class ActionExecutor:
             if src_id is not None:
                 self._epg_data_by_source.setdefault(src_id, []).append(entry)
 
-        # Identify dummy EPG sources (URL contains /api/dummy-epg/xmltv)
+        # Identify dummy EPG sources (URL contains /api/dummy-epg/xmltv).
+        # ti939.3.3 additionally needs the REVERSE of Pass 5's source→profile
+        # URL mapping: profile id → per-profile source id (URL path
+        # /api/dummy-epg/xmltv/<profile_id>), plus the combined all-profiles
+        # sources (bare /api/dummy-epg/xmltv) as a fallback. Deterministic on
+        # duplicates: the lowest source id wins.
         self._dummy_epg_source_ids: set[int] = set()
-        for src in (epg_sources or []):
+        self._dummy_source_by_profile: dict[int, int] = {}
+        self._combined_dummy_source_ids: list[int] = []
+        for src in sorted((epg_sources or []), key=lambda s: s.get("id", 0)):
             url = src.get("url") or ""
-            if "/api/dummy-epg/xmltv" in url:
-                self._dummy_epg_source_ids.add(src["id"])
+            if "/api/dummy-epg/xmltv" not in url:
+                continue
+            self._dummy_epg_source_ids.add(src["id"])
+            m = re.search(r"/api/dummy-epg/xmltv/(\d+)", url)
+            if m:
+                self._dummy_source_by_profile.setdefault(
+                    int(m.group(1)), src["id"]
+                )
+            else:
+                self._combined_dummy_source_ids.append(src["id"])
 
         # Deferred EPG assignments (populated when dummy source has no data yet)
         self._deferred_epg_assignments: list[tuple] = []  # (channel_id, action, stream_ctx, exec_ctx)
@@ -2117,7 +2132,8 @@ class ActionExecutor:
             )
 
     async def _execute_assign_epg(self, action: Action, stream_ctx: StreamContext,
-                                   exec_ctx: ExecutionContext) -> ActionResult:
+                                   exec_ctx: ExecutionContext,
+                                   defer_on_no_match: bool = False) -> ActionResult:
         """Execute assign_epg action.
 
         The user selects an EPG source ID (epg_id), but Dispatcharr channels use
@@ -2126,6 +2142,13 @@ class ActionExecutor:
         1. For dummy EPGs (1 entry per source): uses that single entry
         2. For standard EPGs: matches by the channel's tvg_id
         3. Fallback: first entry from the source
+
+        ``defer_on_no_match`` (ti939.3.3, event_sync dummy EPG assignment
+        only): when the dummy source HAS entries but none matches this
+        channel — the steady state right after Dispatcharr creates a new
+        event channel, before the profile's XMLTV covers it — defer to the
+        existing Pass 5 refresh-and-retry instead of failing. Default False
+        keeps the standard-rule path byte-identical (no-match = failure).
         """
         if not exec_ctx.current_channel_id:
             return ActionResult(
@@ -2181,6 +2204,27 @@ class ActionExecutor:
 
         if not epg_data_entry:
             channel_name = channel.get("name", "unknown")
+            if defer_on_no_match and epg_source_id in self._dummy_epg_source_ids:
+                # ti939.3.3: same deferral as the empty-source branch above —
+                # Pass 5 regenerates the profile's XMLTV (which then covers
+                # this channel), refreshes the source, and retries.
+                logger.info(
+                    "[AUTO-CREATE-EXEC] Deferring assign_epg for dummy source "
+                    "%s (channel %s '%s') — no matching entry yet; will retry "
+                    "after EPG refresh",
+                    epg_source_id, exec_ctx.current_channel_id, channel_name
+                )
+                self._deferred_epg_assignments.append(
+                    (exec_ctx.current_channel_id, action, stream_ctx, exec_ctx)
+                )
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"Deferred: will assign EPG from dummy source {epg_source_id} after refresh",
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                    deferred=True
+                )
             logger.warning("[AUTO-CREATE-EXEC] No EPG match for channel '%s' in source %s", channel_name, epg_source_id)
             return ActionResult(
                 success=False,
@@ -3572,6 +3616,137 @@ class ActionExecutor:
                 "entity_name": r.best.master_name,
                 "error": result.error,
                 "match": provenance,
+            })
+
+        return summary
+
+    async def assign_event_sync_dummy_epg(self, rule_id: Optional[int],
+                                          rule_name: str, config: dict,
+                                          exec_ctx: ExecutionContext) -> dict:
+        """Assign the rule's dummy EPG profile to master-group channels
+        (bead ti939.3.3 — event_sync dummy EPG auto-assignment).
+
+        The master group's channels are ordinary Dispatcharr channels, so
+        this rides the EXISTING machinery end to end: each channel without
+        guide data gets a standard ``assign_epg`` execution against the
+        Dispatcharr EPG source that serves the profile's XMLTV
+        (``/api/dummy-epg/xmltv/<profile_id>``); a channel the source does
+        not cover yet (brand-new event, or first run) defers into
+        ``_deferred_epg_assignments`` and the EXISTING Pass 5 refresh-and-
+        retry — which also auto-adds the master group to the profile's
+        ``channel_group_ids``, regenerates the XMLTV, refreshes the source
+        and retries. No parallel mechanism.
+
+        Idempotent and non-clobbering:
+
+        * a channel whose ``epg_data_id`` already belongs to the profile's
+          source is a no-op (``already_assigned``);
+        * a channel with FOREIGN guide data (any other source, e.g. a
+          hand-assigned real EPG) is never overwritten
+          (``skipped_foreign_epg``);
+        * only channels with NO guide data are assigned.
+
+        NEVER: creates/deletes channels or touches Dispatcharr group
+        settings — assignment is ``epg_data_id`` metadata on existing
+        master channels, exactly what standard assign_epg rules write.
+
+        Returns a summary dict the engine folds into the run results:
+        counts per disposition plus per-channel ``assign_entries`` for the
+        execution log. ``source_id`` is None when no Dispatcharr EPG
+        source serves the profile (the engine surfaces that as a run
+        warning — nothing to assign from).
+        """
+        profile_id = config["dummy_epg_profile_id"]
+        master_group_id = config["master_group_id"]
+
+        source_id = self._dummy_source_by_profile.get(profile_id)
+        if source_id is None and self._combined_dummy_source_ids:
+            # Fallback: a combined all-profiles source serves this profile's
+            # entries too (lowest id — the sort in __init__ — for determinism).
+            source_id = self._combined_dummy_source_ids[0]
+
+        summary = {
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "profile_id": profile_id,
+            "source_id": source_id,
+            "assigned": 0,
+            "already_assigned": 0,
+            "deferred": 0,
+            "skipped_foreign_epg": 0,
+            "failed": 0,
+            "assign_entries": [],
+        }
+        if source_id is None:
+            logger.warning(
+                "[EVENT-SYNC] Rule '%s': dummy_epg_profile_id=%s has no "
+                "Dispatcharr EPG source (no source URL matches "
+                "/api/dummy-epg/xmltv/%s) — nothing to assign from",
+                rule_name, profile_id, profile_id,
+            )
+            return summary
+
+        source_entry_ids = {
+            e["id"] for e in self._epg_data_by_source.get(source_id, [])
+        }
+
+        for channel in self.existing_channels:
+            if channel.get("channel_group_id") != master_group_id:
+                continue
+            channel_id = channel.get("id")
+            channel_name = channel.get("name", f"Channel {channel_id}")
+            epg_data_id = channel.get("epg_data_id")
+
+            if epg_data_id is not None and epg_data_id in source_entry_ids:
+                # Idempotence: already carrying this profile's guide data.
+                summary["already_assigned"] += 1
+                continue
+            if epg_data_id is not None:
+                # Foreign guide data (another source / hand-assigned real
+                # EPG) — never clobber an existing assignment.
+                logger.debug(
+                    "[EVENT-SYNC] Rule '%s': master channel %s '%s' already "
+                    "has foreign epg_data_id=%s — not overwritten",
+                    rule_name, channel_id, channel_name, epg_data_id,
+                )
+                summary["skipped_foreign_epg"] += 1
+                continue
+
+            # A FRESH per-channel context: the deferred tuple carries the
+            # ExecutionContext, and Pass 5's retry resolves the target from
+            # its current_channel_id — a shared context would retry every
+            # deferral against whichever channel was processed last.
+            channel_ctx = ExecutionContext(dry_run=exec_ctx.dry_run)
+            channel_ctx.current_channel_id = channel_id
+            action = Action(type="assign_epg", params={"epg_id": source_id})
+            stream_ctx = StreamContext(
+                stream_id=0,
+                stream_name=channel_name,
+                group_name=None,
+            )
+            result = await self._execute_assign_epg(
+                action, stream_ctx, channel_ctx, defer_on_no_match=True
+            )
+            # Fold into the rule-level context at the shared chokepoint so
+            # channels_updated / modified_entities (legacy rollback state)
+            # aggregate exactly like standard assign_epg executions.
+            exec_ctx.add_result(result)
+
+            if result.deferred:
+                summary["deferred"] += 1
+            elif result.success:
+                summary["assigned"] += 1
+            else:
+                summary["failed"] += 1
+
+            summary["assign_entries"].append({
+                "type": "event_sync_dummy_epg",
+                "description": result.description,
+                "success": result.success,
+                "deferred": result.deferred,
+                "entity_id": channel_id,
+                "entity_name": channel_name,
+                "error": result.error,
             })
 
         return summary

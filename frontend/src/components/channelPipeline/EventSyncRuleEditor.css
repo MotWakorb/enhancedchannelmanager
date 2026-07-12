@@ -159,3 +159,11 @@
   align-items: center;
   gap: 4px;
 }
+
+/* Guided-setup fix buttons inside the auto-sync warnings (ti939.3.4). */
+.event-sync-fix-btn {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 4px 10px;
+}

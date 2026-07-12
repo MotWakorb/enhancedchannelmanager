@@ -8,7 +8,7 @@
  * apply/attach control.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import {
@@ -269,15 +269,16 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
-  describe('live auto-sync guidance (never toggles Dispatcharr settings)', () => {
-    it('warns with enable-it-yourself guidance when the master group has auto-sync OFF', async () => {
+  describe('live auto-sync guidance (toggles ONLY via the confirmed fix)', () => {
+    it('warns with guidance + a Fix button when the master group has auto-sync OFF', async () => {
       seedGroups();
       stubGroupSettings({ 1: false, 2: false });
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
       const warning = await screen.findByTestId('master-autosync-warning');
       expect(warning).toHaveTextContent(/auto-sync is/i);
-      expect(warning).toHaveTextContent('ECM never toggles this setting for you');
+      expect(warning).toHaveTextContent(/never as a side effect/i);
+      expect(screen.getByTestId('master-autosync-fix')).toBeInTheDocument();
     });
 
     it('shows an OK status when the master group has auto-sync ON', async () => {
@@ -291,14 +292,140 @@ describe('EventSyncRuleEditor', () => {
       expect(screen.queryByTestId('master-autosync-warning')).toBeNull();
     });
 
-    it('warns with disable-it-yourself guidance when a secondary group has auto-sync ON', async () => {
+    it('warns with guidance + a per-group Fix button when a secondary group has auto-sync ON', async () => {
       seedGroups();
       stubGroupSettings({ 1: true, 2: true });
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
       const warning = await screen.findByTestId('secondary-autosync-warning');
       expect(warning).toHaveTextContent('Secondary Events');
-      expect(warning).toHaveTextContent('ECM never toggles this setting for you');
+      expect(warning).toHaveTextContent(/never as a side effect/i);
+      expect(screen.getByTestId('secondary-autosync-fix-2')).toBeInTheDocument();
+    });
+  });
+
+  describe('guided auto-sync fix (ti939.3.4 — confirmed, never a side effect)', () => {
+    /** Stub the toggle endpoint, recording every request body. */
+    function stubToggleEndpoint(calls: unknown[]) {
+      server.use(
+        http.post('/api/m3u/accounts/1/group-auto-sync-toggle', async ({ request }) => {
+          const body = await request.json();
+          calls.push(body);
+          return HttpResponse.json({
+            changed: true,
+            channel_group_id: (body as { channel_group_id: number }).channel_group_id,
+            group_name: 'Secondary Events',
+            account_id: 1,
+            account_name: 'Provider A',
+            auto_channel_sync: (body as { auto_channel_sync: boolean }).auto_channel_sync,
+          });
+        })
+      );
+    }
+
+    it('the Fix button only OPENS the confirmation dialog — nothing is written yet', async () => {
+      const user = userEvent.setup();
+      const calls: unknown[] = [];
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: true });
+      stubToggleEndpoint(calls);
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await user.click(await screen.findByTestId('secondary-autosync-fix-2'));
+
+      // Dialog states exactly what will change and why, including the
+      // consequence and the snapshot-restore recovery note.
+      const dialog = screen.getByRole('alertdialog');
+      expect(dialog).toHaveTextContent('Secondary Events');
+      expect(dialog).toHaveTextContent('Provider A');
+      expect(dialog).toHaveTextContent(/stop creating duplicate channels/i);
+      expect(dialog).toHaveTextContent(/may be removed by Dispatcharr/i);
+      expect(dialog).toHaveTextContent(/snapshot restore does .*not.* revert/i);
+      expect(dialog).toHaveTextContent(/journal entry is the recovery breadcrumb/i);
+      expect(calls).toHaveLength(0);
+    });
+
+    it('Cancel closes the dialog without calling the toggle API', async () => {
+      const user = userEvent.setup();
+      const calls: unknown[] = [];
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: true });
+      stubToggleEndpoint(calls);
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await user.click(await screen.findByTestId('secondary-autosync-fix-2'));
+      const dialog = screen.getByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(calls).toHaveLength(0);
+    });
+
+    it('Confirm sends confirm:true for the OFF direction and the warning clears after refetch', async () => {
+      const user = userEvent.setup();
+      const calls: unknown[] = [];
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: true });
+      stubToggleEndpoint(calls);
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await user.click(await screen.findByTestId('secondary-autosync-fix-2'));
+      // The refetch after the confirmed toggle sees the FIXED settings.
+      stubGroupSettings({ 1: true, 2: false });
+      await user.click(screen.getByTestId('autosync-fix-confirm'));
+
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toEqual({
+        channel_group_id: 2,
+        auto_channel_sync: false,
+        confirm: true,
+      });
+      // Pre-flight warning clears — the editor refetched live settings.
+      await waitFor(() =>
+        expect(screen.queryByTestId('secondary-autosync-warning')).toBeNull()
+      );
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+
+    it('Confirm sends confirm:true for the ON direction (master fix)', async () => {
+      const user = userEvent.setup();
+      const calls: unknown[] = [];
+      seedGroups();
+      stubGroupSettings({ 1: false, 2: false });
+      stubToggleEndpoint(calls);
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await user.click(await screen.findByTestId('master-autosync-fix'));
+      const dialog = screen.getByRole('alertdialog');
+      expect(dialog).toHaveTextContent(/begin creating and managing channels/i);
+      stubGroupSettings({ 1: true, 2: false });
+      await user.click(screen.getByTestId('autosync-fix-confirm'));
+
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toEqual({
+        channel_group_id: 1,
+        auto_channel_sync: true,
+        confirm: true,
+      });
+      await waitFor(() =>
+        expect(screen.queryByTestId('master-autosync-warning')).toBeNull()
+      );
+    });
+
+    it('saving a rule NEVER calls the toggle endpoint, even with warnings showing', async () => {
+      const user = userEvent.setup();
+      const calls: unknown[] = [];
+      seedGroups();
+      stubGroupSettings({ 1: false, 2: true });
+      stubToggleEndpoint(calls);
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await screen.findByTestId('master-autosync-warning');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(calls).toHaveLength(0);
     });
   });
 
@@ -544,6 +671,80 @@ describe('EventSyncRuleEditor', () => {
         'custom-shared',
       ]);
       expect(saved.patterns[2].title_pattern).toBe('^(?P<title>.+?)\\s*@');
+    });
+  });
+
+  describe('dummy EPG profile reference (ti939.3.3)', () => {
+    function stubDummyProfiles() {
+      server.use(
+        http.get('/api/dummy-epg/profiles', () =>
+          HttpResponse.json([
+            { id: 7, name: 'Events EPG', enabled: true },
+            { id: 8, name: 'Old EPG', enabled: false },
+          ])
+        )
+      );
+    }
+
+    it('preserves an API-set dummy_epg_profile_id on an untouched save', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(
+        <EventSyncRuleEditor
+          rule={{
+            ...EXISTING_RULE,
+            event_sync_config: {
+              ...EXISTING_RULE.event_sync_config!,
+              dummy_epg_profile_id: 7,
+            },
+          }}
+          onSave={onSave}
+          onCancel={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      expect(saved.dummy_epg_profile_id).toBe(7);
+    });
+
+    it('selecting a profile under Advanced emits it; the default omits the key', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      stubDummyProfiles();
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      // Open the profile picker (shows the None placeholder) and pick one.
+      await user.click(
+        screen.getByRole('button', { name: /none — no automatic guide data/i })
+      );
+      await user.click(await screen.findByRole('option', { name: 'Events EPG' }));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      expect(saved.dummy_epg_profile_id).toBe(7);
+    });
+
+    it('omits the key entirely when no profile is selected (absent means off)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      expect(saved).not.toHaveProperty('dummy_epg_profile_id');
     });
   });
 

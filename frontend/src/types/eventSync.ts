@@ -53,6 +53,12 @@ export interface EventSyncConfig {
    * absent means manual-run-only.
    */
   auto_run?: boolean;
+  /**
+   * Phase 2 (bead ti939.3.3): dummy EPG profile auto-assigned to master
+   * event channels on every run. OPTIONAL — absent means off (the backend
+   * never default-fills it). Must reference an existing dummy EPG profile.
+   */
+  dummy_epg_profile_id?: number;
 }
 
 // =============================================================================
