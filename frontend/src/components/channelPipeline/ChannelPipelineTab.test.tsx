@@ -89,6 +89,35 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
+    it('Event Sync badge tooltip reflects auto_run state (bead xeli0)', async () => {
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({
+          name: 'AutoRun ES',
+          event_sync_config: {
+            master_group_id: 1, secondary_group_ids: [2], auto_run: true,
+          },
+        }),
+        createMockChannelPipelineRule({
+          name: 'Manual ES',
+          event_sync_config: {
+            master_group_id: 1, secondary_group_ids: [2], auto_run: false,
+          },
+        })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => expect(screen.getByText('AutoRun ES')).toBeInTheDocument());
+
+      const autoRow = screen.getByText('AutoRun ES').closest('tr');
+      const manualRow = screen.getByText('Manual ES').closest('tr');
+      expect(
+        within(autoRow!).getByText('Event Sync').getAttribute('title')
+      ).toContain('automatically after each M3U refresh');
+      expect(
+        within(manualRow!).getByText('Event Sync').getAttribute('title')
+      ).toContain('never on unattended refresh');
+    });
+
     it('shows rule enabled/disabled status', async () => {
       mockDataStore.channelPipelineRules.push(
         createMockChannelPipelineRule({ name: 'Enabled Rule', enabled: true }),

@@ -794,6 +794,60 @@ class TestEnginePhaseAutoRun:
         assert results["event_sync"][0]["attached"] == 1
 
 
+class TestUnattendedGatesEnqueueNothing:
+    """bead odnnf: a gated unattended run (tripped circuit breaker OR failed
+    pre-flight) must enqueue NOTHING to the review queue — pinned directly by
+    asserting enqueue_review_candidates is never called, not merely inferred
+    from the attach path being skipped. Uses an AMBIGUOUS stream so a run that
+    reached the enqueue step WOULD enqueue."""
+
+    def _ambiguous_setup(self):
+        channels = [
+            _master_channel(100, MASTER_MERCURY, streams=[9001]),
+            _master_channel(101, MASTER_IMSA, streams=[9002]),
+        ]
+        batch = [{"id": 7002, "name": STREAM_IMSA_AMBIG, "m3u_account": 1}]
+        return _engine_with_client(channels, batch)
+
+    def test_tripped_breaker_enqueues_nothing(self):
+        engine, executor, client = self._ambiguous_setup()
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_OK
+        )
+        results = _results()
+        with patch("tasks.channel_pipeline._run_on_refresh_suppressed",
+                   return_value=(True, "circuit_breaker")), \
+             patch("services.event_sync_review_store."
+                   "enqueue_review_candidates") as enq:
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, results, dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+        enq.assert_not_called()
+
+    def test_failed_preflight_enqueues_nothing(self):
+        engine, executor, client = self._ambiguous_setup()
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_MASTER_OFF  # master auto-sync OFF
+        )
+        results = _results()
+        with _breaker_clear(), \
+             patch("services.event_sync_review_store."
+                   "enqueue_review_candidates") as enq:
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, results, dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+        enq.assert_not_called()
+        # The pre-flight failure is surfaced, not silent.
+        assert any(
+            w["type"] == "event_sync_preflight_failed"
+            for w in results["event_sync_warnings"]
+        )
+
+
 class TestParseMasterFromStream:
     """bead parse-from-stream: master identity read from the attached stream,
     so a cleanly-named master channel still matches via its timed stream."""

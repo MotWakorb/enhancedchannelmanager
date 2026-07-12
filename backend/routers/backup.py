@@ -36,6 +36,7 @@ from models import (
     ChannelPipelineRule,
     DummyEPGProfile,
     DummyEPGChannelAssignment,
+    EventSyncReview,
     FFmpegProfile,
     NormalizationRuleGroup,
     NormalizationRule,
@@ -74,7 +75,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.17.6-0075"
+APP_VERSION = "0.17.6-0076"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2438,8 +2439,39 @@ def _restore_auto_creation_rules(items: list) -> dict:
 
     session = get_session()
     warnings: list[str] = []
+    # bead 8fq6x: the delete-all below CASCADEs to event_sync_reviews, dropping
+    # every review row — including ANSWERED accept/reject decisions. Preserve
+    # them across the delete+recreate and re-key onto the restored rule by
+    # NAME (fingerprints are content-based and survive; only the rule_id FK
+    # breaks). Captured BEFORE the delete because the CASCADE fires on delete.
+    _REVIEW_FIELDS = (
+        "provider_id", "stream_name_hash", "event_key", "status",
+        "created_at", "last_seen_at", "resolved_at", "resolution_source",
+        "actor_token_id", "evidence",
+    )
     try:
+        id_to_name = {
+            rid: name
+            for rid, name in session.query(
+                ChannelPipelineRule.id, ChannelPipelineRule.name
+            )
+        }
+        preserved_reviews: list[dict] = []
+        for rv in session.query(EventSyncReview).all():
+            rule_name = id_to_name.get(rv.rule_id)
+            if rule_name is None:
+                continue
+            preserved_reviews.append({
+                "rule_name": rule_name,
+                **{f: getattr(rv, f) for f in _REVIEW_FIELDS},
+            })
+
         session.query(ChannelPipelineRule).delete()
+        # Clear the review table explicitly rather than relying on the FK
+        # CASCADE — deterministic regardless of the connection's
+        # foreign_keys pragma, and the captured rows above are re-inserted
+        # with the restored rules' new ids below.
+        session.query(EventSyncReview).delete()
         for item in items:
             # ti939.1.3: the export (to_dict) carries event_sync_config as a
             # parsed dict — re-serialize for the Text column. Dropping it
@@ -2497,6 +2529,48 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 ),
             )
             session.add(rule)
+        session.flush()  # assign ids to the recreated rules
+
+        # bead 8fq6x: re-attach the preserved review decisions to the restored
+        # rule by NAME. Rows whose rule is not in the restore set are dropped
+        # (warned). Dedup on (new_rule_id, fingerprint) so duplicate rule
+        # names can't collapse two rules' rows onto one id and violate the
+        # unique-fingerprint constraint.
+        name_to_new_id: dict[str, int] = {}
+        for rid, name in (
+            session.query(ChannelPipelineRule.id, ChannelPipelineRule.name)
+            .order_by(ChannelPipelineRule.id)
+        ):
+            name_to_new_id.setdefault(name, rid)  # lowest id wins
+        seen: set = set()
+        rekeyed = 0
+        orphaned = 0
+        for pr in preserved_reviews:
+            new_id = name_to_new_id.get(pr["rule_name"])
+            if new_id is None:
+                orphaned += 1
+                continue
+            key = (
+                new_id, pr["provider_id"], pr["stream_name_hash"],
+                pr["event_key"],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            session.add(EventSyncReview(
+                rule_id=new_id, **{f: pr[f] for f in _REVIEW_FIELDS}
+            ))
+            rekeyed += 1
+        if orphaned:
+            warnings.append(
+                f"{orphaned} Event Sync review decision(s) dropped on restore: "
+                f"their rule is not in the restored set."
+            )
+        if rekeyed:
+            logger.info(
+                "[BACKUP] Re-keyed %s Event Sync review decision(s) onto "
+                "restored rules by name", rekeyed,
+            )
         session.commit()
         return {"warnings": warnings}
     except Exception:

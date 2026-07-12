@@ -51,6 +51,29 @@
   font-size: 13px;
 }
 
+/* Contested-pairing caution (bead 8rzkq): rejecting one side may auto-attach
+   the sibling — surface it inline on contested cards so the reject is not a
+   surprise. */
+.event-sync-review-contested-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-warning, var(--border-primary));
+  border-radius: 6px;
+  background: var(--bg-warning-subtle, var(--bg-secondary));
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.event-sync-review-contested-note .material-icons {
+  font-size: 18px;
+  flex-shrink: 0;
+  color: var(--text-warning, var(--text-secondary));
+}
+
 .event-sync-review-list {
   list-style: none;
   margin: 0;
