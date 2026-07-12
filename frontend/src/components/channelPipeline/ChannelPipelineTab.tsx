@@ -887,7 +887,11 @@ export function ChannelPipelineTab() {
                           {rule.event_sync_config && (
                             <span
                               className="badge badge-sm badge-info rule-kind-badge"
-                              title="Event Sync rule — attaches streams on MANUAL pipeline runs only (never on unattended refresh); attaches are journaled and reversible via rollback"
+                              title={
+                                rule.event_sync_config.auto_run
+                                  ? 'Event Sync rule — attaches streams on manual pipeline runs AND automatically after each M3U refresh (auto-run is ON); attaches are journaled and reversible via rollback'
+                                  : 'Event Sync rule — attaches streams on MANUAL pipeline runs only (never on unattended refresh); attaches are journaled and reversible via rollback'
+                              }
                             >
                               Event Sync
                             </span>

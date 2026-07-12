@@ -114,6 +114,27 @@ describe('EventSyncReviewQueue — evidence rendering', () => {
       await screen.findByText('No pairings awaiting review'),
     ).toBeInTheDocument();
   });
+
+  it('warns on contested rows that rejecting may auto-attach the sibling (bead 8rzkq)', async () => {
+    mockList([makeRecord()]); // default record is contested
+    render(<EventSyncReviewQueue />);
+    expect(
+      await screen.findByText(/rejecting this pairing may let the other/i),
+    ).toBeInTheDocument();
+  });
+
+  it('omits the contested warning on a non-contested (band) ambiguity', async () => {
+    const rec = makeRecord();
+    mockList([{
+      ...rec,
+      evidence: { ...rec.evidence, ambiguous_reason: 'top_candidate_ambiguous_band' },
+    }]);
+    render(<EventSyncReviewQueue />);
+    await screen.findByText('Fury vs. Usyk'); // wait for the card to render
+    expect(
+      screen.queryByText(/rejecting this pairing may let the other/i),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe('EventSyncReviewQueue — accept', () => {
