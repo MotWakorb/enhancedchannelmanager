@@ -231,6 +231,19 @@ export function EventSyncRuleEditor({
   // Phase 2 opt-in (ti939.3.1): unattended auto-run on the refresh
   // watermark. Default OFF — the backend treats an absent key as false.
   const [autoRun, setAutoRun] = useState(config?.auto_run ?? false);
+  // bead 6xxmp: also match the master group's own streams (a second provider
+  // sharing the master group's name) to the master channels.
+  const [includeMasterGroupStreams, setIncludeMasterGroupStreams] = useState(
+    config?.include_master_group_streams ?? false
+  );
+  // bead assume-current-date: fill the current date for dateless listings.
+  const [assumeCurrentDate, setAssumeCurrentDate] = useState(
+    config?.assume_current_date ?? false
+  );
+  // bead parse-from-stream: read master identity from the attached stream.
+  const [parseMasterFromStream, setParseMasterFromStream] = useState(
+    config?.parse_master_from_stream ?? false
+  );
   // Phase 2 (ti939.3.3): optional dummy EPG profile auto-assigned to master
   // channels on every run. null = feature off (key omitted on save).
   const [dummyEpgProfileId, setDummyEpgProfileId] = useState<number | null>(
@@ -476,6 +489,22 @@ export function EventSyncRuleEditor({
     // the key is never emitted as null).
     if (dummyEpgProfileId != null) {
       built.dummy_epg_profile_id = dummyEpgProfileId;
+    }
+    // bead 6xxmp: emit the master self-attach flag when checked; preserve an
+    // explicit stored value (the backend validator fills it on save). Absent
+    // means false on the backend, so an unchecked legacy config stays absent.
+    if (includeMasterGroupStreams || config?.include_master_group_streams != null) {
+      built.include_master_group_streams = includeMasterGroupStreams;
+    }
+    // bead assume-current-date: emit when checked; preserve an explicit
+    // stored value (absent means false on the backend).
+    if (assumeCurrentDate || config?.assume_current_date != null) {
+      built.assume_current_date = assumeCurrentDate;
+    }
+    // bead parse-from-stream: emit when checked; preserve an explicit stored
+    // value (absent means false on the backend).
+    if (parseMasterFromStream || config?.parse_master_from_stream != null) {
+      built.parse_master_from_stream = parseMasterFromStream;
     }
 
     // --- Shared patterns (bead z4y4a: full round-trip) -------------------
@@ -1018,6 +1047,75 @@ export function EventSyncRuleEditor({
                   landing right after a refresh can precede Dispatcharr
                   creating a brand-new event&apos;s master channel — that
                   stream attaches on the next run.
+                </span>
+              </div>
+
+              <div className="form-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={includeMasterGroupStreams}
+                    onChange={e => setIncludeMasterGroupStreams(e.target.checked)}
+                    disabled={isLoading}
+                    data-testid="event-sync-include-master-group-streams"
+                  />
+                  <span>Also attach the master group&apos;s own streams</span>
+                </label>
+                <span className="form-hint">
+                  Off by default. Turn this on when a second provider&apos;s
+                  streams live in the <em>same-named</em> channel group as the
+                  master (Dispatcharr merges same-named groups into one, so
+                  they cannot be picked as a separate secondary). When on, the
+                  master group&apos;s streams are matched to the master
+                  channels too; streams already attached (the auto-synced
+                  provider&apos;s own) are skipped, so only the unsynced
+                  provider&apos;s streams attach.
+                </span>
+              </div>
+
+              <div className="form-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={parseMasterFromStream}
+                    onChange={e => setParseMasterFromStream(e.target.checked)}
+                    disabled={isLoading}
+                    data-testid="event-sync-parse-master-from-stream"
+                  />
+                  <span>Read master event time from the attached stream</span>
+                </label>
+                <span className="form-hint">
+                  Off by default. Event Sync normally reads a master
+                  channel&apos;s date/time from its <em>name</em>. Turn this on
+                  to read it from the master channel&apos;s <strong>first
+                  attached stream</strong> instead — so you can name the master
+                  channels however you like while the event time still comes
+                  from the underlying auto-synced stream. (If a master channel
+                  has no attached stream, it is skipped.)
+                </span>
+              </div>
+
+              <div className="form-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={assumeCurrentDate}
+                    onChange={e => setAssumeCurrentDate(e.target.checked)}
+                    disabled={isLoading}
+                    data-testid="event-sync-assume-current-date"
+                  />
+                  <span>Assume today&apos;s date for dateless listings</span>
+                </label>
+                <span className="form-hint">
+                  Off by default. Some providers list a live schedule with a
+                  time but <em>no date</em> (e.g. &quot;FURY vs HALL 6PM&quot;).
+                  Normally those can&apos;t be matched (the time could be any
+                  day). Turn this on to place such listings on the{' '}
+                  <strong>current date</strong> so they match same-day events.
+                  Risk: a listing that is really for another day (e.g. a replay
+                  at the same time tomorrow) can mis-match — the ±time window
+                  still applies, but same-time-of-day collisions can slip
+                  through. Leave off unless the group only ever lists today.
                 </span>
               </div>
 

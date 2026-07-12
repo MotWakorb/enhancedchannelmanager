@@ -193,6 +193,150 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
+  describe('master-group self-attach (bead 6xxmp)', () => {
+    it('defaults OFF and omits include_master_group_streams when never set', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      expect(
+        screen.getByTestId('event-sync-include-master-group-streams')
+      ).not.toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config).not.toHaveProperty(
+        'include_master_group_streams'
+      );
+    });
+
+    it('emits include_master_group_streams: true when the operator checks the box', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      await user.click(
+        screen.getByTestId('event-sync-include-master-group-streams')
+      );
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.include_master_group_streams
+      ).toBe(true);
+    });
+
+    it('initializes checked from a stored true and round-trips it', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          include_master_group_streams: true,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      expect(
+        screen.getByTestId('event-sync-include-master-group-streams')
+      ).toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.include_master_group_streams
+      ).toBe(true);
+    });
+  });
+
+  describe('parse-master-from-stream opt-in', () => {
+    it('defaults OFF and omits the key when never set', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      expect(
+        screen.getByTestId('event-sync-parse-master-from-stream')
+      ).not.toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config).not.toHaveProperty(
+        'parse_master_from_stream'
+      );
+    });
+
+    it('emits parse_master_from_stream: true when checked', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      await user.click(
+        screen.getByTestId('event-sync-parse-master-from-stream')
+      );
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.parse_master_from_stream
+      ).toBe(true);
+    });
+  });
+
+  describe('assume-current-date opt-in (dateless listings)', () => {
+    it('defaults OFF and omits assume_current_date when never set', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      expect(
+        screen.getByTestId('event-sync-assume-current-date')
+      ).not.toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config).not.toHaveProperty(
+        'assume_current_date'
+      );
+    });
+
+    it('emits assume_current_date: true when checked', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByTestId('event-sync-assume-current-date'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.assume_current_date
+      ).toBe(true);
+    });
+  });
+
   describe('auto-run opt-in (ti939.3.1)', () => {
     it('defaults OFF and omits auto_run for a rule that never had the key', async () => {
       const user = userEvent.setup();
@@ -496,14 +640,15 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      // Deselect one of the two built-ins
+      // Deselect one of the built-ins; the remaining built-ins are emitted.
       await user.click(screen.getByRole('checkbox', { name: /month-first date \(built-in\)/i }));
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
       const config = onSave.mock.calls[0][0].event_sync_config;
-      expect(config.patterns).toHaveLength(1);
-      expect(config.patterns[0].name).toBe('slot-title-day-first-date');
+      const names = config.patterns.map((p: { name: string }) => p.name);
+      expect(names).toContain('slot-title-day-first-date');
+      expect(names).not.toContain('slot-title-month-first-date');
       expect(config.patterns[0].title_pattern).toContain('(?P<title>');
     });
 
@@ -702,9 +847,10 @@ describe('EventSyncRuleEditor', () => {
       expect(names).toEqual([
         'slot-title-day-first-date',
         'slot-title-month-first-date',
+        'slot-title-numeric-date',
         'custom-shared',
       ]);
-      expect(saved.patterns[2].title_pattern).toBe('^(?P<title>.+?)\\s*@');
+      expect(saved.patterns[3].title_pattern).toBe('^(?P<title>.+?)\\s*@');
     });
   });
 

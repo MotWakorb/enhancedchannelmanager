@@ -203,41 +203,95 @@ _TEAM_AGREE_FLOOR: float = 0.90
 # score. The escape hatch for such providers is a per-rule pattern
 # override (event_sync_config.patterns / group_patterns).
 #
-# Date-delimiter "@" vs team-separator "@" (PR #611 review, finding 2): a
-# title may itself contain "@" as a home/away separator ("Rangers @
-# Islanders @ 11 Jul 07:00 PM ET"), so the title capture is ".+?" bounded
-# by an explicitly DATE-SHAPED tail — the "@" followed by
+# Date-delimiter "@"/"|" vs team-separator "@" (PR #611 review, finding 2;
+# broadened for the live "|"-delimited + trailing-suffix shapes, bead
+# 9c9j7): a title may itself contain "@" as a home/away separator ("Rangers
+# @ Islanders @ 11 Jul 07:00 PM ET"), so the title capture is ".+?" bounded
+# by an explicitly DATE-SHAPED tail — the delimiter followed by
 # "<day> <month> <h:mm>" or "<month> <day> [year] <h:mm>" — not by the
-# first "@" in the name. A team-separator "@" can never satisfy the date
+# first delimiter in the name. A team-separator can never satisfy the date
 # shape (it is never followed by "<h:mm>" immediately after the day/month
 # tokens), so the title extends through it.
+#
+# Three broadenings over the original "@ <date> <time>$" shape, each driven
+# by live provider names that were producing "Incomplete date/time" parse
+# FAILURES (bead 9c9j7):
+#   1. TRAILING SUFFIX after the time — a slot/provider label the provider
+#      appends AFTER the date ("... @ Jul 11 9:30 AM :Flo Racing 03",
+#      "... | Sun 12 Jul 02:00 EDT (US) | | US: ESPN+ PPV 40"). Fixed by
+#      folding the CAPTURED time into the date pattern (``_TIME_CAPTURE``)
+#      so hour/minute are positionally locked to the date and the pattern
+#      stops at the timezone instead of having to reach end-of-string.
+#   2. "|" DELIMITER as well as "@" (``_DATE_DELIM``), for pipe-delimited
+#      listing formats.
+#   3. Optional leading WEEKDAY token before the date (``_WEEKDAY_PREFIX``),
+#      e.g. "| Sun 12 Jul 02:00 EDT". Weekday abbreviations never collide
+#      with month abbreviations, so this is unambiguous before either shape.
 # ---------------------------------------------------------------------------
 
-_TITLE_PATTERN = (
-    r"^(?:[^@:]{0,40}?(?<!\d)\d{2}\s*:\s*)?"
-    r"\s*(?P<title>.+?)\s*"
-    r"(?:@\s*(?:\d{1,2}\s+[A-Za-z]{3,9}\s+\d{1,2}:\d{2}"
-    r"|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:\s*,?\s*\d{4})?\s+\d{1,2}:\d{2}).*)?$"
+# Date delimiter: "@" (most providers), "|" (pipe-delimited listings), or
+# "(" (parenthesized dates, e.g. "Title (7.12 9:15 AM ET)" — bead for the
+# numeric-date shape).
+_DATE_DELIM = r"(?:@|\||\()"
+
+# Optional leading weekday token ("Sun", "Sunday", "Mon,") before the date.
+_WEEKDAY_PREFIX = r"(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\.?,?\s+)?"
+
+# Time-of-day CAPTURED, folded into the date pattern so hour/minute are
+# positionally locked to the date tokens (never re-searched across the whole
+# name) — this is what lets a trailing suffix after the time be ignored.
+# 12h with AM/PM ("06:00 PM ET") or 24h ("02:00 EDT"); optional ET/EST/EDT.
+_TIME_CAPTURE = (
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2})"
+    r"(?:\s*(?P<ampm>[AaPp])\.?[Mm]?\.?)?"
+    r"(?:\s*E[SD]?T)?"
 )
 
-# Time-of-day at the end of the name: 12h with AM/PM ("06:00 PM ET",
-# "02:45 PM ET") or 24h without ("18:30 ET"). Optional ET/EST/EDT suffix.
+# Non-capturing time shape — bounds the title's date tail only.
+_TIME_SHAPE = r"\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]?\.?)?(?:\s*E[SD]?T)?"
+
+_TITLE_PATTERN = (
+    r"^(?:[^@:|(]{0,40}?(?<!\d)\d{2}\s*:\s*)?"
+    + r"\s*(?P<title>.+?)\s*"
+    + r"(?:" + _DATE_DELIM + r"\s*" + _WEEKDAY_PREFIX + r"(?:"
+    + r"\d{1,2}\s+[A-Za-z]{3,9}\.?\s+" + _TIME_SHAPE
+    + r"|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:\s*,?\s*\d{4})?\s+" + _TIME_SHAPE
+    + r"|\d{1,2}[./]\d{1,2}\s+" + _TIME_SHAPE
+    + r").*)?$"
+)
+
+# End-anchored FALLBACK time source for names whose date pattern does not
+# itself capture the time; the date pattern's captured time wins on merge
+# (``extract_groups`` applies ``date_pattern`` last). 12h with AM/PM
+# ("06:00 PM ET") or 24h without ("18:30 ET"). Optional ET/EST/EDT suffix.
 _TIME_PATTERN = (
     r"(?P<hour>\d{1,2}):(?P<minute>\d{2})"
     r"(?:\s*(?P<ampm>[AaPp])\.?[Mm]?\.?)?"
     r"\s*(?:E[SD]?T)?\s*$"
 )
 
-# Date shape 1 (observed): "@ 11 Jul 06:00 PM ET" — day first.
+# Date shape 1 (observed): "@ 11 Jul 06:00 PM ET" / "| Sun 12 Jul 02:00
+# EDT" — day first, captured time.
 _DATE_PATTERN_DAY_FIRST = (
-    r"@\s*(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})\s+\d{1,2}:\d{2}"
+    _DATE_DELIM + r"\s*" + _WEEKDAY_PREFIX
+    + r"(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})\.?\s+" + _TIME_CAPTURE
 )
 
 # Date shape 2 (observed): "@ Jan 17 02:45 PM ET" — month first, optional
-# explicit 4-digit year ("@ Jan 17 2027 02:45 PM ET").
+# explicit 4-digit year ("@ Jan 17 2027 02:45 PM ET"), captured time.
 _DATE_PATTERN_MONTH_FIRST = (
-    r"@\s*(?P<month>[A-Za-z]{3,9})\.?\s+(?P<day>\d{1,2})"
-    r"(?:\s*,?\s*(?P<year>\d{4}))?\s+\d{1,2}:\d{2}"
+    _DATE_DELIM + r"\s*" + _WEEKDAY_PREFIX
+    + r"(?P<month>[A-Za-z]{3,9})\.?\s+(?P<day>\d{1,2})"
+    + r"(?:\s*,?\s*(?P<year>\d{4}))?\s+" + _TIME_CAPTURE
+)
+
+# Date shape 3 (observed): "(7.12 9:15 AM ET)" — NUMERIC month-first date,
+# "." or "/" separated, month-first (US convention, matching the ET default
+# timezone). A provider that lists numeric dates day-first needs a per-rule
+# override. Captured time; the parenthesis opener is one of the delimiters.
+_DATE_PATTERN_NUMERIC = (
+    _DATE_DELIM + r"\s*" + _WEEKDAY_PREFIX
+    + r"(?P<month>\d{1,2})[./](?P<day>\d{1,2})\s+" + _TIME_CAPTURE
 )
 
 DEFAULT_EVENT_PATTERNS: tuple[dict, ...] = (
@@ -252,6 +306,69 @@ DEFAULT_EVENT_PATTERNS: tuple[dict, ...] = (
         "title_pattern": _TITLE_PATTERN,
         "time_pattern": _TIME_PATTERN,
         "date_pattern": _DATE_PATTERN_MONTH_FIRST,
+    },
+    {
+        "name": "slot-title-numeric-date",
+        "title_pattern": _TITLE_PATTERN,
+        "time_pattern": _TIME_PATTERN,
+        "date_pattern": _DATE_PATTERN_NUMERIC,
+    },
+)
+
+# ---------------------------------------------------------------------------
+# Dateless "today's live schedule" support (bead assume-current-date).
+#
+# OPT-IN ONLY, via the per-rule ``assume_current_date`` flag. Some providers
+# list a live schedule with a TIME but NO date ("Boxing 05 : FURY vs HALL
+# 6PM", "LIVE EVENT 05 - 4:15pm Zenith Racing Series"). The never-guess rail
+# rejects these by default (a time with no date is unmatchable). When the
+# flag is on, :func:`parse_event_name` fills the CURRENT date so the time
+# becomes matchable — accepting the cross-day risk the operator opted into.
+#
+# These variants are tried ONLY on the opt-in path (never in
+# DEFAULT_EVENT_PATTERNS), so the shipped defaults' precision is untouched. A
+# bare time REQUIRES a colon (``H:MM``) or an am/pm marker, so a lone number
+# in a title is never mistaken for a time. A slightly broader slot strip
+# handles the 1-digit / colon-less slots common in these PPV feeds.
+# ---------------------------------------------------------------------------
+
+_BARE_SLOT = r"(?:[^@:|(]{0,40}?(?<!\d)\d{1,2}\s*[:\-]\s*)?"
+
+_ASSUME_DATE_PATTERNS: tuple[dict, ...] = (
+    # Time-of-day at the END, am/pm form: "6PM" / "4:15pm" / "12am".
+    {
+        "name": "dateless-title-time-ampm",
+        "title_pattern": (
+            r"^" + _BARE_SLOT + r"\s*(?P<title>.+?)\s+"
+            r"\d{1,2}(?::\d{2})?\s*[AaPp]\.?[Mm]?\.?(?:\s*E[SD]?T)?\s*$"
+        ),
+        "time_pattern": (
+            r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?"
+            r"\s*(?P<ampm>[AaPp])\.?[Mm]?\.?(?:\s*E[SD]?T)?\s*$"
+        ),
+    },
+    # Time-of-day at the END, 24h form: "19:00" / "18:30 ET".
+    {
+        "name": "dateless-title-time-24h",
+        "title_pattern": (
+            r"^" + _BARE_SLOT + r"\s*(?P<title>.+?)\s+"
+            r"\d{1,2}:\d{2}(?:\s*E[SD]?T)?\s*$"
+        ),
+        "time_pattern": r"(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*E[SD]?T)?\s*$",
+    },
+    # Time-of-day FIRST after a "-"/"|" separator: "LIVE EVENT 05 - 4:15pm
+    # <title>". am/pm required here (a leading 24h "HH:MM" is too easily a
+    # score/round number).
+    {
+        "name": "dateless-time-first",
+        "title_pattern": (
+            r"^.*?[-|]\s*\d{1,2}(?::\d{2})?\s*[AaPp]\.?[Mm]?\.?\s+"
+            r"(?P<title>.+?)\s*$"
+        ),
+        "time_pattern": (
+            r"[-|]\s*(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?"
+            r"\s*(?P<ampm>[AaPp])\.?[Mm]?\.?"
+        ),
     },
 )
 
@@ -427,6 +544,7 @@ def parse_event_name(
     *,
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
     now: datetime | None = None,
+    assume_current_date: bool = False,
 ) -> ParsedEvent:
     """Parse one provider event name into a :class:`ParsedEvent`.
 
@@ -439,6 +557,12 @@ def parse_event_name(
 
     ``now`` (tz-aware) anchors year inference for the observed yearless
     date shapes and defaults to the current time in ``event_timezone``.
+
+    ``assume_current_date`` (bead assume-current-date, OPT-IN) relaxes the
+    never-guess rail for dateless "today's schedule" listings: when no
+    variant yields a complete date but the name carries a bare time-of-day,
+    the CURRENT date (in ``event_timezone``) is filled so the time is
+    matchable. Default False preserves the never-guess behavior exactly.
     """
     variants = patterns if patterns is not None else DEFAULT_EVENT_PATTERNS
     tz = pytz.timezone(event_timezone)
@@ -470,6 +594,26 @@ def parse_event_name(
             fallback_title = groups["title"]
             fallback_variant = variant.get("name") or title_pattern
 
+    # Dateless opt-in: no complete date parsed, but with assume_current_date
+    # a bare time-of-day is placed on TODAY (event_timezone). Tried only here
+    # so the shipped defaults never inherit the "guess the date" behavior.
+    if complete_groups is None and assume_current_date:
+        now_local = now.astimezone(tz)
+        for variant in _ASSUME_DATE_PATTERNS:
+            groups = extract_groups(
+                name, variant["title_pattern"], variant.get("time_pattern"),
+            )
+            if groups is None or groups.get("hour") is None:
+                continue
+            complete_groups = {
+                **groups,
+                "day": str(now_local.day),
+                "month": str(now_local.month),
+                "year": str(now_local.year),
+            }
+            complete_variant = variant["name"]
+            break
+
     if complete_groups is None:
         title = _cap_title(fallback_title)
         return ParsedEvent(
@@ -497,7 +641,9 @@ def _build_start(groups: dict, tz, event_timezone: str, now: datetime) -> dateti
     try:
         day = int(groups.get("day"))
         hour = int(groups.get("hour"))
-        minute = int(groups.get("minute"))
+        # Bare am/pm times ("6PM") carry no minutes — default to :00.
+        minute_raw = groups.get("minute")
+        minute = int(minute_raw) if minute_raw is not None else 0
     except (TypeError, ValueError):
         return None
     if month is None:
@@ -530,7 +676,9 @@ def _build_start(groups: dict, tz, event_timezone: str, now: datetime) -> dateti
     except (ValueError, OverflowError):
         return None
 
-    groups = {**groups, "year": str(year)}
+    # Normalize the delegated groups: fill the defaulted minute (bare am/pm
+    # times have none) so compute_event_times never sees ``minute=None``.
+    groups = {**groups, "year": str(year), "minute": str(minute)}
 
     # Delegate the actual datetime construction (incl. 12h→24h and DST
     # localization) to the shared dummy-EPG machinery so event_sync and
@@ -963,6 +1111,7 @@ def match_streams(
     threshold: float = EVENT_ATTACH_FLOOR,
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
     now: datetime | None = None,
+    assume_current_date: bool = False,
 ) -> list[StreamMatchResult]:
     """Match every secondary stream name against the master channel names.
 
@@ -991,7 +1140,8 @@ def match_streams(
     )
     parsed_masters = [
         parse_event_name(
-            m, effective_master_patterns, event_timezone=event_timezone, now=now
+            m, effective_master_patterns, event_timezone=event_timezone,
+            now=now, assume_current_date=assume_current_date,
         )
         for m in master_names
     ]
@@ -1003,7 +1153,8 @@ def match_streams(
     results: list[StreamMatchResult] = []
     for stream_name in stream_names:
         parsed = parse_event_name(
-            stream_name, patterns, event_timezone=event_timezone, now=now
+            stream_name, patterns, event_timezone=event_timezone, now=now,
+            assume_current_date=assume_current_date,
         )
         if parsed.title is None:
             results.append(StreamMatchResult(

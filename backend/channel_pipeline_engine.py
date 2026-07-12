@@ -2744,6 +2744,58 @@ class ChannelPipelineEngine:
                 if not isinstance(resp, dict) or not resp.get("next"):
                     break
                 page += 1
+
+        # bead 6xxmp: optionally also fetch the MASTER group's own streams as
+        # a secondary source (group_id = master_group_id). The resolver drops
+        # the ones already attached to a master channel, so only a second
+        # provider's unsynced streams in the same-named group survive. Mirrors
+        # the secondary fetch above so preview and run see the same universe.
+        if config.get("include_master_group_streams") and not truncated:
+            master_group_id = config["master_group_id"]
+            mgname = await self.client._channel_group_name_for_id(
+                master_group_id
+            )
+            if not mgname:
+                logger.warning(
+                    "[EVENT-SYNC] Master group %s has no resolvable "
+                    "channel-group name; skipping self-attach fetch",
+                    master_group_id,
+                )
+            else:
+                page = 1
+                while True:
+                    resp = await self.client.get_streams(
+                        page=page, page_size=_EVENT_SYNC_FETCH_PAGE_SIZE,
+                        channel_group_name=mgname,
+                    )
+                    batch = (
+                        resp.get("results", []) if isinstance(resp, dict)
+                        else (resp or [])
+                    )
+                    for s in batch:
+                        if not s.get("name") or s.get("id") is None:
+                            continue
+                        account_id = extract_m3u_account_id(s.get("m3u_account"))
+                        secondary_streams.append(SecondaryStream(
+                            name=s["name"],
+                            group_id=master_group_id,
+                            stream_id=s.get("id"),
+                            provider=account_names.get(account_id),
+                            provider_id=account_id,
+                        ))
+                    if len(secondary_streams) >= EVENT_SYNC_MAX_SECONDARY_STREAMS:
+                        secondary_streams = secondary_streams[
+                            :EVENT_SYNC_MAX_SECONDARY_STREAMS]
+                        logger.warning(
+                            "[EVENT-SYNC] Secondary stream fetch truncated at "
+                            "%s streams (guard, incl. master-group self-attach)"
+                            " — remaining streams picked up next run",
+                            EVENT_SYNC_MAX_SECONDARY_STREAMS,
+                        )
+                        break
+                    if not isinstance(resp, dict) or not resp.get("next"):
+                        break
+                    page += 1
         return secondary_streams
 
     async def _run_event_sync_rules(
@@ -2862,6 +2914,23 @@ class ChannelPipelineEngine:
             )
             accounts = []
         account_names = {a.get("id"): a.get("name") for a in accounts}
+
+        # Channel Group Override resolution (bead override): master channels
+        # for an auto-synced SOURCE group live in its override TARGET group.
+        # Fetch settings ONCE for the whole phase so each rule's master fetch
+        # follows the override instead of coming back empty.
+        from services.event_sync_preflight import (
+            resolve_effective_master_group_id,
+        )
+        try:
+            all_group_settings = await self.client.get_all_m3u_group_settings()
+        except Exception as e:
+            logger.warning(
+                "[EVENT-SYNC] Failed to fetch group settings for override "
+                "resolution (%s) — master fetch uses the configured group id "
+                "as-is", e,
+            )
+            all_group_settings = {}
 
         for rule in event_sync_rules:
             config = rule.get_event_sync_config()
@@ -2987,10 +3056,14 @@ class ChannelPipelineEngine:
                     rule.name, rule.id, e,
                 )
 
+            effective_master_group_id = resolve_effective_master_group_id(
+                all_group_settings, config["master_group_id"]
+            )
             exec_ctx = ExecutionContext(dry_run=dry_run)
             summary = await executor.execute_event_sync_rule(
                 rule.id, rule.name, config, secondary_streams, exec_ctx,
                 decisions=decisions,
+                effective_master_group_id=effective_master_group_id,
             )
 
             # ti939.3.2: persist the run's ambiguous pairings as pending

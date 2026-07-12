@@ -1,7 +1,10 @@
 """
-E2E tests for auto-creation, normalization, tags, and ffmpeg endpoints.
+E2E tests for auto-creation, normalization, and tags endpoints.
 
-Endpoints: /api/auto-creation/*, /api/normalization/*, /api/tags/*, /api/ffmpeg/*
+Endpoints: /api/auto-creation/*, /api/normalization/*, /api/tags/*
+
+The FFMPEG Builder feature (/api/ffmpeg) was removed in build 0062 (beads
+vrrxv/1w428); its e2e coverage was deleted with it (bead 72z02).
 """
 from tests.e2e.conftest import skip_if_not_api
 
@@ -78,22 +81,5 @@ class TestTags:
             "text": "CNN",
             "group_id": group_id,
         })
-        skip_if_not_api(response)
-        assert response.status_code == 200
-
-
-class TestFFmpegProfiles:
-    """Tests for /api/ffmpeg endpoints (may not exist in older versions)."""
-
-    def test_list_profiles(self, e2e_client):
-        """GET /api/ffmpeg/profiles returns profiles."""
-        response = e2e_client.get("/api/ffmpeg/profiles")
-        skip_if_not_api(response)
-        data = response.json()
-        assert "profiles" in data
-
-    def test_capabilities(self, e2e_client):
-        """GET /api/ffmpeg/capabilities returns FFmpeg capabilities."""
-        response = e2e_client.get("/api/ffmpeg/capabilities")
         skip_if_not_api(response)
         assert response.status_code == 200

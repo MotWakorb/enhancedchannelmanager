@@ -20,6 +20,7 @@ Pure module — no Dispatcharr client, no DB, no network.
 from __future__ import annotations
 
 from datetime import datetime
+from unittest.mock import AsyncMock
 
 import pytest
 import pytz
@@ -367,6 +368,133 @@ class TestContestedRail:
         disposition, best, reason = _classify(result)
         assert disposition == DISPOSITION_AMBIGUOUS
         assert reason == AMBIGUOUS_REASON_CONTESTED
+
+
+class TestMasterGroupSelfAttach:
+    """bead 6xxmp: the master group as its own secondary stream source.
+
+    When ``include_master_group_streams`` is on, the fetch layer appends the
+    master group's streams with ``group_id == master_group_id``. The resolver
+    drops those already attached to a master channel (passed via
+    ``attached_stream_ids``) so preview/run parity holds and the auto-synced
+    provider's own streams are not re-offered.
+    """
+
+    # A master-group stream that matches MASTERS[0] (a second provider's copy).
+    MASTER_GROUP_STREAM = "Fubo 09 : Mercury vs. Aces @ 11 Jul 06:00 PM ET"
+
+    def test_already_attached_master_group_stream_is_dropped(self):
+        streams = [SecondaryStream(
+            name=self.MASTER_GROUP_STREAM, group_id=10, stream_id=999,
+        )]
+        resolution = resolve_event_sync(
+            _config(include_master_group_streams=True), MASTERS, streams,
+            now=NOW, attached_stream_ids={999},
+        )
+        # Filtered before scoring -> not in the resolution at all.
+        assert resolution.resolved == ()
+
+    def test_unattached_master_group_stream_still_attaches(self):
+        streams = [SecondaryStream(
+            name=self.MASTER_GROUP_STREAM, group_id=10, stream_id=1000,
+        )]
+        resolution = resolve_event_sync(
+            _config(include_master_group_streams=True), MASTERS, streams,
+            now=NOW, attached_stream_ids={999},  # different id -> not filtered
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.best.master_name == MASTERS[0]
+
+    def test_filter_is_scoped_to_the_master_group_only(self):
+        # A normal secondary-group stream (group 20) whose id happens to be in
+        # attached_stream_ids must NOT be dropped — the filter is master-group
+        # scoped so every other group behaves exactly as before.
+        streams = [SecondaryStream(
+            name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            group_id=20, stream_id=555,
+        )]
+        resolution = resolve_event_sync(
+            _config(), MASTERS, streams, now=NOW, attached_stream_ids={555},
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+
+    def test_no_attached_ids_filters_nothing(self):
+        streams = [SecondaryStream(
+            name=self.MASTER_GROUP_STREAM, group_id=10, stream_id=999,
+        )]
+        resolution = resolve_event_sync(
+            _config(include_master_group_streams=True), MASTERS, streams,
+            now=NOW,  # attached_stream_ids defaults to None
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+
+
+class TestAssumeCurrentDate:
+    """bead assume-current-date: the flag threads through to BOTH sides.
+
+    A dateless master and a dateless secondary both land on "today", so their
+    times compare on one day and a same-time same-event pair attaches.
+    """
+
+    DATELESS_MASTERS = ["Boxing 01 : Fury vs. Usyk 6PM"]
+
+    def test_dateless_pair_attaches_only_with_the_flag(self):
+        streams = [SecondaryStream(
+            name="PPV 07 : Tyson Fury vs. Oleksandr Usyk 6PM",
+            group_id=20, stream_id=701,
+        )]
+        # OFF: both sides are dateless -> unmatchable, no candidate.
+        off = resolve_event_sync(
+            _config(), self.DATELESS_MASTERS, streams, now=NOW,
+        )
+        assert off.resolved[0].disposition != DISPOSITION_WOULD_ATTACH
+
+        # ON: both land on today at 18:00 -> in-window, attaches.
+        on = resolve_event_sync(
+            _config(assume_current_date=True), self.DATELESS_MASTERS,
+            streams, now=NOW,
+        )
+        assert on.resolved[0].disposition == DISPOSITION_WOULD_ATTACH
+        assert on.resolved[0].best.master_name == self.DATELESS_MASTERS[0]
+
+
+class TestBuildMasterNameToId:
+    """bead parse-from-stream: master identity from channel name vs stream."""
+
+    CHANNELS = [
+        {"id": 100, "name": "Clean Master A", "streams": [9001]},
+        {"id": 101, "name": "Clean Master B", "streams": [{"id": 9002}]},
+        {"id": 102, "name": "No Streams", "streams": []},
+    ]
+
+    async def test_default_uses_channel_names(self):
+        from services.event_sync_resolver import build_master_name_to_id
+        client = AsyncMock()
+        result = await build_master_name_to_id(self.CHANNELS, client, False)
+        assert result == {
+            "Clean Master A": 100,
+            "Clean Master B": 101,
+            "No Streams": 102,
+        }
+        client.get_streams_by_ids.assert_not_awaited()
+
+    async def test_flag_uses_first_attached_stream_name(self):
+        from services.event_sync_resolver import build_master_name_to_id
+        client = AsyncMock()
+        client.get_streams_by_ids.return_value = [
+            {"id": 9001, "name": "Fury vs. Usyk @ 12 Jul 06:00 PM ET"},
+            {"id": 9002, "name": "Canelo vs. GGG @ 12 Jul 09:00 PM ET"},
+        ]
+        result = await build_master_name_to_id(self.CHANNELS, client, True)
+        # Identity is the STREAM name; the channel with no streams drops out.
+        assert result == {
+            "Fury vs. Usyk @ 12 Jul 06:00 PM ET": 100,
+            "Canelo vs. GGG @ 12 Jul 09:00 PM ET": 101,
+        }
+        client.get_streams_by_ids.assert_awaited_once_with([9001, 9002])
 
 
 def _candidate(master_name: str, *, score: float, band: str) -> MasterCandidate:

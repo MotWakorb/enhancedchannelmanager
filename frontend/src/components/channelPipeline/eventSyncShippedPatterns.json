@@ -7,25 +7,37 @@
       "id": "slot-title-day-first-date",
       "builtin": true,
       "label": "Title @ Day-first date (built-in)",
-      "description": "Optional \"Slot NN :\" prefix, then title, then \"@ <day> <month> <time>\". Matches the most common live shape.",
+      "description": "Optional \"Slot NN :\" prefix, then title, then \"@ <day> <month> <time>\". Matches the most common live shape. Also accepts a \"|\" delimiter, an optional weekday prefix, and a trailing provider/slot suffix after the time.",
       "example": "Fubo Sports Network 07 : Yankees vs Red Sox @ 11 Jul 06:00 PM ET",
       "expected_title": "Yankees vs Red Sox",
       "expected_start": "2026-07-11T18:00:00-04:00",
-      "title_pattern": "^(?:[^@:]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*)?\\s*(?P<title>.+?)\\s*(?:@\\s*(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{1,2}:\\d{2}|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}).*)?$",
+      "title_pattern": "^(?:[^@:|(]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*)?\\s*(?P<title>.+?)\\s*(?:(?:@|\\||\\()\\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\\.?,?\\s+)?(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\.?\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?|\\d{1,2}[./]\\d{1,2}\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?).*)?$",
       "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?\\s*(?:E[SD]?T)?\\s*$",
-      "date_pattern": "@\\s*(?P<day>\\d{1,2})\\s+(?P<month>[A-Za-z]{3,9})\\s+\\d{1,2}:\\d{2}"
+      "date_pattern": "(?:@|\\||\\()\\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\\.?,?\\s+)?(?P<day>\\d{1,2})\\s+(?P<month>[A-Za-z]{3,9})\\.?\\s+(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?"
     },
     {
       "id": "slot-title-month-first-date",
       "builtin": true,
       "label": "Title @ Month-first date (built-in)",
-      "description": "Optional \"Slot NN :\" prefix, then title, then \"@ <month> <day> [year] <time>\".",
+      "description": "Optional \"Slot NN :\" prefix, then title, then \"@ <month> <day> [year] <time>\". Also accepts a \"|\" delimiter, an optional weekday prefix, and a trailing provider/slot suffix after the time.",
       "example": "Peacock 14: Lyon vs Marseille @ Jan 17 02:45 PM ET",
       "expected_title": "Lyon vs Marseille",
       "expected_start": "2026-01-17T14:45:00-05:00",
-      "title_pattern": "^(?:[^@:]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*)?\\s*(?P<title>.+?)\\s*(?:@\\s*(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{1,2}:\\d{2}|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}).*)?$",
+      "title_pattern": "^(?:[^@:|(]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*)?\\s*(?P<title>.+?)\\s*(?:(?:@|\\||\\()\\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\\.?,?\\s+)?(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\.?\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?|\\d{1,2}[./]\\d{1,2}\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?).*)?$",
       "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?\\s*(?:E[SD]?T)?\\s*$",
-      "date_pattern": "@\\s*(?P<month>[A-Za-z]{3,9})\\.?\\s+(?P<day>\\d{1,2})(?:\\s*,?\\s*(?P<year>\\d{4}))?\\s+\\d{1,2}:\\d{2}"
+      "date_pattern": "(?:@|\\||\\()\\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\\.?,?\\s+)?(?P<month>[A-Za-z]{3,9})\\.?\\s+(?P<day>\\d{1,2})(?:\\s*,?\\s*(?P<year>\\d{4}))?\\s+(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?"
+    },
+    {
+      "id": "slot-title-numeric-date",
+      "builtin": true,
+      "label": "Title (numeric date) (built-in)",
+      "description": "Optional \"Slot NN :\" prefix, then title, then a parenthesized/\"@\"/\"|\" NUMERIC month-first date: \"Title (7.12 9:15 AM ET)\" or \"(7/12 12:00 PM ET)\". Numeric dates are read month-first (US convention).",
+      "example": "PPV EVENT 01: Zenith Racing Series at Road America (7.12 9:15 AM ET)",
+      "expected_title": "Zenith Racing Series at Road America",
+      "expected_start": "2026-07-12T09:15:00-04:00",
+      "title_pattern": "^(?:[^@:|(]{0,40}?(?<!\\d)\\d{2}\\s*:\\s*)?\\s*(?P<title>.+?)\\s*(?:(?:@|\\||\\()\\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\\.?,?\\s+)?(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\.?\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?|[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:\\s*,?\\s*\\d{4})?\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?|\\d{1,2}[./]\\d{1,2}\\s+\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?).*)?$",
+      "time_pattern": "(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?\\s*(?:E[SD]?T)?\\s*$",
+      "date_pattern": "(?:@|\\||\\()\\s*(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[A-Za-z]*\\.?,?\\s+)?(?P<month>\\d{1,2})[./](?P<day>\\d{1,2})\\s+(?P<hour>\\d{1,2}):(?P<minute>\\d{2})(?:\\s*(?P<ampm>[AaPp])\\.?[Mm]?\\.?)?(?:\\s*E[SD]?T)?"
     },
     {
       "id": "title-day-first-date-no-at",
