@@ -2425,13 +2425,17 @@ async def preview_event_sync(
     """
     from functools import partial
 
-    from services.event_sync_preflight import check_event_sync_group_settings
+    from services.event_sync_preflight import (
+        check_event_sync_group_settings,
+        resolve_effective_master_group_id,
+    )
     from services.event_sync_resolver import (
         DISPOSITION_AMBIGUOUS,
         DISPOSITION_PARSE_FAILED,
         DISPOSITION_UNMATCHED,
         DISPOSITION_WOULD_ATTACH,
         SecondaryStream,
+        build_master_name_to_id,
         resolve_event_sync,
     )
     from services.event_sync_review import (
@@ -2479,11 +2483,24 @@ async def preview_event_sync(
             session.close()
 
     # --- Pre-flight (READ-ONLY; failures surface, never block) -----------
+    # Fetch group settings ONCE and reuse for both the pre-flight and the
+    # Channel Group Override resolution below (bead override).
     try:
-        preflight = await check_event_sync_group_settings(client, config)
+        all_settings = await client.get_all_m3u_group_settings()
+        preflight = await check_event_sync_group_settings(
+            client, config, all_settings=all_settings
+        )
     except Exception as e:
         logger.warning("[EVENT-SYNC] preview pre-flight failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Follow a Channel Group Override: when the master group is an auto-synced
+    # SOURCE, Dispatcharr places its channels in the override TARGET group, so
+    # the master channels must be fetched from there — not the raw
+    # master_group_id, which would come back empty (bead override).
+    effective_master_group_id = resolve_effective_master_group_id(
+        all_settings, master_group_id
+    )
 
     truncated = False
 
@@ -2494,12 +2511,12 @@ async def preview_event_sync(
         while True:
             resp = await client.get_channels(
                 page=cpage, page_size=_PREVIEW_FETCH_PAGE_SIZE,
-                channel_group=master_group_id,
+                channel_group=effective_master_group_id,
             )
             batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
             master_channels.extend(
                 ch for ch in batch
-                if ch.get("channel_group_id") == master_group_id
+                if ch.get("channel_group_id") == effective_master_group_id
             )
             if len(master_channels) >= _PREVIEW_MAX_CHANNELS:
                 master_channels = master_channels[:_PREVIEW_MAX_CHANNELS]
@@ -2512,16 +2529,19 @@ async def preview_event_sync(
         logger.warning("[EVENT-SYNC] preview master-channel fetch failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Name -> current channel id, re-resolved on THIS call (stateless
-    # recompute; the matcher itself never sees ids). Lowest id wins for
-    # duplicate names — deterministic.
-    name_to_id: dict[str, int] = {}
-    for ch in master_channels:
-        name, cid = ch.get("name"), ch.get("id")
-        if not name or cid is None:
-            continue
-        if name not in name_to_id or cid < name_to_id[name]:
-            name_to_id[name] = cid
+    # Identity name -> current channel id, re-resolved on THIS call (stateless
+    # recompute; the matcher never sees ids). Lowest id wins for duplicate
+    # names — deterministic. bead parse-from-stream: identity is the attached
+    # stream's name when parse_master_from_stream is on, else the channel name.
+    try:
+        name_to_id = await build_master_name_to_id(
+            master_channels, client,
+            bool(config.get("parse_master_from_stream")),
+        )
+    except Exception as e:
+        logger.warning(
+            "[EVENT-SYNC] preview master identity build failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
     master_names = sorted(name_to_id)
 
     # --- Fetch the secondary groups' streams (capped, paginated) ---------
@@ -2573,17 +2593,69 @@ async def preview_event_sync(
                 if not isinstance(resp, dict) or not resp.get("next"):
                     break
                 spage += 1
+        # bead 6xxmp: optionally fetch the MASTER group's own streams as a
+        # self-attach source (group_id = master_group_id). Mirrors the
+        # secondary fetch above so preview matches the run; the resolver drops
+        # the ones already attached to a master channel below.
+        if config.get("include_master_group_streams") and not truncated:
+            mgname = await client._channel_group_name_for_id(master_group_id)
+            # Record the master group's name so its own streams (and any
+            # parse-failure rows they produce) render with a group name in
+            # the preview, not a blank.
+            group_names[master_group_id] = mgname
+            if not mgname:
+                logger.warning(
+                    "[EVENT-SYNC] preview: master group %s has no resolvable "
+                    "channel-group name; skipping self-attach fetch",
+                    master_group_id,
+                )
+            else:
+                spage = 1
+                while True:
+                    resp = await client.get_streams(
+                        page=spage, page_size=_PREVIEW_FETCH_PAGE_SIZE,
+                        channel_group_name=mgname,
+                    )
+                    batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
+                    for s in batch:
+                        if not s.get("name") or s.get("id") is None:
+                            continue
+                        account_id = extract_m3u_account_id(s.get("m3u_account"))
+                        secondary_streams.append(SecondaryStream(
+                            name=s["name"],
+                            group_id=master_group_id,
+                            stream_id=s.get("id"),
+                            provider=account_names.get(account_id),
+                            provider_id=account_id,
+                        ))
+                    if len(secondary_streams) >= _PREVIEW_MAX_STREAMS:
+                        secondary_streams = secondary_streams[:_PREVIEW_MAX_STREAMS]
+                        truncated = True
+                        break
+                    if not isinstance(resp, dict) or not resp.get("next"):
+                        break
+                    spage += 1
     except HTTPException:
         raise
     except Exception as e:
         logger.warning("[EVENT-SYNC] preview stream fetch failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+    # bead 6xxmp: stream ids already on a master channel — the resolver uses
+    # these to drop the master group's own already-attached streams so the
+    # preview's would-attach count matches the run's attach count.
+    attached_stream_ids: set[int] = set()
+    for ch in master_channels:
+        for s in ch.get("streams", []):
+            sid = s["id"] if isinstance(s, dict) else s
+            if sid is not None:
+                attached_stream_ids.add(sid)
+
     # --- Resolve (CPU-bound scoring off the event loop) ------------------
     resolution = await run_cpu_bound(
         partial(
             resolve_event_sync, config, master_names, secondary_streams,
-            decisions=decisions,
+            decisions=decisions, attached_stream_ids=attached_stream_ids,
         )
     )
 

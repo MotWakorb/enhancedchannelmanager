@@ -3372,7 +3372,9 @@ class ActionExecutor:
         return best_channel, provenance
 
     def _resolve_event_sync(self, config: dict, secondary_streams: list,
-                            now=None, decisions=None) -> tuple:
+                            now=None, decisions=None,
+                            effective_master_group_id=None,
+                            master_name_to_id=None) -> tuple:
         """Event-mode candidate resolution (ti939.2.1) — SIBLING of
         :meth:`_resolve_scored_fuzzy`.
 
@@ -3412,22 +3414,46 @@ class ActionExecutor:
         from services.event_sync_resolver import resolve_event_sync
 
         master_group_id = config["master_group_id"]
-        name_to_id: dict[str, int] = {}
+        # Follow a Channel Group Override: master channels live in the
+        # override TARGET group, not the configured source group (bead
+        # override). Falls back to the configured id when unset.
+        channel_group_id = (
+            effective_master_group_id
+            if effective_master_group_id is not None
+            else master_group_id
+        )
+        channel_name_to_id: dict[str, int] = {}
         master_channel_count = 0
+        # bead 6xxmp: stream ids already on a master channel — the resolver
+        # drops these when the master group is a self-attach source so the
+        # auto-synced provider's own streams are never re-offered.
+        attached_stream_ids: set[int] = set()
         for ch in self.existing_channels:
-            if ch.get("channel_group_id") != master_group_id:
+            if ch.get("channel_group_id") != channel_group_id:
                 continue
             master_channel_count += 1
+            for s in ch.get("streams", []):
+                sid = s["id"] if isinstance(s, dict) else s
+                if sid is not None:
+                    attached_stream_ids.add(sid)
             name, cid = ch.get("name"), ch.get("id")
             if not name or cid is None:
                 continue
-            if name not in name_to_id or cid < name_to_id[name]:
-                name_to_id[name] = cid
+            if name not in channel_name_to_id or cid < channel_name_to_id[name]:
+                channel_name_to_id[name] = cid
+        # bead parse-from-stream: master identity may come from the attached
+        # stream names (pre-built async in execute_event_sync_rule) instead of
+        # the channel names. The attach path maps the winning identity back to
+        # its channel id via this same map.
+        name_to_id = (
+            master_name_to_id if master_name_to_id is not None
+            else channel_name_to_id
+        )
         master_names = sorted(name_to_id)
 
         resolution = resolve_event_sync(
             config, master_names, secondary_streams, now=now,
-            decisions=decisions,
+            decisions=decisions, attached_stream_ids=attached_stream_ids,
         )
         return resolution, name_to_id, master_channel_count
 
@@ -3435,7 +3461,8 @@ class ActionExecutor:
                                       rule_name: str, config: dict,
                                       secondary_streams: list,
                                       exec_ctx: ExecutionContext,
-                                      decisions=None) -> dict:
+                                      decisions=None,
+                                      effective_master_group_id=None) -> dict:
         """Execute one event_sync rule's attach path (bead ti939.2.1).
 
         Phase 1B — the FIRST write path for event_sync. Resolves every
@@ -3495,11 +3522,30 @@ class ActionExecutor:
         )
         from concurrency import run_cpu_bound
 
+        # bead parse-from-stream: build the master identity map from attached
+        # stream names (async fetch) BEFORE the CPU-bound resolve. Default
+        # (flag off) keeps channel-name identity built inside _resolve.
+        master_name_to_id = None
+        if config.get("parse_master_from_stream"):
+            from services.event_sync_resolver import build_master_name_to_id
+            cg = (
+                effective_master_group_id
+                if effective_master_group_id is not None
+                else config["master_group_id"]
+            )
+            master_chs = [
+                c for c in self.existing_channels
+                if c.get("channel_group_id") == cg
+            ]
+            master_name_to_id = await build_master_name_to_id(
+                master_chs, self.client, True
+            )
+
         # CPU-bound scoring off the event loop (same treatment as the
         # preview endpoint).
         resolution, name_to_id, master_channel_count = await run_cpu_bound(
             self._resolve_event_sync, config, secondary_streams, None,
-            decisions,
+            decisions, effective_master_group_id, master_name_to_id,
         )
 
         cap = config.get("max_attach_per_run", DEFAULT_MAX_ATTACH_PER_RUN)

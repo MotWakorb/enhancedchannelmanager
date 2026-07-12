@@ -133,6 +133,28 @@ class TestPreviewEventSync:
         assert "channel 55" in text
 
     @pytest.mark.asyncio
+    async def test_include_master_group_streams_flag_forwarded_verbatim(self):
+        # bead 6xxmp: the tool forwards event_sync_config as-is, so the new
+        # flag reaches the backend validator with no MCP-side handling.
+        mcp = _make_mcp_and_register()
+        bodies = []
+
+        async def call_endpoint_side_effect(endpoint, **kwargs):
+            bodies.append(kwargs.get("body"))
+            return _preview_response()
+
+        client = AsyncMock()
+        client.call_endpoint.side_effect = call_endpoint_side_effect
+        config = {
+            "master_group_id": 10,
+            "secondary_group_ids": [20],
+            "include_master_group_streams": True,
+            "assume_current_date": True,
+        }
+        await _call_tool(mcp, client, {"event_sync_config": config})
+        assert bodies == [{"event_sync_config": config}]
+
+    @pytest.mark.asyncio
     async def test_rule_id_sends_rule_id_body(self):
         mcp = _make_mcp_and_register()
         bodies = []

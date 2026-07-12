@@ -21,6 +21,7 @@ from services.event_sync_preflight import (
     CHECK_MASTER_AUTO_SYNC_ON,
     CHECK_SECONDARY_AUTO_SYNC_OFF,
     check_event_sync_group_settings,
+    resolve_effective_master_group_id,
 )
 
 
@@ -146,3 +147,84 @@ class TestPreflightFailures:
         result = await check_event_sync_group_settings(client, _config())
         assert result["ok"] is False
         assert not hasattr(client, "update_m3u_group_settings")
+
+
+def _source(auto_sync: bool, target: int) -> dict:
+    """An auto-synced SOURCE group whose channels are placed in ``target``."""
+    return {
+        "enabled": True,
+        "auto_channel_sync": auto_sync,
+        "custom_properties": {"group_override": target},
+    }
+
+
+class TestChannelGroupOverride:
+    """Channel Group Override resolution (bead override).
+
+    Auto-created channels land in the override TARGET group while the
+    auto_channel_sync setting lives on the SOURCE group; the pre-flight and
+    the master fetch must follow that relationship.
+    """
+
+    def test_effective_id_follows_source_to_target(self):
+        # Source 95 overrides to target 420 -> master channels live in 420.
+        settings = {95: _source(auto_sync=True, target=420)}
+        assert resolve_effective_master_group_id(settings, 95) == 420
+
+    def test_effective_id_is_identity_without_override(self):
+        settings = {10: _group(auto_sync=True)}
+        assert resolve_effective_master_group_id(settings, 10) == 10
+
+    def test_effective_id_of_target_is_itself(self):
+        # Picking the target directly: it has no override of its own.
+        settings = {95: _source(auto_sync=True, target=420)}
+        assert resolve_effective_master_group_id(settings, 420) == 420
+
+    async def test_master_as_override_target_passes(self):
+        # Operator points master at the TARGET (420) which has no direct
+        # setting; auto-sync ON is read through the source (95).
+        client = _ReadOnlyClient({
+            95: _source(auto_sync=True, target=420),
+            20: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(
+            client, _config(master=420, secondaries=(20,))
+        )
+        assert result == {"ok": True, "failures": []}
+
+    async def test_master_target_with_source_auto_sync_off_fails(self):
+        client = _ReadOnlyClient({
+            95: _source(auto_sync=False, target=420),
+            20: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(
+            client, _config(master=420, secondaries=(20,))
+        )
+        assert result["ok"] is False
+        assert any(f["check"] == CHECK_MASTER_AUTO_SYNC_ON
+                   for f in result["failures"])
+
+    async def test_master_as_override_source_still_passes(self):
+        # Operator points master at the auto-synced SOURCE (95) — the natural
+        # pick. Pre-flight passes (auto-sync ON); the master FETCH follows the
+        # override to 420 (covered by resolve_effective_master_group_id).
+        client = _ReadOnlyClient({
+            95: _source(auto_sync=True, target=420),
+            20: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(
+            client, _config(master=95, secondaries=(20,))
+        )
+        assert result == {"ok": True, "failures": []}
+
+    async def test_prefetched_settings_avoid_a_second_fetch(self):
+        settings = {
+            95: _source(auto_sync=True, target=420),
+            20: _group(auto_sync=False),
+        }
+        client = _ReadOnlyClient(settings)
+        await check_event_sync_group_settings(
+            client, _config(master=420, secondaries=(20,)),
+            all_settings=settings,
+        )
+        client.get_all_m3u_group_settings.assert_not_awaited()

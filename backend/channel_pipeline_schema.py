@@ -787,6 +787,9 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "enabled",
     "auto_run",
     "dummy_epg_profile_id",
+    "include_master_group_streams",
+    "assume_current_date",
+    "parse_master_from_stream",
 })
 
 # Ceiling for event_sync_config.max_attach_per_run. The cap is a blast-radius
@@ -1093,6 +1096,57 @@ def validate_event_sync_config(config: Any) -> list[str]:
             "auto_run", auto_run,
             "a boolean (default false) — true opts this rule into "
             "unattended runs on the M3U refresh watermark task",
+        ))
+
+    # Master-group self-attach flag (bead 6xxmp). DEFAULT OFF. When true the
+    # MASTER group's own streams are ALSO fetched as a secondary source and
+    # matched to the master channels — the sanctioned path for the case a
+    # single Dispatcharr channel group (global, unique-by-name) carries
+    # streams from TWO providers, one auto-synced (its streams already on the
+    # master channels) and one not: the unsynced provider's streams attach to
+    # the synced provider's event channels. The master group is NEVER added
+    # to secondary_group_ids (that rail stays); the resolver filters the
+    # master group's already-attached streams so preview/run parity holds and
+    # the auto-synced provider's own streams are not re-offered.
+    include_master = config.get("include_master_group_streams")
+    if include_master is None:
+        config["include_master_group_streams"] = False
+    elif not isinstance(include_master, bool):
+        errors.append(_event_sync_error(
+            "include_master_group_streams", include_master,
+            "a boolean (default false) — true also matches the master "
+            "group's own unattached streams (a second provider sharing the "
+            "master group's name) to the master channels",
+        ))
+
+    # Dateless "today's schedule" opt-in (bead assume-current-date). DEFAULT
+    # OFF — it deliberately relaxes the never-guess-the-date rail (a listing
+    # with a time but no date is placed on the current date), so it must be
+    # an explicit per-rule choice with the cross-day risk understood.
+    assume_current_date = config.get("assume_current_date")
+    if assume_current_date is None:
+        config["assume_current_date"] = False
+    elif not isinstance(assume_current_date, bool):
+        errors.append(_event_sync_error(
+            "assume_current_date", assume_current_date,
+            "a boolean (default false) — true fills the CURRENT date for "
+            "listings that carry a time but no date (dateless live "
+            "schedules), accepting the cross-day match risk",
+        ))
+
+    # Parse master identity from the attached stream (bead parse-from-stream).
+    # DEFAULT OFF. When true the master event's title+time are read from each
+    # master channel's FIRST attached stream name instead of the channel
+    # name, so operators can name master channels freely.
+    parse_master_from_stream = config.get("parse_master_from_stream")
+    if parse_master_from_stream is None:
+        config["parse_master_from_stream"] = False
+    elif not isinstance(parse_master_from_stream, bool):
+        errors.append(_event_sync_error(
+            "parse_master_from_stream", parse_master_from_stream,
+            "a boolean (default false) — true reads each master channel's "
+            "event identity from its attached stream's name instead of the "
+            "channel name, so master channels can be named freely",
         ))
 
     # Dummy EPG auto-assignment (bead ti939.3.3). OPTIONAL — an absent key

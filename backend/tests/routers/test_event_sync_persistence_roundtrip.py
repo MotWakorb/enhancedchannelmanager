@@ -42,6 +42,12 @@ def _event_sync_config(**overrides) -> dict:
         # ti939.3.1: same default-fill convention for the Phase 2 auto-run
         # opt-in — round-tripped configs carry the explicit false.
         "auto_run": False,
+        # bead 6xxmp: master-group self-attach flag, same default-fill.
+        "include_master_group_streams": False,
+        # bead assume-current-date: dateless opt-in, same default-fill.
+        "assume_current_date": False,
+        # bead parse-from-stream: master-identity-from-stream, same default-fill.
+        "parse_master_from_stream": False,
     }
     config.update(overrides)
     return config
