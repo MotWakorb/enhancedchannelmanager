@@ -1,0 +1,7 @@
+/* Guided-setup auto-sync fix confirmation dialog (bead ti939.3.4). */
+
+.autosync-fix-error {
+  color: var(--error);
+  font-size: 13px;
+  margin-top: 8px;
+}

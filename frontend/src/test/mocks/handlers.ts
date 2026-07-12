@@ -562,6 +562,12 @@ export const handlers = [
     return HttpResponse.json({})
   }),
 
+  http.get(`${API_BASE}/dummy-epg/profiles`, () => {
+    // Event Sync editor's dummy EPG profile picker (ti939.3.3).
+    // Empty by default; tests stub profiles via server.use().
+    return HttpResponse.json([])
+  }),
+
   http.get(`${API_BASE}/channels/:id`, ({ params }) => {
     const channel = mockDataStore.channels.find(c => c.id === Number(params.id))
     if (!channel) {

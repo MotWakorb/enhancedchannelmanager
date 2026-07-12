@@ -11,7 +11,9 @@ import time
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from pydantic import BaseModel
 
+from auth import RequireAdminIfEnabled
 from cache import get_cache
 from config import CONFIG_DIR, get_settings, save_settings, validate_url_scheme
 from database import get_session
@@ -1091,6 +1093,174 @@ async def update_m3u_group_settings(account_id: int, request: Request):
 
         return result
     except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class GroupAutoSyncToggleRequest(BaseModel):
+    """Body for the guided-setup auto_channel_sync toggle (ti939.3.4)."""
+    channel_group_id: int
+    auto_channel_sync: bool
+    # The API-level confirm gate: the UI may only send confirm=true from its
+    # confirmation dialog. Defaults to False so the toggle can NEVER happen
+    # as a side effect of some other flow forgetting the field.
+    confirm: bool = False
+
+
+@router.post("/accounts/{account_id}/group-auto-sync-toggle")
+async def toggle_group_auto_sync(
+    account_id: int,
+    request: GroupAutoSyncToggleRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Guided setup: toggle ONE group's ``auto_channel_sync`` (bead ti939.3.4).
+
+    The Event Sync rule editor's pre-flight surfaces a misconfigured group —
+    master with auto-sync OFF, or a secondary with it ON — and offers a
+    one-click fix that lands here. Hard constraints (security, locked at
+    planning):
+
+    * **Explicit, separately confirmed operator action.** ``confirm: true``
+      is required — the UI sends it only from its own confirmation dialog
+      stating exactly what will change and why. This endpoint is NEVER
+      called as a side effect of saving a rule or running the pipeline; it
+      is deliberately OUTSIDE the event_sync feature modules, whose AST
+      no-group-writes gate (tests/unit/test_event_sync_rollback_roundtrip
+      .py) keeps proving the attach/preview path never writes group
+      settings.
+    * **Admin-gated** (``RequireAdminIfEnabled``) — same tier as the other
+      duplicate-channel-risk toggles.
+    * **Journaled per toggle** (the allow_multi_provider_auto_sync
+      guard-change journaling in routers/settings.py is the precedent):
+      snapshot restore does NOT revert Dispatcharr group settings, so the
+      journal entry is the operator's recovery breadcrumb.
+
+    Both directions are supported: enable (master group) and disable
+    (secondary group). A no-op request (already at the requested value)
+    returns ``changed: false`` and writes nothing — not even a journal
+    entry.
+    """
+    logger.debug(
+        "[M3U] POST /api/m3u/accounts/%s/group-auto-sync-toggle "
+        "(channel_group_id=%s, auto_channel_sync=%s, confirm=%s)",
+        account_id, request.channel_group_id, request.auto_channel_sync,
+        request.confirm,
+    )
+    if not request.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "confirm: got false/absent, expected true — toggling "
+                "auto_channel_sync is an explicit operator action that "
+                "requires its own confirmation (see docs/event_sync.md). "
+                "It is never performed as a side effect."
+            ),
+        )
+
+    client = get_client()
+    try:
+        account = await client.get_m3u_account(account_id)
+        account_name = account.get("name", "Unknown")
+        current = next(
+            (g for g in account.get("channel_groups", [])
+             if g.get("channel_group") == request.channel_group_id),
+            None,
+        )
+        if current is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"channel_group_id {request.channel_group_id} has no "
+                    f"group settings on M3U account {account_id} "
+                    f"('{account_name}')"
+                ),
+            )
+
+        # Group name for the journal/response (best effort).
+        try:
+            channel_groups = await client.get_channel_groups()
+            group_name = next(
+                (g["name"] for g in channel_groups
+                 if g["id"] == request.channel_group_id),
+                f"Group {request.channel_group_id}",
+            )
+        except Exception:
+            group_name = f"Group {request.channel_group_id}"
+
+        was = bool(current.get("auto_channel_sync"))
+        if was == request.auto_channel_sync:
+            return {
+                "changed": False,
+                "channel_group_id": request.channel_group_id,
+                "group_name": group_name,
+                "account_id": account_id,
+                "account_name": account_name,
+                "auto_channel_sync": was,
+            }
+
+        # Exactly ONE group's record, all other fields preserved verbatim —
+        # the same per-group payload shape the M3U Groups modal sends.
+        group_settings = {
+            "channel_group": request.channel_group_id,
+            "enabled": current.get("enabled"),
+            "auto_channel_sync": request.auto_channel_sync,
+            "auto_sync_channel_start": current.get("auto_sync_channel_start"),
+            "custom_properties": current.get("custom_properties"),
+        }
+        if current.get("id") is not None:
+            group_settings["id"] = current["id"]
+        await client.update_m3u_group_settings(
+            account_id, {"group_settings": [group_settings]}
+        )
+
+        direction = "ON" if request.auto_channel_sync else "OFF"
+        logger.info(
+            "[M3U] Guided setup: auto_channel_sync %s -> %s for group "
+            "'%s' (id=%s) on account '%s' (id=%s)",
+            was, request.auto_channel_sync, group_name,
+            request.channel_group_id, account_name, account_id,
+        )
+        journal.log_entry(
+            category="m3u",
+            action_type="update",
+            entity_id=account_id,
+            entity_name=account_name,
+            description=(
+                f"Guided setup (Event Sync): turned auto_channel_sync "
+                f"{direction} for group '{group_name}' on account "
+                f"'{account_name}'. Snapshot restore does NOT revert "
+                f"Dispatcharr group settings — this journal entry is the "
+                f"recovery breadcrumb."
+            ),
+            before_value={
+                "channel_group": request.channel_group_id,
+                "name": group_name,
+                "auto_channel_sync": was,
+            },
+            after_value={
+                "channel_group": request.channel_group_id,
+                "name": group_name,
+                "auto_channel_sync": request.auto_channel_sync,
+            },
+        )
+
+        return {
+            "changed": True,
+            "channel_group_id": request.channel_group_id,
+            "group_name": group_name,
+            "account_id": account_id,
+            "account_name": account_name,
+            "auto_channel_sync": request.auto_channel_sync,
+            "was": was,
+        }
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as e:
+        raise upstream_http_exception(e)
+    except Exception as e:
+        logger.warning(
+            "[M3U] Guided auto-sync toggle failed for account %s group %s: %s",
+            account_id, request.channel_group_id, e,
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
