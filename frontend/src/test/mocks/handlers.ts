@@ -158,6 +158,7 @@ export function createMockChannelPipelineRule(overrides: Partial<MockChannelPipe
     match_count: overrides.match_count ?? 0,
     created_at: overrides.created_at ?? new Date().toISOString(),
     updated_at: overrides.updated_at ?? new Date().toISOString(),
+    event_sync_config: overrides.event_sync_config ?? null,
   }
 }
 
@@ -327,6 +328,7 @@ interface MockChannelPipelineRule {
   match_count: number
   created_at: string
   updated_at: string
+  event_sync_config?: object | null
 }
 
 interface MockChannelPipelineExecution {
