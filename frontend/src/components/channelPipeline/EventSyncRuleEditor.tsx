@@ -3,11 +3,15 @@
  *
  * Quick path: pick a master group, pick secondary groups, keep the shipped
  * default patterns, preview. Advanced knobs (time window, attach threshold,
- * dummy EPG profile, per-group pattern overrides) stay collapsed. Auto-sync
- * status is shown LIVE per group with guidance text when it's wrong, plus a
- * guided one-click fix (ti939.3.4): the Fix button opens a confirmation
- * dialog and ONLY its confirm button calls the admin-gated toggle endpoint
- * — never save, never preview, never a side effect.
+ * dummy EPG profile, per-group pattern overrides) stay collapsed. The master
+ * and secondary groups are chosen with the provider-scoped group picker (bead
+ * 38dzi): channel-group names are globally unique, so a group carried by two
+ * providers shares one channel_group_id but two per-provider junctions — the
+ * picker lets the operator scope the master/secondary to a specific provider
+ * (or the whole group). It renders LIVE per-scope auto-sync status inline and
+ * offers a guided one-click fix (ti939.3.4): the Fix affordance opens a
+ * confirmation dialog and ONLY its confirm button calls the admin-gated toggle
+ * endpoint — never save, never preview, never a side effect.
  *
  * There is NO apply/attach control anywhere: saving stores the config on the
  * rule; the only action against live data is the zero-write preview.
@@ -20,23 +24,33 @@
  * never dropped or reordered. Built-ins are recognized by VERBATIM equality
  * and are never silently re-added to an all-custom selection.
  *
- * Group pickers default to ENABLED groups only (bead x82s3): the master
- * select and secondary multi-select both hide groups whose provider setting
- * (`M3UGroupSetting.enabled`) is not `true` — a group with no settings entry
- * at all counts as not-enabled. A "Show all groups" toggle (default off)
- * reveals the full list. Round-trip guard: a group already referenced by the
- * rule being edited (masterGroupId, or a checked secondary id) always
- * renders — with a "(disabled)" hint — even when the enabled-only filter
- * would otherwise hide it, and `buildConfig` never drops it.
+ * Group pickers default to ENABLED junctions only (bead x82s3): both pickers
+ * hide (provider, group) junctions whose provider setting is not enabled — a
+ * group with no junction at all simply does not appear. A shared "Show all
+ * groups" toggle (default off) reveals the full list. Round-trip guard: a
+ * scope already referenced by the rule being edited (the master scope, or a
+ * checked secondary scope) always renders — with a "(disabled)" hint — even
+ * when the enabled-only filter would otherwise hide it, and `buildConfig`
+ * never drops it.
+ *
+ * Migration (bead 38dzi): a legacy rule whose config carries only the flat
+ * `master_group_id` / `secondary_group_ids` opens as WHOLE-GROUP scopes
+ * (`m3u_account_id: null`); saving emits the nested `master` / `secondary`
+ * and lets the backend derive the flat keys.
  */
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { ChannelPipelineRule, CreateRuleData } from '../../types/channelPipeline';
-import type { EventSyncConfig, EventSyncPattern, EventSyncPreviewResponse } from '../../types/eventSync';
-import type { DummyEPGProfile, M3UGroupSetting } from '../../types';
+import type {
+  EventSyncConfig,
+  EventSyncGroupScope,
+  EventSyncPattern,
+  EventSyncPreviewResponse,
+} from '../../types/eventSync';
+import type { DummyEPGProfile } from '../../types';
 import {
   getChannelGroups,
   getDummyEPGProfiles,
-  getProviderGroupSettings,
+  getProviderGroupSettingsByProvider,
   toggleGroupAutoSync,
 } from '../../services/api';
 import { previewEventSync } from '../../services/channelPipelineApi';
@@ -46,6 +60,8 @@ import type { LabeledEventSyncPattern } from './EventSyncTestPatternsPanel';
 import { EventSyncPreviewPanel } from './EventSyncPreviewPanel';
 import { EventSyncAutoSyncFixDialog } from './EventSyncAutoSyncFixDialog';
 import type { AutoSyncFixTarget } from './EventSyncAutoSyncFixDialog';
+import { ProviderScopedGroupPicker } from './ProviderScopedGroupPicker';
+import { joinProviderRows, type GroupProviderRow } from './providerScopedGroups';
 import {
   SHIPPED_EVENT_SYNC_PATTERNS,
   DEFAULT_PATTERN_IDS,
@@ -184,18 +200,26 @@ export function EventSyncRuleEditor({
   const [description, setDescription] = useState(rule?.description || '');
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
 
-  // Scoping
-  const [masterGroupId, setMasterGroupId] = useState<number | null>(
-    config?.master_group_id ?? null
-  );
-  const [secondaryGroupIds, setSecondaryGroupIds] = useState<number[]>(
-    config?.secondary_group_ids ?? []
-  );
-  const [secondarySearch, setSecondarySearch] = useState('');
-  // bead x82s3: both group pickers default to enabled-only groups (hundreds
+  // Scoping (bead 38dzi): provider-scoped master + secondary. Initialize from
+  // the nested `master` / `secondary` when present; otherwise migrate the flat
+  // legacy keys to WHOLE-GROUP scopes (m3u_account_id null).
+  const [masterScope, setMasterScope] = useState<EventSyncGroupScope | null>(() => {
+    if (config?.master) return config.master;
+    if (config?.master_group_id != null) {
+      return { group_id: config.master_group_id, m3u_account_id: null };
+    }
+    return null;
+  });
+  const [secondaryScopes, setSecondaryScopes] = useState<EventSyncGroupScope[]>(() => {
+    if (config?.secondary) return config.secondary;
+    return (config?.secondary_group_ids ?? []).map(gid => ({
+      group_id: gid,
+      m3u_account_id: null,
+    }));
+  });
+  // bead x82s3: both group pickers default to enabled-only junctions (hundreds
   // of groups on a real instance is noisy); this reveals the full list for
-  // edge cases (temporarily-disabled group, a group with no provider
-  // settings at all). Default OFF.
+  // edge cases (temporarily-disabled group). Default OFF.
   const [showAllGroups, setShowAllGroups] = useState(false);
 
   // Patterns. `initial` keeps the untouched-open values so save can detect a
@@ -253,8 +277,9 @@ export function EventSyncRuleEditor({
 
   // Reference data
   const [channelGroups, setChannelGroups] = useState<{ id: number; name: string }[]>([]);
-  const [groupSettings, setGroupSettings] = useState<Record<number, M3UGroupSetting>>({});
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  // bead 38dzi: (provider, group) junction rows joined to channel-group names,
+  // driving the provider-scoped pickers (and their inline auto-sync status).
+  const [junctions, setJunctions] = useState<GroupProviderRow[]>([]);
 
   // Guided setup (ti939.3.4): one-click confirmed auto_channel_sync fix.
   // The toggle API is ONLY called from the confirmation dialog's confirm
@@ -272,22 +297,24 @@ export function EventSyncRuleEditor({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getChannelGroups()
-      .then(groups => setChannelGroups(groups.map(g => ({ id: g.id, name: g.name }))))
-      .catch(() => {});
-    getProviderGroupSettings()
-      .then(settings => {
-        setGroupSettings(settings);
-        setSettingsLoaded(true);
-      })
-      .catch(() => {});
+    // The junction rows carry no group name; join them against the channel
+    // group list the editor already loads. Load both, then join.
+    Promise.all([
+      getChannelGroups().catch(() => []),
+      getProviderGroupSettingsByProvider().catch(() => []),
+    ]).then(([groups, rows]) => {
+      const simple = groups.map(g => ({ id: g.id, name: g.name }));
+      setChannelGroups(simple);
+      const byId = new Map(simple.map(g => [g.id, g.name]));
+      setJunctions(joinProviderRows(rows, gid => byId.get(gid)));
+    });
     getDummyEPGProfiles()
       .then(setDummyProfiles)
       .catch(() => {});
   }, []);
 
-  /** Guided fix (ti939.3.4): the CONFIRMED toggle, then refetch the live
-   * group settings so the pre-flight warnings clear. */
+  /** Guided fix (ti939.3.4): the CONFIRMED toggle, then refetch the junctions
+   * so the picker's inline auto-sync status updates. */
   const handleConfirmFix = async () => {
     if (!pendingFix) return;
     setFixBusy(true);
@@ -298,8 +325,9 @@ export function EventSyncRuleEditor({
         auto_channel_sync: pendingFix.enable,
         confirm: true,
       });
-      const settings = await getProviderGroupSettings();
-      setGroupSettings(settings);
+      const rows = await getProviderGroupSettingsByProvider();
+      const byId = new Map(channelGroups.map(g => [g.id, g.name]));
+      setJunctions(joinProviderRows(rows, gid => byId.get(gid)));
       setPendingFix(null);
     } catch (err) {
       setFixError(err instanceof Error ? err.message : 'Toggle failed');
@@ -308,84 +336,30 @@ export function EventSyncRuleEditor({
     }
   };
 
-  /** Fix-button target for a provider-backed group, or null when the group
-   * has no provider settings (nothing to toggle). */
-  const fixTargetFor = (groupId: number, enable: boolean): AutoSyncFixTarget | null => {
-    const setting = groupSettings[groupId];
-    if (!setting) return null;
-    return {
-      groupId,
-      groupName: groupName(groupId),
-      accountId: setting.m3u_account_id,
-      accountName: setting.m3u_account_name,
-      enable,
-    };
-  };
-
   const openFixDialog = (target: AutoSyncFixTarget) => {
     setFixError(null);
     setPendingFix(target);
+  };
+
+  /** Translate the picker's fix request (accountId + groupId) into the fix
+   * dialog target, looking up the provider name from the junction rows. */
+  const requestFix = (t: { accountId: number; groupId: number }, enable: boolean) => {
+    const row = junctions.find(
+      j => j.m3uAccountId === t.accountId && j.groupId === t.groupId
+    );
+    openFixDialog({
+      groupId: t.groupId,
+      groupName: groupName(t.groupId),
+      accountId: t.accountId,
+      accountName: row?.m3uAccountName ?? `Provider ${t.accountId}`,
+      enable,
+    });
   };
 
   const groupName = useMemo(() => {
     const byId = new Map(channelGroups.map(g => [g.id, g.name]));
     return (groupId: number) => byId.get(groupId) ?? `Group ${groupId}`;
   }, [channelGroups]);
-
-  /** Live auto-sync status: true/false when known, null when not provider-backed. */
-  const autoSyncStatus = (groupId: number): boolean | null => {
-    const setting = groupSettings[groupId];
-    return setting ? Boolean(setting.auto_channel_sync) : null;
-  };
-
-  /** bead x82s3: 'enabled' = the group's provider (M3U) setting is enabled.
-   * A group with no groupSettings entry at all is treated as NOT enabled
-   * (hidden by default unless already selected, or Show all groups is on). */
-  const isGroupEnabled = (groupId: number): boolean =>
-    groupSettings[groupId]?.enabled === true;
-
-  const masterStatus = masterGroupId != null ? autoSyncStatus(masterGroupId) : null;
-
-  const secondariesWithAutoSyncOn = secondaryGroupIds.filter(
-    groupId => autoSyncStatus(groupId) === true
-  );
-
-  /** Master group options: enabled groups by default, plus Show all groups
-   * escape hatch, plus (round-trip guard, bead z4y4a-style) the CURRENTLY
-   * selected master group even when it's disabled/hidden — an edited rule
-   * must never lose its saved master group just because it's filtered out
-   * of the list. Checks `groupSettings` directly (not via the `isGroupEnabled`
-   * / `autoSyncStatus` helpers) so the dependency array stays exhaustive
-   * without re-deriving on every render. */
-  const masterGroupOptions = useMemo(() => {
-    return channelGroups
-      .filter(g => showAllGroups || groupSettings[g.id]?.enabled === true || g.id === masterGroupId)
-      .slice()
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map(g => {
-        const setting = groupSettings[g.id];
-        const statusLabel =
-          setting === undefined
-            ? 'no provider settings'
-            : setting.auto_channel_sync
-              ? 'auto-sync ON'
-              : 'auto-sync OFF';
-        const disabledHint = setting?.enabled === true ? '' : ' (disabled)';
-        return { value: g.id.toString(), label: `${g.name} — ${statusLabel}${disabledHint}` };
-      });
-  }, [channelGroups, groupSettings, showAllGroups, masterGroupId]);
-
-  /** Secondary group options: enabled groups by default (composed with the
-   * name filter), plus Show all groups, plus the round-trip guard for any
-   * secondary group already checked on this rule. */
-  const filteredSecondaryOptions = useMemo(() => {
-    const query = secondarySearch.trim().toLowerCase();
-    return channelGroups
-      .filter(g => g.id !== masterGroupId)
-      .filter(g => showAllGroups || groupSettings[g.id]?.enabled === true || secondaryGroupIds.includes(g.id))
-      .filter(g => !query || g.name.toLowerCase().includes(query))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [channelGroups, masterGroupId, secondarySearch, showAllGroups, groupSettings, secondaryGroupIds]);
 
   /** The custom-shared draft as a pattern object, or null when empty. The
    * API-authored name of the first custom pattern is preserved (z4y4a);
@@ -442,18 +416,22 @@ export function EventSyncRuleEditor({
     return patterns;
   }, [selectedPatternIds, customShared, customSharedMeta]);
 
-  /** Groups in scope (master + secondaries) — for live samples + overrides. */
+  /** Groups in scope (master + secondaries) — for live samples + overrides.
+   * Deduped by group id: master and a secondary may share a group id under
+   * different providers. */
   const scopedGroups = useMemo(() => {
-    const ids = masterGroupId != null ? [masterGroupId, ...secondaryGroupIds] : [...secondaryGroupIds];
-    return ids.map(groupId => ({ id: groupId, name: groupName(groupId) }));
-  }, [masterGroupId, secondaryGroupIds, groupName]);
+    const ids = new Set<number>();
+    if (masterScope != null) ids.add(masterScope.group_id);
+    for (const s of secondaryScopes) ids.add(s.group_id);
+    return [...ids].map(groupId => ({ id: groupId, name: groupName(groupId) }));
+  }, [masterScope, secondaryScopes, groupName]);
 
   const validationError: string | null = (() => {
-    if (masterGroupId == null) return 'Pick a master group first';
+    if (masterScope == null) return 'Pick a master group first';
     // bead 3ux85: no separate secondary is required when the master group is
     // itself the stream source (include_master_group_streams) — the
     // same-named cross-provider case.
-    if (secondaryGroupIds.length === 0 && !includeMasterGroupStreams) {
+    if (secondaryScopes.length === 0 && !includeMasterGroupStreams) {
       return 'Pick at least one secondary group (or enable '
         + '"Also attach the master group’s own streams" under Advanced)';
     }
@@ -469,12 +447,14 @@ export function EventSyncRuleEditor({
     // itself the stream source (include_master_group_streams) — the pure
     // same-named cross-provider case, where Dispatcharr collapses both
     // providers into one channel group so there is no separate secondary.
-    if (masterGroupId == null) return null;
-    if (secondaryGroupIds.length === 0 && !includeMasterGroupStreams) return null;
+    if (masterScope == null) return null;
+    if (secondaryScopes.length === 0 && !includeMasterGroupStreams) return null;
 
     const built: EventSyncConfig = {
-      master_group_id: masterGroupId,
-      secondary_group_ids: [...secondaryGroupIds],
+      // bead 38dzi: emit the nested provider-scoped shape only; the backend
+      // validator derives the flat master_group_id / secondary_group_ids.
+      master: masterScope,
+      secondary: [...secondaryScopes],
       time_window_minutes: Math.min(
         MAX_TIME_WINDOW_MINUTES,
         Math.max(1, parseInt(timeWindowText, 10) || DEFAULT_TIME_WINDOW_MINUTES)
@@ -557,8 +537,8 @@ export function EventSyncRuleEditor({
     // an edited group keeps its saved name and its inexpressible extra
     // patterns (patterns[1..]) unchanged behind the edited first pattern.
     const scopedIds = new Set<number>([
-      ...(masterGroupId != null ? [masterGroupId] : []),
-      ...secondaryGroupIds,
+      ...(masterScope != null ? [masterScope.group_id] : []),
+      ...secondaryScopes.map(s => s.group_id),
     ]);
     const groupPatternsOut: Record<string, EventSyncPattern[]> = {};
     const savedGroupPatterns = config?.group_patterns ?? {};
@@ -651,12 +631,6 @@ export function EventSyncRuleEditor({
     }
   };
 
-  const toggleSecondary = (groupId: number) => {
-    setSecondaryGroupIds(ids =>
-      ids.includes(groupId) ? ids.filter(i => i !== groupId) : [...ids, groupId]
-    );
-  };
-
   const updateOverride = (groupId: number, field: keyof GroupPatternDraft, value: string) => {
     setGroupOverrides(overrides => ({
       ...overrides,
@@ -727,160 +701,53 @@ export function EventSyncRuleEditor({
             <span>Show all groups</span>
           </label>
           <span className="form-hint">
-            The master and secondary pickers below list only groups enabled
-            on their M3U/provider account by default. Turn this on to see
-            every group too — useful for a temporarily-disabled group, or one
-            with no provider settings at all.
+            The master and secondary pickers below list only groups whose
+            provider (M3U) junction is enabled by default. Turn this on to see
+            every provider junction too — useful for a temporarily-disabled
+            group.
           </span>
         </section>
 
-        {/* Master group */}
+        {/* Master group (bead 38dzi: provider-scoped picker) */}
         <section className="event-sync-section-block">
           <h3 className="event-sync-section-title">Master group</h3>
           <span className="form-hint">
             The ONE group whose channels Dispatcharr owns — auto-sync must be
-            ON for it. Secondary streams attach to these channels.
+            ON for it. Secondary streams attach to these channels. A group
+            carried by more than one provider expands so you can scope the
+            master to a specific provider.
           </span>
-          <CustomSelect
-            value={masterGroupId != null ? masterGroupId.toString() : ''}
-            onChange={value => {
-              const groupId = value ? parseInt(value, 10) : null;
-              setMasterGroupId(groupId);
-              if (groupId != null) {
-                setSecondaryGroupIds(ids => ids.filter(i => i !== groupId));
-              }
-            }}
-            options={masterGroupOptions}
-            placeholder="Select master group..."
-            searchable
-            searchPlaceholder="Search groups..."
+          <ProviderScopedGroupPicker
+            role="master"
+            rows={junctions}
+            value={masterScope}
+            onChange={s => setMasterScope(s as EventSyncGroupScope | null)}
+            showAll={showAllGroups}
+            excludeScope={null}
+            onRequestFix={t => requestFix(t, true)}
             disabled={isLoading}
           />
-          {masterGroupId != null && settingsLoaded && masterStatus !== true && (
-            <div className="warning-message" role="alert" data-testid="master-autosync-warning">
-              <span className="material-icons">warning</span>
-              <span>
-                {masterStatus === false ? (
-                  <>
-                    Auto-sync is <strong>OFF</strong> for this group, so
-                    Dispatcharr creates no master channels and the preview will
-                    match nothing. Enable <code>auto_channel_sync</code> for
-                    this group in M3U Manager → account → Groups, or use the
-                    Fix button — ECM changes this setting only through that
-                    explicitly confirmed fix, never as a side effect of saving
-                    or running.
-                    {(() => {
-                      const target = fixTargetFor(masterGroupId, true);
-                      return target ? (
-                        <button
-                          type="button"
-                          className="btn-secondary event-sync-fix-btn"
-                          data-testid="master-autosync-fix"
-                          onClick={() => openFixDialog(target)}
-                          disabled={isLoading}
-                        >
-                          Fix: turn auto-sync ON…
-                        </button>
-                      ) : null;
-                    })()}
-                  </>
-                ) : (
-                  <>
-                    This group has no provider group settings — it may not be
-                    provider-backed. Pick the provider event group Dispatcharr
-                    auto-syncs channels from.
-                  </>
-                )}
-              </span>
-            </div>
-          )}
-          {masterGroupId != null && masterStatus === true && (
-            <span className="event-sync-status-ok">
-              <span className="material-icons" aria-hidden="true">check_circle</span>
-              Auto-sync is ON — Dispatcharr owns this group&apos;s channels.
-            </span>
-          )}
         </section>
 
-        {/* Secondary groups */}
+        {/* Secondary groups (bead 38dzi: provider-scoped picker) */}
         <section className="event-sync-section-block">
           <h3 className="event-sync-section-title">Secondary groups</h3>
           <span className="form-hint">
             Pure stream sources from other providers — auto-sync should be OFF
             for each (otherwise Dispatcharr keeps creating duplicate channels
-            from them).
+            from them). The same group under a different provider than the
+            master IS selectable here.
           </span>
-          <input
-            type="text"
-            className="event-sync-secondary-search"
-            placeholder="Filter groups..."
-            value={secondarySearch}
-            onChange={e => setSecondarySearch(e.target.value)}
-            aria-label="Filter secondary groups"
+          <ProviderScopedGroupPicker
+            role="secondary"
+            rows={junctions}
+            value={secondaryScopes}
+            onChange={s => setSecondaryScopes(s as EventSyncGroupScope[])}
+            showAll={showAllGroups}
+            excludeScope={masterScope}
+            onRequestFix={t => requestFix(t, false)}
+            disabled={isLoading}
           />
-          <div className="event-sync-secondary-list checkbox-group" role="group" aria-label="Secondary groups">
-            {filteredSecondaryOptions.length === 0 ? (
-              <span className="form-hint">No groups match the filter</span>
-            ) : (
-              filteredSecondaryOptions.map(group => {
-                const status = autoSyncStatus(group.id);
-                const disabled = !isGroupEnabled(group.id);
-                return (
-                  <label key={group.id} className="checkbox-option">
-                    <input
-                      type="checkbox"
-                      checked={secondaryGroupIds.includes(group.id)}
-                      onChange={() => toggleSecondary(group.id)}
-                      disabled={isLoading}
-                    />
-                    <span>
-                      {group.name}
-                      {disabled && (
-                        <span className="event-sync-disabled-hint">(disabled)</span>
-                      )}
-                      {status === true && (
-                        <span className="event-sync-inline-warn">
-                          <span className="material-icons" aria-hidden="true">warning</span>
-                          auto-sync ON
-                        </span>
-                      )}
-                    </span>
-                  </label>
-                );
-              })
-            )}
-          </div>
-          {secondariesWithAutoSyncOn.length > 0 && (
-            <div className="warning-message" role="alert" data-testid="secondary-autosync-warning">
-              <span className="material-icons">warning</span>
-              <span>
-                Auto-sync is <strong>ON</strong> for{' '}
-                {secondariesWithAutoSyncOn.map(groupName).join(', ')} —
-                Dispatcharr will keep creating duplicate channels from{' '}
-                {secondariesWithAutoSyncOn.length === 1 ? 'this group' : 'these groups'}.
-                Disable <code>auto_channel_sync</code> for{' '}
-                {secondariesWithAutoSyncOn.length === 1 ? 'it' : 'them'} in M3U
-                Manager → account → Groups, or use the Fix buttons — ECM
-                changes this setting only through that explicitly confirmed
-                fix, never as a side effect of saving or running.
-                {secondariesWithAutoSyncOn.map(groupId => {
-                  const target = fixTargetFor(groupId, false);
-                  return target ? (
-                    <button
-                      key={groupId}
-                      type="button"
-                      className="btn-secondary event-sync-fix-btn"
-                      data-testid={`secondary-autosync-fix-${groupId}`}
-                      onClick={() => openFixDialog(target)}
-                      disabled={isLoading}
-                    >
-                      Fix: turn auto-sync OFF for {groupName(groupId)}…
-                    </button>
-                  ) : null;
-                })}
-              </span>
-            </div>
-          )}
         </section>
 
         {/* Parse patterns */}

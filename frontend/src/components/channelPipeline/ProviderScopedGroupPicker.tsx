@@ -93,12 +93,17 @@ export function ProviderScopedGroupPicker({
     selectedKeys.has(scopeKey(s));
 
   // A scope is "kept visible" (round-trip guard) if it is selected or is the
-  // excluded master scope — never dropped by the enabled-only filter.
+  // excluded master scope — never dropped by the enabled-only filter. A
+  // WHOLE-GROUP reference ({group_id, null} — e.g. a migrated legacy flat
+  // scope, or a single-provider selection) keeps that group's provider rows
+  // visible too, so a disabled-but-selected group never silently disappears.
   const isReferenced = (groupId: number, providerId: number | null) => {
-    const k = scopeKey({ group_id: groupId, m3u_account_id: providerId });
-    return (
+    const refs = (k: string) =>
       selectedKeys.has(k) ||
-      (excludeScope != null && scopeKey(excludeScope) === k)
+      (excludeScope != null && scopeKey(excludeScope) === k);
+    return (
+      refs(scopeKey({ group_id: groupId, m3u_account_id: providerId })) ||
+      refs(scopeKey({ group_id: groupId, m3u_account_id: null }))
     );
   };
 
@@ -156,10 +161,16 @@ export function ProviderScopedGroupPicker({
     );
   };
 
-  const renderProviderRow = (p: GroupProviderRow, showGroupName: boolean) => {
+  // ``asWholeGroup`` (single-provider groups, PO decision): the emitted scope
+  // is the whole group (m3u_account_id null) — the common one-click case —
+  // even though we still show the provider name + its sync status. The Fix
+  // still targets that provider's junction.
+  const renderProviderRow = (
+    p: GroupProviderRow, showGroupName: boolean, asWholeGroup = false,
+  ) => {
     const scope: EventSyncGroupScope = {
       group_id: p.groupId,
-      m3u_account_id: p.m3uAccountId,
+      m3u_account_id: asWholeGroup ? null : p.m3uAccountId,
     };
     const excluded = isExcluded(scope);
     const checked = isSelectedScope(scope);
@@ -176,7 +187,11 @@ export function ProviderScopedGroupPicker({
             checked={checked}
             disabled={disabled || excluded}
             onChange={() => selectScope(scope)}
-            data-testid={`psg-${role}-${p.groupId}-${p.m3uAccountId}`}
+            data-testid={
+              asWholeGroup
+                ? `psg-${role}-${p.groupId}-any`
+                : `psg-${role}-${p.groupId}-${p.m3uAccountId}`
+            }
           />
           <span className="psg-label">{label}</span>
           {syncBadge(p.autoChannelSync, true)}
@@ -255,9 +270,10 @@ export function ProviderScopedGroupPicker({
           );
           if (visibleProviders.length === 0) return null;
 
-          // Single-provider group -> flat row (provider unambiguous).
+          // Single-provider group -> flat row selecting the WHOLE group
+          // (m3u_account_id null); the provider is unambiguous (PO decision).
           if (visibleProviders.length === 1 && node.providers.length === 1) {
-            return renderProviderRow(visibleProviders[0], true);
+            return renderProviderRow(visibleProviders[0], true, true);
           }
 
           // Multi-provider group -> expandable parent.
