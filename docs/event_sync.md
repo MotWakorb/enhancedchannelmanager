@@ -314,8 +314,11 @@ the rule.
 
 ```json
 {
-  "master_group_id": 12,
-  "secondary_group_ids": [34, 56],
+  "master": { "group_id": 12, "m3u_account_id": 3 },
+  "secondary": [
+    { "group_id": 12, "m3u_account_id": 7 },
+    { "group_id": 56, "m3u_account_id": null }
+  ],
   "patterns": [
     {
       "name": "my-provider-shape",
@@ -334,10 +337,37 @@ the rule.
 }
 ```
 
+### Provider-scoped groups (`master` / `secondary`)
+
+The **canonical** scoping shape is provider-scoped: `master` is one scope
+object and `secondary` is a list of them. A scope is
+`{ "group_id": int, "m3u_account_id": int | null }` — a channel group plus,
+optionally, the ONE M3U provider account whose streams that scope draws from.
+`m3u_account_id: null` means the **whole group** (every provider's streams in
+it), which is the pre-provider-scope behaviour.
+
+This exists because Dispatcharr channel-group names are globally unique (see
+[Two providers, one group name](#two-providers-one-group-name)): a group two
+providers both carry is ONE `group_id` with two per-provider junctions. The
+scope's `m3u_account_id` is what lets you draw provider A's copy as the master
+and provider B's copy of the **same group** as a secondary — the case that
+had no expression under the flat shape.
+
+**Derived flat keys (`master_group_id` / `secondary_group_ids`).** The
+validator derives these scalar keys from the scopes on every save and stores
+**both** — they are a denormalization the execution hot path still reads
+directly, kept in lockstep by re-derivation on each persist (they can never
+drift from the scopes). A **legacy** rule that carries only the flat keys is
+auto-upgraded to whole-group scopes (`m3u_account_id: null`) on read — no
+migration, no data touched. Sending only the flat keys is still accepted for
+backward compatibility; the rule editor now reads and writes the nested shape.
+
 | Field | Required | Meaning |
 |-|-|-|
-| `master_group_id` | yes | The ONE Dispatcharr group whose channels Dispatcharr owns (`auto_channel_sync` ON). Positive integer group ID. |
-| `secondary_group_ids` | yes* | The secondary event groups (`auto_channel_sync` OFF) whose streams get matched onto master channels. Must NOT contain `master_group_id`. *May be **empty** when `include_master_group_streams` is true — then the master group is itself the stream source (bead 3ux85). |
+| `master` | yes† | The master scope `{group_id, m3u_account_id}`: the ONE Dispatcharr group whose channels Dispatcharr owns (`auto_channel_sync` ON), optionally scoped to one provider. †Either `master` (canonical) or the legacy `master_group_id` must be present. |
+| `secondary` | yes*† | The secondary scopes (each `auto_channel_sync` OFF) whose streams get matched onto master channels. A scope must NOT duplicate the master's exact `(group_id, m3u_account_id)` pair — but the **same group under a different provider** IS allowed. *May be **empty** when `include_master_group_streams` is true (bead 3ux85). †Legacy `secondary_group_ids` is accepted in its place. |
+| `master_group_id` | derived | Legacy/derived scalar master group ID. Present on every stored config (derived from `master`); accepted as input for backward compatibility. Positive integer. |
+| `secondary_group_ids` | derived | Legacy/derived list of secondary group IDs (derived from `secondary`). Must NOT contain `master_group_id`. |
 | `patterns` | no | Shared parse-pattern variants (title/time/date regexes with named capture groups, same shape as the built-in defaults in `backend/services/event_sync_matcher.py`). Omit to use the built-in defaults. API-authored arrays survive UI resaves: the rule editor round-trips the full array (an untouched save emits it verbatim; patterns beyond the one custom slot the UI can edit are preserved read-only, and built-ins are never silently re-added to an all-custom selection). |
 | `group_patterns` | no | Per-group pattern overrides, keyed by group ID (master or a secondary). A group with an override uses ONLY its own patterns for parsing; other groups keep the shared `patterns` selection. Multi-pattern lists round-trip through the UI the same way as `patterns` (the editor edits only the first pattern per group; the rest are preserved). |
 | `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. Capped at 1440 (24 hours). |
@@ -346,7 +376,7 @@ the rule.
 | `enabled` | no (default true) | Feature toggle within the rule. |
 | `auto_run` | no (default **false**) | Phase 2 opt-in (bead ti939.3.1): when true, the rule also runs **unattended** after each M3U refresh (the watermark task). Absent means false — manual-run-only. See [Automatic runs after refresh](#automatic-runs-after-refresh-phase-2-opt-in). |
 | `dummy_epg_profile_id` | no (absent = off) | Phase 2 (bead ti939.3.3): id of a [dummy EPG profile](template_engine.md) auto-assigned to the master group's channels on every run. Must reference an **existing** profile (teaching error otherwise); the key is never default-filled — omit it to disable. See [Automatic guide data for master channels](#automatic-guide-data-for-master-channels-dummy-epg). |
-| `include_master_group_streams` | no (default **false**) | bead 6xxmp: when true, the **master group's own streams** are also matched to the master channels (streams already attached are skipped). The sanctioned path for a same-named cross-provider group — see [Two providers, one group name](#two-providers-one-group-name) below. |
+| `include_master_group_streams` | no (default **false**) | bead 6xxmp: when true, the **master group's own streams** (from *any* provider) are also matched to the master channels; streams already attached are skipped. A whole-group catch-all for a same-named cross-provider group — now usually superseded by adding the same group under the other provider as a `secondary` scope (which targets exactly one provider). Still useful when a same-named group spans **three or more** providers and you want them all. See [Two providers, one group name](#two-providers-one-group-name) below. |
 | `assume_current_date` | no (default **false**) | When true, a listing that carries a **time but no date** is placed on the **current date** so it becomes matchable — deliberately relaxing the never-guess-the-date rail. Accepts the cross-day match risk. See [Dateless live listings](#dateless-live-listings). |
 | `parse_master_from_stream` | no (default **false**) | When true, each master channel's event identity (title + time) is read from its **first attached stream's name** instead of the channel name — so master channels can be named freely. A master with no attached stream is skipped. See [The master channels' date+time must be in their NAMES](#the-master-channels-datetime-must-be-in-their-names). |
 
@@ -355,11 +385,14 @@ the rule.
 Validation errors are designed to teach — each carries the field, the
 value you sent, what was expected, and a link back to this document.
 
-* **Mandatory scoping** (`master_group_id` present, `secondary_group_ids`
-  non-empty, master not in secondaries) is schema-enforced, not
-  convention. It is the rail that prevents recurrence of the prior
-  fuzzy-matching incident — see [History: the 1,341-incident
-  benchmark](#history-the-1341-incident-benchmark) below.
+* **Mandatory scoping** (a master present, at least one secondary scope —
+  or `include_master_group_streams` — and no secondary scope duplicating the
+  master's exact `(group_id, m3u_account_id)` pair) is schema-enforced, not
+  convention. The uniqueness rail is the (group, provider) **pair**, so the
+  same group under a different provider is allowed as a secondary while an
+  identical group+provider master/secondary is rejected. It is the rail that
+  prevents recurrence of the prior fuzzy-matching incident — see [History:
+  the 1,341-incident benchmark](#history-the-1341-incident-benchmark) below.
 * **Parse regexes compile through `safe_regex` at save time.** Operator
   regex is the ReDoS surface; the save-time compiler is the exact one the
   runtime uses.
@@ -382,32 +415,38 @@ model declares `name = models.TextField(unique=True)`, and per-provider
 settings (`auto_channel_sync`, `enabled`) live in a `ChannelGroupM3UAccount`
 junction. So if two M3U providers both carry a group called `MLB PPV`, their
 streams land in the **same** channel group — one group ID with two junction
-rows (provider A: sync ON, provider B: sync OFF). There is no second group to
-pick: the picker shows one entry, and it correctly cannot be both master and
-secondary. **This is not an ECM limitation — Dispatcharr cannot represent two
-same-named groups.**
+rows (provider A: sync ON, provider B: sync OFF). **Dispatcharr cannot
+represent two same-named groups**, so there is only one group ID to work with.
 
-`include_master_group_streams` is the sanctioned path for exactly this case:
+**The provider-scoped picker resolves this directly.** A group carried by two
+providers expands in the master and secondary pickers into per-provider rows,
+so you scope each role to the provider you mean:
 
-1. Pick the shared group as the **master** (`auto_channel_sync` ON via
-   provider A) so Dispatcharr owns one channel per event.
-2. Set `include_master_group_streams: true` (in the rule editor: **"Also
-   attach the master group's own streams"** under Advanced).
-3. **Leave `secondary_group_ids` empty** — with the flag on, the master group
-   is itself the stream source, so no separate secondary is required (bead
-   3ux85). The editor's Save is enabled with no secondary once the flag is on.
+1. Pick the shared group under **provider A** as the master
+   (`{group_id: 12, m3u_account_id: 3}`) — provider A has `auto_channel_sync`
+   ON, so Dispatcharr owns one channel per event.
+2. Pick the **same group under provider B** as a secondary
+   (`{group_id: 12, m3u_account_id: 7}`) — provider B has `auto_channel_sync`
+   OFF. The secondary fetch filters streams to provider B alone, so only its
+   still-unattached streams are matched onto the master channels.
 
-On each run the master group's own streams are matched to the master
-channels. Streams **already attached** to a master channel — provider A's own
-— are skipped by the resolver, so only provider B's still-unattached streams
-attach. Preview and run stay in lockstep (the preview's *would attach* count
-already excludes the already-attached streams). The master group is **never**
-added to `secondary_group_ids` — the empty list plus the flag is the scoped
-path, so the anti-unscoped-matching rail is untouched.
+The two roles share a group ID but differ by provider, so the uniqueness rail
+(the `(group_id, m3u_account_id)` pair) is satisfied — this is the case that
+had no expression before provider scoping.
+
+**`include_master_group_streams` remains as a whole-group catch-all** for the
+same shape, and is the right tool when a same-named group spans **three or
+more** providers (add the master under one provider, set the flag, and every
+other provider's unsynced streams in that group attach without enumerating
+each). With the flag on you may **leave `secondary` empty** (bead 3ux85): the
+master group is itself the stream source, streams already attached (provider
+A's own) are skipped by the resolver, and preview/run stay in lockstep. The
+master scope is never *also* added as a secondary — the empty list plus the
+flag is the scoped path, so the anti-unscoped-matching rail is untouched.
 
 If you would rather keep the two providers fully separate, the alternative
 is to **rename one provider's group** in Dispatcharr (a group override) so
-the two names become distinct IDs that pick independently — no flag needed.
+the two names become distinct IDs that pick independently.
 
 ## Threshold and bands
 
@@ -471,7 +510,7 @@ both the master's channel *and* the secondary's own auto-created
 duplicate.
 
 Fix: M3U Manager → account → Groups → disable `auto_channel_sync` for
-every group used as a `secondary_group_ids` entry — or use the rule
+every provider used as a `secondary` scope — or use the rule
 editor's **Fix** button (a [confirmed guided
 fix](#guided-setup-the-confirmed-auto-sync-fix); the toggle happens only
 when you confirm its dialog, never automatically). The rule editor's live
@@ -1074,7 +1113,10 @@ is the trust benchmark this whole feature is built against:
 unscoped event rule is refused at save time, not caught in review), and
 team-token conflict is a hard reject (score 0.0, never admissible at any
 fuzzy score) rather than a soft penalty. Precision over recall everywhere
-in this module.
+in this module. Provider scoping (the nested `master` / `secondary` shape)
+tightens the same rail one notch: the uniqueness boundary is the
+`(group_id, m3u_account_id)` pair, so a scope names not just a group but the
+one provider it draws from.
 
 ### No durable cluster state
 
