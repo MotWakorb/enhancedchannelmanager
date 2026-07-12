@@ -50,6 +50,20 @@ def _event_sync_config(**overrides) -> dict:
         "parse_master_from_stream": False,
     }
     config.update(overrides)
+    # bead 3p2af: the validator normalizes to the nested provider-scoped
+    # canonical shape AND keeps the derived flat keys in sync, so a
+    # round-tripped stored config carries both. Derive the nested shape from
+    # the (possibly overridden) flat keys unless the caller overrode it
+    # directly — so existing flat-key overrides keep taking effect.
+    if "master" not in overrides:
+        config["master"] = {
+            "group_id": config["master_group_id"], "m3u_account_id": None,
+        }
+    if "secondary" not in overrides:
+        config["secondary"] = [
+            {"group_id": g, "m3u_account_id": None}
+            for g in config["secondary_group_ids"]
+        ]
     return config
 
 

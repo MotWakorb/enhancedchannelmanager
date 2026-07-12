@@ -562,3 +562,76 @@ class TestTeachingErrorFormat:
         errors = validate_event_sync_config(config)
         assert len(errors) >= 6
         assert all("docs/event_sync.md" in e for e in errors)
+
+
+class TestProviderScopedSchema:
+    """Nested provider-scoped shape (bead 3p2af/2c2vz).
+
+    Canonical config is {master:{group_id,m3u_account_id}, secondary:[...]};
+    a legacy flat config auto-upgrades on read (no data migration); the flat
+    keys are kept in sync so existing readers are untouched.
+    """
+
+    def test_legacy_flat_config_upgrades_to_nested(self):
+        config = {"master_group_id": 10, "secondary_group_ids": [20, 30]}
+        assert validate_event_sync_config(config) == []
+        assert config["master"] == {"group_id": 10, "m3u_account_id": None}
+        assert config["secondary"] == [
+            {"group_id": 20, "m3u_account_id": None},
+            {"group_id": 30, "m3u_account_id": None},
+        ]
+        # derived flat keys stay in sync for existing readers
+        assert config["master_group_id"] == 10
+        assert config["secondary_group_ids"] == [20, 30]
+
+    def test_nested_config_derives_flat_keys(self):
+        config = {
+            "master": {"group_id": 10, "m3u_account_id": 3},
+            "secondary": [{"group_id": 10, "m3u_account_id": 7}],
+        }
+        assert validate_event_sync_config(config) == []
+        assert config["master_group_id"] == 10
+        assert config["secondary_group_ids"] == [10]
+        assert config["master"]["m3u_account_id"] == 3
+        assert config["secondary"][0]["m3u_account_id"] == 7
+
+    def test_same_group_different_provider_is_valid(self):
+        # The whole point: master group 10 / provider 3, secondary group 10 /
+        # provider 7 — same group, different provider — is allowed.
+        config = {
+            "master": {"group_id": 10, "m3u_account_id": 3},
+            "secondary": [{"group_id": 10, "m3u_account_id": 7}],
+        }
+        assert validate_event_sync_config(config) == []
+
+    def test_identical_group_provider_pair_rejected(self):
+        config = {
+            "master": {"group_id": 10, "m3u_account_id": 3},
+            "secondary": [{"group_id": 10, "m3u_account_id": 3}],
+        }
+        errors = validate_event_sync_config(config)
+        assert any("secondary_group_ids" in e for e in errors)
+
+    def test_same_group_null_provider_both_still_rejected(self):
+        # Legacy behavior preserved: group 10 (any provider) as both master and
+        # secondary is still forbidden (identical pair (10, None)).
+        config = {"master_group_id": 10, "secondary_group_ids": [10]}
+        errors = validate_event_sync_config(config)
+        assert any("secondary_group_ids" in e for e in errors)
+
+    @pytest.mark.parametrize("bad_pid", ["3", 0, -1, True, 1.5])
+    def test_bad_provider_id_rejected(self, bad_pid):
+        config = {
+            "master": {"group_id": 10, "m3u_account_id": bad_pid},
+            "secondary": [{"group_id": 20, "m3u_account_id": None}],
+        }
+        errors = validate_event_sync_config(config)
+        assert any("master_group_id" in e for e in errors)
+
+    def test_null_provider_means_whole_group(self):
+        config = {
+            "master": {"group_id": 10, "m3u_account_id": None},
+            "secondary": [{"group_id": 20, "m3u_account_id": None}],
+        }
+        assert validate_event_sync_config(config) == []
+        assert config["master_group_id"] == 10
