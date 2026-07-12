@@ -286,6 +286,20 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 
 ---
 
+## Event Sync Reviews
+
+The `/api/event-sync-reviews/*` family (bead ti939.3.2) is the review queue for ambiguous Event Sync matches — ambiguous-band scores and contested ties enqueue here instead of being silently skipped. Rows key on **content fingerprints** — `(rule_id, provider_id, stream_name_hash, event_key)` — never channel/stream IDs, so decisions survive Dispatcharr refreshes and re-apply on every future run. Feature guide: [`docs/event_sync.md`](event_sync.md) → "Reviewing ambiguous matches"; fingerprint semantics: `backend/services/event_sync_review.py`.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/event-sync-reviews` | Paginated list. Query: `status` (`pending` default \| `accepted` \| `rejected` \| `superseded`), `rule_id`, `page`, `page_size` (≤200). Rows carry the fingerprint columns, state-machine fields, and a parsed display-only `evidence` snapshot (both raw names, parsed titles/starts, score/band/team-verdict/time-delta, snapshot ids). `RequireAuthIfEnabled`. |
+| `POST /api/event-sync-reviews/{id}/accept` | Accept a pairing: records the durable fingerprint decision (future runs auto-attach it), supersedes sibling pending pairings for the same stream fingerprint, then best-effort attaches immediately — snapshot channel/stream ids are re-verified against live Dispatcharr (channel name must still parse to the row's `event_key`; stream name must still hash to `stream_name_hash`) and a failed verification defers the attach to the next run (`attach_deferred_reason`). Response: `{status: "accepted", attached, already_attached, attach_deferred_reason, superseded_siblings}`. Idempotent on `accepted`; `409` on `rejected`/`superseded`; `404` if missing. `RequireAdminIfEnabled`. |
+| `POST /api/event-sync-reviews/{id}/reject` | Reject a pairing: durable fingerprint suppression — future runs neither attach nor re-ask. No Dispatcharr call. Response: `{status: "rejected"}`. Idempotent on `rejected`; `409` on `accepted`/`superseded`. `RequireAdminIfEnabled`. |
+
+Audit: accepts/rejects write `journal_entries` rows (category `event_sync`, action `review_accept`/`review_reject`); an immediate attach writes the standard `merge_stream` entry with `after_value.match.attach_source = "review_queue"` (threshold attaches carry `"threshold"`), keeping queue-driven attaches distinguishable and covered by the journal-driven surgical unmerge.
+
+---
+
 ## Logos
 
 | Endpoint | Description |
@@ -785,8 +799,8 @@ Event Sync (epic ti939) dry-run: parses and scores every secondary-group stream 
 | Key | Contents |
 |-|-|
 | `preflight` | `{ok, failures[]}` from the read-only group-settings check (master auto-sync ON, secondaries OFF, groups exist). |
-| `summary` | `secondary_streams`, `would_attach`, `ambiguous_skipped`, `unmatched`, `parse_failed` (the four dispositions sum to `secondary_streams` and reconcile exactly with `streams`), plus `master_channels` / `master_channels_unparsed`. |
-| `streams` | One row per secondary stream: raw name, provider, group, parsed title + start, disposition, `ambiguous_reason` (`contested_top_candidates` — the ti939.2.1 contested rail — or `top_candidate_ambiguous_band`; `null` otherwise), `would_attach_master` (name + current channel id, re-resolved this call), and up to 10 scored candidates (master name/id, parsed title/start, score, band, team-token verdict, time delta, machine-readable reject reason). |
+| `summary` | `secondary_streams`, `would_attach`, `ambiguous_skipped`, `unmatched`, `parse_failed` (the four dispositions sum to `secondary_streams` and reconcile exactly with `streams`), plus `master_channels` / `master_channels_unparsed`, plus the ti939.3.2 review-queue context: `would_attach_via_review` (subset of `would_attach` reached via a prior review accept) and `candidates_pending_review` (rendered candidate pairings currently awaiting review). |
+| `streams` | One row per secondary stream: raw name, provider, group, parsed title + start, disposition, `ambiguous_reason` (`contested_top_candidates` — the ti939.2.1 contested rail — or `top_candidate_ambiguous_band`; `null` otherwise), `attach_source` (`"threshold"` \| `"review_queue"` when the disposition is `would_attach`, else `null` — ti939.3.2), `would_attach_master` (name + current channel id, re-resolved this call), and up to 10 scored candidates (master name/id, parsed title/start, score, band, team-token verdict, time delta, machine-readable reject reason, and `review_status` — `pending`/`accepted`/`rejected`/`null` queue marker for that exact pairing, populated only when previewing a saved rule). |
 | `unmatched_streams` | Streams with no master in the time window (the master-as-ceiling visibility hedge; evidence base for any future promotion feature). |
 | `parse_failures` | Failures grouped by `(group, reason)` with counts and sample names — a silently broken pattern is loud here. |
 | `unparsed_master_channels` | Master channel names with no complete parsed identity (they can never be attach targets). |

@@ -3372,7 +3372,7 @@ class ActionExecutor:
         return best_channel, provenance
 
     def _resolve_event_sync(self, config: dict, secondary_streams: list,
-                            now=None) -> tuple:
+                            now=None, decisions=None) -> tuple:
         """Event-mode candidate resolution (ti939.2.1) — SIBLING of
         :meth:`_resolve_scored_fuzzy`.
 
@@ -3396,6 +3396,10 @@ class ActionExecutor:
             config: A VALIDATED event_sync_config.
             secondary_streams: list[services.event_sync_resolver.SecondaryStream].
             now: Optional tz-aware anchor threaded to the resolver (tests).
+            decisions: Optional ``services.event_sync_review.ReviewDecisions``
+                (bead ti939.3.2) — prior operator accepts/rejects for THIS
+                rule, applied INSIDE the shared resolver so run and preview
+                classification cannot diverge.
 
         Returns:
             ``(resolution, name_to_id, master_channel_count)`` where
@@ -3422,14 +3426,16 @@ class ActionExecutor:
         master_names = sorted(name_to_id)
 
         resolution = resolve_event_sync(
-            config, master_names, secondary_streams, now=now
+            config, master_names, secondary_streams, now=now,
+            decisions=decisions,
         )
         return resolution, name_to_id, master_channel_count
 
     async def execute_event_sync_rule(self, rule_id: Optional[int],
                                       rule_name: str, config: dict,
                                       secondary_streams: list,
-                                      exec_ctx: ExecutionContext) -> dict:
+                                      exec_ctx: ExecutionContext,
+                                      decisions=None) -> dict:
         """Execute one event_sync rule's attach path (bead ti939.2.1).
 
         Phase 1B — the FIRST write path for event_sync. Resolves every
@@ -3439,9 +3445,19 @@ class ActionExecutor:
         * ``would_attach`` → attach via the EXISTING add-stream-to-channel
           merge internals (:meth:`_add_stream_to_channel`). Idempotent by
           construction: a stream already on the master channel is a no-op
-          skip, so stateless re-runs after every refresh are safe.
-        * ``ambiguous`` (band or contested rail) → skip + count.
+          skip, so stateless re-runs after every refresh are safe. The
+          journal provenance carries ``attach_source`` ("threshold" vs
+          "review_queue") so queue-driven attaches — dispositions upgraded
+          by a prior operator accept — stay distinguishable (ti939.3.2).
+        * ``ambiguous`` (band or contested rail) → skip + count, AND
+          surface the enqueue-eligible pairings in
+          ``summary["review_candidates"]`` (fingerprint + evidence
+          payloads). The ENGINE persists them on live runs — this method
+          stays DB-free, and a dry run therefore enqueues nothing by
+          construction.
         * ``unmatched`` / ``parse_failed`` → skip with reason (counted).
+          Pairings the operator previously REJECTED are already filtered
+          inside the resolver (counted via ``rejected_suppressed``).
 
         Blast-radius controls:
 
@@ -3471,12 +3487,19 @@ class ActionExecutor:
             DISPOSITION_UNMATCHED,
             DISPOSITION_WOULD_ATTACH,
         )
+        from services.event_sync_review import (
+            ATTACH_SOURCE_REVIEW_QUEUE,
+            PROVIDER_ID_UNKNOWN,
+            master_event_key,
+            stream_name_hash,
+        )
         from concurrency import run_cpu_bound
 
         # CPU-bound scoring off the event loop (same treatment as the
         # preview endpoint).
         resolution, name_to_id, master_channel_count = await run_cpu_bound(
-            self._resolve_event_sync, config, secondary_streams
+            self._resolve_event_sync, config, secondary_streams, None,
+            decisions,
         )
 
         cap = config.get("max_attach_per_run", DEFAULT_MAX_ATTACH_PER_RUN)
@@ -3501,9 +3524,16 @@ class ActionExecutor:
             "capped": False,
             "cap_overage": 0,
             "attach_entries": [],
+            # ti939.3.2 review-queue surface: queue-driven attach count,
+            # rejection-suppressed pairing count, and the pending-question
+            # payloads the engine persists on live runs.
+            "queue_attached": 0,
+            "rejected_suppressed": 0,
+            "review_candidates": [],
         }
 
         for r in resolution.resolved:
+            summary["rejected_suppressed"] += r.rejected_suppressed
             if r.disposition == DISPOSITION_PARSE_FAILED:
                 summary["parse_failed"] += 1
                 continue
@@ -3516,9 +3546,55 @@ class ActionExecutor:
                     summary["contested_skipped"] += 1
                 logger.info(
                     "[EVENT-SYNC] Rule '%s': stream '%s' AMBIGUOUS (%s) — "
-                    "skipped, never auto-attached",
+                    "skipped, never auto-attached; %d pairing(s) surfaced "
+                    "for operator review",
                     rule_name, r.stream.name, r.ambiguous_reason,
+                    len(r.review_candidates),
                 )
+                # ti939.3.2: enqueue instead of silently skipping. One
+                # payload per enqueue-eligible pairing, keyed on content
+                # fingerprints (NEVER stream/channel ids — those appear
+                # only inside the display-only evidence snapshot).
+                shash = stream_name_hash(r.stream.name)
+                provider_id = (
+                    r.stream.provider_id
+                    if r.stream.provider_id is not None
+                    else PROVIDER_ID_UNKNOWN
+                )
+                for c in r.review_candidates:
+                    event_key = master_event_key(c.parsed)
+                    if event_key is None:  # defensive: candidates always parse
+                        continue
+                    summary["review_candidates"].append({
+                        "provider_id": provider_id,
+                        "stream_name_hash": shash,
+                        "event_key": event_key,
+                        "evidence": {
+                            "rule_name": rule_name,
+                            "stream_name": r.stream.name,
+                            "provider": r.stream.provider,
+                            "secondary_group_id": r.stream.group_id,
+                            "stream_id": r.stream.stream_id,
+                            "stream_parsed_title": r.result.parsed.title,
+                            "stream_parsed_start": (
+                                r.result.parsed.start.isoformat()
+                                if r.result.parsed.start else None
+                            ),
+                            "master_channel_name": c.master_name,
+                            "master_channel_id": name_to_id.get(c.master_name),
+                            "master_parsed_title": c.parsed.title,
+                            "master_parsed_start": (
+                                c.parsed.start.isoformat()
+                                if c.parsed.start else None
+                            ),
+                            "score": round(c.score, 4),
+                            "band": c.band,
+                            "team_verdict": c.team_verdict,
+                            "time_delta_minutes": round(
+                                c.time_delta_minutes, 1),
+                            "ambiguous_reason": r.ambiguous_reason,
+                        },
+                    })
                 continue
             if r.disposition != DISPOSITION_WOULD_ATTACH:
                 # Defensive: an unknown disposition must be loud, not a
@@ -3581,6 +3657,11 @@ class ActionExecutor:
                 "band": r.best.band,
                 "time_delta_minutes": round(r.best.time_delta_minutes, 1),
                 "team_verdict": r.best.team_verdict,
+                # ti939.3.2: how the attach decision was reached —
+                # "threshold" (matcher admission) vs "review_queue" (prior
+                # operator accept). The journal-distinction contract: a
+                # queue-driven attach is auditable as such.
+                "attach_source": r.attach_source,
             }
             stream_ctx = StreamContext(
                 stream_id=r.stream.stream_id,
@@ -3606,6 +3687,14 @@ class ActionExecutor:
                 summary["already_attached"] += 1
             else:
                 summary["attached"] += 1
+                if r.attach_source == ATTACH_SOURCE_REVIEW_QUEUE:
+                    summary["queue_attached"] += 1
+                    logger.info(
+                        "[EVENT-SYNC] Rule '%s': stream '%s' attached to "
+                        "'%s' via REVIEW-QUEUE accept (fingerprint-keyed "
+                        "decision re-applied)",
+                        rule_name, r.stream.name, r.best.master_name,
+                    )
 
             summary["attach_entries"].append({
                 "type": "event_sync_attach",

@@ -100,7 +100,27 @@ export interface EventSyncPreviewSummary {
   parse_failed: number;
   master_channels: number;
   master_channels_unparsed: number;
+  /**
+   * ti939.3.2: subset of `would_attach` reached via a prior review-queue
+   * accept (fingerprint-keyed decision) rather than the score threshold.
+   */
+  would_attach_via_review: number;
+  /** ti939.3.2: rendered candidate pairings currently pending review. */
+  candidates_pending_review: number;
 }
+
+/**
+ * ti939.3.2: review-queue state of one exact (stream, master) pairing —
+ * `'pending'` (awaiting the operator), `'accepted'` / `'rejected'`
+ * (durable fingerprint-keyed decision), or `null` (never queued).
+ */
+export type EventSyncReviewStatus = 'pending' | 'accepted' | 'rejected' | null;
+
+/**
+ * ti939.3.2: how a `would_attach` disposition was reached — the matcher's
+ * own score admission or a prior operator accept from the review queue.
+ */
+export type EventSyncAttachSource = 'threshold' | 'review_queue' | null;
 
 export interface EventSyncCandidate {
   master_channel_name: string;
@@ -112,6 +132,7 @@ export interface EventSyncCandidate {
   team_verdict: EventSyncTeamVerdict;
   time_delta_minutes: number;
   reject_reason: string | null;
+  review_status: EventSyncReviewStatus;
 }
 
 export interface EventSyncStreamRow {
@@ -124,6 +145,7 @@ export interface EventSyncStreamRow {
   matched_pattern: string | null;
   disposition: EventSyncDisposition;
   unmatchable_reason: string | null;
+  attach_source: EventSyncAttachSource;
   would_attach_master: { channel_id: number | null; name: string } | null;
   candidates: EventSyncCandidate[];
 }
@@ -165,3 +187,76 @@ export interface EventSyncPreviewResponse {
 export type EventSyncPreviewRequest =
   | { rule_id: number }
   | { event_sync_config: EventSyncConfig };
+
+// =============================================================================
+// Review queue (bead ti939.3.2) — /api/event-sync-reviews
+// =============================================================================
+
+/**
+ * Display-only evidence snapshot on one review row. Everything the operator
+ * needs to judge the pairing without an opaque aggregate score: both raw
+ * names, both parsed identities, per-candidate score/band/verdict/delta.
+ * The snapshot channel/stream ids are NOT identity — the backend re-verifies
+ * them against live Dispatcharr before any use (fingerprints are the key).
+ */
+export interface EventSyncReviewEvidence {
+  rule_name?: string;
+  stream_name?: string;
+  provider?: string | null;
+  secondary_group_id?: number;
+  stream_id?: number | null;
+  stream_parsed_title?: string | null;
+  stream_parsed_start?: string | null;
+  master_channel_name?: string;
+  master_channel_id?: number | null;
+  master_parsed_title?: string | null;
+  master_parsed_start?: string | null;
+  score?: number;
+  band?: EventSyncBand;
+  team_verdict?: EventSyncTeamVerdict;
+  time_delta_minutes?: number;
+  ambiguous_reason?: string | null;
+}
+
+/**
+ * One event_sync_reviews row, as projected by `GET /api/event-sync-reviews`.
+ * Identity is the content fingerprint (`rule_id`, `provider_id`,
+ * `stream_name_hash`, `event_key`) — never channel/stream IDs — so decisions
+ * survive Dispatcharr refreshes (epic ti939.3 keying constraint).
+ */
+export interface EventSyncReviewRecord {
+  id: number;
+  rule_id: number;
+  provider_id: number;
+  stream_name_hash: string;
+  event_key: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'superseded';
+  created_at: number;
+  last_seen_at: number;
+  resolved_at: number | null;
+  resolution_source: string | null;
+  evidence: EventSyncReviewEvidence;
+}
+
+/** Paginated envelope for `GET /api/event-sync-reviews`. */
+export interface EventSyncReviewsListResponse {
+  reviews: EventSyncReviewRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+/** Flat outcome for `POST /api/event-sync-reviews/{id}/accept`. */
+export interface AcceptEventSyncReviewOutcome {
+  status: 'accepted';
+  attached: boolean;
+  already_attached: boolean;
+  attach_deferred_reason: string | null;
+  superseded_siblings: number;
+}
+
+/** Flat outcome for `POST /api/event-sync-reviews/{id}/reject`. */
+export interface RejectEventSyncReviewOutcome {
+  status: 'rejected';
+}

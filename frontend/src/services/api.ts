@@ -92,6 +92,11 @@ import type {
   DummyEPGBatchPreviewRequest,
   DummyEPGChannelAssignment,
 } from '../types';
+import type {
+  AcceptEventSyncReviewOutcome,
+  EventSyncReviewsListResponse,
+  RejectEventSyncReviewOutcome,
+} from '../types/eventSync';
 import { logger } from '../utils/logger';
 import { fetchJson, fetchText, buildQuery, HttpError } from './httpClient';
 import {
@@ -4431,6 +4436,65 @@ export async function acceptPendingMerge(mergeId: number): Promise<AcceptMergeOu
  */
 export async function dismissPendingMerge(mergeId: number): Promise<DismissMergeOutcome> {
   return fetchJson(`${API_BASE}/channel-merges/${mergeId}/dismiss`, {
+    method: 'POST',
+  });
+}
+
+// -------------------------------------------------------------------------
+// Event Sync review queue (bead ti939.3.2) — /api/event-sync-reviews.
+//
+// Ambiguous-band event_sync matches enqueue here instead of being silently
+// skipped. Rows key on content fingerprints (rule, provider, normalized
+// stream name hash, normalized event identity) — never channel/stream IDs —
+// so operator decisions survive Dispatcharr refreshes and re-apply on every
+// future run. List is RequireAuthIfEnabled; accept/reject are admin-gated.
+// -------------------------------------------------------------------------
+
+/**
+ * List event sync review rows. Defaults to the open queue
+ * (status='pending', page=1, page_size=50). Pass `ruleId` to scope to one
+ * event_sync rule.
+ */
+export async function getEventSyncReviews(params?: {
+  status?: 'pending' | 'accepted' | 'rejected' | 'superseded';
+  ruleId?: number;
+  page?: number;
+  pageSize?: number;
+}): Promise<EventSyncReviewsListResponse> {
+  const query = buildQuery({
+    status: params?.status ?? 'pending',
+    rule_id: params?.ruleId,
+    page: params?.page ?? 1,
+    page_size: params?.pageSize ?? 50,
+  });
+  return fetchJson(`${API_BASE}/event-sync-reviews${query}`);
+}
+
+/**
+ * Accept a review pairing: the backend records the fingerprint-keyed
+ * decision (durable — future runs auto-attach it) and best-effort attaches
+ * the stream immediately after re-verifying the snapshot ids against live
+ * Dispatcharr. `attach_deferred_reason` explains a deferred attach; the
+ * next pipeline run applies it. Idempotent on `accepted`; 409 on
+ * `rejected`/`superseded`.
+ */
+export async function acceptEventSyncReview(
+  reviewId: number,
+): Promise<AcceptEventSyncReviewOutcome> {
+  return fetchJson(`${API_BASE}/event-sync-reviews/${reviewId}/accept`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Reject a review pairing: durable fingerprint-keyed suppression — future
+ * runs skip the pairing without re-asking. Idempotent on `rejected`; 409
+ * on `accepted`/`superseded`.
+ */
+export async function rejectEventSyncReview(
+  reviewId: number,
+): Promise<RejectEventSyncReviewOutcome> {
+  return fetchJson(`${API_BASE}/event-sync-reviews/${reviewId}/reject`, {
     method: 'POST',
   });
 }

@@ -365,3 +365,143 @@ class TestValidationAndErrors:
         )
         assert neither.status_code == 422
         assert both.status_code == 422
+
+
+class TestReviewQueueMarkers:
+    """ti939.3.2: preview surfaces review-queue state on candidate rows and
+    applies decisions through the SAME resolver a run uses (parity)."""
+
+    AMBIG_STREAM = "IMSA TV 03 : IMSA VPRC at CTMP R2 @ 11 Jul 03:55 PM ET"
+    AMBIG_MASTER = "Peacock 11: IMSA CTMP Qualifying @ 11 Jul 03:55 PM ET"
+
+    def _saved_rule(self, test_session):
+        rule = ChannelPipelineRule(
+            name="Event Sync Rule",
+            enabled=True,
+            priority=0,
+            conditions=json.dumps([]),
+            actions=json.dumps([]),
+            sort_order="asc",
+            orphan_action="delete",
+            event_sync_config=json.dumps(_config(
+                time_window_minutes=30, attach_threshold=0.80, enabled=True,
+            )),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        test_session.add(rule)
+        test_session.commit()
+        test_session.refresh(rule)
+        return rule
+
+    def _review_row(self, test_session, rule_id: int, status: str):
+        from models import EventSyncReview
+        from services.event_sync_matcher import parse_event_name
+        from services.event_sync_review import (
+            master_event_key,
+            stream_name_hash,
+        )
+
+        row = EventSyncReview(
+            rule_id=rule_id,
+            provider_id=1,  # FuboProvider account id in the shared corpus
+            stream_name_hash=stream_name_hash(self.AMBIG_STREAM),
+            event_key=master_event_key(
+                parse_event_name(self.AMBIG_MASTER, None)
+            ),
+            status=status,
+            created_at=1_752_300_000_000,
+            last_seen_at=1_752_300_000_000,
+            evidence=json.dumps({"stream_name": self.AMBIG_STREAM}),
+        )
+        test_session.add(row)
+        test_session.commit()
+        return row
+
+    def _ambig_row(self, data: dict) -> dict:
+        return next(
+            s for s in data["streams"] if s["stream_name"] == self.AMBIG_STREAM
+        )
+
+    @pytest.mark.asyncio
+    async def test_pending_row_marks_candidate(self, async_client, test_session):
+        rule = self._saved_rule(test_session)
+        self._review_row(test_session, rule.id, "pending")
+
+        resp = await _preview(async_client, _mock_client(), {"rule_id": rule.id})
+        assert resp.status_code == 200
+        data = resp.json()
+        row = self._ambig_row(data)
+        assert row["disposition"] == "ambiguous"
+        candidate = next(
+            c for c in row["candidates"]
+            if c["master_channel_name"] == self.AMBIG_MASTER
+        )
+        assert candidate["review_status"] == "pending"
+        assert data["summary"]["candidates_pending_review"] == 1
+        assert data["summary"]["would_attach_via_review"] == 0
+
+    @pytest.mark.asyncio
+    async def test_accepted_decision_previews_as_queue_attach(
+        self, async_client, test_session
+    ):
+        rule = self._saved_rule(test_session)
+        self._review_row(test_session, rule.id, "accepted")
+
+        client = _mock_client()
+        resp = await _preview(async_client, client, {"rule_id": rule.id})
+        assert resp.status_code == 200
+        data = resp.json()
+        row = self._ambig_row(data)
+        # Parity with the run: the accepted pairing WOULD attach, marked
+        # as queue-driven, and the candidate carries the decision marker.
+        assert row["disposition"] == "would_attach"
+        assert row["attach_source"] == "review_queue"
+        assert row["would_attach_master"]["name"] == self.AMBIG_MASTER
+        candidate = next(
+            c for c in row["candidates"]
+            if c["master_channel_name"] == self.AMBIG_MASTER
+        )
+        assert candidate["review_status"] == "accepted"
+        assert data["summary"]["would_attach_via_review"] == 1
+        assert data["summary"]["ambiguous_skipped"] == 0
+        # Still ZERO writes — decisions change classification, not the
+        # preview's read-only nature.
+        _assert_zero_writes(client)
+
+    @pytest.mark.asyncio
+    async def test_rejected_decision_suppresses_and_marks(
+        self, async_client, test_session
+    ):
+        rule = self._saved_rule(test_session)
+        self._review_row(test_session, rule.id, "rejected")
+
+        resp = await _preview(async_client, _mock_client(), {"rule_id": rule.id})
+        assert resp.status_code == 200
+        data = resp.json()
+        row = self._ambig_row(data)
+        # The lone ambiguous candidate is suppressed -> unmatched; the
+        # candidate row still renders (transparency) with the marker.
+        assert row["disposition"] == "unmatched"
+        candidate = next(
+            c for c in row["candidates"]
+            if c["master_channel_name"] == self.AMBIG_MASTER
+        )
+        assert candidate["review_status"] == "rejected"
+        assert data["summary"]["ambiguous_skipped"] == 0
+
+    @pytest.mark.asyncio
+    async def test_inline_config_has_no_queue_state(self, async_client, test_session):
+        rule = self._saved_rule(test_session)
+        self._review_row(test_session, rule.id, "accepted")
+
+        # Inline preview (no rule id) — no queue state applies, matching
+        # the only run an unsaved config could ever produce.
+        resp = await _preview(
+            async_client, _mock_client(), {"event_sync_config": _config()},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        row = self._ambig_row(data)
+        assert row["disposition"] == "ambiguous"
+        assert all(c["review_status"] is None for c in row["candidates"])

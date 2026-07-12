@@ -107,3 +107,16 @@ export const TEAM_VERDICT_META: Record<EventSyncTeamVerdict, { label: string; ic
   uncertain: { label: 'Teams uncertain', icon: 'help_outline' },
   absent: { label: 'No team tokens', icon: 'remove' },
 };
+
+/**
+ * ti939.3.2: review-queue state of one candidate pairing (text + icon,
+ * never color alone — same accessibility baseline as the other badges).
+ */
+export const REVIEW_STATUS_META: Record<
+  'pending' | 'accepted' | 'rejected',
+  { label: string; icon: string }
+> = {
+  pending: { label: 'Pending review', icon: 'pending_actions' },
+  accepted: { label: 'Accepted (auto-attaches)', icon: 'task_alt' },
+  rejected: { label: 'Rejected (suppressed)', icon: 'do_not_disturb_on' },
+};

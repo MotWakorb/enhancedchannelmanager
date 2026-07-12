@@ -17,7 +17,12 @@ import type {
   EventSyncPreviewResponse,
   EventSyncStreamRow,
 } from '../../types/eventSync';
-import { BAND_META, DISPOSITION_META, TEAM_VERDICT_META } from './eventSyncDefaults';
+import {
+  BAND_META,
+  DISPOSITION_META,
+  REVIEW_STATUS_META,
+  TEAM_VERDICT_META,
+} from './eventSyncDefaults';
 import { getDateLocale } from '../../utils/formatting';
 import './EventSyncPreviewPanel.css';
 
@@ -40,12 +45,22 @@ function formatStart(iso: string | null): string {
 }
 
 function summaryLine(summary: EventSyncPreviewResponse['summary']): string {
-  return (
+  let line =
     `${summary.would_attach} would attach, ` +
     `${summary.ambiguous_skipped} ambiguous (skipped), ` +
     `${summary.unmatched} unmatched, ` +
-    `${summary.parse_failed} parse failure${summary.parse_failed === 1 ? '' : 's'}`
-  );
+    `${summary.parse_failed} parse failure${summary.parse_failed === 1 ? '' : 's'}`;
+  // ti939.3.2: review-queue context — decision-driven attaches and open
+  // questions must be visible in the one-line summary too.
+  if (summary.would_attach_via_review > 0) {
+    line += ` (${summary.would_attach_via_review} via review-queue accept)`;
+  }
+  if (summary.candidates_pending_review > 0) {
+    line += ` · ${summary.candidates_pending_review} pairing${
+      summary.candidates_pending_review === 1 ? '' : 's'
+    } pending review`;
+  }
+  return line;
 }
 
 function DispositionBadge({ disposition }: { disposition: EventSyncStreamRow['disposition'] }) {
@@ -69,6 +84,11 @@ function MatchCard({ stream }: { stream: EventSyncStreamRow }) {
     if (top.team_verdict !== 'agree') {
       flags.push(TEAM_VERDICT_META[top.team_verdict].label);
     }
+  }
+  // ti939.3.2: a queue-driven attach prediction is visibly not a
+  // score-driven one — the operator's own prior accept is the reason.
+  if (stream.disposition === 'would_attach' && stream.attach_source === 'review_queue') {
+    flags.push('Via review-queue accept');
   }
 
   return (
@@ -130,6 +150,7 @@ function MatchCard({ stream }: { stream: EventSyncStreamRow }) {
                 <th scope="col">Team tokens</th>
                 <th scope="col">Time delta</th>
                 <th scope="col">Reject reason</th>
+                <th scope="col">Review</th>
               </tr>
             </thead>
             <tbody>
@@ -158,6 +179,20 @@ function MatchCard({ stream }: { stream: EventSyncStreamRow }) {
                   </td>
                   <td>{candidate.time_delta_minutes} min</td>
                   <td>{candidate.reject_reason ?? '—'}</td>
+                  <td>
+                    {candidate.review_status ? (
+                      <span
+                        className={`event-sync-verdict event-sync-review-marker-${candidate.review_status}`}
+                      >
+                        <span className="material-icons" aria-hidden="true">
+                          {REVIEW_STATUS_META[candidate.review_status].icon}
+                        </span>
+                        {REVIEW_STATUS_META[candidate.review_status].label}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -715,6 +715,75 @@ reference), but a *disabled* profile or a missing Dispatcharr source only
 warns and skips the EPG step — attaches are never blocked by a guide-data
 convenience.
 
+## Reviewing ambiguous matches (Phase 2 review queue)
+
+Ambiguous-band matches — a candidate that scored below the attach
+threshold but above the reject floor, **or** a contested tie between two
+masters — are never auto-attached. Before Phase 2 they were silently
+skipped and re-skipped forever; now every event_sync run (manual **and**
+auto-run) **queues them for your decision** instead.
+
+The queue lives on the **Channel Pipeline tab → Event Sync Review**
+section (it appears once at least one event_sync rule exists). Each card
+is **one exact pairing** — one secondary stream against one master
+channel — with the full evidence the matcher saw, never just a score:
+
+* both raw provider names side by side,
+* both parsed titles and parsed start times,
+* the score, confidence band, **team-token verdict**, and start-time
+  delta,
+* a "Contested between masters" marker when the question exists because
+  two masters tied (one card per contender).
+
+### What Accept and Reject mean
+
+* **Accept & attach** — the stream is attached to that master now (via
+  the same idempotent, journaled attach internals a run uses), and the
+  decision is **recorded permanently**: every future run auto-attaches
+  this exact pairing without asking. Accepting one contender of a
+  contested tie automatically closes the other contenders' cards (the
+  question was answered). If the immediate attach can't be safely
+  verified — e.g. the provider refreshed and the snapshot stream id went
+  stale — the accept still succeeds and the **next run performs the
+  attach**; the banner tells you which happened.
+* **Reject pairing** — the pairing is **suppressed permanently**: it will
+  never attach (not even if a later run's score drifts into the attach
+  band) and never re-enters the queue. Nothing is written to Dispatcharr.
+
+### Decisions survive refreshes — by design
+
+Decisions are keyed on **content identity** — the provider account, the
+normalized stream name, and the master's parsed event identity (title +
+start time) — **never on channel or stream IDs**. Stream IDs churn on
+every provider refresh and channel IDs live only as long as the event's
+channel, so an ID-keyed queue would refill with duplicates of questions
+you already answered. With fingerprint keying:
+
+* a refresh that re-delivers the same provider string re-applies your
+  decision automatically (accepted → attach; rejected → skip);
+* the queue never re-asks an answered question — a re-encountered pending
+  pairing only refreshes its card's evidence;
+* when the event ends and its channel disappears, the decision simply
+  never matches again (decision rows are content-scoped, not
+  channel-scoped).
+
+The **preview** shows queue state inline when previewing a *saved* rule:
+candidates carry `Pending review` / `Accepted (auto-attaches)` /
+`Rejected (suppressed)` markers, and a would-attach row driven by your
+prior accept is flagged "Via review-queue accept" (with the summary
+counting them separately from threshold attaches). Preview and run share
+one resolver, so what the preview predicts is exactly what the run does.
+
+Unattended runs (auto-run rules) include the queued count in their
+completion notification — "N event matches queued for review" — so
+borderline events are one click away instead of silently skipped at 3 AM.
+
+**Audit**: every accept/reject writes a journal entry (category
+`event_sync`, action `review_accept` / `review_reject`), and every
+queue-driven attach is journaled with `attach_source: "review_queue"` —
+distinguishable from threshold attaches (`attach_source: "threshold"`) in
+the journal's match provenance.
+
 ## Testing & pre-release verification
 
 ### What the automated E2E covers (and what it honestly cannot)
@@ -852,13 +921,17 @@ in this module.
 
 ### No durable cluster state
 
-Event Sync persists **no new database tables** for match state. The only
-durable state is the nullable `event_sync_config` JSON column on
-`auto_creation_rules` (the rule's own configuration) plus the journal
-provenance rows the attach path writes per attach. Every preview and every run
-**recomputes matching from scratch** against live Dispatcharr
-data — master channels are identified by **name**, never by ID, and the
-matcher/resolver modules never see, cache, or return a channel ID.
+Event Sync persists **no database state keyed on Dispatcharr IDs**. The
+durable state is: the nullable `event_sync_config` JSON column on
+`auto_creation_rules` (the rule's own configuration), the journal
+provenance rows the attach path writes per attach, and — since Phase 2
+(bead ti939.3.2) — the fingerprint-keyed `event_sync_reviews` table (see
+"Review queue keying" below; the Phase 1 "no new tables" decision was
+scoped to *match state*, and review rows deliberately contain no
+ID-keyed match state). Every preview and every run **recomputes matching
+from scratch** against live Dispatcharr data — master channels are
+identified by **name**, never by ID, and the matcher/resolver modules
+never see, cache, or return a channel ID.
 
 This is a direct consequence of verified Dispatcharr behavior (read from
 Dispatcharr's `apps/m3u/tasks.py` `sync_auto_channels`):
@@ -893,13 +966,62 @@ rules don't create channels.
 
 ### Future-state constraint
 
-Any future state that must survive a Dispatcharr refresh — Phase 2 review
-decisions, Phase 3 exclusion lists, anything an operator would expect to
-persist — **must key on content fingerprints / event identity** (parsed
-title + start time, or similar), **never on channel/stream IDs**. This
-constraint exists because of the same stateless-recompute reasoning above:
-IDs are Dispatcharr's, names/content are the stable identity anchor this
-feature can actually reason about across runs.
+Any future state that must survive a Dispatcharr refresh — Phase 3
+exclusion lists, anything an operator would expect to persist — **must
+key on content fingerprints / event identity** (parsed title + start
+time, or similar), **never on channel/stream IDs**. This constraint
+exists because of the same stateless-recompute reasoning above: IDs are
+Dispatcharr's, names/content are the stable identity anchor this feature
+can actually reason about across runs. The Phase 2 review queue (next
+section) is the first consumer of this constraint and the reference
+implementation for the next one.
+
+### Review queue keying (ti939.3.2) — fingerprint reference
+
+The `event_sync_reviews` table keys every pending question and every
+accepted/rejected outcome on the content fingerprint
+
+```
+(rule_id, provider_id, stream_name_hash, event_key)
+```
+
+defined once in `backend/services/event_sync_review.py`:
+
+* **`provider_id`** — the secondary stream's M3U account id
+  (refresh-stable ECM/Dispatcharr configuration; `0` is the documented
+  unknown-provider sentinel, NOT NULL because SQLite unique indexes
+  treat NULLs as distinct).
+* **`stream_name_hash`** — SHA-256 of the **LOCALS-cleaned** raw stream
+  name (`services.dedup_matcher.clean_name`, the ONE shared cleaner the
+  scoring stack uses). Cosmetic churn (case, punctuation, quality tags)
+  can't mint a new question; anything the *matcher* would see differently
+  legitimately re-opens it — the fingerprint can never be more forgiving
+  than the scorer.
+* **`event_key`** — the **master side's** parsed event identity:
+  `<LOCALS-cleaned parsed title>|<parsed start as UTC ISO-8601>`. It
+  survives master-channel recreation and provider dressing, keeps two
+  sessions of one fixture (main card vs. prelims) distinct, and is
+  timezone-representation independent.
+
+The four-column unique index is **full** (unlike `pending_merges`'
+partial index): answered rows persist as the decision record, so "the
+queue must not refill with answered questions" is DB-enforced. Snapshot
+channel/stream ids appear ONLY inside the display-only `evidence` JSON;
+the accept endpoint re-verifies both against live Dispatcharr (channel
+name must still parse to the row's `event_key`, stream name must still
+hash to `stream_name_hash`) before using them, and degrades to
+"decision recorded, next run attaches" when verification fails.
+
+Decisions are an **input to the one resolver**
+(`resolve_event_sync(..., decisions=...)`), never a second scorer:
+rejected pairings are filtered from the candidate set before
+classification (suppressing threshold attaches AND re-enqueueing);
+accepted pairings upgrade an ambiguous outcome to `would_attach`
+(`attach_source="review_queue"`) only while the master is still an
+attach/ambiguous-band candidate — an accept never overrides the
+matcher's hard rejects (team conflict, time window, below the ambiguous
+floor). Preview and run therefore apply decisions identically by
+construction.
 
 ### Frozen regression corpus — add-only policy
 
