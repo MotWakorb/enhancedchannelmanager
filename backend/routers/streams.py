@@ -337,3 +337,34 @@ async def get_all_provider_group_settings():
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/api/providers/group-settings/by-provider", tags=["Providers"])
+async def get_provider_group_settings_by_provider():
+    """Per-(provider, group) group settings, NON-collapsed (bead 38dzi).
+
+    Unlike ``/api/providers/group-settings`` (one row per channel-group id,
+    collapsed preferring auto_channel_sync ON), this returns ONE row per
+    (m3u_account, channel_group) junction — so the UI can offer provider-scoped
+    Event Sync group selection (Provider A's "MLB PPV" vs Provider B's
+    "MLB PPV", which share one channel-group id). The group NAME is not
+    included; the caller joins on ``channel_group_id`` against the channel
+    groups it already loads.
+    """
+    logger.debug("[STREAMS] GET /api/providers/group-settings/by-provider")
+    client = get_client()
+    try:
+        by_pair = await client.get_m3u_group_settings_by_provider()
+        return [
+            {
+                "m3u_account_id": setting.get("m3u_account_id"),
+                "m3u_account_name": setting.get("m3u_account_name"),
+                "channel_group_id": setting.get("channel_group"),
+                "auto_channel_sync": bool(setting.get("auto_channel_sync")),
+                "enabled": bool(setting.get("enabled")),
+                "stream_count": setting.get("stream_count"),
+            }
+            for setting in by_pair.values()
+        ]
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal server error")
