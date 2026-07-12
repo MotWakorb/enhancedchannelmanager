@@ -53,16 +53,20 @@ channels are the ones every other provider's stream will attach to, so
 picking the group with the best coverage minimizes how many events end up
 in the [unmatched list](#events-missing-entirely-master-as-ceiling).
 
-### 2. Turn secondary auto-sync OFF (manual, this phase)
+### 2. Turn secondary auto-sync OFF
 
 For **every other** provider's event group, disable `auto_channel_sync` in
-Dispatcharr (M3U Manager → account → Groups). This is a manual step in
-Phase 1A — ECM never toggles Dispatcharr settings for you, and the rule
-editor's live status only *reports* the setting, it doesn't change it. If
-you skip this, Dispatcharr keeps creating its own channels from the
-secondary group and you're back to duplicates regardless of what ECM
-matches — see [the auto-sync gotcha](#still-seeing-duplicate-channels)
-below.
+Dispatcharr (M3U Manager → account → Groups) — or use the rule editor's
+**Fix** button (Phase 2, bead ti939.3.4): when the editor's live status
+shows a secondary with auto-sync ON (or the master OFF), it offers a
+one-click fix behind its own confirmation dialog. The toggle is an
+explicit, separately confirmed operator action — never a side effect of
+saving a rule or running the pipeline — and every toggle is journaled.
+See [Guided setup: the confirmed auto-sync
+fix](#guided-setup-the-confirmed-auto-sync-fix). If you skip this,
+Dispatcharr keeps creating its own channels from the secondary group and
+you're back to duplicates regardless of what ECM matches — see [the
+auto-sync gotcha](#still-seeing-duplicate-channels) below.
 
 ### 3. Create the Event Sync rule
 
@@ -260,6 +264,7 @@ the rule.
 | `max_attach_per_run` | no (default 100) | Per-run attach cap (1–1000). On overage the run stops attaching, warns in the execution log, and records the overage count. Runs are idempotent — run again to continue. |
 | `enabled` | no (default true) | Feature toggle within the rule. |
 | `auto_run` | no (default **false**) | Phase 2 opt-in (bead ti939.3.1): when true, the rule also runs **unattended** after each M3U refresh (the watermark task). Absent means false — manual-run-only. See [Automatic runs after refresh](#automatic-runs-after-refresh-phase-2-opt-in). |
+| `dummy_epg_profile_id` | no (absent = off) | Phase 2 (bead ti939.3.3): id of a [dummy EPG profile](template_engine.md) auto-assigned to the master group's channels on every run. Must reference an **existing** profile (teaching error otherwise); the key is never default-filled — omit it to disable. See [Automatic guide data for master channels](#automatic-guide-data-for-master-channels-dummy-epg). |
 
 ### Why validation is strict
 
@@ -348,10 +353,12 @@ both the master's channel *and* the secondary's own auto-created
 duplicate.
 
 Fix: M3U Manager → account → Groups → disable `auto_channel_sync` for
-every group used as a `secondary_group_ids` entry. ECM never toggles this
-setting for you — it only reports the current state (rule editor's live
-warnings, and the [pre-flight check](#pre-flight-checks) on every
-preview).
+every group used as a `secondary_group_ids` entry — or use the rule
+editor's **Fix** button (a [confirmed guided
+fix](#guided-setup-the-confirmed-auto-sync-fix); the toggle happens only
+when you confirm its dialog, never automatically). The rule editor's live
+warnings and the [pre-flight check](#pre-flight-checks) on every preview
+report the current state.
 
 ### Nothing matches
 
@@ -434,7 +441,11 @@ historical audit trail (journal entries are never deleted).
 ## Pre-flight checks
 
 Before a preview (and later, a run), ECM verifies against Dispatcharr —
-read-only, ECM never toggles group settings:
+the pre-flight itself is read-only, and the event_sync feature never
+toggles group settings (a static AST gate in
+`backend/tests/unit/test_event_sync_rollback_roundtrip.py` proves it; the
+only group-settings write ECM offers is the separate [confirmed guided
+fix](#guided-setup-the-confirmed-auto-sync-fix) below):
 
 * master group has `auto_channel_sync` **ON** (otherwise no master
   channels exist and the whole feature silently matches nothing);
@@ -452,6 +463,39 @@ as another account's auto-synced group, they share a group ID, and the
 pre-flight secondary check will fail for it (correctly — Dispatcharr is
 auto-syncing that group ID). Real event groups are provider-distinct-named
 in practice.
+
+## Guided setup: the confirmed auto-sync fix
+
+When the rule editor's live status detects a misconfigured group — the
+master with `auto_channel_sync` OFF, or a secondary with it ON — it offers
+a one-click **Fix** button (Phase 2, bead ti939.3.4). Hard constraints,
+locked at planning:
+
+* **Explicit and separately confirmed.** The Fix button only opens a
+  confirmation dialog stating exactly what will change and why — e.g.
+  *"Turn OFF auto-sync for 'FIFA | World Cup' (Provider 2)? Dispatcharr
+  will stop creating duplicate channels from this group; existing
+  auto-created channels from it may be removed by Dispatcharr."* The
+  toggle happens only when you confirm. It is **never** a side effect of
+  saving a rule or running the pipeline.
+* **Dedicated, admin-gated endpoint.** The confirm button calls
+  `POST /api/m3u/accounts/{account_id}/group-auto-sync-toggle` (admin
+  when auth is enabled; `confirm: true` required at the API level too).
+  Both directions are supported: enable the master, disable a secondary.
+* **Journaled per toggle.** Every toggle writes a journal entry with the
+  before/after values. **Snapshot restore does NOT revert Dispatcharr
+  group settings** — an execution rollback undoes ECM's attaches, not
+  Dispatcharr's group configuration. If you need to undo a toggle, the
+  journal entry is the recovery breadcrumb: it records which group on
+  which account changed, and in which direction — re-run the fix the
+  other way (or flip it in M3U Manager → account → Groups).
+* **Outside the event_sync feature modules.** The endpoint lives on the
+  M3U router (a guided-setup surface), so the AST no-group-writes gate
+  keeps proving the attach/preview path itself never writes group
+  settings.
+
+After a confirmed fix the editor refetches the live settings, so the
+warning clears immediately.
 
 ## What ECM deliberately does NOT do
 
@@ -476,6 +520,12 @@ in practice.
   else (deny-by-default — "scheduled" and unidentified triggers stay
   denied even for opted-in rules), and the attach phase re-checks the gate
   plus the circuit breaker and a pre-flight before any unattended write.
+* **No group-settings writes from the feature itself.** The attach,
+  preview and dummy-EPG paths never touch `auto_channel_sync` (statically
+  proven by the AST gate). The ONLY group-settings write ECM offers is
+  the [confirmed guided fix](#guided-setup-the-confirmed-auto-sync-fix)
+  — a separate, admin-gated, journaled endpoint the operator drives
+  through its own confirmation dialog.
 
 ## Previewing matches (Phase 1A)
 
@@ -560,9 +610,12 @@ bell in the UI plus any configured alert methods):
   Dispatcharr group settings and **fail closed**: if the master group's
   `auto_channel_sync` is OFF, a configured group is missing, or the check
   itself errors, the rule is skipped that run and you get a warning
-  notification. Fix the group settings (ECM never toggles them for you);
-  the rule runs again on the next refresh. Manual runs are unchanged —
-  they do not pre-flight; the preview is your pre-flight surface.
+  notification. Fix the group settings — in M3U Manager or via the rule
+  editor's [confirmed Fix
+  button](#guided-setup-the-confirmed-auto-sync-fix); ECM never toggles
+  them unattended — and the rule runs again on the next refresh. Manual
+  runs are unchanged — they do not pre-flight; the preview is your
+  pre-flight surface.
 
 The completion notification also carries the unattended attach count
 ("N event streams attached").
@@ -589,6 +642,79 @@ never a guess) and attaches on the **next** run — convergence, not
 immediacy. Covered by the lifecycle race tests
 (`backend/tests/unit/test_event_sync_lifecycle.py`).
 
+## Automatic guide data for master channels (dummy EPG)
+
+Master event channels are created by Dispatcharr with no guide data —
+sports/PPV events rarely carry real EPG. Phase 2 (bead ti939.3.3) lets a
+rule reference a [dummy EPG profile](template_engine.md) that gets
+assigned to the master group's channels on **every** run, manual and
+auto-run, so new events show programme information automatically.
+
+### Setup
+
+1. **Create a dummy EPG profile** (EPG Manager → Dummy EPG) whose
+   title/time/date patterns match the **master provider's** channel
+   naming. For the corpus example master name
+   `Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET`:
+
+   ```
+   title_pattern:  ^[^:]+:\s*(?<title>.+?)\s*@
+   time_pattern:   (?<hour>\d{1,2}):(?<minute>\d{2})\s*(?<ampm>[AP])M
+   date_pattern:   @\s*(?<day>\d{1,2})\s+(?<month>[A-Za-z]{3,9})
+   ```
+
+   **Tip — share the rule's parse patterns.** The Event Sync rule already
+   parses the master group's names with its own `patterns` (title + start
+   time). The master provider's naming is the same in both places, so the
+   profile's patterns can reuse the rule's regexes (dummy EPG uses
+   JS-style `(?<name>...)` groups; the engine accepts Python-style
+   `(?P<name>...)` too, so a rule pattern usually pastes in verbatim).
+   Author them once, paste twice — don't invent a second grammar for the
+   same names.
+
+2. **Ensure a Dispatcharr EPG source serves the profile's XMLTV** — an
+   XMLTV source whose URL is ECM's
+   `/api/dummy-epg/xmltv/<profile_id>` endpoint (the per-profile URL is
+   preferred; the combined `/api/dummy-epg/xmltv` also works). Without
+   one, the run warns (`event_sync_dummy_epg_no_source`) and assigns
+   nothing.
+
+3. **Reference the profile on the rule** — rule editor → Advanced →
+   *Dummy EPG profile*, or set `dummy_epg_profile_id` in the config JSON.
+   Validation requires the profile to exist; omitting the key turns the
+   feature off.
+
+### What a run does
+
+* Master-group channels with **no** guide data get the profile's EPG via
+  the standard `assign_epg` machinery, against the Dispatcharr source
+  from step 2.
+* Channels the source does not cover **yet** — a brand-new event, or the
+  very first run — defer into the pipeline's **existing Pass 5**
+  refresh-and-retry: Pass 5 auto-adds the master group to the profile's
+  channel groups, regenerates the XMLTV, refreshes the Dispatcharr
+  source, and retries the assignment in the same run. No parallel
+  mechanism, and nothing to schedule.
+* **Idempotent**: already-assigned channels are no-ops on re-runs.
+* **Never clobbers**: a channel that already carries guide data from any
+  OTHER source (e.g. a hand-assigned real EPG) is left alone and counted
+  as `kept foreign EPG` in the run summary.
+* **Never fights Dispatcharr refresh semantics**: the assignment is
+  `epg_data_id` metadata on existing master channels — exactly what
+  standard assign_epg rules write — and Dispatcharr's sync task updates
+  channels in place without resetting EPG assignments. ECM still never
+  creates or deletes channels; execution rollback restores masters
+  streams-only and does not revert guide data.
+* The run summary line reports the step:
+  `event_sync dummy EPG ('<profile>'): X assigned, Y deferred to Pass 5,
+  Z already assigned`.
+
+**Degradation is graceful and attach-safe**: a deleted profile is a
+teaching validation error (the rule is loudly skipped until you fix the
+reference), but a *disabled* profile or a missing Dispatcharr source only
+warns and skips the EPG step — attaches are never blocked by a guide-data
+convenience.
+
 ## Testing & pre-release verification
 
 ### What the automated E2E covers (and what it honestly cannot)
@@ -605,8 +731,9 @@ run is attach-nothing **by construction** and safe against live data.
 
 What it cannot cover live: the actual multi-provider attachment. The dev
 instance has no event group with `auto_channel_sync` ON, and ECM never
-toggles that Dispatcharr setting (hard rail, this whole page) — so no live
-master channels exist to attach to. The attach behavior itself (streams
+toggles that Dispatcharr setting outside the operator-confirmed guided
+fix (a test must not drive that dialog against live provider data) — so
+no live master channels exist to attach to. The attach behavior itself (streams
 from multiple providers landing on master channels, per-attach journal
 provenance, idempotent re-runs, refresh survival, rollback) is covered
 against a mocked Dispatcharr in
@@ -619,7 +746,9 @@ Recorded reason for this being a manual script rather than automated E2E
 (bead ti939.2.4): demonstrating real attachment requires a Dispatcharr
 event group with `auto_channel_sync` ON, which only exists on an
 operator's real deployment — the test environment cannot create one
-without crossing the never-toggle-group-settings rail.
+without writing group settings against live provider data (the only
+sanctioned write path is the operator-confirmed guided fix, which a test
+must not drive).
 
 Run this on a deployment that has a real auto-sync master event group,
 before cutting a release that touches event_sync:

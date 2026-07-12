@@ -1900,12 +1900,19 @@ class ChannelPipelineEngine:
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel profiles: %s", e)
 
-        # Pre-fetch EPG data and sources if any rule uses assign_epg
+        # Pre-fetch EPG data and sources if any rule uses assign_epg —
+        # including event_sync rules whose config opts into dummy EPG
+        # auto-assignment (ti939.3.3: their assignment path resolves the
+        # profile's Dispatcharr source from epg_sources and its entries from
+        # epg_data, exactly like a standard assign_epg action).
         epg_data = []
         epg_sources = []
         needs_epg = any(
             a.get("type") == "assign_epg" if isinstance(a, dict) else getattr(a, "type", "") == "assign_epg"
             for r in rules for a in r.get_actions()
+        ) or any(
+            (r.get_event_sync_config() or {}).get("dummy_epg_profile_id")
+            for r in (event_sync_rules or [])
         )
         if needs_epg:
             try:
@@ -2925,9 +2932,10 @@ class ChannelPipelineEngine:
                             f"event_sync rule '{rule.name}' skipped on the "
                             f"unattended run: pre-flight failed — "
                             f"{failure_text} Fix the Dispatcharr group "
-                            f"settings (ECM never toggles auto_channel_sync "
-                            f"for you); the rule runs again on the next "
-                            f"refresh."
+                            f"settings in M3U Manager or via the rule "
+                            f"editor's confirmed Fix button (ECM never "
+                            f"toggles auto_channel_sync unattended); the "
+                            f"rule runs again on the next refresh."
                         ),
                     })
                     continue
@@ -3063,7 +3071,172 @@ class ChannelPipelineEngine:
                     "error": None,
                 }],
             })
+
+            # ti939.3.3: dummy EPG auto-assignment for master channels —
+            # every run (manual AND unattended), after the attach phase.
+            # Deferred assignments ride the EXISTING Pass 5 refresh-and-
+            # retry via executor._deferred_epg_assignments.
+            if config.get("dummy_epg_profile_id"):
+                epg_summary = await self._assign_event_sync_dummy_epg(
+                    rule, config, executor, exec_ctx, results, dry_run
+                )
+                if epg_summary is not None:
+                    summary["dummy_epg"] = epg_summary
+
             results["event_sync"].append(summary)
+
+    async def _assign_event_sync_dummy_epg(
+        self,
+        rule,
+        config: dict,
+        executor: "ActionExecutor",
+        exec_ctx: "ExecutionContext",
+        results: dict,
+        dry_run: bool,
+    ) -> Optional[dict]:
+        """One event_sync rule's dummy EPG assignment step (ti939.3.3).
+
+        Thin engine wrapper around
+        ``executor.assign_event_sync_dummy_epg``: resolves the profile row
+        (disabled profile → warning + skip, so a convenience toggle never
+        kills the rule's attach path; the VALIDATOR already guaranteed
+        existence), surfaces a missing Dispatcharr source as a run warning,
+        writes per-channel and summary execution-log entries, and folds the
+        step's channel updates into the run counters. Returns the step
+        summary (stored on the rule's event_sync summary), or None when the
+        step was skipped.
+
+        NEVER: creates/deletes channels or writes Dispatcharr group
+        settings — the step is epg_data_id metadata on existing master
+        channels.
+        """
+        from models import DummyEPGProfile
+
+        profile_id = config["dummy_epg_profile_id"]
+        db = get_session()
+        try:
+            profile = db.get(DummyEPGProfile, profile_id)
+        finally:
+            db.close()
+        if profile is None:
+            # The validator refuses dangling ids, so this is a race
+            # (profile deleted mid-run) — warn, never crash the run.
+            results["event_sync_warnings"].append({
+                "type": "event_sync_dummy_epg_profile_missing",
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "message": (
+                    f"event_sync rule '{rule.name}': dummy EPG profile "
+                    f"{profile_id} no longer exists — dummy EPG assignment "
+                    f"skipped this run. Remove dummy_epg_profile_id from "
+                    f"the rule or recreate the profile."
+                ),
+            })
+            return None
+        if not profile.enabled:
+            results["event_sync_warnings"].append({
+                "type": "event_sync_dummy_epg_profile_disabled",
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "message": (
+                    f"event_sync rule '{rule.name}': dummy EPG profile "
+                    f"'{profile.name}' (id={profile_id}) is disabled — "
+                    f"dummy EPG assignment skipped this run (attaches are "
+                    f"unaffected). Enable the profile to resume guide-data "
+                    f"assignment."
+                ),
+            })
+            return None
+
+        # Delta-fold the step's counters: the attach phase already extended
+        # results with this exec_ctx's totals, so only what THIS step adds
+        # may be folded again.
+        modified_before = len(exec_ctx.modified_entities)
+        updated_before = exec_ctx.channels_updated
+
+        epg_summary = await executor.assign_event_sync_dummy_epg(
+            rule.id, rule.name, config, exec_ctx
+        )
+        epg_summary["profile_name"] = profile.name
+
+        results["modified_entities"].extend(
+            exec_ctx.modified_entities[modified_before:]
+        )
+        results["channels_updated"] += (
+            exec_ctx.channels_updated - updated_before
+        )
+
+        if epg_summary["source_id"] is None:
+            results["event_sync_warnings"].append({
+                "type": "event_sync_dummy_epg_no_source",
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "profile_id": profile_id,
+                "message": (
+                    f"event_sync rule '{rule.name}': no Dispatcharr EPG "
+                    f"source serves dummy EPG profile '{profile.name}' "
+                    f"(id={profile_id}) — add an XMLTV source pointing at "
+                    f"ECM's /api/dummy-epg/xmltv/{profile_id} endpoint, "
+                    f"then run again. No guide data was assigned."
+                ),
+            })
+
+        # Per-channel entries (bounded by the shared BoundedExecutionLog
+        # chokepoint), mirroring the attach entries' shape.
+        for entry in epg_summary.pop("assign_entries"):
+            results["execution_log"].append({
+                "stream_id": None,
+                "stream_name": f"[EVENT-SYNC EPG] {entry['entity_name']}",
+                "m3u_account_id": None,
+                "rules_evaluated": [],
+                "actions_executed": [entry],
+            })
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": None,
+                    "stream_name": f"[EVENT-SYNC EPG] {entry['entity_name']}",
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "action": entry["description"],
+                    "would_create": False,
+                    "would_modify": entry["success"],
+                })
+
+        epg_line = (
+            f"event_sync dummy EPG ('{profile.name}'): "
+            f"{epg_summary['assigned']} assigned, "
+            f"{epg_summary['deferred']} deferred to Pass 5, "
+            f"{epg_summary['already_assigned']} already assigned"
+        )
+        extras = []
+        if epg_summary["skipped_foreign_epg"]:
+            extras.append(
+                f"{epg_summary['skipped_foreign_epg']} kept foreign EPG"
+            )
+        if epg_summary["failed"]:
+            extras.append(f"{epg_summary['failed']} failed")
+        if extras:
+            epg_line += f" ({'; '.join(extras)})"
+        epg_summary["summary_line"] = epg_line
+
+        logger.info(
+            "[EVENT-SYNC] Rule '%s' (id=%s): %s",
+            rule.name, rule.id, epg_line,
+        )
+        results["execution_log"].append({
+            "stream_id": None,
+            "stream_name": f"[EVENT-SYNC EPG] {rule.name}",
+            "m3u_account_id": None,
+            "rules_evaluated": [],
+            "actions_executed": [{
+                "type": "event_sync_dummy_epg_summary",
+                "description": epg_line,
+                "success": epg_summary["failed"] == 0,
+                "entity_id": None,
+                "error": None,
+            }],
+        })
+        return epg_summary
 
     # =========================================================================
     # Pass 6: Batch probe streams queued by probe_streams actions
