@@ -718,6 +718,23 @@ export async function getProviderGroupSettings(): Promise<Record<number, M3UGrou
   return fetchJson(`${API_BASE}/providers/group-settings`);
 }
 
+/** One (provider, channel-group) junction row — NON-collapsed. bead 38dzi:
+ *  powers the provider-scoped Event Sync group picker (the same channel-group
+ *  id can appear under multiple providers). Join on channel_group_id against
+ *  the channel groups the caller already loads for the group name. */
+export interface ProviderGroupScopeRow {
+  m3u_account_id: number;
+  m3u_account_name: string;
+  channel_group_id: number;
+  auto_channel_sync: boolean;
+  enabled: boolean;
+  stream_count: number | null;
+}
+
+export async function getProviderGroupSettingsByProvider(): Promise<ProviderGroupScopeRow[]> {
+  return fetchJson(`${API_BASE}/providers/group-settings/by-provider`);
+}
+
 // M3U Account CRUD
 export async function getM3UAccount(id: number): Promise<M3UAccount> {
   return fetchJson(`${API_BASE}/m3u/accounts/${id}`);
