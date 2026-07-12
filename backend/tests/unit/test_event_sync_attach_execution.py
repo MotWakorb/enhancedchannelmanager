@@ -848,6 +848,30 @@ class TestUnattendedGatesEnqueueNothing:
         )
 
 
+class TestProviderScopedFetch:
+    """bead jiscc: a provider-scoped secondary fetches only that provider's
+    streams (get_streams m3u_account=), so a shared group can supply different
+    providers' streams to different rules."""
+
+    def test_provider_scope_passes_m3u_account_filter(self):
+        engine, _executor, client = _engine_with_client([], [])
+        config = {
+            "master_group_id": 10, "secondary_group_ids": [20],
+            "secondary": [{"group_id": 20, "m3u_account_id": 7}],
+        }
+        _run(engine._fetch_event_sync_secondary_streams(config, {1: "ProvB"}))
+        assert client.get_streams.call_args_list, "get_streams not called"
+        assert client.get_streams.call_args_list[0].kwargs.get(
+            "m3u_account") == 7
+
+    def test_whole_group_scope_passes_none_filter(self):
+        engine, _executor, client = _engine_with_client([], [])
+        config = {"master_group_id": 10, "secondary_group_ids": [20]}
+        _run(engine._fetch_event_sync_secondary_streams(config, {1: "ProvB"}))
+        assert client.get_streams.call_args_list[0].kwargs.get(
+            "m3u_account") is None
+
+
 class TestParseMasterFromStream:
     """bead parse-from-stream: master identity read from the attached stream,
     so a cleanly-named master channel still matches via its timed stream."""

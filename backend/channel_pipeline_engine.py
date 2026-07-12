@@ -2693,7 +2693,18 @@ class ChannelPipelineEngine:
 
         secondary_streams: list = []
         truncated = False
-        for gid in config["secondary_group_ids"]:
+        # bead jiscc: iterate the provider-scoped secondary scopes. When a
+        # scope carries an m3u_account_id, the stream fetch is filtered to that
+        # provider (get_streams m3u_account=) — the same channel group can then
+        # supply DIFFERENT providers' streams to different rules. m3u_account_id
+        # None = the whole group (pre-provider-scope behavior).
+        secondary_scopes = config.get("secondary") or [
+            {"group_id": g, "m3u_account_id": None}
+            for g in config["secondary_group_ids"]
+        ]
+        for scope in secondary_scopes:
+            gid = scope["group_id"]
+            provider_filter = scope.get("m3u_account_id")
             gname = await self.client._channel_group_name_for_id(gid)
             if not gname:
                 logger.warning(
@@ -2708,6 +2719,7 @@ class ChannelPipelineEngine:
                 resp = await self.client.get_streams(
                     page=page, page_size=_EVENT_SYNC_FETCH_PAGE_SIZE,
                     channel_group_name=gname,
+                    m3u_account=provider_filter,
                 )
                 batch = (
                     resp.get("results", []) if isinstance(resp, dict)
