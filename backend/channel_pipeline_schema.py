@@ -785,6 +785,7 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "attach_threshold",
     "max_attach_per_run",
     "enabled",
+    "auto_run",
 })
 
 # Ceiling for event_sync_config.max_attach_per_run. The cap is a blast-radius
@@ -1074,6 +1075,23 @@ def validate_event_sync_config(config: Any) -> list[str]:
     elif not isinstance(enabled, bool):
         errors.append(_event_sync_error(
             "enabled", enabled, "a boolean",
+        ))
+
+    # Phase 2 opt-in auto-run flag (bead ti939.3.1). DEFAULT OFF is a safety
+    # property, not a convenience default: an event_sync rule only ever runs
+    # from the unattended refresh-watermark task when the operator explicitly
+    # set this to true (after trusting manual runs). Absent == false, so
+    # every stored config that predates the key keeps manual-run-only
+    # behavior unchanged. Filled in place like the other defaults so stored
+    # configs are explicit.
+    auto_run = config.get("auto_run")
+    if auto_run is None:
+        config["auto_run"] = False
+    elif not isinstance(auto_run, bool):
+        errors.append(_event_sync_error(
+            "auto_run", auto_run,
+            "a boolean (default false) — true opts this rule into "
+            "unattended runs on the M3U refresh watermark task",
         ))
 
     if errors:

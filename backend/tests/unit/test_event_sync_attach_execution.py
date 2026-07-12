@@ -478,7 +478,8 @@ class TestEnginePhase:
 
     def test_unattended_trigger_refused_defense_in_depth(self):
         """Even if a caller bypasses run_pipeline's gate, the phase refuses
-        unattended triggers — nothing is fetched, nothing is attached."""
+        unattended triggers for rules WITHOUT the auto_run opt-in — nothing
+        is fetched, nothing is attached (ti939.3.1: absent flag == false)."""
         channels = [_master_channel(100, MASTER_MERCURY)]
         batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
         engine, executor, client = _engine_with_client(channels, batch)
@@ -573,6 +574,219 @@ class TestEnginePhase:
         assert results["event_sync"] == []
         assert results["event_sync_warnings"] == []
         client.get_streams.assert_not_awaited()
+
+
+GROUP_SETTINGS_OK = {
+    10: {"auto_channel_sync": True},
+    20: {"auto_channel_sync": False},
+}
+
+GROUP_SETTINGS_MASTER_OFF = {
+    10: {"auto_channel_sync": False},
+    20: {"auto_channel_sync": False},
+}
+
+
+def _breaker_clear():
+    return patch("tasks.channel_pipeline._run_on_refresh_suppressed",
+                 return_value=(False, ""))
+
+
+class TestEnginePhaseAutoRun:
+    """ti939.3.1 + ixujz: the attach phase on the UNATTENDED watermark
+    trigger — per-rule opt-in, circuit-breaker gate, and pre-flight.
+
+    Each defense layer is pinned individually by driving the phase directly
+    (the task-query and run_pipeline layers have their own tests)."""
+
+    def test_opted_in_rule_runs_unattended_when_breaker_clear(self):
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_OK
+        )
+        results = _results()
+
+        with _breaker_clear():
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, results, dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+
+        assert results["event_sync"][0]["attached"] == 1
+        client.update_channel.assert_awaited_once()
+
+    def test_mixed_rules_only_opted_in_rule_runs_unattended(self):
+        """Surgical relaxation: in one unattended phase call, the opted-in
+        rule runs and the non-opted rule is refused."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_OK
+        )
+        results = _results()
+
+        with _breaker_clear():
+            _run(engine._run_event_sync_rules(
+                [
+                    _event_rule(rid=1, name="Opted",
+                                config=_config(auto_run=True)),
+                    _event_rule(rid=2, name="Not Opted"),
+                ],
+                executor, results, dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+
+        assert len(results["event_sync"]) == 1
+        assert results["event_sync"][0]["rule_id"] == 1
+
+    def test_tripped_breaker_blocks_unattended_opted_in_rule(self):
+        """ixujz: a tripped circuit breaker gates the event_sync auto-run
+        chain — the phase refuses BEFORE any fetch or write, and the refusal
+        is a persisted run warning, never silence."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_OK
+        )
+        results = _results()
+
+        with patch("tasks.channel_pipeline._run_on_refresh_suppressed",
+                   return_value=(True, "circuit_breaker")):
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, results, dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+
+        client.get_streams.assert_not_awaited()
+        client.update_channel.assert_not_awaited()
+        warnings = results["event_sync_warnings"]
+        assert len(warnings) == 1
+        assert warnings[0]["type"] == "event_sync_auto_run_suppressed"
+        assert warnings[0]["reason"] == "circuit_breaker"
+
+    def test_breaker_reset_restores_unattended_runs(self):
+        """The reset path: tripped -> blocked, cleared -> the SAME call
+        attaches again (manual reset is the only recovery, and it works)."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_OK
+        )
+
+        with patch("tasks.channel_pipeline._run_on_refresh_suppressed",
+                   return_value=(True, "circuit_breaker")):
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, _results(), dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+        client.update_channel.assert_not_awaited()
+
+        results = _results()
+        with _breaker_clear():
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, results, dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+        assert results["event_sync"][0]["attached"] == 1
+        client.update_channel.assert_awaited_once()
+
+    def test_tripped_breaker_never_gates_manual_runs(self):
+        """Manual stays the recovery surface: the breaker check is applied
+        ONLY to unattended triggers."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        results = _results()
+
+        with patch("tasks.channel_pipeline._run_on_refresh_suppressed",
+                   return_value=(True, "circuit_breaker")) as mock_suppressed:
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, results, dry_run=False,
+                triggered_by="manual", channels_touched_ids=set(),
+            ))
+
+        mock_suppressed.assert_not_called()
+        assert results["event_sync"][0]["attached"] == 1
+
+    def test_unattended_preflight_failure_skips_rule_with_warning(self):
+        """Master auto-sync OFF during an unattended run: the rule is
+        skipped LOUDLY (persisted warning type event_sync_preflight_failed
+        -> notification at the task layer), nothing is fetched or written."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_MASTER_OFF
+        )
+        results = _results()
+
+        with _breaker_clear():
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, results, dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+
+        client.get_streams.assert_not_awaited()
+        client.update_channel.assert_not_awaited()
+        assert results["event_sync"] == []
+        warnings = results["event_sync_warnings"]
+        assert len(warnings) == 1
+        assert warnings[0]["type"] == "event_sync_preflight_failed"
+        assert "auto_channel_sync" in warnings[0]["message"]
+
+    def test_unattended_preflight_error_fails_closed(self):
+        """A pre-flight FETCH failure on an unattended run skips the rule
+        (fail-closed: no unattended writes under an unverifiable config)."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_all_m3u_group_settings = AsyncMock(
+            side_effect=RuntimeError("dispatcharr down")
+        )
+        results = _results()
+
+        with _breaker_clear():
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config(auto_run=True))],
+                executor, results, dry_run=False,
+                triggered_by="m3u_refresh", channels_touched_ids=set(),
+            ))
+
+        client.update_channel.assert_not_awaited()
+        assert results["event_sync"] == []
+        assert results["event_sync_warnings"][0]["type"] == (
+            "event_sync_preflight_failed"
+        )
+
+    def test_manual_runs_do_not_preflight(self):
+        """Manual behavior is unchanged: no pre-flight call on the manual
+        path (the operator previews; preview carries the pre-flight)."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_MASTER_OFF
+        )
+        results = _results()
+
+        _run(engine._run_event_sync_rules(
+            [_event_rule()], executor, results, dry_run=False,
+            triggered_by="manual", channels_touched_ids=set(),
+        ))
+
+        client.get_all_m3u_group_settings.assert_not_awaited()
+        assert results["event_sync"][0]["attached"] == 1
 
 
 # =============================================================================
@@ -813,3 +1027,240 @@ class TestWatermarkTaskExclusion:
         assert kwargs["rule_ids"] == [standard_id]
         assert event_id not in kwargs["rule_ids"]
         assert kwargs["triggered_by"] == "m3u_refresh"
+
+
+# =============================================================================
+# Watermark task auto_run inclusion + unattended notifications (ti939.3.1)
+# =============================================================================
+
+
+def _watermark_settings():
+    return MagicMock(
+        auto_creation_run_on_refresh_disabled=False,
+        last_m3u_refresh_completed_at="2026-01-02T00:00:00+00:00",
+        last_auto_creation_consumed_refresh_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+def _add_rule(session_factory, *, name: str, run_on_refresh: bool = False,
+              enabled: bool = True, es_config: dict | None = None) -> int:
+    session = session_factory()
+    try:
+        rule = ChannelPipelineRule(
+            name=name, enabled=enabled, priority=0,
+            conditions=json.dumps([{"type": "always"}]),
+            actions=json.dumps([{"type": "skip"}]),
+            run_on_refresh=run_on_refresh,
+            event_sync_config=(
+                json.dumps(es_config) if es_config is not None else None
+            ),
+        )
+        session.add(rule)
+        session.commit()
+        session.refresh(rule)
+        return rule.id
+    finally:
+        session.close()
+
+
+def _execute_watermark_task(db_session_factory, engine_result: dict):
+    """Run ChannelPipelineTask.execute() against a REAL rules DB and a fake
+    engine. Returns (result, fake_engine.run_pipeline mock, notify mock)."""
+    import os
+    from tasks.channel_pipeline import ChannelPipelineTask
+
+    fake_engine = MagicMock()
+    fake_engine.run_pipeline = AsyncMock(return_value=engine_result)
+    notify = AsyncMock()
+
+    os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
+    with patch("tasks.channel_pipeline.get_settings",
+               return_value=_watermark_settings()), \
+         patch("tasks.channel_pipeline.save_settings"), \
+         patch("services.notification_service.create_notification_internal",
+               new=notify), \
+         patch("channel_pipeline_engine.get_channel_pipeline_engine",
+               return_value=fake_engine), \
+         patch("database.get_session", side_effect=db_session_factory), \
+         patch("tasks.channel_pipeline.get_client", return_value=MagicMock()), \
+         patch("journal.log_entry"):
+        task = ChannelPipelineTask()
+        task._enabled = True
+        result = _run(task.execute())
+    return result, fake_engine.run_pipeline, notify
+
+
+_ENGINE_NOOP_RESULT = {
+    "channels_created": 0, "channels_updated": 0,
+    "streams_matched": 0, "streams_evaluated": 0,
+}
+
+
+class TestWatermarkTaskAutoRunInclusion:
+    """ti939.3.1: the watermark task's rule selection includes event_sync
+    rules IF AND ONLY IF their config carries auto_run=true (the narrow
+    adjustment of the ti939.2.1 SQL exclusion)."""
+
+    def test_opted_in_event_sync_rule_included_alongside_standard(
+        self, db_session_factory
+    ):
+        standard_id = _add_rule(
+            db_session_factory, name="Standard", run_on_refresh=True,
+        )
+        # run_on_refresh deliberately FALSE: auto_run alone is the opt-in
+        # for event_sync rules — they never use the standard-rule flag.
+        opted_id = _add_rule(
+            db_session_factory, name="Opted",
+            es_config=_config(auto_run=True),
+        )
+        _add_rule(
+            db_session_factory, name="Not Opted",
+            es_config=_config(auto_run=False),
+        )
+        _add_rule(  # absent key == false (backward compat)
+            db_session_factory, name="Legacy", es_config=_config(),
+        )
+
+        result, run_pipeline, _ = _execute_watermark_task(
+            db_session_factory, _ENGINE_NOOP_RESULT
+        )
+
+        assert result.success is True
+        run_pipeline.assert_awaited_once()
+        kwargs = run_pipeline.call_args.kwargs
+        assert sorted(kwargs["rule_ids"]) == sorted([standard_id, opted_id])
+        assert kwargs["triggered_by"] == "m3u_refresh"
+
+    def test_opted_in_event_sync_rule_alone_fires_the_watermark_run(
+        self, db_session_factory
+    ):
+        """An instance with ONLY an opted-in event_sync rule (no standard
+        run_on_refresh rules) still consumes the watermark and runs."""
+        opted_id = _add_rule(
+            db_session_factory, name="Opted",
+            es_config=_config(auto_run=True),
+        )
+
+        result, run_pipeline, _ = _execute_watermark_task(
+            db_session_factory, _ENGINE_NOOP_RESULT
+        )
+
+        assert result.success is True
+        run_pipeline.assert_awaited_once()
+        assert run_pipeline.call_args.kwargs["rule_ids"] == [opted_id]
+
+    def test_disabled_opted_in_rule_does_not_fire(self, db_session_factory):
+        _add_rule(
+            db_session_factory, name="Disabled Opted", enabled=False,
+            es_config=_config(auto_run=True),
+        )
+
+        result, run_pipeline, _ = _execute_watermark_task(
+            db_session_factory, _ENGINE_NOOP_RESULT
+        )
+
+        assert result.success is True
+        run_pipeline.assert_not_awaited()
+
+
+class TestWatermarkTaskUnattendedNotifications:
+    """ti939.3.1: cap overage and pre-flight failures during an UNATTENDED
+    run surface via the existing notification channel, never silence. The
+    engine persists the warnings on the execution record; the task reads
+    them back and notifies."""
+
+    def _execution_with_warnings(self, db_session_factory,
+                                 warnings: list) -> int:
+        from datetime import datetime as dt
+        session = db_session_factory()
+        try:
+            execution = ChannelPipelineExecution(
+                mode="execute", triggered_by="m3u_refresh",
+                started_at=dt.utcnow(), status="completed",
+            )
+            execution.set_warnings(warnings)
+            session.add(execution)
+            session.commit()
+            session.refresh(execution)
+            return execution.id
+        finally:
+            session.close()
+
+    def test_cap_overage_and_preflight_failure_notify(
+        self, db_session_factory
+    ):
+        _add_rule(
+            db_session_factory, name="Opted",
+            es_config=_config(auto_run=True),
+        )
+        execution_id = self._execution_with_warnings(db_session_factory, [
+            {"type": "event_sync_attach_capped", "rule_id": 1,
+             "rule_name": "Opted", "cap": 100, "overage": 3,
+             "message": "cap overage message"},
+            {"type": "event_sync_preflight_failed", "rule_id": 1,
+             "rule_name": "Opted", "failures": [],
+             "message": "preflight failure message"},
+            # A non-event_sync warning must NOT notify from this path.
+            {"type": "disabled_normalization_group", "rule_id": 1,
+             "message": "unrelated"},
+        ])
+
+        result, _, notify = _execute_watermark_task(
+            db_session_factory,
+            {**_ENGINE_NOOP_RESULT, "execution_id": execution_id},
+        )
+
+        assert result.success is True
+        warn_calls = [
+            c.kwargs for c in notify.call_args_list
+            if c.kwargs.get("notification_type") == "warning"
+        ]
+        messages = [c["message"] for c in warn_calls]
+        assert "cap overage message" in messages
+        assert "preflight failure message" in messages
+        assert not any("unrelated" in m for m in messages)
+        # Unattended misconfigurations must reach the alert channels.
+        assert all(c["send_alerts"] is True for c in warn_calls)
+
+    def test_clean_run_emits_no_warning_notifications(
+        self, db_session_factory
+    ):
+        _add_rule(
+            db_session_factory, name="Opted",
+            es_config=_config(auto_run=True),
+        )
+        execution_id = self._execution_with_warnings(db_session_factory, [])
+
+        result, _, notify = _execute_watermark_task(
+            db_session_factory,
+            {**_ENGINE_NOOP_RESULT, "execution_id": execution_id,
+             "event_sync": [{"attached": 2}]},
+        )
+
+        assert result.success is True
+        warn_calls = [
+            c.kwargs for c in notify.call_args_list
+            if c.kwargs.get("notification_type") == "warning"
+        ]
+        assert warn_calls == []
+
+    def test_completion_notification_reports_attached_count(
+        self, db_session_factory
+    ):
+        """The completion toast carries the unattended attach count — part
+        of the 3 AM safety net alongside the persisted summary line."""
+        _add_rule(
+            db_session_factory, name="Opted",
+            es_config=_config(auto_run=True),
+        )
+        execution_id = self._execution_with_warnings(db_session_factory, [])
+
+        result, _, notify = _execute_watermark_task(
+            db_session_factory,
+            {**_ENGINE_NOOP_RESULT, "execution_id": execution_id,
+             "event_sync": [{"attached": 2}, {"attached": 1}]},
+        )
+
+        assert result.success is True
+        titles = [c.kwargs.get("title", "") for c in notify.call_args_list]
+        assert any("3" in t and "attached" in t for t in titles)
