@@ -777,6 +777,11 @@ class TemplateVariables:
 # rejected — a typo'd optional key ("attach_treshold") would otherwise
 # silently fall back to its default, which for a threshold is a safety knob.
 _EVENT_SYNC_ALLOWED_KEYS = frozenset({
+    # Provider-scoped canonical shape (bead 3p2af).
+    "master",
+    "secondary",
+    # Legacy flat shape — still accepted as input and kept in sync as derived
+    # keys so existing readers work (validate upgrades legacy -> nested).
     "master_group_id",
     "secondary_group_ids",
     "patterns",
@@ -892,6 +897,30 @@ def _is_group_id(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
+def _is_provider_id(value: Any) -> bool:
+    """m3u_account_id: a positive int, or None (= whole group / any provider)."""
+    return value is None or _is_group_id(value)
+
+
+def _normalize_scope(raw: Any) -> dict | None:
+    """Normalize one provider-scoped group to ``{group_id, m3u_account_id}``.
+
+    Accepts the nested form (``{"group_id": int, "m3u_account_id": int|null}``)
+    or a bare integer group id (legacy shape — upgraded here on read, so no
+    data migration is needed). Returns ``None`` when the shape is invalid.
+    ``m3u_account_id`` of ``None`` means "the whole group / any provider" —
+    the pre-provider-scope behavior.
+    """
+    if _is_group_id(raw):
+        return {"group_id": raw, "m3u_account_id": None}
+    if isinstance(raw, dict):
+        gid = raw.get("group_id")
+        pid = raw.get("m3u_account_id")
+        if _is_group_id(gid) and _is_provider_id(pid):
+            return {"group_id": gid, "m3u_account_id": pid}
+    return None
+
+
 def validate_event_sync_config(config: Any) -> list[str]:
     """Validate (and default-fill) an event_sync rule config at save time.
 
@@ -945,50 +974,97 @@ def validate_event_sync_config(config: Any) -> list[str]:
             f"only the keys {sorted(_EVENT_SYNC_ALLOWED_KEYS)}",
         ))
 
-    # --- Mandatory scoping (the anti-1,341 rail) -------------------------
-    master_group_id = config.get("master_group_id")
-    if not _is_group_id(master_group_id):
+    # --- Mandatory scoping (provider-scoped, beads 3p2af/2c2vz) ----------
+    # Canonical shape is nested and provider-scoped:
+    #   master:    {group_id, m3u_account_id}
+    #   secondary: [{group_id, m3u_account_id}, ...]
+    # ``m3u_account_id`` is None for "the whole group / any provider" (the
+    # pre-provider-scope behavior). A legacy flat config
+    # ({master_group_id, secondary_group_ids}) is UPGRADED here on read (no
+    # data migration). The derived flat keys are kept in sync below so every
+    # existing reader of master_group_id / secondary_group_ids is untouched;
+    # only the provider-aware fetch/preflight read the nested provider ids.
+    include_master_streams = config.get("include_master_group_streams") is True
+
+    raw_master = config.get("master")
+    if raw_master is None and "master_group_id" in config:
+        raw_master = config.get("master_group_id")
+    master_scope = _normalize_scope(raw_master)
+    if master_scope is None:
         errors.append(_event_sync_error(
-            "master_group_id", master_group_id,
-            "a positive integer Dispatcharr group ID — the ONE master "
-            "event group whose channels Dispatcharr owns "
-            "(auto_channel_sync ON)",
+            "master_group_id", raw_master,
+            'the master event group as a positive integer group id, or '
+            '{"group_id": <positive int>, "m3u_account_id": <positive int or '
+            "null>} (null = whole group / any provider) — the ONE group whose "
+            "channels Dispatcharr owns (auto_channel_sync ON)",
         ))
 
+    raw_secondary = config.get("secondary")
+    if raw_secondary is None and "secondary_group_ids" in config:
+        raw_secondary = config.get("secondary_group_ids")
     # bead 3ux85: an empty secondary list is allowed ONLY when the master
-    # group is itself the stream source (include_master_group_streams) — the
-    # pure same-named cross-provider case, where Dispatcharr collapses both
-    # providers into ONE channel group (ChannelGroup.name is unique) so there
-    # is no separate secondary group to pick. The rule stays SCOPED (to the
-    # master group), so the anti-unscoped-matching rail is intact.
-    include_master_streams = config.get("include_master_group_streams") is True
-    secondary_group_ids = config.get("secondary_group_ids")
-    if secondary_group_ids is None and include_master_streams:
-        secondary_group_ids = config["secondary_group_ids"] = []
-    if (not isinstance(secondary_group_ids, list)
-            or not all(_is_group_id(g) for g in secondary_group_ids)):
+    # group is itself the stream source (include_master_group_streams).
+    if raw_secondary is None and include_master_streams:
+        raw_secondary = []
+    secondary_scopes: list[dict] = []
+    secondary_ok = True
+    if not isinstance(raw_secondary, list):
+        secondary_ok = False
         errors.append(_event_sync_error(
-            "secondary_group_ids", secondary_group_ids,
-            "a list of positive integer group IDs — the secondary event "
-            "groups (auto_channel_sync OFF) whose streams attach to master "
-            "channels",
+            "secondary_group_ids", raw_secondary,
+            'a list of secondary event groups — each a positive integer group '
+            'id or {"group_id": int, "m3u_account_id": int|null}',
         ))
+    else:
+        for item in raw_secondary:
+            sc = _normalize_scope(item)
+            if sc is None:
+                secondary_ok = False
+                errors.append(_event_sync_error(
+                    "secondary_group_ids", item,
+                    'each secondary as a positive integer group id or '
+                    '{"group_id": int, "m3u_account_id": int|null}',
+                ))
+            else:
+                secondary_scopes.append(sc)
+        if secondary_ok and not secondary_scopes and not include_master_streams:
+            errors.append(_event_sync_error(
+                "secondary_group_ids", raw_secondary,
+                "a non-empty list — an unscoped event rule is refused. (An "
+                "empty list is allowed only when include_master_group_streams "
+                "is true, so the master group is itself the stream source.)",
+            ))
+
+    # The master-not-in-secondary rail is now the (group, provider) PAIR: the
+    # SAME group with a DIFFERENT provider IS a valid secondary (that is the
+    # whole point of provider scoping), but an identical group+provider cannot
+    # be both master and secondary.
+    if master_scope is not None and secondary_ok:
+        m_pair = (master_scope["group_id"], master_scope["m3u_account_id"])
+        if any((sc["group_id"], sc["m3u_account_id"]) == m_pair
+               for sc in secondary_scopes):
+            errors.append(_event_sync_error(
+                "secondary_group_ids", secondary_scopes,
+                "a list whose (group, provider) does not duplicate "
+                "master_group_id's — an identical group+provider cannot be "
+                "both master and secondary. (The same group with a DIFFERENT "
+                "provider IS allowed.)",
+            ))
+
+    # Write canonical nested + derived flat. Downstream readers use the flat
+    # keys (unchanged); provider-aware code reads master/secondary.
+    if master_scope is not None:
+        config["master"] = master_scope
+        config["master_group_id"] = master_group_id = master_scope["group_id"]
+    else:
+        master_group_id = None
+    if secondary_ok:
+        config["secondary"] = secondary_scopes
+        config["secondary_group_ids"] = secondary_group_ids = [
+            sc["group_id"] for sc in secondary_scopes
+        ]
+    else:
         secondary_group_ids = []
-    elif not secondary_group_ids and not include_master_streams:
-        errors.append(_event_sync_error(
-            "secondary_group_ids", secondary_group_ids,
-            "a non-empty list of positive integer group IDs — an unscoped "
-            "event rule is refused. (An empty list is allowed only when "
-            "include_master_group_streams is true, so the master group is "
-            "itself the self-attach stream source.)",
-        ))
-    elif _is_group_id(master_group_id) and master_group_id in secondary_group_ids:
-        errors.append(_event_sync_error(
-            "secondary_group_ids", secondary_group_ids,
-            f"a list that does NOT contain master_group_id "
-            f"{master_group_id} — a group cannot be both the master "
-            f"(Dispatcharr-owned channels) and a secondary (stream source)",
-        ))
 
     # --- Parse patterns (shared and per-group) ---------------------------
     if "patterns" in config:
