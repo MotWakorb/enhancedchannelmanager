@@ -287,9 +287,7 @@ class TestPass5RetryPath:
             regenerated_entries=[_dummy_entry(501, MASTER_MERCURY)],
         )
 
-        first = _manual_run(
-            client, db_session_factory, regenerate, wait_refresh
-        )
+        _manual_run(client, db_session_factory, regenerate, wait_refresh)
         assert state.channels[100]["epg_data_id"] == 501
         writes_after_first = len(state.update_channel_calls)
 
