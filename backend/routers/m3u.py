@@ -1139,10 +1139,16 @@ async def toggle_group_auto_sync(
     returns ``changed: false`` and writes nothing — not even a journal
     entry.
     """
+    # CodeQL py/partial-ssrf taint-cut: re-assert integer types at the call
+    # boundary so the values reaching the Dispatcharr client URLs are
+    # provably ints — belt on top of FastAPI/Pydantic, which already coerce
+    # the path param and body field to int.
+    account_id = int(account_id)
+    channel_group_id = int(request.channel_group_id)
     logger.debug(
         "[M3U] POST /api/m3u/accounts/%s/group-auto-sync-toggle "
         "(channel_group_id=%s, auto_channel_sync=%s, confirm=%s)",
-        account_id, request.channel_group_id, request.auto_channel_sync,
+        account_id, channel_group_id, request.auto_channel_sync,
         request.confirm,
     )
     if not request.confirm:
@@ -1162,14 +1168,14 @@ async def toggle_group_auto_sync(
         account_name = account.get("name", "Unknown")
         current = next(
             (g for g in account.get("channel_groups", [])
-             if g.get("channel_group") == request.channel_group_id),
+             if g.get("channel_group") == channel_group_id),
             None,
         )
         if current is None:
             raise HTTPException(
                 status_code=404,
                 detail=(
-                    f"channel_group_id {request.channel_group_id} has no "
+                    f"channel_group_id {channel_group_id} has no "
                     f"group settings on M3U account {account_id} "
                     f"('{account_name}')"
                 ),
@@ -1180,17 +1186,17 @@ async def toggle_group_auto_sync(
             channel_groups = await client.get_channel_groups()
             group_name = next(
                 (g["name"] for g in channel_groups
-                 if g["id"] == request.channel_group_id),
-                f"Group {request.channel_group_id}",
+                 if g["id"] == channel_group_id),
+                f"Group {channel_group_id}",
             )
         except Exception:
-            group_name = f"Group {request.channel_group_id}"
+            group_name = f"Group {channel_group_id}"
 
         was = bool(current.get("auto_channel_sync"))
         if was == request.auto_channel_sync:
             return {
                 "changed": False,
-                "channel_group_id": request.channel_group_id,
+                "channel_group_id": channel_group_id,
                 "group_name": group_name,
                 "account_id": account_id,
                 "account_name": account_name,
@@ -1200,7 +1206,7 @@ async def toggle_group_auto_sync(
         # Exactly ONE group's record, all other fields preserved verbatim —
         # the same per-group payload shape the M3U Groups modal sends.
         group_settings = {
-            "channel_group": request.channel_group_id,
+            "channel_group": channel_group_id,
             "enabled": current.get("enabled"),
             "auto_channel_sync": request.auto_channel_sync,
             "auto_sync_channel_start": current.get("auto_sync_channel_start"),
@@ -1217,7 +1223,7 @@ async def toggle_group_auto_sync(
             "[M3U] Guided setup: auto_channel_sync %s -> %s for group "
             "'%s' (id=%s) on account '%s' (id=%s)",
             was, request.auto_channel_sync, group_name,
-            request.channel_group_id, account_name, account_id,
+            channel_group_id, account_name, account_id,
         )
         journal.log_entry(
             category="m3u",
@@ -1232,12 +1238,12 @@ async def toggle_group_auto_sync(
                 f"recovery breadcrumb."
             ),
             before_value={
-                "channel_group": request.channel_group_id,
+                "channel_group": channel_group_id,
                 "name": group_name,
                 "auto_channel_sync": was,
             },
             after_value={
-                "channel_group": request.channel_group_id,
+                "channel_group": channel_group_id,
                 "name": group_name,
                 "auto_channel_sync": request.auto_channel_sync,
             },
@@ -1245,7 +1251,7 @@ async def toggle_group_auto_sync(
 
         return {
             "changed": True,
-            "channel_group_id": request.channel_group_id,
+            "channel_group_id": channel_group_id,
             "group_name": group_name,
             "account_id": account_id,
             "account_name": account_name,
@@ -1259,7 +1265,7 @@ async def toggle_group_auto_sync(
     except Exception as e:
         logger.warning(
             "[M3U] Guided auto-sync toggle failed for account %s group %s: %s",
-            account_id, request.channel_group_id, e,
+            account_id, channel_group_id, e,
         )
         raise HTTPException(status_code=500, detail="Internal server error")
 
