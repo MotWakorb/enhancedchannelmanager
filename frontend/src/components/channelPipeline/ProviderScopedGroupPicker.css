@@ -1,0 +1,182 @@
+/* Provider-scoped Event Sync group picker (bead 38dzi / Option A P4). */
+.provider-scoped-group-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.psg-search {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.psg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+}
+
+.psg-empty {
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: center;
+}
+
+.psg-provider-row {
+  border-bottom: 1px solid var(--border-subtle, var(--border-primary));
+}
+.psg-provider-row:last-child {
+  border-bottom: none;
+}
+
+.psg-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.psg-option input {
+  flex-shrink: 0;
+}
+.psg-option.psg-excluded {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.psg-label {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.psg-streams {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.psg-disabled-hint {
+  font-style: italic;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Sync status badges — text + icon, never color alone. */
+.psg-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  white-space: nowrap;
+}
+.psg-sync-badge .material-icons {
+  font-size: 15px;
+}
+.psg-sync-ok {
+  color: var(--text-success, var(--text-secondary));
+  border-color: var(--border-success, var(--border-primary));
+}
+.psg-sync-mismatch {
+  color: var(--text-warning, var(--text-secondary));
+  border-color: var(--border-warning, var(--border-primary));
+}
+
+.psg-mismatch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 12px 10px 34px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.psg-fix-btn {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px solid var(--border-warning, var(--border-primary));
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Multi-provider parent node. */
+.psg-group-node {
+  border-bottom: 1px solid var(--border-subtle, var(--border-primary));
+}
+.psg-group-node:last-child {
+  border-bottom: none;
+}
+.psg-group-parent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.psg-group-parent .material-icons {
+  font-size: 18px;
+  color: var(--text-secondary);
+}
+.psg-group-name {
+  flex: 1;
+  font-weight: 500;
+}
+.psg-group-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.psg-sublist {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 16px;
+  background: var(--bg-subtle, transparent);
+}
+
+/* Selected-scope chips (secondary multi-select). */
+.psg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.psg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.psg-chip-remove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  line-height: 1;
+}
