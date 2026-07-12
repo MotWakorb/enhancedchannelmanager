@@ -616,7 +616,12 @@ class TestAutoRunOptIn:
         auto_entry = dict(journal_entries[0])
         manual_entry = dict(manual_entries[0])
         # batch_id is the (different) execution id — provenance, not drift.
-        assert auto_entry.pop("batch_id") != manual_entry.pop("batch_id")
+        # Pop into locals BEFORE asserting (CodeQL py/side-effect-in-assert):
+        # the pops are load-bearing for the field-for-field equality below,
+        # which must compare batch_id-less dicts.
+        auto_batch_id = auto_entry.pop("batch_id")
+        manual_batch_id = manual_entry.pop("batch_id")
+        assert auto_batch_id != manual_batch_id
         assert auto_entry == manual_entry
         assert journal_entries[0]["category"] == "event_sync"
         match = journal_entries[0]["after_value"]["match"]
