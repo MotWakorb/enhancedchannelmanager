@@ -2423,6 +2423,8 @@ async def preview_event_sync(
     call (stateless recompute — duplicate-named masters map to the lowest
     channel id, deterministically).
     """
+    from functools import partial
+
     from services.event_sync_preflight import check_event_sync_group_settings
     from services.event_sync_resolver import (
         DISPOSITION_AMBIGUOUS,
@@ -2432,12 +2434,49 @@ async def preview_event_sync(
         SecondaryStream,
         resolve_event_sync,
     )
+    from services.event_sync_review import (
+        ATTACH_SOURCE_REVIEW_QUEUE,
+        PROVIDER_ID_UNKNOWN,
+        REVIEW_STATUS_ACCEPTED,
+        REVIEW_STATUS_PENDING,
+        REVIEW_STATUS_REJECTED,
+        master_event_key,
+        stream_name_hash,
+    )
+    from services.event_sync_review_store import (
+        load_pending_fingerprints,
+        load_review_decisions,
+    )
     from stream_prober import extract_m3u_account_id
 
     config = await _load_event_sync_preview_config(request)
     master_group_id = config["master_group_id"]
     secondary_group_ids = config["secondary_group_ids"]
     client = get_client()
+
+    # ti939.3.2: review-queue state for a SAVED rule. Decisions feed the
+    # shared resolver (so the preview predicts exactly what a run would do
+    # — accepted pairings show as would_attach via review_queue, rejected
+    # ones are suppressed); pending fingerprints only decorate candidate
+    # rows. Inline (unsaved) configs have no rule id and therefore no
+    # queue state — matching the run they could ever produce.
+    decisions = None
+    pending_fps: frozenset = frozenset()
+    if request.rule_id is not None:
+        session = get_session()
+        try:
+            decisions = load_review_decisions(session, request.rule_id)
+            pending_fps = load_pending_fingerprints(session, request.rule_id)
+        except Exception as e:
+            logger.warning(
+                "[EVENT-SYNC] preview: failed to load review-queue state "
+                "for rule %s (%s) — previewing without it",
+                request.rule_id, e,
+            )
+            decisions = None
+            pending_fps = frozenset()
+        finally:
+            session.close()
 
     # --- Pre-flight (READ-ONLY; failures surface, never block) -----------
     try:
@@ -2516,13 +2555,16 @@ async def preview_event_sync(
                     # the dry-run parity.
                     if not s.get("name") or s.get("id") is None:
                         continue
+                    account_id = extract_m3u_account_id(s.get("m3u_account"))
                     secondary_streams.append(SecondaryStream(
                         name=s["name"],
                         group_id=gid,
                         stream_id=s.get("id"),
-                        provider=account_names.get(
-                            extract_m3u_account_id(s.get("m3u_account"))
-                        ),
+                        provider=account_names.get(account_id),
+                        # ti939.3.2: review-queue fingerprint component —
+                        # mirrors the engine fetch so preview and run key
+                        # decisions identically.
+                        provider_id=account_id,
                     ))
                 if len(secondary_streams) >= _PREVIEW_MAX_STREAMS:
                     secondary_streams = secondary_streams[:_PREVIEW_MAX_STREAMS]
@@ -2539,7 +2581,10 @@ async def preview_event_sync(
 
     # --- Resolve (CPU-bound scoring off the event loop) ------------------
     resolution = await run_cpu_bound(
-        resolve_event_sync, config, master_names, secondary_streams
+        partial(
+            resolve_event_sync, config, master_names, secondary_streams,
+            decisions=decisions,
+        )
     )
 
     # --- Build detail rows; counts derive from the SAME iteration so they
@@ -2553,9 +2598,41 @@ async def preview_event_sync(
     streams_out: list[dict] = []
     unmatched_out: list[dict] = []
     failure_groups: dict[tuple[int, str], dict] = {}
+    would_attach_via_review = 0
+    candidates_pending_review = 0
+
+    # ti939.3.2: per-candidate queue markers ('pending review' /
+    # 'previously accepted/rejected'), computed from the SAME fingerprints
+    # the resolver keys decisions on.
+    has_queue_state = bool(pending_fps) or (
+        decisions is not None and (decisions.accepted or decisions.rejected)
+    )
+
+    def _candidate_review_status(resolved, candidate) -> str | None:
+        if not has_queue_state:
+            return None
+        event_key = master_event_key(candidate.parsed)
+        if event_key is None:
+            return None
+        provider = (
+            resolved.stream.provider_id
+            if resolved.stream.provider_id is not None
+            else PROVIDER_ID_UNKNOWN
+        )
+        fp = (provider, stream_name_hash(resolved.stream.name), event_key)
+        if decisions is not None and fp in decisions.accepted:
+            return REVIEW_STATUS_ACCEPTED
+        if decisions is not None and fp in decisions.rejected:
+            return REVIEW_STATUS_REJECTED
+        if fp in pending_fps:
+            return REVIEW_STATUS_PENDING
+        return None
 
     for r in resolution.resolved:
         counts[r.disposition] += 1
+        if r.disposition == DISPOSITION_WOULD_ATTACH \
+                and r.attach_source == ATTACH_SOURCE_REVIEW_QUEUE:
+            would_attach_via_review += 1
         parsed_start = (
             r.result.parsed.start.isoformat() if r.result.parsed.start else None
         )
@@ -2574,6 +2651,10 @@ async def preview_event_sync(
             # rail) or "top_candidate_ambiguous_band". Preview inherits the
             # rail automatically (same resolver as the attach path).
             "ambiguous_reason": r.ambiguous_reason,
+            # ti939.3.2: "threshold" | "review_queue" when would_attach —
+            # a queue-driven attach prediction is visibly not a score-driven
+            # one. None for every other disposition.
+            "attach_source": r.attach_source,
             "would_attach_master": (
                 {
                     "channel_id": name_to_id.get(r.best.master_name),
@@ -2596,10 +2677,18 @@ async def preview_event_sync(
                     "reject_reason": (
                         c.reject_reasons[0] if c.reject_reasons else None
                     ),
+                    # ti939.3.2 queue marker: 'pending' | 'accepted' |
+                    # 'rejected' | None for this exact pairing fingerprint.
+                    "review_status": _candidate_review_status(r, c),
                 }
                 for c in r.result.candidates[:_EVENT_PREVIEW_MAX_CANDIDATES_PER_STREAM]
             ],
         })
+        if streams_out[-1]["candidates"]:
+            candidates_pending_review += sum(
+                1 for c in streams_out[-1]["candidates"]
+                if c["review_status"] == REVIEW_STATUS_PENDING
+            )
 
         if r.disposition == DISPOSITION_UNMATCHED:
             top = r.result.candidates[0] if r.result.candidates else None
@@ -2655,6 +2744,11 @@ async def preview_event_sync(
             "parse_failed": counts[DISPOSITION_PARSE_FAILED],
             "master_channels": len(master_channels),
             "master_channels_unparsed": len(resolution.unparsed_master_names),
+            # ti939.3.2: how many would_attach rows come from prior review
+            # accepts (subset of would_attach) and how many rendered
+            # candidate pairings are sitting in the pending review queue.
+            "would_attach_via_review": would_attach_via_review,
+            "candidates_pending_review": candidates_pending_review,
         },
         "streams": streams_out,
         "unmatched_streams": unmatched_out,
