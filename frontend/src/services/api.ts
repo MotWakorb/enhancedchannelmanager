@@ -864,6 +864,34 @@ export async function updateM3UGroupSettings(
   });
 }
 
+export interface GroupAutoSyncToggleResult {
+  changed: boolean;
+  channel_group_id: number;
+  group_name: string;
+  account_id: number;
+  account_name: string;
+  auto_channel_sync: boolean;
+  was?: boolean;
+}
+
+/**
+ * Guided-setup auto_channel_sync toggle (bead ti939.3.4). Admin-gated and
+ * confirm-gated on the backend: `confirm: true` is REQUIRED and must only
+ * be sent from an explicit confirmation dialog — never as a side effect of
+ * saving a rule or running the pipeline. Every toggle is journaled
+ * (snapshot restore does NOT revert Dispatcharr group settings; the
+ * journal entry is the recovery breadcrumb).
+ */
+export async function toggleGroupAutoSync(
+  accountId: number,
+  data: { channel_group_id: number; auto_channel_sync: boolean; confirm: true }
+): Promise<GroupAutoSyncToggleResult> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/group-auto-sync-toggle`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 // Server Groups
 export async function getServerGroups(): Promise<ServerGroup[]> {
   return fetchJson(`${API_BASE}/m3u/server-groups`);

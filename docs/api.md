@@ -329,6 +329,7 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 | `PATCH /api/m3u/accounts/{id}/profiles/{pid}/` | Update a profile |
 | `DELETE /api/m3u/accounts/{id}/profiles/{pid}/` | Delete a profile |
 | `PATCH /api/m3u/accounts/{id}/group-settings` | Update group settings for an account |
+| `POST /api/m3u/accounts/{id}/group-auto-sync-toggle` | Guided-setup toggle of ONE group's `auto_channel_sync` (bead ti939.3.4). Admin-gated; body `{channel_group_id, auto_channel_sync, confirm: true}` — `confirm: true` is REQUIRED (400 otherwise; the toggle is an explicit operator action, never a side effect). Journaled per toggle; snapshot restore does NOT revert Dispatcharr group settings — the journal entry is the recovery breadcrumb. See `docs/event_sync.md`. |
 | `GET /api/m3u/accounts/{id}/changes` | Get change history for an account |
 | `GET /api/m3u/snapshots` | List M3U snapshots |
 | `GET /api/m3u/server-groups` | List server groups |

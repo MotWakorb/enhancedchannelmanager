@@ -786,6 +786,7 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "max_attach_per_run",
     "enabled",
     "auto_run",
+    "dummy_epg_profile_id",
 })
 
 # Ceiling for event_sync_config.max_attach_per_run. The cap is a blast-radius
@@ -1093,6 +1094,46 @@ def validate_event_sync_config(config: Any) -> list[str]:
             "a boolean (default false) — true opts this rule into "
             "unattended runs on the M3U refresh watermark task",
         ))
+
+    # Dummy EPG auto-assignment (bead ti939.3.3). OPTIONAL — an absent key
+    # means the feature is OFF and is NOT default-filled (unlike the knobs
+    # above): filling e.g. null would turn a feature toggle into stored
+    # noise. When present, the reference must RESOLVE — a dangling profile
+    # id is config corruption, caught here (save time AND the engine's
+    # per-run re-validation) rather than as a silent no-op at run time.
+    # Enabled-ness is deliberately NOT validated here: a temporarily
+    # disabled profile must not invalidate the rule and kill its attach
+    # path — the engine skips just the EPG-assignment step with a warning.
+    dummy_epg_profile_id = config.get("dummy_epg_profile_id")
+    if dummy_epg_profile_id is not None:
+        if (isinstance(dummy_epg_profile_id, bool)
+                or not isinstance(dummy_epg_profile_id, int)
+                or dummy_epg_profile_id < 1):
+            errors.append(_event_sync_error(
+                "dummy_epg_profile_id", dummy_epg_profile_id,
+                "a positive integer id of an existing dummy EPG profile "
+                "(omit the key entirely to disable dummy EPG "
+                "auto-assignment for master channels)",
+            ))
+        else:
+            # Lazy imports: keep the DB stack off this module's load path
+            # (same pattern as the matcher constants above). One quick
+            # primary-key lookup, only when the key is present.
+            from database import get_session
+            from models import DummyEPGProfile
+            db = get_session()
+            try:
+                profile = db.get(DummyEPGProfile, dummy_epg_profile_id)
+            finally:
+                db.close()
+            if profile is None:
+                errors.append(_event_sync_error(
+                    "dummy_epg_profile_id", dummy_epg_profile_id,
+                    "the id of an EXISTING dummy EPG profile — no profile "
+                    "with this id was found (create one under EPG Manager "
+                    "→ Dummy EPG, or omit the key to disable dummy EPG "
+                    "auto-assignment)",
+                ))
 
     if errors:
         logger.warning(

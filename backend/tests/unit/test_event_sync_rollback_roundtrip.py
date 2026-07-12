@@ -591,13 +591,22 @@ class TestNoGroupSettingsWrites:
     snapshot restore never needs to touch group settings either."""
 
     # Every function that participates in the event_sync execution path.
+    # ti939.3.3 additions: the dummy EPG assignment step (engine wrapper +
+    # executor implementation) is part of the event_sync run path and is
+    # held to the same never-writes-group-settings constraint. The guided
+    # auto_channel_sync toggle (ti939.3.4) deliberately lives OUTSIDE these
+    # modules (routers/m3u.py — a guided-setup surface, admin-gated and
+    # confirm-gated) so this gate keeps proving the event_sync feature
+    # itself never writes group settings.
     ENGINE_FUNCTIONS = (
         "_fetch_event_sync_secondary_streams",
         "_run_event_sync_rules",
+        "_assign_event_sync_dummy_epg",
     )
     EXECUTOR_FUNCTIONS = (
         "_resolve_event_sync",
         "execute_event_sync_rule",
+        "assign_event_sync_dummy_epg",
     )
     ROUTER_FUNCTIONS = (
         "preview_event_sync",

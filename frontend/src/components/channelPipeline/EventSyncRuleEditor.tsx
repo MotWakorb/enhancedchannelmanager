@@ -3,10 +3,11 @@
  *
  * Quick path: pick a master group, pick secondary groups, keep the shipped
  * default patterns, preview. Advanced knobs (time window, attach threshold,
- * per-group pattern overrides) stay collapsed. Auto-sync status is shown
- * LIVE per group with guidance text when it's wrong — this phase never
- * toggles Dispatcharr settings (guidance only; a guided one-click toggle is
- * a Phase 2 bead).
+ * dummy EPG profile, per-group pattern overrides) stay collapsed. Auto-sync
+ * status is shown LIVE per group with guidance text when it's wrong, plus a
+ * guided one-click fix (ti939.3.4): the Fix button opens a confirmation
+ * dialog and ONLY its confirm button calls the admin-gated toggle endpoint
+ * — never save, never preview, never a side effect.
  *
  * There is NO apply/attach control anywhere: saving stores the config on the
  * rule; the only action against live data is the zero-write preview.
@@ -22,13 +23,20 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { ChannelPipelineRule, CreateRuleData } from '../../types/channelPipeline';
 import type { EventSyncConfig, EventSyncPattern, EventSyncPreviewResponse } from '../../types/eventSync';
-import type { M3UGroupSetting } from '../../types';
-import { getChannelGroups, getProviderGroupSettings } from '../../services/api';
+import type { DummyEPGProfile, M3UGroupSetting } from '../../types';
+import {
+  getChannelGroups,
+  getDummyEPGProfiles,
+  getProviderGroupSettings,
+  toggleGroupAutoSync,
+} from '../../services/api';
 import { previewEventSync } from '../../services/channelPipelineApi';
 import { CustomSelect } from '../CustomSelect';
 import { EventSyncTestPatternsPanel } from './EventSyncTestPatternsPanel';
 import type { LabeledEventSyncPattern } from './EventSyncTestPatternsPanel';
 import { EventSyncPreviewPanel } from './EventSyncPreviewPanel';
+import { EventSyncAutoSyncFixDialog } from './EventSyncAutoSyncFixDialog';
+import type { AutoSyncFixTarget } from './EventSyncAutoSyncFixDialog';
 import {
   SHIPPED_EVENT_SYNC_PATTERNS,
   DEFAULT_PATTERN_IDS,
@@ -209,11 +217,24 @@ export function EventSyncRuleEditor({
   // Phase 2 opt-in (ti939.3.1): unattended auto-run on the refresh
   // watermark. Default OFF — the backend treats an absent key as false.
   const [autoRun, setAutoRun] = useState(config?.auto_run ?? false);
+  // Phase 2 (ti939.3.3): optional dummy EPG profile auto-assigned to master
+  // channels on every run. null = feature off (key omitted on save).
+  const [dummyEpgProfileId, setDummyEpgProfileId] = useState<number | null>(
+    config?.dummy_epg_profile_id ?? null
+  );
+  const [dummyProfiles, setDummyProfiles] = useState<DummyEPGProfile[]>([]);
 
   // Reference data
   const [channelGroups, setChannelGroups] = useState<{ id: number; name: string }[]>([]);
   const [groupSettings, setGroupSettings] = useState<Record<number, M3UGroupSetting>>({});
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+
+  // Guided setup (ti939.3.4): one-click confirmed auto_channel_sync fix.
+  // The toggle API is ONLY called from the confirmation dialog's confirm
+  // button — never from save, never from preview.
+  const [pendingFix, setPendingFix] = useState<AutoSyncFixTarget | null>(null);
+  const [fixBusy, setFixBusy] = useState(false);
+  const [fixError, setFixError] = useState<string | null>(null);
 
   // Preview
   const [preview, setPreview] = useState<EventSyncPreviewResponse | null>(null);
@@ -233,7 +254,51 @@ export function EventSyncRuleEditor({
         setSettingsLoaded(true);
       })
       .catch(() => {});
+    getDummyEPGProfiles()
+      .then(setDummyProfiles)
+      .catch(() => {});
   }, []);
+
+  /** Guided fix (ti939.3.4): the CONFIRMED toggle, then refetch the live
+   * group settings so the pre-flight warnings clear. */
+  const handleConfirmFix = async () => {
+    if (!pendingFix) return;
+    setFixBusy(true);
+    setFixError(null);
+    try {
+      await toggleGroupAutoSync(pendingFix.accountId, {
+        channel_group_id: pendingFix.groupId,
+        auto_channel_sync: pendingFix.enable,
+        confirm: true,
+      });
+      const settings = await getProviderGroupSettings();
+      setGroupSettings(settings);
+      setPendingFix(null);
+    } catch (err) {
+      setFixError(err instanceof Error ? err.message : 'Toggle failed');
+    } finally {
+      setFixBusy(false);
+    }
+  };
+
+  /** Fix-button target for a provider-backed group, or null when the group
+   * has no provider settings (nothing to toggle). */
+  const fixTargetFor = (groupId: number, enable: boolean): AutoSyncFixTarget | null => {
+    const setting = groupSettings[groupId];
+    if (!setting) return null;
+    return {
+      groupId,
+      groupName: groupName(groupId),
+      accountId: setting.m3u_account_id,
+      accountName: setting.m3u_account_name,
+      enable,
+    };
+  };
+
+  const openFixDialog = (target: AutoSyncFixTarget) => {
+    setFixError(null);
+    setPendingFix(target);
+  };
 
   const groupName = useMemo(() => {
     const byId = new Map(channelGroups.map(g => [g.id, g.name]));
@@ -356,6 +421,12 @@ export function EventSyncRuleEditor({
     // box is unchecked — absent means false on the backend.
     if (autoRun || config?.auto_run != null) {
       built.auto_run = autoRun;
+    }
+    // ti939.3.3: emit the dummy EPG profile reference when selected; a
+    // cleared selection omits the key (absent means OFF on the backend —
+    // the key is never emitted as null).
+    if (dummyEpgProfileId != null) {
+      built.dummy_epg_profile_id = dummyEpgProfileId;
     }
 
     // --- Shared patterns (bead z4y4a: full round-trip) -------------------
@@ -592,8 +663,24 @@ export function EventSyncRuleEditor({
                     Auto-sync is <strong>OFF</strong> for this group, so
                     Dispatcharr creates no master channels and the preview will
                     match nothing. Enable <code>auto_channel_sync</code> for
-                    this group in M3U Manager → account → Groups. ECM never
-                    toggles this setting for you.
+                    this group in M3U Manager → account → Groups, or use the
+                    Fix button — ECM changes this setting only through that
+                    explicitly confirmed fix, never as a side effect of saving
+                    or running.
+                    {(() => {
+                      const target = fixTargetFor(masterGroupId, true);
+                      return target ? (
+                        <button
+                          type="button"
+                          className="btn-secondary event-sync-fix-btn"
+                          data-testid="master-autosync-fix"
+                          onClick={() => openFixDialog(target)}
+                          disabled={isLoading}
+                        >
+                          Fix: turn auto-sync ON…
+                        </button>
+                      ) : null;
+                    })()}
                   </>
                 ) : (
                   <>
@@ -667,8 +754,24 @@ export function EventSyncRuleEditor({
                 {secondariesWithAutoSyncOn.length === 1 ? 'this group' : 'these groups'}.
                 Disable <code>auto_channel_sync</code> for{' '}
                 {secondariesWithAutoSyncOn.length === 1 ? 'it' : 'them'} in M3U
-                Manager → account → Groups. ECM never toggles this setting for
-                you.
+                Manager → account → Groups, or use the Fix buttons — ECM
+                changes this setting only through that explicitly confirmed
+                fix, never as a side effect of saving or running.
+                {secondariesWithAutoSyncOn.map(groupId => {
+                  const target = fixTargetFor(groupId, false);
+                  return target ? (
+                    <button
+                      key={groupId}
+                      type="button"
+                      className="btn-secondary event-sync-fix-btn"
+                      data-testid={`secondary-autosync-fix-${groupId}`}
+                      onClick={() => openFixDialog(target)}
+                      disabled={isLoading}
+                    >
+                      Fix: turn auto-sync OFF for {groupName(groupId)}…
+                    </button>
+                  ) : null;
+                })}
               </span>
             </div>
           )}
@@ -853,6 +956,36 @@ export function EventSyncRuleEditor({
               </div>
 
               <div className="form-group">
+                <label>Dummy EPG profile (optional)</label>
+                <CustomSelect
+                  value={dummyEpgProfileId != null ? dummyEpgProfileId.toString() : ''}
+                  onChange={value =>
+                    setDummyEpgProfileId(value ? parseInt(value, 10) : null)
+                  }
+                  options={[
+                    { value: '', label: 'None — no automatic guide data' },
+                    ...dummyProfiles.map(p => ({
+                      value: p.id.toString(),
+                      label: p.enabled ? p.name : `${p.name} (disabled)`,
+                    })),
+                  ]}
+                  placeholder="None — no automatic guide data"
+                  disabled={isLoading}
+                />
+                <span className="form-hint">
+                  Assigns this dummy EPG profile to the master group&apos;s
+                  event channels on every run (manual and auto-run), so new
+                  events get guide data automatically. Channels the
+                  profile&apos;s XMLTV does not cover yet are retried after an
+                  automatic regenerate + refresh in the same run. Existing
+                  guide data from other sources is never overwritten. Tip: the
+                  profile&apos;s title/time patterns can reuse this rule&apos;s
+                  parse patterns — the master provider&apos;s naming is the
+                  same in both places.
+                </span>
+              </div>
+
+              <div className="form-group">
                 <label>Per-group pattern overrides</label>
                 <span className="form-hint">
                   A group with an override uses ONLY its own patterns; other
@@ -966,6 +1099,18 @@ export function EventSyncRuleEditor({
           {saving ? 'Saving...' : 'Save'}
         </button>
       </div>
+
+      {/* Guided setup (ti939.3.4): the toggle API is reachable ONLY through
+          this dialog's confirm button. */}
+      {pendingFix && (
+        <EventSyncAutoSyncFixDialog
+          target={pendingFix}
+          busy={fixBusy}
+          error={fixError}
+          onCancel={() => setPendingFix(null)}
+          onConfirm={handleConfirmFix}
+        />
+      )}
     </div>
   );
 }
