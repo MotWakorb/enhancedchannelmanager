@@ -67,6 +67,18 @@ def _event_sync_config(**overrides) -> dict:
     return config
 
 
+def _provider_scoped_config() -> dict:
+    """A provider-scoped config (bead 1bftz): master group 10 / provider 3,
+    secondary group 10 / provider 7 — the same shared group, two providers.
+    Built so the flat + nested keys are consistent (validator-canonical)."""
+    return _event_sync_config(
+        master={"group_id": 10, "m3u_account_id": 3},
+        secondary=[{"group_id": 10, "m3u_account_id": 7}],
+        master_group_id=10,
+        secondary_group_ids=[10],
+    )
+
+
 def _create_rule(session, **overrides) -> ChannelPipelineRule:
     defaults = {
         "name": "Event Rule",
@@ -124,6 +136,27 @@ class TestDbasRestoreRoundTrip:
             "as a standard rule with dormant actions live"
         )
         assert restored.get_event_sync_config() == _event_sync_config()
+
+    def test_provider_scoped_config_round_trips(self, test_session):
+        """bead 1bftz: a PROVIDER-SCOPED config survives DBAS restore with the
+        nested {group_id, m3u_account_id} scopes preserved."""
+        from routers.backup import _restore_auto_creation_rules
+
+        rule = _create_rule(
+            test_session, name="PS",
+            event_sync_config=json.dumps(_provider_scoped_config()),
+        )
+        exported = rule.to_dict()
+
+        with patch("routers.backup.get_session", return_value=test_session):
+            result = _restore_auto_creation_rules([exported])
+
+        assert result["warnings"] == []
+        restored = test_session.query(ChannelPipelineRule).filter(
+            ChannelPipelineRule.name == "PS"
+        ).one().get_event_sync_config()
+        assert restored["master"] == {"group_id": 10, "m3u_account_id": 3}
+        assert restored["secondary"] == [{"group_id": 10, "m3u_account_id": 7}]
 
     def test_restore_preserves_answered_review_decisions_by_name(self, test_session):
         """bead 8fq6x: an ANSWERED accept/reject decision survives a config
@@ -304,6 +337,42 @@ class TestYamlExportImportRoundTrip:
             "YAML import-create stripped event_sync_config"
         )
         assert restored.get_event_sync_config() == _event_sync_config()
+
+    @pytest.mark.asyncio
+    async def test_provider_scoped_config_yaml_round_trips(
+        self, async_client, test_session
+    ):
+        """bead 1bftz: a PROVIDER-SCOPED config survives YAML export → import
+        with the nested {group_id, m3u_account_id} scopes preserved."""
+        _create_rule(
+            test_session, name="PSYaml",
+            event_sync_config=json.dumps(_provider_scoped_config()),
+        )
+        with patch("routers.channel_pipeline.get_client",
+                   return_value=_mock_client()):
+            export_response = await async_client.get(
+                "/api/auto-creation/export/yaml"
+            )
+        assert export_response.status_code == 200
+
+        test_session.query(ChannelPipelineRule).delete()
+        test_session.commit()
+
+        with patch("routers.channel_pipeline.get_client",
+                   return_value=_mock_client()), \
+             patch("routers.channel_pipeline.journal"):
+            import_response = await async_client.post(
+                "/api/auto-creation/import/yaml",
+                json={"yaml_content": export_response.text},
+            )
+        assert import_response.status_code == 200, import_response.text
+        assert import_response.json()["errors"] == []
+
+        rc = test_session.query(ChannelPipelineRule).filter(
+            ChannelPipelineRule.name == "PSYaml"
+        ).one().get_event_sync_config()
+        assert rc["master"] == {"group_id": 10, "m3u_account_id": 3}
+        assert rc["secondary"] == [{"group_id": 10, "m3u_account_id": 7}]
 
     @pytest.mark.asyncio
     async def test_export_import_update_round_trip(
