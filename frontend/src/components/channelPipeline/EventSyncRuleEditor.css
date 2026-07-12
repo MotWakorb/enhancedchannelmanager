@@ -76,6 +76,16 @@
   font-size: 14px;
 }
 
+/* bead x82s3: round-trip guard hint — an already-selected group that's
+   disabled/hidden from the default enabled-only filter still renders, with
+   this subtle marker. */
+.event-sync-disabled-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
 .event-sync-status-ok {
   display: inline-flex;
   align-items: center;

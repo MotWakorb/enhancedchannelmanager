@@ -88,6 +88,15 @@ warns immediately if the master is OFF or a secondary is still ON:
 Fix any warning here before moving on — the same checks re-run as
 [pre-flight](#pre-flight-checks) on every preview.
 
+Both dropdowns list only groups **enabled** on their M3U/provider account by
+default — a real instance can have hundreds of groups, and most are not
+relevant to this rule. Check **Show all groups** above the pickers to reveal
+disabled groups too (useful for a temporarily-disabled group, or one with no
+provider settings at all). A group the rule already references stays visible
+— marked `(disabled)` — even when it's filtered out of the default list, so
+editing an existing rule never silently drops its saved master or secondary
+selection.
+
 ### 5. Keep the shipped default pattern
 
 The **Parse patterns** section ships with the two built-in patterns

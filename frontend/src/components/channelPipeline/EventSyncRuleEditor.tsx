@@ -19,6 +19,15 @@
  * preserved unchanged behind the editable ones (with a read-only indicator),
  * never dropped or reordered. Built-ins are recognized by VERBATIM equality
  * and are never silently re-added to an all-custom selection.
+ *
+ * Group pickers default to ENABLED groups only (bead x82s3): the master
+ * select and secondary multi-select both hide groups whose provider setting
+ * (`M3UGroupSetting.enabled`) is not `true` — a group with no settings entry
+ * at all counts as not-enabled. A "Show all groups" toggle (default off)
+ * reveals the full list. Round-trip guard: a group already referenced by the
+ * rule being edited (masterGroupId, or a checked secondary id) always
+ * renders — with a "(disabled)" hint — even when the enabled-only filter
+ * would otherwise hide it, and `buildConfig` never drops it.
  */
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { ChannelPipelineRule, CreateRuleData } from '../../types/channelPipeline';
@@ -183,6 +192,11 @@ export function EventSyncRuleEditor({
     config?.secondary_group_ids ?? []
   );
   const [secondarySearch, setSecondarySearch] = useState('');
+  // bead x82s3: both group pickers default to enabled-only groups (hundreds
+  // of groups on a real instance is noisy); this reveals the full list for
+  // edge cases (temporarily-disabled group, a group with no provider
+  // settings at all). Default OFF.
+  const [showAllGroups, setShowAllGroups] = useState(false);
 
   // Patterns. `initial` keeps the untouched-open values so save can detect a
   // pristine patterns section and round-trip the saved arrays VERBATIM
@@ -311,19 +325,54 @@ export function EventSyncRuleEditor({
     return setting ? Boolean(setting.auto_channel_sync) : null;
   };
 
+  /** bead x82s3: 'enabled' = the group's provider (M3U) setting is enabled.
+   * A group with no groupSettings entry at all is treated as NOT enabled
+   * (hidden by default unless already selected, or Show all groups is on). */
+  const isGroupEnabled = (groupId: number): boolean =>
+    groupSettings[groupId]?.enabled === true;
+
   const masterStatus = masterGroupId != null ? autoSyncStatus(masterGroupId) : null;
 
   const secondariesWithAutoSyncOn = secondaryGroupIds.filter(
     groupId => autoSyncStatus(groupId) === true
   );
 
+  /** Master group options: enabled groups by default, plus Show all groups
+   * escape hatch, plus (round-trip guard, bead z4y4a-style) the CURRENTLY
+   * selected master group even when it's disabled/hidden — an edited rule
+   * must never lose its saved master group just because it's filtered out
+   * of the list. Checks `groupSettings` directly (not via the `isGroupEnabled`
+   * / `autoSyncStatus` helpers) so the dependency array stays exhaustive
+   * without re-deriving on every render. */
+  const masterGroupOptions = useMemo(() => {
+    return channelGroups
+      .filter(g => showAllGroups || groupSettings[g.id]?.enabled === true || g.id === masterGroupId)
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(g => {
+        const setting = groupSettings[g.id];
+        const statusLabel =
+          setting === undefined
+            ? 'no provider settings'
+            : setting.auto_channel_sync
+              ? 'auto-sync ON'
+              : 'auto-sync OFF';
+        const disabledHint = setting?.enabled === true ? '' : ' (disabled)';
+        return { value: g.id.toString(), label: `${g.name} — ${statusLabel}${disabledHint}` };
+      });
+  }, [channelGroups, groupSettings, showAllGroups, masterGroupId]);
+
+  /** Secondary group options: enabled groups by default (composed with the
+   * name filter), plus Show all groups, plus the round-trip guard for any
+   * secondary group already checked on this rule. */
   const filteredSecondaryOptions = useMemo(() => {
     const query = secondarySearch.trim().toLowerCase();
     return channelGroups
       .filter(g => g.id !== masterGroupId)
+      .filter(g => showAllGroups || groupSettings[g.id]?.enabled === true || secondaryGroupIds.includes(g.id))
       .filter(g => !query || g.name.toLowerCase().includes(query))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [channelGroups, masterGroupId, secondarySearch]);
+  }, [channelGroups, masterGroupId, secondarySearch, showAllGroups, groupSettings, secondaryGroupIds]);
 
   /** The custom-shared draft as a pattern object, or null when empty. The
    * API-authored name of the first custom pattern is preserved (z4y4a);
@@ -624,6 +673,27 @@ export function EventSyncRuleEditor({
           </label>
         </section>
 
+        {/* Group visibility (bead x82s3): shared toggle for both the master
+            and secondary group pickers below. */}
+        <section className="event-sync-section-block">
+          <label className="checkbox-option">
+            <input
+              type="checkbox"
+              checked={showAllGroups}
+              onChange={e => setShowAllGroups(e.target.checked)}
+              disabled={isLoading}
+              data-testid="event-sync-show-all-groups"
+            />
+            <span>Show all groups</span>
+          </label>
+          <span className="form-hint">
+            The master and secondary pickers below list only groups enabled
+            on their M3U/provider account by default. Turn this on to see
+            every group too — useful for a temporarily-disabled group, or one
+            with no provider settings at all.
+          </span>
+        </section>
+
         {/* Master group */}
         <section className="event-sync-section-block">
           <h3 className="event-sync-section-title">Master group</h3>
@@ -640,15 +710,7 @@ export function EventSyncRuleEditor({
                 setSecondaryGroupIds(ids => ids.filter(i => i !== groupId));
               }
             }}
-            options={channelGroups
-              .slice()
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map(g => {
-                const status = autoSyncStatus(g.id);
-                const statusLabel =
-                  status === true ? 'auto-sync ON' : status === false ? 'auto-sync OFF' : 'no provider settings';
-                return { value: g.id.toString(), label: `${g.name} — ${statusLabel}` };
-              })}
+            options={masterGroupOptions}
             placeholder="Select master group..."
             searchable
             searchPlaceholder="Search groups..."
@@ -722,6 +784,7 @@ export function EventSyncRuleEditor({
             ) : (
               filteredSecondaryOptions.map(group => {
                 const status = autoSyncStatus(group.id);
+                const disabled = !isGroupEnabled(group.id);
                 return (
                   <label key={group.id} className="checkbox-option">
                     <input
@@ -732,6 +795,9 @@ export function EventSyncRuleEditor({
                     />
                     <span>
                       {group.name}
+                      {disabled && (
+                        <span className="event-sync-disabled-hint">(disabled)</span>
+                      )}
                       {status === true && (
                         <span className="event-sync-inline-warn">
                           <span className="material-icons" aria-hidden="true">warning</span>
