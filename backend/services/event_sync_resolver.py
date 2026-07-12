@@ -207,6 +207,59 @@ def effective_patterns(config: dict, group_id: int) -> list[dict] | None:
     return config.get("patterns")
 
 
+async def build_master_name_to_id(
+    channels: list[dict], client, parse_master_from_stream: bool
+) -> dict[str, int]:
+    """Map a master IDENTITY name -> master channel id (bead parse-from-stream).
+
+    Default identity is the channel's OWN name. When
+    ``parse_master_from_stream`` is on, the identity is the name of the
+    channel's FIRST attached stream (fetched by id via ``get_streams_by_ids``)
+    — so operators can name master channels freely while the event title+time
+    are read from the underlying auto-synced stream. Duplicate identity names
+    resolve to the LOWEST channel id (deterministic, mirrors the channel-name
+    path). The matcher is unchanged: it scores whatever identity strings this
+    map's keys carry, and the attach path maps the winning key back to its
+    channel id here.
+    """
+    name_to_id: dict[str, int] = {}
+    if not parse_master_from_stream:
+        for ch in channels:
+            name, cid = ch.get("name"), ch.get("id")
+            if not name or cid is None:
+                continue
+            if name not in name_to_id or cid < name_to_id[name]:
+                name_to_id[name] = cid
+        return name_to_id
+
+    # Stream-identity: the first attached stream per channel.
+    first_stream_id: dict[int, int] = {}
+    for ch in channels:
+        cid = ch.get("id")
+        streams = ch.get("streams") or []
+        if cid is None or not streams:
+            continue
+        first = streams[0]
+        sid = first["id"] if isinstance(first, dict) else first
+        if sid is not None:
+            first_stream_id[cid] = sid
+    if not first_stream_id:
+        return name_to_id
+    stream_objs = await client.get_streams_by_ids(
+        sorted(set(first_stream_id.values()))
+    ) or []
+    sid_to_name = {
+        s.get("id"): s.get("name") for s in stream_objs if s.get("name")
+    }
+    for cid, sid in sorted(first_stream_id.items()):
+        name = sid_to_name.get(sid)
+        if not name:
+            continue
+        if name not in name_to_id or cid < name_to_id[name]:
+            name_to_id[name] = cid
+    return name_to_id
+
+
 def _is_contested(candidates: tuple[MasterCandidate, ...]) -> bool:
     """True when the winner's attach decision is CONTESTED (PR #613 rail).
 
@@ -369,6 +422,7 @@ def resolve_event_sync(
     *,
     now: datetime | None = None,
     decisions: ReviewDecisions | None = None,
+    attached_stream_ids: set[int] | frozenset[int] | None = None,
 ) -> EventSyncResolution:
     """Resolve every secondary stream against the master channel names.
 
@@ -390,6 +444,16 @@ def resolve_event_sync(
             (bead ti939.3.2), fingerprint-keyed — see the module docstring
             and :func:`_resolve_stream` for the application contract.
             ``None`` (or empty) preserves pre-queue behavior exactly.
+        attached_stream_ids: Stream ids already attached to a master
+            channel (bead 6xxmp). Master-group streams (group_id ==
+            master_group_id, present only when
+            ``include_master_group_streams`` is on) whose id is in this set
+            are dropped BEFORE scoring — the auto-synced provider's own
+            streams are already on their channels, so re-offering them would
+            desync preview ("would attach") from the run (an idempotent
+            no-op). Scoped to the master group so every other secondary
+            group's behavior is byte-identical. ``None`` (or empty) filters
+            nothing.
 
     Returns:
         :class:`EventSyncResolution` in a deterministic order — streams
@@ -402,15 +466,32 @@ def resolve_event_sync(
     window_minutes = config.get("time_window_minutes", DEFAULT_TIME_WINDOW_MINUTES)
     threshold = config.get("attach_threshold", EVENT_ATTACH_FLOOR)
     master_patterns = effective_patterns(config, config["master_group_id"])
+    # bead assume-current-date: opt-in dateless matching (both master and
+    # secondary sides share the same "today" so their times compare on one day).
+    assume_current_date = bool(config.get("assume_current_date", False))
 
     # Master-as-ceiling diagnostic: masters with no complete parsed identity
     # can never be candidates (match_streams filters them the same way —
     # same parse function, same patterns, same "now").
     unparsed_masters = tuple(
         name for name in master_names
-        if (parsed := parse_event_name(name, master_patterns, now=now)).title is None
+        if (parsed := parse_event_name(
+                name, master_patterns, now=now,
+                assume_current_date=assume_current_date,
+            )).title is None
         or parsed.start is None
     )
+
+    # bead 6xxmp: drop the master group's already-attached streams (the
+    # auto-synced provider's own streams). Scoped to the master group so
+    # normal secondary groups resolve exactly as before.
+    if attached_stream_ids:
+        master_group_id = config["master_group_id"]
+        secondary_streams = [
+            s for s in secondary_streams
+            if not (s.group_id == master_group_id
+                    and s.stream_id in attached_stream_ids)
+        ]
 
     by_group: dict[int, list[SecondaryStream]] = {}
     for stream in secondary_streams:
@@ -430,6 +511,7 @@ def resolve_event_sync(
             window_minutes=window_minutes,
             threshold=threshold,
             now=now,
+            assume_current_date=assume_current_date,
         )
         for stream, result in zip(streams, results):
             resolved.append(_resolve_stream(stream, result, decisions))

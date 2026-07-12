@@ -340,6 +340,91 @@ class TestAutoRunFlag:
         assert stored["auto_run"] is False
 
 
+class TestIncludeMasterGroupStreamsFlag:
+    """include_master_group_streams flag (bead 6xxmp — master self-attach).
+
+    Same default-fill/safety convention as auto_run: absent reads as false,
+    and pre-existing stored configs validate unchanged.
+    """
+
+    def test_default_filled_false(self):
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert config["include_master_group_streams"] is False
+
+    @pytest.mark.parametrize("good", [True, False])
+    def test_bool_accepted(self, good):
+        config = _valid_config(include_master_group_streams=good)
+        assert validate_event_sync_config(config) == []
+        assert config["include_master_group_streams"] is good
+
+    @pytest.mark.parametrize("bad", ["true", 1, 0])
+    def test_non_bool_rejected(self, bad):
+        config = _valid_config()
+        config["include_master_group_streams"] = bad
+        errors = validate_event_sync_config(config)
+        assert any("include_master_group_streams" in e for e in errors)
+
+    def test_master_still_forbidden_in_secondary_list(self):
+        # The flag is the sanctioned path — it does NOT relax the rail that
+        # forbids the master id inside secondary_group_ids.
+        config = _valid_config(
+            master_group_id=10,
+            secondary_group_ids=[10, 20],
+            include_master_group_streams=True,
+        )
+        errors = validate_event_sync_config(config)
+        assert any("secondary_group_ids" in e for e in errors)
+
+
+class TestAssumeCurrentDateFlag:
+    """assume_current_date flag (bead assume-current-date — dateless opt-in).
+
+    Same default-fill/safety convention as auto_run: absent reads as false,
+    and pre-existing stored configs validate unchanged.
+    """
+
+    def test_default_filled_false(self):
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert config["assume_current_date"] is False
+
+    @pytest.mark.parametrize("good", [True, False])
+    def test_bool_accepted(self, good):
+        config = _valid_config(assume_current_date=good)
+        assert validate_event_sync_config(config) == []
+        assert config["assume_current_date"] is good
+
+    @pytest.mark.parametrize("bad", ["true", 1, 0])
+    def test_non_bool_rejected(self, bad):
+        config = _valid_config()
+        config["assume_current_date"] = bad
+        errors = validate_event_sync_config(config)
+        assert any("assume_current_date" in e for e in errors)
+
+
+class TestParseMasterFromStreamFlag:
+    """parse_master_from_stream flag (bead parse-from-stream)."""
+
+    def test_default_filled_false(self):
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert config["parse_master_from_stream"] is False
+
+    @pytest.mark.parametrize("good", [True, False])
+    def test_bool_accepted(self, good):
+        config = _valid_config(parse_master_from_stream=good)
+        assert validate_event_sync_config(config) == []
+        assert config["parse_master_from_stream"] is good
+
+    @pytest.mark.parametrize("bad", ["true", 1, 0])
+    def test_non_bool_rejected(self, bad):
+        config = _valid_config()
+        config["parse_master_from_stream"] = bad
+        errors = validate_event_sync_config(config)
+        assert any("parse_master_from_stream" in e for e in errors)
+
+
 class TestDummyEpgProfileId:
     """dummy_epg_profile_id reference (bead ti939.3.3 — dummy EPG
     auto-assignment for master event channels).
