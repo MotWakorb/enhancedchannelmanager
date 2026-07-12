@@ -38,15 +38,18 @@ export interface EventSyncGroupScope {
 
 export interface EventSyncConfig {
   /**
-   * bead 3p2af: canonical provider-scoped shape. The backend validator keeps
-   * these in sync with the flat `master_group_id` / `secondary_group_ids`
-   * (derived) so both are present on a stored config. The editor currently
-   * reads/writes the flat keys; the provider-scoped picker (P4) will use these.
+   * bead 3p2af / 38dzi: canonical provider-scoped shape. The editor (P4)
+   * reads and writes these nested scopes; the backend validator derives the
+   * flat `master_group_id` / `secondary_group_ids` from them, so a stored
+   * config carries both. The flat keys are OPTIONAL on the client: the editor
+   * no longer emits them (the backend fills them), but they remain readable on
+   * a fetched config and are the migration fallback for a legacy rule authored
+   * before the nested shape existed.
    */
   master?: EventSyncGroupScope;
   secondary?: EventSyncGroupScope[];
-  master_group_id: number;
-  secondary_group_ids: number[];
+  master_group_id?: number;
+  secondary_group_ids?: number[];
   /** Shared pattern variants; omit to use the matcher's built-in defaults. */
   patterns?: EventSyncPattern[];
   /** Per-group overrides keyed by group ID (JSON object keys are strings). */

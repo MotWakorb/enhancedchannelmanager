@@ -45,13 +45,25 @@ describe('joinProviderRows', () => {
 });
 
 describe('ProviderScopedGroupPicker', () => {
-  it('renders a single-provider group as a flat row (no expander)', () => {
+  it('renders a single-provider group as a flat WHOLE-GROUP row (no expander)', () => {
     render(
       <ProviderScopedGroupPicker role="secondary" rows={ROWS} value={[]}
         onChange={vi.fn()} showAll={false} />,
     );
-    // NBA is single-provider → a flat checkbox, not an expand button.
-    expect(screen.getByTestId('psg-secondary-20-7')).toBeInTheDocument();
+    // NBA is single-provider → a flat checkbox that selects the whole group
+    // (m3u_account_id null), per the PO decision.
+    expect(screen.getByTestId('psg-secondary-20-any')).toBeInTheDocument();
+  });
+
+  it('single-provider flat row emits a WHOLE-GROUP (null provider) scope', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ProviderScopedGroupPicker role="master" rows={ROWS} value={null}
+        onChange={onChange} showAll={false} />,
+    );
+    await user.click(screen.getByTestId('psg-master-20-any'));
+    expect(onChange).toHaveBeenCalledWith({ group_id: 20, m3u_account_id: null });
   });
 
   it('expands a multi-provider group into per-provider + whole-group rows', async () => {
@@ -84,13 +96,13 @@ describe('ProviderScopedGroupPicker', () => {
     const onChange = vi.fn();
     render(
       <ProviderScopedGroupPicker role="secondary" rows={ROWS}
-        value={[{ group_id: 20, m3u_account_id: 7 }]} onChange={onChange}
+        value={[{ group_id: 20, m3u_account_id: null }]} onChange={onChange}
         showAll={false} />,
     );
     await user.click(screen.getByRole('button', { name: /MLB PPV/i }));
     await user.click(screen.getByTestId('psg-secondary-10-7'));
     expect(onChange).toHaveBeenCalledWith([
-      { group_id: 20, m3u_account_id: 7 },
+      { group_id: 20, m3u_account_id: null },
       { group_id: 10, m3u_account_id: 7 },
     ]);
   });
