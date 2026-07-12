@@ -27,7 +27,9 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-/** Stub GET /api/providers/group-settings with per-group auto-sync flags. */
+/** Stub GET /api/providers/group-settings with per-group auto-sync flags.
+ * All groups are `enabled: true` — use `stubGroupSettingsFull` for tests
+ * that need to control the `enabled` flag itself. */
 function stubGroupSettings(autoSyncByGroupId: Record<number, boolean>) {
   server.use(
     http.get('/api/providers/group-settings', () =>
@@ -50,11 +52,43 @@ function stubGroupSettings(autoSyncByGroupId: Record<number, boolean>) {
   );
 }
 
+/** Stub GET /api/providers/group-settings with explicit `enabled` +
+ * `auto_channel_sync` per group (bead x82s3 — enabled-groups filter). */
+function stubGroupSettingsFull(
+  settings: Record<number, { enabled: boolean; auto_channel_sync: boolean }>
+) {
+  server.use(
+    http.get('/api/providers/group-settings', () =>
+      HttpResponse.json(
+        Object.fromEntries(
+          Object.entries(settings).map(([groupId, s]) => [
+            groupId,
+            {
+              channel_group: Number(groupId),
+              enabled: s.enabled,
+              auto_channel_sync: s.auto_channel_sync,
+              auto_sync_channel_start: null,
+              m3u_account_id: 1,
+              m3u_account_name: 'Provider A',
+            },
+          ])
+        )
+      )
+    )
+  );
+}
+
 function seedGroups() {
   mockDataStore.channelGroups.push(
     createMockChannelGroup({ id: 1, name: 'Master Events' }),
     createMockChannelGroup({ id: 2, name: 'Secondary Events' })
   );
+}
+
+/** seedGroups() plus a third group (id 3) for the enabled-groups-filter tests. */
+function seedGroupsWithDisabled() {
+  seedGroups();
+  mockDataStore.channelGroups.push(createMockChannelGroup({ id: 3, name: 'Disabled Group' }));
 }
 
 const EXISTING_RULE: Partial<ChannelPipelineRule> = {
@@ -755,5 +789,147 @@ describe('EventSyncRuleEditor', () => {
 
     await screen.findByText(/auto-sync is on — dispatcharr owns this group/i);
     expect(screen.queryByRole('button', { name: /apply|attach/i })).toBeNull();
+  });
+
+  describe('enabled-groups filter (bead x82s3)', () => {
+    /** Group 3 ('Disabled Group') has `enabled: false` — hidden by default. */
+    function stubThreeGroups() {
+      stubGroupSettingsFull({
+        1: { enabled: true, auto_channel_sync: true },
+        2: { enabled: true, auto_channel_sync: false },
+        3: { enabled: false, auto_channel_sync: false },
+      });
+    }
+
+    it('defaults to hiding disabled groups from both the master and secondary pickers', async () => {
+      const user = userEvent.setup();
+      seedGroupsWithDisabled();
+      stubThreeGroups();
+      render(<EventSyncRuleEditor onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      // Secondary list: disabled group absent, enabled groups present.
+      await screen.findByRole('checkbox', { name: /Secondary Events/i });
+      expect(screen.queryByRole('checkbox', { name: /Disabled Group/i })).toBeNull();
+
+      // Master picker: same filtering.
+      await user.click(screen.getByRole('button', { name: /select master group/i }));
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText(/Master Events/)).toBeInTheDocument();
+      expect(within(listbox).getByText(/Secondary Events/)).toBeInTheDocument();
+      expect(within(listbox).queryByText(/Disabled Group/)).toBeNull();
+    });
+
+    it('reveals disabled groups in both pickers when "Show all groups" is checked', async () => {
+      const user = userEvent.setup();
+      seedGroupsWithDisabled();
+      stubThreeGroups();
+      render(<EventSyncRuleEditor onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await screen.findByRole('checkbox', { name: /Secondary Events/i });
+      expect(screen.queryByRole('checkbox', { name: /Disabled Group/i })).toBeNull();
+
+      await user.click(
+        screen.getByRole('checkbox', { name: /show all groups/i })
+      );
+
+      expect(
+        await screen.findByRole('checkbox', { name: /Disabled Group/i })
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /select master group/i }));
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText(/Disabled Group/)).toBeInTheDocument();
+    });
+
+    it('keeps an already-selected but disabled master group visible, selected, and round-tripped on save', async () => {
+      const user = userEvent.setup();
+      seedGroupsWithDisabled();
+      // The rule's master group (1) is itself disabled.
+      stubGroupSettingsFull({
+        1: { enabled: false, auto_channel_sync: true },
+        2: { enabled: true, auto_channel_sync: false },
+        3: { enabled: false, auto_channel_sync: false },
+      });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      // The trigger still shows the selected (disabled) master group.
+      const trigger = await screen.findByRole('button', { name: /Master Events/i });
+      expect(trigger).toHaveTextContent('(disabled)');
+
+      await user.click(trigger);
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText(/Master Events.*\(disabled\)/)).toBeInTheDocument();
+      await user.keyboard('{Escape}');
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.master_group_id).toBe(1);
+    });
+
+    it('keeps an already-checked but disabled secondary group visible, checked, and round-tripped on save', async () => {
+      const user = userEvent.setup();
+      seedGroupsWithDisabled();
+      stubThreeGroups();
+      const rule: Partial<ChannelPipelineRule> = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          secondary_group_ids: [2, 3],
+        },
+      };
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      const disabledCheckbox = await screen.findByRole('checkbox', { name: /Disabled Group/i });
+      expect(disabledCheckbox).toBeChecked();
+      expect(disabledCheckbox.closest('label')).toHaveTextContent('(disabled)');
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.secondary_group_ids).toEqual([2, 3]);
+    });
+
+    it('treats a group absent from groupSettings as not-enabled but still round-trips it if already selected', async () => {
+      const user = userEvent.setup();
+      seedGroupsWithDisabled();
+      // Group 3 has NO entry at all in group-settings.
+      stubGroupSettingsFull({
+        1: { enabled: true, auto_channel_sync: true },
+        2: { enabled: true, auto_channel_sync: false },
+      });
+      const rule: Partial<ChannelPipelineRule> = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          secondary_group_ids: [2, 3],
+        },
+      };
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      const disabledCheckbox = await screen.findByRole('checkbox', { name: /Disabled Group/i });
+      expect(disabledCheckbox).toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.secondary_group_ids).toEqual([2, 3]);
+    });
+
+    it('composes the enabled filter with the existing name filter on the secondary list', async () => {
+      const user = userEvent.setup();
+      seedGroupsWithDisabled();
+      stubThreeGroups();
+      render(<EventSyncRuleEditor onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('checkbox', { name: /show all groups/i }));
+      await screen.findByRole('checkbox', { name: /Disabled Group/i });
+
+      await user.type(screen.getByLabelText('Filter secondary groups'), 'Secondary');
+
+      expect(screen.getByRole('checkbox', { name: /Secondary Events/i })).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /Disabled Group/i })).toBeNull();
+      expect(screen.queryByRole('checkbox', { name: /Master Events/i })).toBeNull();
+    });
   });
 });
