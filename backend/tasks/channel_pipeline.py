@@ -377,6 +377,13 @@ class ChannelPipelineTask(TaskScheduler):
             event_sync_attached = sum(
                 s.get("attached", 0) for s in result.get("event_sync", [])
             )
+            # ti939.3.2: ambiguous matches queued for operator review on
+            # this unattended run — no operator was watching, so the count
+            # must reach the notification surface.
+            event_sync_review_queued = sum(
+                s.get("review_enqueued", 0)
+                for s in result.get("event_sync", [])
+            )
 
             # Notify: completed
             parts = []
@@ -390,6 +397,12 @@ class ChannelPipelineTask(TaskScheduler):
                 parts.append(
                     f"{event_sync_attached} event stream"
                     f"{'s' if event_sync_attached != 1 else ''} attached"
+                )
+            if event_sync_review_queued:
+                parts.append(
+                    f"{event_sync_review_queued} event match"
+                    f"{'es' if event_sync_review_queued != 1 else ''} "
+                    f"queued for review"
                 )
             title = f"Auto-Creation: {', '.join(parts)}" if parts else "Auto-Creation: No changes"
             ntype = "success" if parts else "info"

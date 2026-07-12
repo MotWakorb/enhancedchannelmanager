@@ -2720,13 +2720,15 @@ class ChannelPipelineEngine:
                     # attach time — skip it here instead.
                     if not s.get("name") or s.get("id") is None:
                         continue
+                    account_id = extract_m3u_account_id(s.get("m3u_account"))
                     secondary_streams.append(SecondaryStream(
                         name=s["name"],
                         group_id=gid,
                         stream_id=s.get("id"),
-                        provider=account_names.get(
-                            extract_m3u_account_id(s.get("m3u_account"))
-                        ),
+                        provider=account_names.get(account_id),
+                        # ti939.3.2: the review-queue fingerprint component
+                        # (account ids are refresh-stable; stream ids are not).
+                        provider_id=account_id,
                     ))
                 if len(secondary_streams) >= EVENT_SYNC_MAX_SECONDARY_STREAMS:
                     secondary_streams = secondary_streams[
@@ -2963,10 +2965,106 @@ class ChannelPipelineEngine:
                 })
                 continue
 
+            # ti939.3.2: load the rule's prior review decisions
+            # (fingerprint-keyed accepts/rejects) — an INPUT to the shared
+            # resolver for BOTH live and dry runs, so dry-run classification
+            # stays byte-identical to the live run it predicts.
+            from services.event_sync_review_store import (
+                load_review_decisions,
+            )
+            decisions = None
+            try:
+                db = get_session()
+                try:
+                    decisions = load_review_decisions(db, rule.id)
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.warning(
+                    "[EVENT-SYNC] Rule '%s' (id=%s): failed to load review "
+                    "decisions (%s) — running without them; accepted "
+                    "pairings will not auto-attach this run",
+                    rule.name, rule.id, e,
+                )
+
             exec_ctx = ExecutionContext(dry_run=dry_run)
             summary = await executor.execute_event_sync_rule(
-                rule.id, rule.name, config, secondary_streams, exec_ctx
+                rule.id, rule.name, config, secondary_streams, exec_ctx,
+                decisions=decisions,
             )
+
+            # ti939.3.2: persist the run's ambiguous pairings as pending
+            # review rows — live runs only (a dry run mutates nothing; it
+            # reports the would-enqueue count instead). Dedup against
+            # pending AND answered fingerprints is DB-enforced by the
+            # unique fingerprint index + the store's status check.
+            review_payloads = summary.pop("review_candidates", [])
+            summary["review_enqueued"] = 0
+            summary["review_refreshed"] = 0
+            summary["review_would_enqueue"] = (
+                len(review_payloads) if dry_run else 0
+            )
+            if review_payloads and not dry_run:
+                from services.event_sync_review import (
+                    MAX_REVIEW_ENQUEUE_PER_RUN,
+                )
+                from services.event_sync_review_store import (
+                    enqueue_review_candidates,
+                )
+                if len(review_payloads) > MAX_REVIEW_ENQUEUE_PER_RUN:
+                    overflow = (
+                        len(review_payloads) - MAX_REVIEW_ENQUEUE_PER_RUN
+                    )
+                    review_payloads = review_payloads[
+                        :MAX_REVIEW_ENQUEUE_PER_RUN]
+                    logger.warning(
+                        "[EVENT-SYNC] Rule '%s' (id=%s): review enqueue "
+                        "capped at %s this run (%s deferred) — runs are "
+                        "idempotent, the remainder re-surfaces next run",
+                        rule.name, rule.id, MAX_REVIEW_ENQUEUE_PER_RUN,
+                        overflow,
+                    )
+                    results["event_sync_warnings"].append({
+                        "type": "event_sync_review_enqueue_capped",
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "cap": MAX_REVIEW_ENQUEUE_PER_RUN,
+                        "overage": overflow,
+                        "message": (
+                            f"event_sync rule '{rule.name}': review-queue "
+                            f"enqueue capped at "
+                            f"{MAX_REVIEW_ENQUEUE_PER_RUN} pairings this "
+                            f"run ({overflow} deferred to the next run). "
+                            f"A cap this size usually means a broken parse "
+                            f"pattern — check the preview."
+                        ),
+                    })
+                try:
+                    db = get_session()
+                    try:
+                        counts = enqueue_review_candidates(
+                            db, rule.id, review_payloads
+                        )
+                    finally:
+                        db.close()
+                    summary["review_enqueued"] = counts["enqueued"]
+                    summary["review_refreshed"] = counts["refreshed"]
+                except Exception as e:
+                    logger.warning(
+                        "[EVENT-SYNC] Rule '%s' (id=%s): review enqueue "
+                        "failed (%s) — ambiguous matches were skipped as "
+                        "before but NOT queued this run",
+                        rule.name, rule.id, e,
+                    )
+                    results["event_sync_warnings"].append({
+                        "type": "event_sync_review_enqueue_failed",
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "message": (
+                            f"event_sync rule '{rule.name}': failed to "
+                            f"enqueue ambiguous matches for review ({e})"
+                        ),
+                    })
 
             # Aggregate the executor context exactly like Pass 2 does so
             # streams_merged / channels_touched / modified_entities (legacy
@@ -3043,6 +3141,26 @@ class ChannelPipelineEngine:
             extras = []
             if summary["already_attached"]:
                 extras.append(f"{summary['already_attached']} already attached")
+            # ti939.3.2 review-queue extras: queue-driven attaches and
+            # newly queued questions must be visible in the one-line drift
+            # detector too.
+            if summary.get("queue_attached"):
+                extras.append(
+                    f"{summary['queue_attached']} via review queue"
+                )
+            if summary.get("review_enqueued"):
+                extras.append(
+                    f"{summary['review_enqueued']} queued for review"
+                )
+            if summary.get("review_would_enqueue"):
+                extras.append(
+                    f"{summary['review_would_enqueue']} would queue for review"
+                )
+            if summary.get("rejected_suppressed"):
+                extras.append(
+                    f"{summary['rejected_suppressed']} suppressed by "
+                    f"rejected reviews"
+                )
             if summary["capped"]:
                 extras.append(
                     f"capped at {summary['cap']}, "

@@ -3046,3 +3046,115 @@ class PendingMergeJournal(Base):
             f"action={self.action_type}, "
             f"trigger={self.trigger_context})>"
         )
+
+
+class EventSyncReview(Base):
+    """One reviewable event_sync pairing + its outcome (bead ti939.3.2).
+
+    Ambiguous-band matches (including the PR #613 contested rail) from
+    event_sync runs enqueue here instead of being silently skipped. One row
+    = one (secondary stream identity, master event identity) PAIRING under
+    one rule; a stream contested between two masters produces two rows.
+
+    **Keying (HARD security constraint, epic ti939.3):** the identity
+    columns are the content fingerprint — ``rule_id``, ``provider_id``,
+    ``stream_name_hash``, ``event_key`` — NEVER channel or stream IDs.
+    Stream IDs churn on provider refresh; channel IDs live only as long as
+    the event's channel. Fingerprint semantics (normalization, sentinel,
+    UTC event key) are defined in ``services/event_sync_review.py``; this
+    model carries only the shape.
+
+    ``evidence`` is a DISPLAY-ONLY JSON snapshot (raw names, parsed
+    identities, score/band/verdict/delta, snapshot stream/channel ids for
+    the accept endpoint's lazy re-verification). Nothing in it is ever
+    authoritative for identity — the accept path re-verifies snapshot IDs
+    against live Dispatcharr before using them and falls back to the
+    fingerprint-keyed next-run auto-attach when verification fails.
+
+    State machine: ``pending → accepted | rejected`` via the operator
+    endpoints; ``pending → superseded`` when a sibling pairing for the same
+    stream fingerprint is accepted (the stream-level question was answered;
+    superseded is terminal but distinct from an operator "no"). All
+    terminal rows persist as the decision record — the unique fingerprint
+    index makes "the queue must not refill with answered questions"
+    DB-enforced rather than application-checked.
+
+    Audit trail: accept/reject actions and queue-driven attaches write
+    ``journal_entries`` rows under category ``event_sync`` (no second
+    journal table — deliberate divergence from the ADR-008 §D6 twin-table
+    precedent, which predates the mutation_source-aware shared journal).
+    """
+
+    __tablename__ = "event_sync_reviews"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # The event_sync rule the question arose under. FK CASCADE: deleting a
+    # rule deletes its open questions AND its decisions — decisions are
+    # meaningless without the rule's config (patterns define the parse).
+    rule_id = Column(
+        Integer,
+        ForeignKey(
+            "auto_creation_rules.id",
+            name="fk_event_sync_reviews_rule",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # M3U account id of the secondary stream. 0 is the documented
+    # unknown-provider sentinel (services/event_sync_review.py) — NOT NULL
+    # because SQLite unique indexes treat NULLs as distinct, which would
+    # break the dedup invariant.
+    provider_id = Column(Integer, nullable=False)
+    # SHA-256 hex of the LOCALS-normalized secondary stream name.
+    stream_name_hash = Column(Text, nullable=False)
+    # Normalized master event identity: "<cleaned title>|<UTC ISO start>".
+    event_key = Column(Text, nullable=False)
+    # State machine column (CHECK is load-bearing).
+    status = Column(
+        Text,
+        nullable=False,
+        server_default=sa_text("'pending'"),
+        default="pending",
+    )
+    # Epoch-ms (ADR-007 / pending_merges convention).
+    created_at = Column(Integer, nullable=False)
+    # Epoch-ms of the last run that re-encountered this pending pairing
+    # (evidence snapshot refreshed alongside).
+    last_seen_at = Column(Integer, nullable=False)
+    # Epoch-ms when the row left 'pending'; NULL while pending.
+    resolved_at = Column(Integer, nullable=True)
+    # 'operator' / 'superseded_by_accept' (app-validated enum; NULL while
+    # pending).
+    resolution_source = Column(Text, nullable=True)
+    # Opaque acting-user DB id (ADR-008 §D6 posture); "anonymous" when auth
+    # is disabled; NULL while pending or when superseded mechanically.
+    actor_token_id = Column(Text, nullable=True)
+    # Display-only JSON snapshot (see class docstring).
+    evidence = Column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','accepted','rejected','superseded')",
+            name="ck_event_sync_reviews_status",
+        ),
+        # THE dedup invariant: one row per fingerprint, ever. Answered rows
+        # persist as decisions; re-encounters refresh, never duplicate.
+        Index(
+            "uq_event_sync_reviews_fingerprint",
+            "rule_id",
+            "provider_id",
+            "stream_name_hash",
+            "event_key",
+            unique=True,
+        ),
+        # Queue list + badge count read path.
+        Index("idx_event_sync_reviews_status_created", "status", "created_at"),
+        # Per-rule decision load (every run) + per-rule queue filters.
+        Index("idx_event_sync_reviews_rule_status", "rule_id", "status"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<EventSyncReview(id={self.id}, rule_id={self.rule_id}, "
+            f"provider_id={self.provider_id}, status={self.status})>"
+        )

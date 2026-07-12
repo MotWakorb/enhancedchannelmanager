@@ -23,6 +23,8 @@ function buildPreview(overrides: Partial<EventSyncPreviewResponse> = {}): EventS
       parse_failed: 1,
       master_channels: 12,
       master_channels_unparsed: 2,
+      would_attach_via_review: 0,
+      candidates_pending_review: 0,
     },
     streams: [
       {
@@ -35,6 +37,7 @@ function buildPreview(overrides: Partial<EventSyncPreviewResponse> = {}): EventS
         matched_pattern: 'slot-title-day-first-date',
         disposition: 'would_attach',
         unmatchable_reason: null,
+        attach_source: 'threshold',
         would_attach_master: { channel_id: 7, name: 'Peacock 14: Yankees v Red Sox @ 11 Jul 06:00 PM ET' },
         candidates: [
           {
@@ -47,6 +50,7 @@ function buildPreview(overrides: Partial<EventSyncPreviewResponse> = {}): EventS
             team_verdict: 'agree',
             time_delta_minutes: 0,
             reject_reason: null,
+            review_status: null,
           },
           {
             master_channel_name: 'Peacock 09: Mets vs Braves @ 11 Jul 06:10 PM ET',
@@ -58,6 +62,7 @@ function buildPreview(overrides: Partial<EventSyncPreviewResponse> = {}): EventS
             team_verdict: 'conflict',
             time_delta_minutes: 10,
             reject_reason: 'team_token_conflict',
+            review_status: null,
           },
         ],
       },
@@ -250,5 +255,35 @@ describe('EventSyncPreviewPanel', () => {
 
     expect(screen.getByRole('button', { name: /preview matches/i })).toBeDisabled();
     expect(screen.getByText('Pick a master group first')).toBeInTheDocument();
+  });
+
+  it('marks review-queue state on candidates and queue-driven attaches (ti939.3.2)', () => {
+    const preview = buildPreview();
+    preview.summary.would_attach_via_review = 1;
+    preview.summary.candidates_pending_review = 1;
+    preview.streams[0].attach_source = 'review_queue';
+    preview.streams[0].candidates[0].review_status = 'accepted';
+    preview.streams[0].candidates[1].review_status = 'pending';
+
+    render(
+      <EventSyncPreviewPanel
+        preview={preview}
+        loading={false}
+        error={null}
+        onRunPreview={vi.fn()}
+      />
+    );
+
+    // Summary line carries the queue context.
+    const summary = screen.getByTestId('event-sync-summary');
+    expect(summary).toHaveTextContent('1 via review-queue accept');
+    expect(summary).toHaveTextContent('1 pairing pending review');
+
+    // The would-attach card is flagged as decision-driven, not score-driven.
+    expect(screen.getByText('Via review-queue accept')).toBeInTheDocument();
+
+    // Per-candidate markers render as text + icon in the Review column.
+    expect(screen.getByText('Accepted (auto-attaches)')).toBeInTheDocument();
+    expect(screen.getByText('Pending review')).toBeInTheDocument();
   });
 });

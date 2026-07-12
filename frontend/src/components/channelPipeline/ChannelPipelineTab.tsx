@@ -18,6 +18,7 @@ import { useChannelPipelineRules } from '../../hooks/useChannelPipelineRules';
 import { useChannelPipelineExecution } from '../../hooks/useChannelPipelineExecution';
 import { RuleBuilder } from './RuleBuilder';
 import { EventSyncRuleEditor } from './EventSyncRuleEditor';
+import { EventSyncReviewQueue } from './EventSyncReviewQueue';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 import { CircuitBreakerBanner } from './CircuitBreakerBanner';
 import * as channelPipelineApi from '../../services/channelPipelineApi';
@@ -735,6 +736,14 @@ export function ChannelPipelineTab() {
           <span className="stat-label">Matches</span>
         </div>
       </div>
+
+      {/* Event Sync review queue (ti939.3.2) — only meaningful when an
+          event_sync rule exists; the component self-fetches its rows. */}
+      {rules.some(r => r.event_sync_config) && (
+        <section className="event-sync-review-section">
+          <EventSyncReviewQueue />
+        </section>
+      )}
 
       {/* Main Content */}
       <div className="channel-pipeline-content">
