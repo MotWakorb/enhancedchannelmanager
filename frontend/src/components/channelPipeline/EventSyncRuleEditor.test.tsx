@@ -194,6 +194,47 @@ describe('EventSyncRuleEditor', () => {
   });
 
   describe('master-group self-attach (bead 6xxmp)', () => {
+    it('saves with an EMPTY secondary list when the flag is on (bead 3ux85)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          secondary_group_ids: [],
+          include_master_group_streams: true,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      // No secondary selected + flag on => save is allowed.
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const cfg = onSave.mock.calls[0][0].event_sync_config;
+      expect(cfg.secondary_group_ids).toEqual([]);
+      expect(cfg.include_master_group_streams).toBe(true);
+    });
+
+    it('blocks save with an empty secondary list when the flag is OFF', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          secondary_group_ids: [],
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      expect(onSave).not.toHaveBeenCalled();
+    });
+
     it('defaults OFF and omits include_master_group_streams when never set', async () => {
       const user = userEvent.setup();
       seedGroups();

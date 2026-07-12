@@ -450,7 +450,13 @@ export function EventSyncRuleEditor({
 
   const validationError: string | null = (() => {
     if (masterGroupId == null) return 'Pick a master group first';
-    if (secondaryGroupIds.length === 0) return 'Pick at least one secondary group';
+    // bead 3ux85: no separate secondary is required when the master group is
+    // itself the stream source (include_master_group_streams) — the
+    // same-named cross-provider case.
+    if (secondaryGroupIds.length === 0 && !includeMasterGroupStreams) {
+      return 'Pick at least one secondary group (or enable '
+        + '"Also attach the master group’s own streams" under Advanced)';
+    }
     if (effectivePatterns.length === 0) {
       return 'Select at least one parse pattern (or add a custom one)';
     }
@@ -459,7 +465,12 @@ export function EventSyncRuleEditor({
 
   /** Build the event_sync_config from the current form state. */
   const buildConfig = (): EventSyncConfig | null => {
-    if (masterGroupId == null || secondaryGroupIds.length === 0) return null;
+    // bead 3ux85: a secondary group is required UNLESS the master group is
+    // itself the stream source (include_master_group_streams) — the pure
+    // same-named cross-provider case, where Dispatcharr collapses both
+    // providers into one channel group so there is no separate secondary.
+    if (masterGroupId == null) return null;
+    if (secondaryGroupIds.length === 0 && !includeMasterGroupStreams) return null;
 
     const built: EventSyncConfig = {
       master_group_id: masterGroupId,
@@ -1064,12 +1075,14 @@ export function EventSyncRuleEditor({
                 <span className="form-hint">
                   Off by default. Turn this on when a second provider&apos;s
                   streams live in the <em>same-named</em> channel group as the
-                  master (Dispatcharr merges same-named groups into one, so
-                  they cannot be picked as a separate secondary). When on, the
-                  master group&apos;s streams are matched to the master
-                  channels too; streams already attached (the auto-synced
-                  provider&apos;s own) are skipped, so only the unsynced
-                  provider&apos;s streams attach.
+                  master (Dispatcharr requires channel-group names to be
+                  unique, so both providers share <strong>one</strong> group —
+                  it cannot be picked twice). When on, the master group&apos;s
+                  streams are matched to the master channels too; streams
+                  already attached (the auto-synced provider&apos;s own) are
+                  skipped, so only the unsynced provider&apos;s streams attach.
+                  <strong> With this on you can leave the secondary list empty</strong>
+                  {' '}— the master group is the stream source.
                 </span>
               </div>
 
