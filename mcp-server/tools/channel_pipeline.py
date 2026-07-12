@@ -1530,18 +1530,30 @@ def register(mcp: FastMCP):
 
         Provide EXACTLY ONE of:
             rule_id: Preview a saved event_sync rule.
-            event_sync_config: Preview an inline config before saving —
-                {"master_group_id": int, "secondary_group_ids": [int, ...],
-                 optional "patterns"/"group_patterns"/"time_window_minutes"/
-                 "attach_threshold"/"max_attach_per_run"/"auto_run"/
-                 "dummy_epg_profile_id"/"include_master_group_streams"/
-                 "assume_current_date"/"parse_master_from_stream"}.
+            event_sync_config: Preview an inline config before saving. The
+                canonical scoping is provider-scoped:
+                {"master": {"group_id": int, "m3u_account_id": int | null},
+                 "secondary": [{"group_id": int, "m3u_account_id": int|null},
+                 ...], optional "patterns"/"group_patterns"/
+                 "time_window_minutes"/"attach_threshold"/"max_attach_per_run"/
+                 "auto_run"/"dummy_epg_profile_id"/
+                 "include_master_group_streams"/"assume_current_date"/
+                 "parse_master_from_stream"}.
+                A scope's m3u_account_id (null = whole group) draws streams
+                from ONE M3U provider, so provider A's copy of a group can be
+                the master while provider B's copy of the SAME group is a
+                secondary. The legacy flat shape
+                {"master_group_id": int, "secondary_group_ids": [int, ...]}
+                is still accepted and auto-upgraded to whole-group scopes; the
+                server derives and stores both shapes.
                 include_master_group_streams (bool, default false, bead
-                6xxmp): also match the MASTER group's OWN streams to the
-                master channels — the path for two providers sharing one
-                same-named channel group (Dispatcharr merges same-named
-                groups into one id). Streams already attached are skipped, so
-                only the unsynced provider's streams attach.
+                6xxmp): also match the MASTER group's OWN streams (any
+                provider) to the master channels — a whole-group catch-all for
+                a same-named cross-provider group (Dispatcharr merges
+                same-named groups into one id), usually superseded by adding
+                the same group under the other provider as a secondary scope.
+                Streams already attached are skipped, so only the unsynced
+                provider's streams attach.
                 assume_current_date (bool, default false): place a listing
                 that carries a time but NO date onto the CURRENT date so
                 dateless "today's schedule" feeds become matchable — relaxes
