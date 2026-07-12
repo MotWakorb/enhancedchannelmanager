@@ -19,6 +19,7 @@ import {
 } from '../../test/mocks/server';
 import { EventSyncRuleEditor } from './EventSyncRuleEditor';
 import type { ChannelPipelineRule } from '../../types/channelPipeline';
+import type { ProviderGroupScopeRow } from '../../services/api';
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
@@ -27,54 +28,48 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-/** Stub GET /api/providers/group-settings with per-group auto-sync flags.
- * All groups are `enabled: true` — use `stubGroupSettingsFull` for tests
- * that need to control the `enabled` flag itself. */
-function stubGroupSettings(autoSyncByGroupId: Record<number, boolean>) {
+/** Stub GET /api/providers/group-settings/by-provider with (provider, group)
+ * junction rows (bead 38dzi). The picker groups rows by channel_group_id; a
+ * single row per group renders as a flat WHOLE-GROUP (m3u_account_id null)
+ * option with data-testid `psg-<role>-<groupId>-any`. */
+function stubJunctions(rows: ProviderGroupScopeRow[]) {
   server.use(
-    http.get('/api/providers/group-settings', () =>
-      HttpResponse.json(
-        Object.fromEntries(
-          Object.entries(autoSyncByGroupId).map(([groupId, autoSync]) => [
-            groupId,
-            {
-              channel_group: Number(groupId),
-              enabled: true,
-              auto_channel_sync: autoSync,
-              auto_sync_channel_start: null,
-              m3u_account_id: 1,
-              m3u_account_name: 'Provider A',
-            },
-          ])
-        )
-      )
+    http.get('/api/providers/group-settings/by-provider', () =>
+      HttpResponse.json(rows)
     )
   );
 }
 
-/** Stub GET /api/providers/group-settings with explicit `enabled` +
- * `auto_channel_sync` per group (bead x82s3 — enabled-groups filter). */
+/** Convenience: one single-provider junction per group ('Provider A', id 1,
+ * enabled) with the given auto-sync flag. Use `stubJunctionsFull` for tests
+ * that need to control the `enabled` flag itself (bead x82s3). */
+function stubGroupSettings(autoSyncByGroupId: Record<number, boolean>) {
+  stubJunctions(
+    Object.entries(autoSyncByGroupId).map(([groupId, autoSync]) => ({
+      m3u_account_id: 1,
+      m3u_account_name: 'Provider A',
+      channel_group_id: Number(groupId),
+      auto_channel_sync: autoSync,
+      enabled: true,
+      stream_count: 10,
+    }))
+  );
+}
+
+/** One single-provider junction per group with explicit `enabled` +
+ * `auto_channel_sync` (bead x82s3 — enabled-groups filter). */
 function stubGroupSettingsFull(
   settings: Record<number, { enabled: boolean; auto_channel_sync: boolean }>
 ) {
-  server.use(
-    http.get('/api/providers/group-settings', () =>
-      HttpResponse.json(
-        Object.fromEntries(
-          Object.entries(settings).map(([groupId, s]) => [
-            groupId,
-            {
-              channel_group: Number(groupId),
-              enabled: s.enabled,
-              auto_channel_sync: s.auto_channel_sync,
-              auto_sync_channel_start: null,
-              m3u_account_id: 1,
-              m3u_account_name: 'Provider A',
-            },
-          ])
-        )
-      )
-    )
+  stubJunctions(
+    Object.entries(settings).map(([groupId, s]) => ({
+      m3u_account_id: 1,
+      m3u_account_name: 'Provider A',
+      channel_group_id: Number(groupId),
+      auto_channel_sync: s.auto_channel_sync,
+      enabled: s.enabled,
+      stream_count: 10,
+    }))
   );
 }
 
@@ -213,7 +208,8 @@ describe('EventSyncRuleEditor', () => {
       await user.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
       const cfg = onSave.mock.calls[0][0].event_sync_config;
-      expect(cfg.secondary_group_ids).toEqual([]);
+      expect(cfg.secondary).toEqual([]);
+      expect(cfg).not.toHaveProperty('secondary_group_ids');
       expect(cfg.include_master_group_streams).toBe(true);
     });
 
@@ -488,38 +484,45 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
-  describe('live auto-sync guidance (toggles ONLY via the confirmed fix)', () => {
-    it('warns with guidance + a Fix button when the master group has auto-sync OFF', async () => {
+  describe('inline auto-sync status (picker; toggles ONLY via the confirmed fix)', () => {
+    it('shows an inline mismatch + Fix when the master scope has auto-sync OFF', async () => {
       seedGroups();
       stubGroupSettings({ 1: false, 2: false });
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      const warning = await screen.findByTestId('master-autosync-warning');
-      expect(warning).toHaveTextContent(/auto-sync is/i);
-      expect(warning).toHaveTextContent(/never as a side effect/i);
-      expect(screen.getByTestId('master-autosync-fix')).toBeInTheDocument();
+      // The migrated master scope (whole group 1) renders checked with an OFF
+      // junction — a master needs it ON, so the picker shows the inline fix.
+      const fix = await screen.findByRole('button', {
+        name: /turn auto-sync ON for Provider A/i,
+      });
+      expect(fix).toBeInTheDocument();
+      expect(screen.getByText(/a master needs it ON/i)).toBeInTheDocument();
     });
 
-    it('shows an OK status when the master group has auto-sync ON', async () => {
+    it('shows an OK sync badge (no Fix) when the master scope has auto-sync ON', async () => {
       seedGroups();
       stubGroupSettings({ 1: true, 2: false });
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
+      const master = await screen.findByTestId('psg-master');
+      expect(await within(master).findByText(/Auto-sync ON ✓/)).toBeInTheDocument();
       expect(
-        await screen.findByText(/auto-sync is on — dispatcharr owns this group/i)
-      ).toBeInTheDocument();
-      expect(screen.queryByTestId('master-autosync-warning')).toBeNull();
+        within(master).queryByRole('button', { name: /turn auto-sync/i })
+      ).toBeNull();
     });
 
-    it('warns with guidance + a per-group Fix button when a secondary group has auto-sync ON', async () => {
+    it('shows an inline mismatch + Fix when a secondary scope has auto-sync ON', async () => {
       seedGroups();
       stubGroupSettings({ 1: true, 2: true });
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      const warning = await screen.findByTestId('secondary-autosync-warning');
-      expect(warning).toHaveTextContent('Secondary Events');
-      expect(warning).toHaveTextContent(/never as a side effect/i);
-      expect(screen.getByTestId('secondary-autosync-fix-2')).toBeInTheDocument();
+      const secondary = await screen.findByTestId('psg-secondary');
+      expect(
+        await within(secondary).findByRole('button', {
+          name: /turn auto-sync OFF for Provider A/i,
+        })
+      ).toBeInTheDocument();
+      expect(within(secondary).getByText(/a secondary needs it OFF/i)).toBeInTheDocument();
     });
   });
 
@@ -542,7 +545,7 @@ describe('EventSyncRuleEditor', () => {
       );
     }
 
-    it('the Fix button only OPENS the confirmation dialog — nothing is written yet', async () => {
+    it('the picker Fix affordance only OPENS the confirmation dialog — nothing is written yet', async () => {
       const user = userEvent.setup();
       const calls: unknown[] = [];
       seedGroups();
@@ -550,7 +553,9 @@ describe('EventSyncRuleEditor', () => {
       stubToggleEndpoint(calls);
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      await user.click(await screen.findByTestId('secondary-autosync-fix-2'));
+      await user.click(
+        await screen.findByRole('button', { name: /turn auto-sync OFF for Provider A/i })
+      );
 
       // Dialog states exactly what will change and why, including the
       // consequence and the snapshot-restore recovery note.
@@ -572,7 +577,9 @@ describe('EventSyncRuleEditor', () => {
       stubToggleEndpoint(calls);
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      await user.click(await screen.findByTestId('secondary-autosync-fix-2'));
+      await user.click(
+        await screen.findByRole('button', { name: /turn auto-sync OFF for Provider A/i })
+      );
       const dialog = screen.getByRole('alertdialog');
       await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
@@ -580,7 +587,7 @@ describe('EventSyncRuleEditor', () => {
       expect(calls).toHaveLength(0);
     });
 
-    it('Confirm sends confirm:true for the OFF direction and the warning clears after refetch', async () => {
+    it('Confirm sends confirm:true for the OFF direction and the inline fix clears after refetch', async () => {
       const user = userEvent.setup();
       const calls: unknown[] = [];
       seedGroups();
@@ -588,8 +595,10 @@ describe('EventSyncRuleEditor', () => {
       stubToggleEndpoint(calls);
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      await user.click(await screen.findByTestId('secondary-autosync-fix-2'));
-      // The refetch after the confirmed toggle sees the FIXED settings.
+      await user.click(
+        await screen.findByRole('button', { name: /turn auto-sync OFF for Provider A/i })
+      );
+      // The refetch after the confirmed toggle sees the FIXED junction.
       stubGroupSettings({ 1: true, 2: false });
       await user.click(screen.getByTestId('autosync-fix-confirm'));
 
@@ -599,9 +608,11 @@ describe('EventSyncRuleEditor', () => {
         auto_channel_sync: false,
         confirm: true,
       });
-      // Pre-flight warning clears — the editor refetched live settings.
+      // The inline mismatch fix clears — the editor refetched the junctions.
       await waitFor(() =>
-        expect(screen.queryByTestId('secondary-autosync-warning')).toBeNull()
+        expect(
+          screen.queryByRole('button', { name: /turn auto-sync OFF for Provider A/i })
+        ).toBeNull()
       );
       expect(screen.queryByRole('alertdialog')).toBeNull();
     });
@@ -614,7 +625,9 @@ describe('EventSyncRuleEditor', () => {
       stubToggleEndpoint(calls);
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      await user.click(await screen.findByTestId('master-autosync-fix'));
+      await user.click(
+        await screen.findByRole('button', { name: /turn auto-sync ON for Provider A/i })
+      );
       const dialog = screen.getByRole('alertdialog');
       expect(dialog).toHaveTextContent(/begin creating and managing channels/i);
       stubGroupSettings({ 1: true, 2: false });
@@ -627,11 +640,13 @@ describe('EventSyncRuleEditor', () => {
         confirm: true,
       });
       await waitFor(() =>
-        expect(screen.queryByTestId('master-autosync-warning')).toBeNull()
+        expect(
+          screen.queryByRole('button', { name: /turn auto-sync ON for Provider A/i })
+        ).toBeNull()
       );
     });
 
-    it('saving a rule NEVER calls the toggle endpoint, even with warnings showing', async () => {
+    it('saving a rule NEVER calls the toggle endpoint, even with a mismatch showing', async () => {
       const user = userEvent.setup();
       const calls: unknown[] = [];
       seedGroups();
@@ -640,7 +655,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await screen.findByTestId('master-autosync-warning');
+      await screen.findByRole('button', { name: /turn auto-sync ON for Provider A/i });
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
@@ -663,9 +678,12 @@ describe('EventSyncRuleEditor', () => {
       expect(saved.name).toBe('PPV Events');
       expect(saved.conditions).toEqual([{ type: 'always' }]);
       expect(saved.actions).toEqual([{ type: 'skip' }]);
+      // bead 38dzi: the editor emits the nested provider-scoped shape; the
+      // legacy flat master_group_id/secondary_group_ids migrate to
+      // whole-group scopes (m3u_account_id null) and the flat keys are gone.
       expect(saved.event_sync_config).toEqual({
-        master_group_id: 1,
-        secondary_group_ids: [2],
+        master: { group_id: 1, m3u_account_id: null },
+        secondary: [{ group_id: 2, m3u_account_id: null }],
         time_window_minutes: 30,
         attach_threshold: 0.8,
         enabled: true,
@@ -757,8 +775,14 @@ describe('EventSyncRuleEditor', () => {
 
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
       const saved = onSave.mock.calls[0][0].event_sync_config;
-      // The whole config round-trips content-identically...
-      expect(saved).toEqual(API_CONFIG);
+      // The group scopes migrate to the nested provider-scoped shape (the
+      // flat keys are gone), but everything else round-trips content-identically...
+      expect(saved.master).toEqual({ group_id: 1, m3u_account_id: null });
+      expect(saved.secondary).toEqual([{ group_id: 2, m3u_account_id: null }]);
+      expect(saved).not.toHaveProperty('master_group_id');
+      expect(saved).not.toHaveProperty('secondary_group_ids');
+      expect(saved.time_window_minutes).toBe(45);
+      expect(saved.attach_threshold).toBe(0.9);
       // ...and the arrays the UI cannot express are passed through VERBATIM
       // (same objects — not a re-built lossy approximation).
       expect(saved.patterns).toBe(API_CONFIG.patterns);
@@ -974,7 +998,8 @@ describe('EventSyncRuleEditor', () => {
     stubGroupSettings({ 1: true, 2: false });
     render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-    await screen.findByText(/auto-sync is on — dispatcharr owns this group/i);
+    const master = await screen.findByTestId('psg-master');
+    await within(master).findByText(/Auto-sync ON ✓/);
     expect(screen.queryByRole('button', { name: /apply|attach/i })).toBeNull();
   });
 
@@ -988,44 +1013,37 @@ describe('EventSyncRuleEditor', () => {
       });
     }
 
-    it('defaults to hiding disabled groups from both the master and secondary pickers', async () => {
-      const user = userEvent.setup();
+    it('defaults to hiding disabled junctions from both the master and secondary pickers', async () => {
       seedGroupsWithDisabled();
       stubThreeGroups();
       render(<EventSyncRuleEditor onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      // Secondary list: disabled group absent, enabled groups present.
-      await screen.findByRole('checkbox', { name: /Secondary Events/i });
-      expect(screen.queryByRole('checkbox', { name: /Disabled Group/i })).toBeNull();
+      // Secondary picker: disabled group's junction absent, enabled present.
+      expect(await screen.findByTestId('psg-secondary-1-any')).toBeInTheDocument();
+      expect(screen.getByTestId('psg-secondary-2-any')).toBeInTheDocument();
+      expect(screen.queryByTestId('psg-secondary-3-any')).toBeNull();
 
       // Master picker: same filtering.
-      await user.click(screen.getByRole('button', { name: /select master group/i }));
-      const listbox = await screen.findByRole('listbox');
-      expect(within(listbox).getByText(/Master Events/)).toBeInTheDocument();
-      expect(within(listbox).getByText(/Secondary Events/)).toBeInTheDocument();
-      expect(within(listbox).queryByText(/Disabled Group/)).toBeNull();
+      expect(screen.getByTestId('psg-master-1-any')).toBeInTheDocument();
+      expect(screen.getByTestId('psg-master-2-any')).toBeInTheDocument();
+      expect(screen.queryByTestId('psg-master-3-any')).toBeNull();
     });
 
-    it('reveals disabled groups in both pickers when "Show all groups" is checked', async () => {
+    it('reveals disabled junctions in both pickers when "Show all groups" is checked', async () => {
       const user = userEvent.setup();
       seedGroupsWithDisabled();
       stubThreeGroups();
       render(<EventSyncRuleEditor onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      await screen.findByRole('checkbox', { name: /Secondary Events/i });
-      expect(screen.queryByRole('checkbox', { name: /Disabled Group/i })).toBeNull();
+      await screen.findByTestId('psg-secondary-1-any');
+      expect(screen.queryByTestId('psg-secondary-3-any')).toBeNull();
 
       await user.click(
         screen.getByRole('checkbox', { name: /show all groups/i })
       );
 
-      expect(
-        await screen.findByRole('checkbox', { name: /Disabled Group/i })
-      ).toBeInTheDocument();
-
-      await user.click(screen.getByRole('button', { name: /select master group/i }));
-      const listbox = await screen.findByRole('listbox');
-      expect(within(listbox).getByText(/Disabled Group/)).toBeInTheDocument();
+      expect(await screen.findByTestId('psg-secondary-3-any')).toBeInTheDocument();
+      expect(screen.getByTestId('psg-master-3-any')).toBeInTheDocument();
     });
 
     it('keeps an already-selected but disabled master group visible, selected, and round-tripped on save', async () => {
@@ -1040,18 +1058,18 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      // The trigger still shows the selected (disabled) master group.
-      const trigger = await screen.findByRole('button', { name: /Master Events/i });
-      expect(trigger).toHaveTextContent('(disabled)');
-
-      await user.click(trigger);
-      const listbox = await screen.findByRole('listbox');
-      expect(within(listbox).getByText(/Master Events.*\(disabled\)/)).toBeInTheDocument();
-      await user.keyboard('{Escape}');
+      // The migrated whole-group master scope stays visible (round-trip guard)
+      // with a disabled hint, and checked.
+      const masterRow = await screen.findByTestId('psg-master-1-any');
+      expect(masterRow).toBeChecked();
+      expect(masterRow.closest('label')).toHaveTextContent('(disabled)');
 
       await user.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-      expect(onSave.mock.calls[0][0].event_sync_config.master_group_id).toBe(1);
+      expect(onSave.mock.calls[0][0].event_sync_config.master).toEqual({
+        group_id: 1,
+        m3u_account_id: null,
+      });
     });
 
     it('keeps an already-checked but disabled secondary group visible, checked, and round-tripped on save', async () => {
@@ -1068,19 +1086,24 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
 
-      const disabledCheckbox = await screen.findByRole('checkbox', { name: /Disabled Group/i });
-      expect(disabledCheckbox).toBeChecked();
-      expect(disabledCheckbox.closest('label')).toHaveTextContent('(disabled)');
+      const disabledRow = await screen.findByTestId('psg-secondary-3-any');
+      expect(disabledRow).toBeChecked();
+      expect(disabledRow.closest('label')).toHaveTextContent('(disabled)');
 
       await user.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-      expect(onSave.mock.calls[0][0].event_sync_config.secondary_group_ids).toEqual([2, 3]);
+      expect(onSave.mock.calls[0][0].event_sync_config.secondary).toEqual([
+        { group_id: 2, m3u_account_id: null },
+        { group_id: 3, m3u_account_id: null },
+      ]);
     });
 
-    it('treats a group absent from groupSettings as not-enabled but still round-trips it if already selected', async () => {
+    it('round-trips a selected group with no provider junction (shown as a chip, kept on save)', async () => {
       const user = userEvent.setup();
       seedGroupsWithDisabled();
-      // Group 3 has NO entry at all in group-settings.
+      // Group 3 has NO junction row at all, so it is not a selectable picker
+      // option — but the secondary selection chip still surfaces it and the
+      // scope survives on save (no data loss).
       stubGroupSettingsFull({
         1: { enabled: true, auto_channel_sync: true },
         2: { enabled: true, auto_channel_sync: false },
@@ -1095,28 +1118,31 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
 
-      const disabledCheckbox = await screen.findByRole('checkbox', { name: /Disabled Group/i });
-      expect(disabledCheckbox).toBeChecked();
+      const secondary = await screen.findByTestId('psg-secondary');
+      expect(within(secondary).getByText(/Group 3 · Any provider/)).toBeInTheDocument();
 
       await user.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-      expect(onSave.mock.calls[0][0].event_sync_config.secondary_group_ids).toEqual([2, 3]);
+      expect(onSave.mock.calls[0][0].event_sync_config.secondary).toEqual([
+        { group_id: 2, m3u_account_id: null },
+        { group_id: 3, m3u_account_id: null },
+      ]);
     });
 
-    it('composes the enabled filter with the existing name filter on the secondary list', async () => {
+    it('composes the enabled filter with the picker search on the secondary list', async () => {
       const user = userEvent.setup();
       seedGroupsWithDisabled();
       stubThreeGroups();
       render(<EventSyncRuleEditor onSave={vi.fn()} onCancel={vi.fn()} />);
 
       await user.click(screen.getByRole('checkbox', { name: /show all groups/i }));
-      await screen.findByRole('checkbox', { name: /Disabled Group/i });
+      await screen.findByTestId('psg-secondary-3-any');
 
       await user.type(screen.getByLabelText('Filter secondary groups'), 'Secondary');
 
-      expect(screen.getByRole('checkbox', { name: /Secondary Events/i })).toBeInTheDocument();
-      expect(screen.queryByRole('checkbox', { name: /Disabled Group/i })).toBeNull();
-      expect(screen.queryByRole('checkbox', { name: /Master Events/i })).toBeNull();
+      expect(screen.getByTestId('psg-secondary-2-any')).toBeInTheDocument();
+      expect(screen.queryByTestId('psg-secondary-3-any')).toBeNull();
+      expect(screen.queryByTestId('psg-secondary-1-any')).toBeNull();
     });
   });
 });
