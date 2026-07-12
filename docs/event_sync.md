@@ -290,9 +290,12 @@ risk, set **`assume_current_date: true`** on the rule (in the editor:
 a listing that carries a time but no date is placed on the **current date**
 (in the rule's timezone) so it becomes matchable. Both the master and
 secondary sides share the same "today", so their times compare on one day.
-The built-in dateless shapes cover `… TITLE 6PM` / `… TITLE 19:00` (time
-last) and `… - 4:15pm TITLE` (time first); a bare time must carry a colon or
-an am/pm marker so a lone number in a title is never mistaken for a time.
+The built-in dateless shapes cover `… TITLE 6PM` / `… TITLE 19:00` /
+`… TITLE @ 06:00 PM ET` (time last, an optional `@`/`|` before the time is
+stripped) and time-first after a `:`/`-`/`|` slot separator
+(`PPV 06: 4:15pm TITLE`, `LIVE EVENT 05 - 4:15pm TITLE`); a bare time must
+carry a colon or an am/pm marker so a lone number in a title is never
+mistaken for a time.
 
 **The risk:** a listing that is really for a *different* day (a replay at the
 same time-of-day tomorrow) can mis-match — the ±`time_window_minutes` window
@@ -334,7 +337,7 @@ the rule.
 | Field | Required | Meaning |
 |-|-|-|
 | `master_group_id` | yes | The ONE Dispatcharr group whose channels Dispatcharr owns (`auto_channel_sync` ON). Positive integer group ID. |
-| `secondary_group_ids` | yes, non-empty | The secondary event groups (`auto_channel_sync` OFF) whose streams get matched onto master channels. Must NOT contain `master_group_id`. |
+| `secondary_group_ids` | yes* | The secondary event groups (`auto_channel_sync` OFF) whose streams get matched onto master channels. Must NOT contain `master_group_id`. *May be **empty** when `include_master_group_streams` is true — then the master group is itself the stream source (bead 3ux85). |
 | `patterns` | no | Shared parse-pattern variants (title/time/date regexes with named capture groups, same shape as the built-in defaults in `backend/services/event_sync_matcher.py`). Omit to use the built-in defaults. API-authored arrays survive UI resaves: the rule editor round-trips the full array (an untouched save emits it verbatim; patterns beyond the one custom slot the UI can edit are preserved read-only, and built-ins are never silently re-added to an all-custom selection). |
 | `group_patterns` | no | Per-group pattern overrides, keyed by group ID (master or a secondary). A group with an override uses ONLY its own patterns for parsing; other groups keep the shared `patterns` selection. Multi-pattern lists round-trip through the UI the same way as `patterns` (the editor edits only the first pattern per group; the rest are preserved). |
 | `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. Capped at 1440 (24 hours). |
@@ -374,27 +377,33 @@ value you sent, what was expected, and a link back to this document.
 
 ### Two providers, one group name
 
-Dispatcharr channel groups are **global and unique by name**: if two M3U
-providers both carry a group called `Live Events`, their streams land in the
-*same* channel group — one group ID. That means you cannot pick provider A's
-`Live Events` as the master and provider B's `Live Events` as a secondary;
-the group picker shows one entry, and choosing it as master removes it from
-the secondary list (a group cannot be both — the mandatory-scoping rail).
+Dispatcharr channel-group names are **globally unique** — its `ChannelGroup`
+model declares `name = models.TextField(unique=True)`, and per-provider
+settings (`auto_channel_sync`, `enabled`) live in a `ChannelGroupM3UAccount`
+junction. So if two M3U providers both carry a group called `MLB PPV`, their
+streams land in the **same** channel group — one group ID with two junction
+rows (provider A: sync ON, provider B: sync OFF). There is no second group to
+pick: the picker shows one entry, and it correctly cannot be both master and
+secondary. **This is not an ECM limitation — Dispatcharr cannot represent two
+same-named groups.**
 
 `include_master_group_streams` is the sanctioned path for exactly this case:
 
-1. Leave the shared group as the **master** (`auto_channel_sync` ON) so
-   Dispatcharr owns one channel per event, built from provider A's streams.
+1. Pick the shared group as the **master** (`auto_channel_sync` ON via
+   provider A) so Dispatcharr owns one channel per event.
 2. Set `include_master_group_streams: true` (in the rule editor: **"Also
    attach the master group's own streams"** under Advanced).
+3. **Leave `secondary_group_ids` empty** — with the flag on, the master group
+   is itself the stream source, so no separate secondary is required (bead
+   3ux85). The editor's Save is enabled with no secondary once the flag is on.
 
 On each run the master group's own streams are matched to the master
-channels alongside the secondary groups. Streams **already attached** to a
-master channel — provider A's own — are skipped by the resolver, so only
-provider B's still-unattached streams attach. Preview and run stay in
-lockstep (the preview's *would attach* count already excludes the
-already-attached streams), and the master group is **never** added to
-`secondary_group_ids` — that rail is untouched.
+channels. Streams **already attached** to a master channel — provider A's own
+— are skipped by the resolver, so only provider B's still-unattached streams
+attach. Preview and run stay in lockstep (the preview's *would attach* count
+already excludes the already-attached streams). The master group is **never**
+added to `secondary_group_ids` — the empty list plus the flag is the scoped
+path, so the anti-unscoped-matching rail is untouched.
 
 If you would rather keep the two providers fully separate, the alternative
 is to **rename one provider's group** in Dispatcharr (a group override) so

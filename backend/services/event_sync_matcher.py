@@ -334,39 +334,44 @@ DEFAULT_EVENT_PATTERNS: tuple[dict, ...] = (
 
 _BARE_SLOT = r"(?:[^@:|(]{0,40}?(?<!\d)\d{1,2}\s*[:\-]\s*)?"
 
+# Optional "@"/"|" that some providers place between the title and a
+# dateless time ("Title @ 06:00 PM ET") — consumed so it never rides into
+# the parsed title.
+_DATELESS_TIME_LEAD = r"(?:[@|]\s*)?"
+
 _ASSUME_DATE_PATTERNS: tuple[dict, ...] = (
-    # Time-of-day at the END, am/pm form: "6PM" / "4:15pm" / "12am".
+    # Time-of-day at the END, am/pm form: "6PM" / "4:15pm" / "@ 06:00 PM ET".
     {
         "name": "dateless-title-time-ampm",
         "title_pattern": (
-            r"^" + _BARE_SLOT + r"\s*(?P<title>.+?)\s+"
-            r"\d{1,2}(?::\d{2})?\s*[AaPp]\.?[Mm]?\.?(?:\s*E[SD]?T)?\s*$"
+            r"^" + _BARE_SLOT + r"\s*(?P<title>.+?)\s+" + _DATELESS_TIME_LEAD
+            + r"\d{1,2}(?::\d{2})?\s*[AaPp]\.?[Mm]?\.?(?:\s*E[SD]?T)?\s*$"
         ),
         "time_pattern": (
             r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?"
             r"\s*(?P<ampm>[AaPp])\.?[Mm]?\.?(?:\s*E[SD]?T)?\s*$"
         ),
     },
-    # Time-of-day at the END, 24h form: "19:00" / "18:30 ET".
+    # Time-of-day at the END, 24h form: "19:00" / "18:30 ET" / "@ 18:30 ET".
     {
         "name": "dateless-title-time-24h",
         "title_pattern": (
-            r"^" + _BARE_SLOT + r"\s*(?P<title>.+?)\s+"
-            r"\d{1,2}:\d{2}(?:\s*E[SD]?T)?\s*$"
+            r"^" + _BARE_SLOT + r"\s*(?P<title>.+?)\s+" + _DATELESS_TIME_LEAD
+            + r"\d{1,2}:\d{2}(?:\s*E[SD]?T)?\s*$"
         ),
         "time_pattern": r"(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*E[SD]?T)?\s*$",
     },
-    # Time-of-day FIRST after a "-"/"|" separator: "LIVE EVENT 05 - 4:15pm
-    # <title>". am/pm required here (a leading 24h "HH:MM" is too easily a
-    # score/round number).
+    # Time-of-day FIRST after a ":"/"-"/"|" slot separator: "PPV 06: 4:15pm
+    # <title>", "LIVE EVENT 05 - 4:15pm <title>". am/pm REQUIRED here (a
+    # leading 24h "HH:MM" is too easily a score/round number/slot).
     {
         "name": "dateless-time-first",
         "title_pattern": (
-            r"^.*?[-|]\s*\d{1,2}(?::\d{2})?\s*[AaPp]\.?[Mm]?\.?\s+"
+            r"^.*?[:\-|]\s*\d{1,2}(?::\d{2})?\s*[AaPp]\.?[Mm]?\.?\s+"
             r"(?P<title>.+?)\s*$"
         ),
         "time_pattern": (
-            r"[-|]\s*(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?"
+            r"[:\-|]\s*(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?"
             r"\s*(?P<ampm>[AaPp])\.?[Mm]?\.?"
         ),
     },

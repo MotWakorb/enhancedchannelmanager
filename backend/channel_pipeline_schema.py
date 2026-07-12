@@ -955,17 +955,33 @@ def validate_event_sync_config(config: Any) -> list[str]:
             "(auto_channel_sync ON)",
         ))
 
+    # bead 3ux85: an empty secondary list is allowed ONLY when the master
+    # group is itself the stream source (include_master_group_streams) — the
+    # pure same-named cross-provider case, where Dispatcharr collapses both
+    # providers into ONE channel group (ChannelGroup.name is unique) so there
+    # is no separate secondary group to pick. The rule stays SCOPED (to the
+    # master group), so the anti-unscoped-matching rail is intact.
+    include_master_streams = config.get("include_master_group_streams") is True
     secondary_group_ids = config.get("secondary_group_ids")
+    if secondary_group_ids is None and include_master_streams:
+        secondary_group_ids = config["secondary_group_ids"] = []
     if (not isinstance(secondary_group_ids, list)
-            or not secondary_group_ids
             or not all(_is_group_id(g) for g in secondary_group_ids)):
         errors.append(_event_sync_error(
             "secondary_group_ids", secondary_group_ids,
-            "a non-empty list of positive integer group IDs — the "
-            "secondary event groups (auto_channel_sync OFF) whose streams "
-            "attach to master channels; an unscoped event rule is refused",
+            "a list of positive integer group IDs — the secondary event "
+            "groups (auto_channel_sync OFF) whose streams attach to master "
+            "channels",
         ))
         secondary_group_ids = []
+    elif not secondary_group_ids and not include_master_streams:
+        errors.append(_event_sync_error(
+            "secondary_group_ids", secondary_group_ids,
+            "a non-empty list of positive integer group IDs — an unscoped "
+            "event rule is refused. (An empty list is allowed only when "
+            "include_master_group_streams is true, so the master group is "
+            "itself the self-attach stream source.)",
+        ))
     elif _is_group_id(master_group_id) and master_group_id in secondary_group_ids:
         errors.append(_event_sync_error(
             "secondary_group_ids", secondary_group_ids,
