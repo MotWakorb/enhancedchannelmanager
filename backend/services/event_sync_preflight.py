@@ -129,82 +129,115 @@ async def check_event_sync_group_settings(
         ``group_settings_found`` — scoping to a group no provider carries
         is a stale config worth surfacing, not a silent no-op.
     """
-    master_group_id = config.get("master_group_id")
-    secondary_group_ids = config.get("secondary_group_ids") or []
+    # bead jiscc: read the provider-scoped nested shape (P1 keeps it in sync
+    # with the flat keys; fall back to whole-group scopes for a bare config).
+    master_scope = config.get("master") or {
+        "group_id": config.get("master_group_id"), "m3u_account_id": None,
+    }
+    secondary_scopes = config.get("secondary") or [
+        {"group_id": g, "m3u_account_id": None}
+        for g in (config.get("secondary_group_ids") or [])
+    ]
 
     if all_settings is None:
         all_settings = await client.get_all_m3u_group_settings()
     target_to_source, _source_to_target = _build_override_maps(all_settings)
+
+    # The non-collapsed per-(provider, group) view is only needed when a scope
+    # is provider-specific — on a shared group the collapsed view (which
+    # prefers auto_channel_sync ON) would misreport the other provider's row.
+    needs_provider = (
+        master_scope.get("m3u_account_id") is not None
+        or any(s.get("m3u_account_id") is not None for s in secondary_scopes)
+    )
+    by_provider = (
+        await client.get_m3u_group_settings_by_provider()
+        if needs_provider else {}
+    )
+
+    def _scope_setting(scope: dict) -> dict | None:
+        """Effective junction setting for a scope, or None if not found.
+
+        Provider-scoped -> the specific (provider, group) row. Whole-group
+        (provider None) -> the collapsed setting, resolving a Channel Group
+        Override target through its source (bead override).
+        """
+        gid = scope.get("group_id")
+        pid = scope.get("m3u_account_id")
+        if pid is not None:
+            return by_provider.get((pid, gid))
+        setting = all_settings.get(gid)
+        if setting is None:
+            setting = target_to_source.get(gid)
+        return setting
+
+    def _scope_label(scope: dict) -> str:
+        pid = scope.get("m3u_account_id")
+        base = f"group {scope.get('group_id')}"
+        return f"{base} (provider {pid})" if pid is not None else base
+
     failures: list[dict] = []
 
-    master_settings = all_settings.get(master_group_id)
+    # --- Master ---------------------------------------------------------
+    master_settings = _scope_setting(master_scope)
     if master_settings is None:
-        # A Channel Group Override TARGET has no direct M3U setting of its
-        # own — auto-sync creates its channels from a SOURCE group. Read the
-        # effective auto-sync state through that source instead of failing
-        # "group not found" (bead override).
-        override_source = target_to_source.get(master_group_id)
-        if override_source is not None:
-            master_settings = override_source
-        else:
-            failures.append(_failure(
-                group_id=master_group_id,
-                role="master",
-                check=CHECK_GROUP_SETTINGS_FOUND,
-                expected="group present in an M3U account's group settings",
-                got="no settings for this group ID on any account",
-                message=(
-                    f"Master group {master_group_id} was not found in any "
-                    f"M3U account's group settings — the group may have been "
-                    f"removed or renamed by the provider."
-                ),
-            ))
-    if master_settings is not None and not master_settings.get(
-            "auto_channel_sync"):
         failures.append(_failure(
-            group_id=master_group_id,
+            group_id=master_scope.get("group_id"),
+            role="master",
+            check=CHECK_GROUP_SETTINGS_FOUND,
+            expected="group present in an M3U account's group settings",
+            got="no settings for this (group, provider) on any account",
+            message=(
+                f"Master {_scope_label(master_scope)} was not found in the "
+                f"M3U account's group settings — the group may have been "
+                f"removed or renamed, or that provider does not carry it."
+            ),
+        ))
+    elif not master_settings.get("auto_channel_sync"):
+        failures.append(_failure(
+            group_id=master_scope.get("group_id"),
             role="master",
             check=CHECK_MASTER_AUTO_SYNC_ON,
             expected="auto_channel_sync ON",
             got="auto_channel_sync OFF",
             message=(
-                f"Master group {master_group_id} has auto_channel_sync OFF "
-                f"in Dispatcharr — Dispatcharr creates no master channels, "
+                f"Master {_scope_label(master_scope)} has auto_channel_sync "
+                f"OFF in Dispatcharr — Dispatcharr creates no master channels, "
                 f"so event_sync has nothing to attach to. Enable "
-                f"auto_channel_sync for this group in Dispatcharr "
-                f"(ECM never toggles it for you)."
+                f"auto_channel_sync for it in Dispatcharr (ECM never toggles "
+                f"it for you)."
             ),
         ))
 
-    for group_id in secondary_group_ids:
-        settings = all_settings.get(group_id)
+    # --- Secondaries ----------------------------------------------------
+    for scope in secondary_scopes:
+        settings = _scope_setting(scope)
         if settings is None:
             failures.append(_failure(
-                group_id=group_id,
+                group_id=scope.get("group_id"),
                 role="secondary",
                 check=CHECK_GROUP_SETTINGS_FOUND,
                 expected="group present in an M3U account's group settings",
-                got="no settings for this group ID on any account",
+                got="no settings for this (group, provider) on any account",
                 message=(
-                    f"Secondary group {group_id} was not found in any M3U "
-                    f"account's group settings — the group may have been "
-                    f"removed or renamed by the provider."
+                    f"Secondary {_scope_label(scope)} was not found in the "
+                    f"M3U account's group settings — the group may have been "
+                    f"removed or renamed, or that provider does not carry it."
                 ),
             ))
         elif settings.get("auto_channel_sync"):
             failures.append(_failure(
-                group_id=group_id,
+                group_id=scope.get("group_id"),
                 role="secondary",
                 check=CHECK_SECONDARY_AUTO_SYNC_OFF,
                 expected="auto_channel_sync OFF",
                 got="auto_channel_sync ON",
                 message=(
-                    f"Secondary group {group_id} has auto_channel_sync ON "
-                    f"in Dispatcharr — Dispatcharr is creating its own "
-                    f"channels from this group, which duplicates the master "
-                    f"channels event_sync attaches to. Disable "
-                    f"auto_channel_sync for this group in Dispatcharr "
-                    f"(ECM never toggles it for you)."
+                    f"Secondary {_scope_label(scope)} has auto_channel_sync "
+                    f"ON in Dispatcharr — Dispatcharr is creating its own "
+                    f"channels from it, which duplicates the master channels "
+                    f"event_sync attaches to. Disable auto_channel_sync for it "
+                    f"in Dispatcharr (ECM never toggles it for you)."
                 ),
             ))
 
@@ -212,7 +245,8 @@ async def check_event_sync_group_settings(
         logger.warning(
             "[EVENT-SYNC] Pre-flight failed %s check(s) for master=%s "
             "secondaries=%s: %s",
-            len(failures), master_group_id, secondary_group_ids,
+            len(failures), _scope_label(master_scope),
+            [_scope_label(s) for s in secondary_scopes],
             [(f["group_id"], f["check"]) for f in failures],
         )
     return {"ok": not failures, "failures": failures}
