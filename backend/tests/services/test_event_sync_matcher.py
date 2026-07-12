@@ -327,6 +327,29 @@ class TestParseEventName:
         )
         assert parsed.start is None
 
+    @pytest.mark.parametrize(
+        ("name", "expected_title", "hour", "minute"),
+        [
+            # bead uwm8d: time-FIRST after a colon slot (no dash).
+            ("PPV 06: 4:15pm Zenith Racing Series Road America",
+             "Zenith Racing Series Road America", 16, 15),
+            ("PPV 08: 6pm DIRTcar Summer Nationals Late Model Crystal",
+             "DIRTcar Summer Nationals Late Model Crystal", 18, 0),
+            # "@ <time>" dateless — the "@" is consumed, not left in the title.
+            ("PPV01: Crystal Motor Speedway @ 06:00 PM EDT",
+             "Crystal Motor Speedway", 18, 0),
+        ],
+    )
+    def test_dateless_colon_slot_and_at_time_formats(
+        self, name, expected_title, hour, minute
+    ):
+        parsed = parse_event_name(name, now=_NOW, assume_current_date=True)
+        assert parsed.title == expected_title
+        assert parsed.start is not None
+        assert (parsed.start.hour, parsed.start.minute) == (hour, minute)
+        # never-guess preserved without the flag
+        assert parse_event_name(name, now=_NOW).start is None
+
     def test_pipe_delimited_name_with_weekday_and_region_marker_parses(self):
         # bead 9c9j7: live pipe-delimited listing shape that produced
         # "Incomplete date/time" — "|" delimiter, a "Sun" weekday prefix, a
