@@ -68,6 +68,30 @@ EVENT_SYNC_ALLOWED_TRIGGERS = frozenset({"manual", "api"})
 # the watermark task passes "m3u_refresh").
 TRIGGERED_BY_UNSPECIFIED = "unspecified"
 
+# Phase 2 (bead ti939.3.1): the ONE unattended trigger that can execute
+# event_sync rules — and only for rules whose config carries the explicit
+# auto_run=true opt-in. Everything else keeps the deny-by-default posture
+# above: "scheduled" and the unspecified sentinel stay denied even for
+# opted-in rules.
+EVENT_SYNC_AUTO_RUN_TRIGGER = "m3u_refresh"
+
+
+def event_sync_trigger_allowed(triggered_by: str, config: dict | None) -> bool:
+    """Per-rule event_sync trigger gate (ti939.3.1).
+
+    Manual triggers (EVENT_SYNC_ALLOWED_TRIGGERS) are always allowed. The
+    refresh-watermark trigger is allowed ONLY when the rule's validated
+    ``event_sync_config`` carries the literal ``auto_run: true`` — absent,
+    false, or any non-bool value all read as "not opted in", so stored
+    configs that predate the flag keep manual-run-only behavior exactly.
+    Every other trigger is denied.
+    """
+    if triggered_by in EVENT_SYNC_ALLOWED_TRIGGERS:
+        return True
+    if triggered_by == EVENT_SYNC_AUTO_RUN_TRIGGER:
+        return bool(config) and config.get("auto_run") is True
+    return False
+
 # Upper bound on secondary streams fetched per event_sync rule — a fetch
 # guard, not a decision knob (per-stream decisions are independent, so
 # truncation only defers later streams to the next idempotent run; it is
@@ -260,14 +284,17 @@ class ChannelPipelineEngine:
         # since the filter here already keeps them out of the rules list Pass
         # 4 receives.
         #
-        # Phase 1B (ti939.2.1): event_sync rules now EXECUTE via the dedicated
+        # Phase 1B (ti939.2.1): event_sync rules EXECUTE via the dedicated
         # attach phase (_run_event_sync_rules → executor.execute_event_sync_
-        # rule), but ONLY on manually-triggered runs (EVENT_SYNC_ALLOWED_
-        # TRIGGERS). Unattended paths — the watermark task ("m3u_refresh"),
-        # "scheduled", anything unrecognized — never run them (Phase 2 adds an
-        # explicit opt-in auto-run flag). The task layer additionally filters
-        # event_sync rules out of its run_on_refresh query (belt) — this gate
-        # is the braces.
+        # rule) on manually-triggered runs (EVENT_SYNC_ALLOWED_TRIGGERS).
+        # Phase 2 (ti939.3.1): the refresh-watermark trigger is ALSO allowed,
+        # per rule, when the rule's config carries the explicit auto_run=true
+        # opt-in (event_sync_trigger_allowed). Every other unattended path —
+        # "scheduled", anything unrecognized — stays denied even for opted-in
+        # rules. The task layer's watermark query selects only opted-in
+        # event_sync rules (belt); this per-rule gate is the braces; the
+        # phase itself re-checks per rule AND gates the unattended path on
+        # the circuit breaker + a pre-flight (suspenders).
         #
         # VERIFIED NON-WORK (do not "fix" these — they were checked):
         # * No bypass of the auto_creation_exclude_auto_sync_groups global
@@ -288,31 +315,39 @@ class ChannelPipelineEngine:
         event_sync_to_run: list = []
         if event_sync_rules:
             rules = [r for r in rules if not r.is_event_sync()]
-            if triggered_by in EVENT_SYNC_ALLOWED_TRIGGERS:
-                event_sync_to_run = event_sync_rules
+            event_sync_to_run = [
+                r for r in event_sync_rules
+                if event_sync_trigger_allowed(
+                    triggered_by, r.get_event_sync_config())
+            ]
+            excluded = [
+                r for r in event_sync_rules if r not in event_sync_to_run
+            ]
+            if event_sync_to_run:
                 logger.info(
                     "[AUTO-CREATE-ENGINE] %s event_sync rule(s) excluded from "
                     "Pass 1/2 evaluation; will run via the event_sync attach "
                     "phase (triggered_by=%s): %s",
-                    len(event_sync_rules), triggered_by,
-                    [r.id for r in event_sync_rules],
+                    len(event_sync_to_run), triggered_by,
+                    [r.id for r in event_sync_to_run],
                 )
-            else:
+            if excluded:
                 logger.info(
                     "[AUTO-CREATE-ENGINE] Excluded %s event_sync rule(s) from "
-                    "this run entirely — event_sync is manual-run-only in "
-                    "this phase and never fires from unattended runs "
-                    "(triggered_by=%s): %s",
-                    len(event_sync_rules), triggered_by,
-                    [r.id for r in event_sync_rules],
+                    "this run entirely — event_sync is manual-run-only unless "
+                    "the rule's config opts into auto_run, and even then only "
+                    "for the refresh-watermark trigger (triggered_by=%s): %s",
+                    len(excluded), triggered_by,
+                    [r.id for r in excluded],
                 )
 
         if not rules and not event_sync_to_run:
             if event_sync_rules:
                 message = (
-                    "Only event_sync rules are in scope — event_sync rules "
-                    "are manual-run-only in this phase and never fire from "
-                    "unattended runs"
+                    "Only event_sync rules are in scope and none is allowed "
+                    "for this trigger — event_sync rules are manual-run-only "
+                    "unless event_sync_config.auto_run is true, and auto_run "
+                    "admits only the refresh-watermark trigger"
                 )
             else:
                 message = "No enabled rules to process"
@@ -2731,21 +2766,79 @@ class ChannelPipelineEngine:
 
         NEVER: creates/deletes channels, touches managed_channel_ids, or
         toggles Dispatcharr group settings.
+
+        Unattended (watermark-triggered, ti939.3.1) calls add three gates on
+        top of the manual path, each pinned by its own test:
+
+        * **Per-rule trigger gate** — only rules whose config carries the
+          explicit ``auto_run: true`` opt-in run; the rest are refused here
+          even if a caller bypassed ``run_pipeline``'s routing.
+        * **Circuit breaker (bead ixujz)** — a tripped run-on-refresh
+          breaker (or the break-glass env var) refuses the WHOLE unattended
+          phase before any fetch or write; manual runs are never gated (they
+          are the recovery surface).
+        * **Pre-flight (fail-closed)** — each opted-in rule's Dispatcharr
+          group settings are checked (master auto-sync ON, secondaries OFF);
+          on failure the rule is skipped with a persisted
+          ``event_sync_preflight_failed`` warning that the watermark task
+          turns into a notification. Manual runs never pre-flight here — the
+          operator's preview carries the pre-flight surface.
         """
         from channel_pipeline_schema import validate_event_sync_config
 
-        # Defense in depth: run_pipeline already gates unattended triggers
-        # out; if a future caller reaches this phase directly with an
-        # unattended trigger, refuse rather than attach (manual-run-only is
-        # a Phase 1 hard constraint).
-        if triggered_by not in EVENT_SYNC_ALLOWED_TRIGGERS:
-            logger.warning(
-                "[EVENT-SYNC] Attach phase invoked with unattended "
-                "triggered_by=%r — refusing to run %s event_sync rule(s) "
-                "(manual-run-only phase)",
-                triggered_by, len(event_sync_rules),
-            )
+        # Defense in depth (the braces to run_pipeline's belt): re-apply the
+        # per-rule trigger gate. A future caller that reaches this phase
+        # directly can still only run manually-triggered rules or explicitly
+        # opted-in rules on the watermark trigger — never anything else.
+        allowed_rules = []
+        for rule in event_sync_rules:
+            if event_sync_trigger_allowed(
+                    triggered_by, rule.get_event_sync_config()):
+                allowed_rules.append(rule)
+            else:
+                logger.warning(
+                    "[EVENT-SYNC] Attach phase invoked with triggered_by=%r "
+                    "— refusing event_sync rule '%s' (id=%s): not an allowed "
+                    "trigger for this rule (manual-run-only unless "
+                    "event_sync_config.auto_run is true)",
+                    triggered_by, rule.name, rule.id,
+                )
+        if not allowed_rules:
             return
+        event_sync_rules = allowed_rules
+
+        unattended = triggered_by not in EVENT_SYNC_ALLOWED_TRIGGERS
+        if unattended:
+            # bead ixujz: a tripped circuit breaker must gate the event_sync
+            # auto-run chain too. The watermark task already checks this at
+            # the top of its tick (belt); this check covers any direct
+            # unattended caller (braces). Lazy import — ONE definition of
+            # the breaker semantics lives in tasks/channel_pipeline.py
+            # (persisted flag + ECM_DISABLE_RUN_ON_REFRESH break-glass),
+            # read FRESH here for the same reason it is there: the breaker
+            # scenario is a restart, so a cached value is wrong.
+            from tasks.channel_pipeline import _run_on_refresh_suppressed
+            suppressed, reason = _run_on_refresh_suppressed()
+            if suppressed:
+                logger.warning(
+                    "[EVENT-SYNC] Unattended attach phase SUPPRESSED (%s) — "
+                    "refusing %s opted-in event_sync rule(s). Manual runs "
+                    "remain available; clear the circuit breaker via POST "
+                    "/api/channel-pipeline/reset-circuit-breaker to restore "
+                    "auto-runs.",
+                    reason, len(event_sync_rules),
+                )
+                results.setdefault("event_sync_warnings", []).append({
+                    "type": "event_sync_auto_run_suppressed",
+                    "reason": reason,
+                    "message": (
+                        f"event_sync auto-run suppressed ({reason}): "
+                        f"{len(event_sync_rules)} opted-in rule(s) did not "
+                        f"run. Manual runs are unaffected; clear the "
+                        f"circuit breaker to restore unattended runs."
+                    ),
+                })
+                return
 
         results.setdefault("event_sync", [])
         results.setdefault("event_sync_warnings", [])
@@ -2792,6 +2885,52 @@ class ChannelPipelineEngine:
                     "enabled is false — skipped", rule.name, rule.id,
                 )
                 continue
+
+            if unattended:
+                # ti939.3.1: unattended runs pre-flight the Dispatcharr
+                # group settings and FAIL CLOSED — no operator is watching,
+                # so a rule whose preconditions cannot be verified (master
+                # auto-sync OFF, missing group, or the check itself failing)
+                # is skipped with a persisted warning the task layer turns
+                # into a notification. Manual runs never pre-flight here;
+                # the preview is the operator's pre-flight surface.
+                from services.event_sync_preflight import (
+                    check_event_sync_group_settings,
+                )
+                try:
+                    preflight = await check_event_sync_group_settings(
+                        self.client, config
+                    )
+                except Exception as e:
+                    preflight = {
+                        "ok": False,
+                        "failures": [],
+                        "error": str(e),
+                    }
+                if not preflight["ok"]:
+                    failure_text = "; ".join(
+                        f["message"] for f in preflight["failures"]
+                    ) or f"pre-flight check failed ({preflight.get('error')})"
+                    logger.warning(
+                        "[EVENT-SYNC] Rule '%s' (id=%s): unattended "
+                        "pre-flight failed; rule skipped this run: %s",
+                        rule.name, rule.id, failure_text,
+                    )
+                    results["event_sync_warnings"].append({
+                        "type": "event_sync_preflight_failed",
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "failures": preflight["failures"],
+                        "message": (
+                            f"event_sync rule '{rule.name}' skipped on the "
+                            f"unattended run: pre-flight failed — "
+                            f"{failure_text} Fix the Dispatcharr group "
+                            f"settings (ECM never toggles auto_channel_sync "
+                            f"for you); the rule runs again on the next "
+                            f"refresh."
+                        ),
+                    })
+                    continue
 
             try:
                 secondary_streams = (

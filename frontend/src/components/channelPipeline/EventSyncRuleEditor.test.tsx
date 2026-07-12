@@ -159,6 +159,116 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
+  describe('auto-run opt-in (ti939.3.1)', () => {
+    it('defaults OFF and omits auto_run for a rule that never had the key', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      expect(screen.getByTestId('event-sync-auto-run')).not.toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config).not.toHaveProperty('auto_run');
+    });
+
+    it('emits auto_run: true when the operator checks the box', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByTestId('event-sync-auto-run'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.auto_run).toBe(true);
+    });
+
+    it('initializes checked from a stored auto_run: true and round-trips it untouched', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          auto_run: true,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      expect(screen.getByTestId('event-sync-auto-run')).toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.auto_run).toBe(true);
+    });
+
+    it('preserves a stored explicit auto_run: false on an untouched save (z4y4a round-trip)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          auto_run: false,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.auto_run).toBe(false);
+    });
+
+    it('turning a stored auto_run: true OFF saves an explicit false', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          auto_run: true,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByTestId('event-sync-auto-run'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.auto_run).toBe(false);
+    });
+
+    it('explains the unattended behavior honestly (default off, notifications, breaker)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      expect(
+        screen.getByText(/enable it only after you trust/i)
+      ).toBeInTheDocument();
+      expect(screen.getByText(/warning notifications/i)).toBeInTheDocument();
+      expect(screen.getByText(/circuit breaker/i)).toBeInTheDocument();
+      expect(screen.getByText(/attaches on the next run/i)).toBeInTheDocument();
+    });
+  });
+
   describe('live auto-sync guidance (never toggles Dispatcharr settings)', () => {
     it('warns with enable-it-yourself guidance when the master group has auto-sync OFF', async () => {
       seedGroups();
