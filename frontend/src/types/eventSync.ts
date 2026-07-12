@@ -29,7 +29,22 @@ export interface EventSyncPattern {
  * event_sync rule; its conditions/actions are placeholders ignored by the
  * engine (docs/event_sync.md).
  */
+/** One provider-scoped group: a group id + optional M3U account (provider) id
+ *  (null/absent = the whole group / any provider). bead 3p2af. */
+export interface EventSyncGroupScope {
+  group_id: number;
+  m3u_account_id: number | null;
+}
+
 export interface EventSyncConfig {
+  /**
+   * bead 3p2af: canonical provider-scoped shape. The backend validator keeps
+   * these in sync with the flat `master_group_id` / `secondary_group_ids`
+   * (derived) so both are present on a stored config. The editor currently
+   * reads/writes the flat keys; the provider-scoped picker (P4) will use these.
+   */
+  master?: EventSyncGroupScope;
+  secondary?: EventSyncGroupScope[];
   master_group_id: number;
   secondary_group_ids: number[];
   /** Shared pattern variants; omit to use the matcher's built-in defaults. */
