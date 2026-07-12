@@ -211,6 +211,42 @@ class TestGetProviderGroupSettings:
         assert data["10"]["enabled"] is True
 
 
+class TestGetProviderGroupSettingsByProvider:
+    """GET /api/providers/group-settings/by-provider — non-collapsed (bead 38dzi)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_one_row_per_provider_group_pair(self, async_client):
+        mock_client = AsyncMock()
+        # Same channel group (99) carried by TWO providers — the case the
+        # collapsed endpoint hides.
+        mock_client.get_m3u_group_settings_by_provider.return_value = {
+            (3, 99): {
+                "channel_group": 99, "auto_channel_sync": True,
+                "enabled": True, "stream_count": 40,
+                "m3u_account_id": 3, "m3u_account_name": "Provider A",
+            },
+            (11, 99): {
+                "channel_group": 99, "auto_channel_sync": False,
+                "enabled": True, "stream_count": 12,
+                "m3u_account_id": 11, "m3u_account_name": "Provider B",
+            },
+        }
+
+        with patch("routers.streams.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/providers/group-settings/by-provider"
+            )
+
+        assert response.status_code == 200
+        rows = response.json()
+        assert len(rows) == 2
+        by_provider = {r["m3u_account_id"]: r for r in rows}
+        assert by_provider[3]["channel_group_id"] == 99
+        assert by_provider[3]["auto_channel_sync"] is True
+        assert by_provider[11]["auto_channel_sync"] is False
+        assert by_provider[3]["m3u_account_name"] == "Provider A"
+
+
 class TestGetStreamsByIds:
     """Tests for POST /api/streams/by-ids endpoint."""
 
