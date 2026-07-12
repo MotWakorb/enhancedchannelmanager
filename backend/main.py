@@ -111,6 +111,7 @@ tags_metadata = [
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
     {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
+    {"name": "Event Sync Reviews", "description": "Event Sync ambiguous-match review queue — fingerprint-keyed accept/reject decisions (bead ti939.3.2)"},
     {"name": "Emby", "description": "Emby actions — clear cached channel logos so Emby re-fetches them (GH #475)"},
     {"name": "Sync Targets", "description": "Cross-instance live-sync destinations (remote Dispatcharr-B) — CRUD for sync targets (epic i39wu)"},
 ]
@@ -139,7 +140,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0072",
+    version="0.17.6-0073",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
