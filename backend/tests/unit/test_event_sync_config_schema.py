@@ -376,6 +376,24 @@ class TestIncludeMasterGroupStreamsFlag:
         errors = validate_event_sync_config(config)
         assert any("secondary_group_ids" in e for e in errors)
 
+    def test_empty_secondary_allowed_with_flag(self):
+        # bead 3ux85: the pure same-named-group case — master group is the
+        # only stream source, so an empty secondary list is valid WITH the
+        # flag on (and both None and [] normalize to []).
+        for empty in ([], None):
+            config = _valid_config(include_master_group_streams=True)
+            if empty is None:
+                del config["secondary_group_ids"]
+            else:
+                config["secondary_group_ids"] = empty
+            assert validate_event_sync_config(config) == []
+            assert config["secondary_group_ids"] == []
+
+    def test_empty_secondary_rejected_without_flag(self):
+        config = _valid_config(secondary_group_ids=[])
+        errors = validate_event_sync_config(config)
+        assert any("secondary_group_ids" in e for e in errors)
+
 
 class TestAssumeCurrentDateFlag:
     """assume_current_date flag (bead assume-current-date — dateless opt-in).
