@@ -298,6 +298,48 @@ class TestMatchingKnobs:
         assert "cap" in errors[0]
 
 
+class TestAutoRunFlag:
+    """auto_run opt-in flag (bead ti939.3.1 — Phase 2 unattended runs).
+
+    The flag is the EXPLICIT per-rule opt-in for watermark auto-runs.
+    Default OFF is a safety property: an absent key must always read as
+    false, and existing stored configs (which predate the key) must
+    validate unchanged.
+    """
+
+    def test_auto_run_default_filled_false(self):
+        """Absent auto_run is filled IN PLACE as False — default off."""
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert config["auto_run"] is False
+
+    @pytest.mark.parametrize("good", [True, False])
+    def test_auto_run_bool_accepted(self, good):
+        config = _valid_config(auto_run=good)
+        assert validate_event_sync_config(config) == []
+        assert config["auto_run"] is good
+
+    @pytest.mark.parametrize("bad", ["true", 1, 0])
+    def test_auto_run_non_bool_rejected(self, bad):
+        config = _valid_config()
+        config["auto_run"] = bad
+        errors = validate_event_sync_config(config)
+        assert any("auto_run" in e for e in errors)
+
+    def test_existing_stored_config_without_auto_run_still_validates(self):
+        """Backward compat: a pre-Phase-2 stored config (no auto_run key)
+        re-validates clean at run time — the rail that keeps existing rules
+        running exactly as before."""
+        stored = _valid_config(
+            time_window_minutes=30,
+            attach_threshold=0.85,
+            max_attach_per_run=50,
+            enabled=True,
+        )
+        assert validate_event_sync_config(stored) == []
+        assert stored["auto_run"] is False
+
+
 class TestTeachingErrorFormat:
     """Errors must teach: field, got, expected, doc link."""
 

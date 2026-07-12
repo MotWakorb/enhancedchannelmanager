@@ -206,6 +206,9 @@ export function EventSyncRuleEditor({
   const [thresholdText, setThresholdText] = useState(
     (config?.attach_threshold ?? EVENT_ATTACH_FLOOR).toFixed(2)
   );
+  // Phase 2 opt-in (ti939.3.1): unattended auto-run on the refresh
+  // watermark. Default OFF — the backend treats an absent key as false.
+  const [autoRun, setAutoRun] = useState(config?.auto_run ?? false);
 
   // Reference data
   const [channelGroups, setChannelGroups] = useState<{ id: number; name: string }[]>([]);
@@ -346,6 +349,13 @@ export function EventSyncRuleEditor({
     // the backend default.
     if (config?.max_attach_per_run != null) {
       built.max_attach_per_run = config.max_attach_per_run;
+    }
+    // ti939.3.1: emit auto_run when checked, and preserve an explicit stored
+    // value (the backend validator fills the key on save, so round-trips
+    // keep it). A legacy config without the key stays without it while the
+    // box is unchecked — absent means false on the backend.
+    if (autoRun || config?.auto_run != null) {
+      built.auto_run = autoRun;
     }
 
     // --- Shared patterns (bead z4y4a: full round-trip) -------------------
@@ -502,7 +512,8 @@ export function EventSyncRuleEditor({
           the default patterns, then Preview. Preview never writes; a manual
           pipeline Run attaches matched streams to master channels — capped
           per run, journaled, and reversible via execution rollback. Event
-          Sync never runs from the unattended refresh task.
+          Sync runs unattended only if you explicitly enable auto-run under
+          Advanced (off by default).
         </p>
 
         {/* Basic Info */}
@@ -812,6 +823,32 @@ export function EventSyncRuleEditor({
                   Auto-attach score floor on the parsed-title score. Hard
                   minimum {EVENT_ATTACH_FLOOR.toFixed(2)} — it can be raised,
                   never lowered (precision over recall).
+                </span>
+              </div>
+
+              <div className="form-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={autoRun}
+                    onChange={e => setAutoRun(e.target.checked)}
+                    disabled={isLoading}
+                    data-testid="event-sync-auto-run"
+                  />
+                  <span>Run automatically after each M3U refresh (auto-run)</span>
+                </label>
+                <span className="form-hint">
+                  Off by default — enable it only after you trust this
+                  rule&apos;s manual runs. When on, the rule runs unattended
+                  after every M3U refresh with the same journaling, per-run
+                  attach cap, and run summary line as a manual run. Attach-cap
+                  overages and failed pre-flight checks (e.g. master
+                  auto-sync turned OFF) raise warning notifications. A
+                  tripped auto-creation circuit breaker pauses auto-runs
+                  until you reset it; manual runs stay available. A run
+                  landing right after a refresh can precede Dispatcharr
+                  creating a brand-new event&apos;s master channel — that
+                  stream attaches on the next run.
                 </span>
               </div>
 

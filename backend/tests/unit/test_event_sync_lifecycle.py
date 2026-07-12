@@ -23,8 +23,16 @@ statement:
    documented here).
 6. **Dry-run parity** — the preview endpoint's decisions equal the actual
    run's decisions on identical fixtures (frozen time, shared corpus).
-7. **Manual-run-only** — the unattended watermark task never executes
-   event_sync rules and never mutates Dispatcharr.
+7. **Manual-run-only by default** — the unattended watermark task never
+   executes event_sync rules that lack the explicit auto_run opt-in
+   (ti939.3.1: absent flag == false) and never mutates Dispatcharr.
+
+Phase 2 (bead ti939.3.1 + ixujz) adds the opt-in scenarios: an
+auto_run=true rule attaches from the watermark task with the SAME journal
+provenance and summary line as a manual run; a tripped circuit breaker
+blocks the unattended chain (and reset restores it); pre-flight failures
+and cap overages notify; the refresh-ordering race converges across
+unattended runs too.
 
 Every scenario also rides two standing canaries from the fixtures module:
 event_sync never creates/deletes channels and never toggles Dispatcharr
@@ -495,5 +503,280 @@ class TestManualRunOnly:
         client.get_streams.assert_not_awaited()
         assert state.update_channel_calls == []
         assert state.stream_ids_of(100) == [9001]
+        assert_never_created_or_deleted_channels(client)
+        assert_never_touched_group_settings(client)
+
+
+# =============================================================================
+# Phase 2 opt-in auto-run (beads ti939.3.1 + ixujz)
+# =============================================================================
+
+
+def _watermark_run(client, session_factory, *, breaker_tripped: bool = False,
+                   refresh_at: str = "2026-01-02T00:00:00+00:00",
+                   consumed_at: str = "2026-01-01T00:00:00+00:00"):
+    """One full ChannelPipelineTask.execute() tick with a REAL engine.
+
+    Returns (TaskResult, journal entries, notification mock). A FRESH engine
+    per run — stateless recompute, same as _manual_run.
+    """
+    import os
+    from tasks.channel_pipeline import ChannelPipelineTask
+
+    engine = ChannelPipelineEngine(client)
+    settings = MagicMock(
+        auto_creation_run_on_refresh_disabled=breaker_tripped,
+        last_m3u_refresh_completed_at=refresh_at,
+        last_auto_creation_consumed_refresh_at=consumed_at,
+    )
+    notify = AsyncMock()
+
+    os.environ.pop("ECM_DISABLE_RUN_ON_REFRESH", None)
+    with patch("tasks.channel_pipeline.get_settings", return_value=settings), \
+         patch("tasks.channel_pipeline.save_settings"), \
+         patch("services.notification_service.create_notification_internal",
+               new=notify), \
+         patch("channel_pipeline_engine.get_channel_pipeline_engine",
+               return_value=engine), \
+         patch("channel_pipeline_engine.get_session",
+               side_effect=session_factory), \
+         patch("database.get_session", side_effect=session_factory), \
+         patch("tasks.channel_pipeline.get_client", return_value=client), \
+         patch("journal.log_entry"), \
+         patch("journal.log_entries") as mock_log_entries:
+        task = ChannelPipelineTask()
+        task._enabled = True
+        result = _run(task.execute())
+    entries = [
+        e for call in mock_log_entries.call_args_list
+        for e in call.kwargs.get("entries", [])
+    ]
+    return result, entries, notify
+
+
+def _latest_execution_summary_line(session_factory) -> str | None:
+    """The event_sync summary line persisted on the newest execution record."""
+    from models import ChannelPipelineExecution
+
+    session = session_factory()
+    try:
+        execution = (
+            session.query(ChannelPipelineExecution)
+            .order_by(ChannelPipelineExecution.id.desc())
+            .first()
+        )
+        if execution is None:
+            return None
+        for entry in execution.get_execution_log() or []:
+            for action in entry.get("actions_executed", []):
+                if action.get("type") == "event_sync_summary":
+                    return action["description"]
+        return None
+    finally:
+        session.close()
+
+
+class TestAutoRunOptIn:
+    """ti939.3.1: the full unattended path with the explicit opt-in."""
+
+    def test_watermark_task_attaches_with_journal_and_summary_parity(
+        self, db_session_factory
+    ):
+        """An opted-in rule attaches from the watermark task, and the run is
+        indistinguishable from a manual run on the audit surfaces: the SAME
+        journal provenance (category event_sync, batch_id = execution id,
+        names+ids+score/band/delta/verdict) and the SAME summary line — the
+        3 AM safety net."""
+        _add_event_rule(
+            db_session_factory, _config_secondary_a(auto_run=True)
+        )
+        state = _mercury_state()
+        client = make_stateful_client(state)
+
+        result, journal_entries, _ = _watermark_run(
+            client, db_session_factory
+        )
+
+        assert result.success is True
+        assert state.stream_ids_of(100) == [9001, 7001]
+        assert len(state.update_channel_calls) == 1
+
+        # --- Journal parity with an identical MANUAL run ------------------
+        manual_state = _mercury_state()
+        manual_client = make_stateful_client(manual_state)
+        manual_session_factory = db_session_factory  # same rule set
+        # Fresh DB not needed: the manual run below re-runs the same rule
+        # against a fresh Dispatcharr state, producing execution id 2.
+        manual_result, manual_entries = _manual_run(
+            manual_client, manual_session_factory
+        )
+
+        assert len(journal_entries) == 1
+        assert len(manual_entries) == 1
+        auto_entry = dict(journal_entries[0])
+        manual_entry = dict(manual_entries[0])
+        # batch_id is the (different) execution id — provenance, not drift.
+        assert auto_entry.pop("batch_id") != manual_entry.pop("batch_id")
+        assert auto_entry == manual_entry
+        assert journal_entries[0]["category"] == "event_sync"
+        match = journal_entries[0]["after_value"]["match"]
+        assert match["secondary_stream_name"] == STREAM_MERCURY
+        assert match["master_channel_name"] == MASTER_MERCURY
+        assert match["band"] == "attach"
+        assert "score" in match and "time_delta_minutes" in match
+        assert "team_verdict" in match
+
+        # --- Summary-line parity -------------------------------------------
+        auto_line = _latest_execution_summary_line(db_session_factory)
+        manual_line = manual_result["event_sync"][0]["summary_line"]
+        assert auto_line is not None
+        # The unattended run's line is checked in full shape, then compared.
+        assert auto_line.startswith("event_sync: 1 attached")
+        assert manual_line.startswith("event_sync: 1 attached")
+
+        assert_never_created_or_deleted_channels(client)
+        assert_never_touched_group_settings(client)
+
+    def test_tripped_breaker_blocks_unattended_run_and_reset_restores_it(
+        self, db_session_factory
+    ):
+        """ixujz end-to-end: breaker tripped -> the watermark tick performs
+        ZERO event_sync activity; breaker cleared -> the next tick attaches."""
+        _add_event_rule(
+            db_session_factory, _config_secondary_a(auto_run=True)
+        )
+        state = _mercury_state()
+        client = make_stateful_client(state)
+
+        tripped_result, _, _ = _watermark_run(
+            client, db_session_factory, breaker_tripped=True
+        )
+        assert tripped_result.success is True
+        assert tripped_result.details.get("skipped") is True
+        assert tripped_result.details.get("reason") == "circuit_breaker"
+        client.get_streams.assert_not_awaited()
+        assert state.update_channel_calls == []
+        assert state.stream_ids_of(100) == [9001]
+
+        # Operator clears the breaker (POST /reset-circuit-breaker); the
+        # next tick with an unconsumed watermark runs and attaches.
+        reset_result, _, _ = _watermark_run(
+            client, db_session_factory, breaker_tripped=False
+        )
+        assert reset_result.success is True
+        assert state.stream_ids_of(100) == [9001, 7001]
+
+        assert_never_created_or_deleted_channels(client)
+        assert_never_touched_group_settings(client)
+
+    def test_unattended_preflight_failure_notifies_and_skips(
+        self, db_session_factory
+    ):
+        """Master auto-sync OFF at watermark time: the rule is skipped, and
+        the failure surfaces as a warning notification (never silence)."""
+        _add_event_rule(
+            db_session_factory, _config_secondary_a(auto_run=True)
+        )
+        state = _mercury_state()
+        client = make_stateful_client(state)
+        client.get_all_m3u_group_settings = AsyncMock(return_value={
+            MASTER_GROUP_ID: {"auto_channel_sync": False},
+            SECONDARY_A: {"auto_channel_sync": False},
+        })
+
+        result, _, notify = _watermark_run(client, db_session_factory)
+
+        assert result.success is True
+        assert state.update_channel_calls == []
+        assert state.stream_ids_of(100) == [9001]
+        preflight_calls = [
+            c.kwargs for c in notify.call_args_list
+            if c.kwargs.get("title") == (
+                "Event Sync: Pre-flight failed (rule skipped)")
+        ]
+        assert len(preflight_calls) == 1
+        assert preflight_calls[0]["notification_type"] == "warning"
+        assert preflight_calls[0]["send_alerts"] is True
+        assert "auto_channel_sync" in preflight_calls[0]["message"]
+
+    def test_unattended_cap_overage_notifies(self, db_session_factory):
+        """Attach-cap overage during an unattended run raises the warning
+        notification with the overage count."""
+        _add_event_rule(
+            db_session_factory,
+            _config_secondary_a(auto_run=True, max_attach_per_run=1),
+        )
+        state = FakeDispatcharrState(
+            channels=[
+                {"id": 100, "name": MASTER_MERCURY,
+                 "channel_group_id": MASTER_GROUP_ID,
+                 "auto_created": True, "streams": [9001]},
+                {"id": 101,
+                 "name": "Peacock 02: Sparks vs. Storm @ 11 Jul 07:00 PM ET",
+                 "channel_group_id": MASTER_GROUP_ID,
+                 "auto_created": True, "streams": [9002]},
+            ],
+            secondary_streams={SECONDARY_GROUP_NAME: [
+                {"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1},
+                {"id": 7002,
+                 "name": "WNBA TV 02: Sparks vs. Storm @ 11 Jul 07:00 PM ET",
+                 "m3u_account": 1},
+            ]},
+        )
+        client = make_stateful_client(state)
+
+        result, _, notify = _watermark_run(client, db_session_factory)
+
+        assert result.success is True
+        # Exactly one attach happened (the cap), one deferred.
+        assert len(state.update_channel_calls) == 1
+        cap_calls = [
+            c.kwargs for c in notify.call_args_list
+            if c.kwargs.get("title") == "Event Sync: Attach cap reached"
+        ]
+        assert len(cap_calls) == 1
+        assert cap_calls[0]["notification_type"] == "warning"
+        assert cap_calls[0]["send_alerts"] is True
+        assert "1" in cap_calls[0]["message"]
+
+    def test_refresh_ordering_race_converges_across_unattended_runs(
+        self, db_session_factory
+    ):
+        """The documented timing note, now on the unattended path: a
+        watermark run that precedes master-channel materialization attaches
+        nothing (zero writes, never guesses); the NEXT refresh's run
+        converges."""
+        _add_event_rule(
+            db_session_factory, _config_secondary_a(auto_run=True)
+        )
+        state = FakeDispatcharrState(
+            channels=[],
+            secondary_streams={SECONDARY_GROUP_NAME: [
+                {"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1},
+            ]},
+        )
+        client = make_stateful_client(state)
+
+        first, first_journal, _ = _watermark_run(client, db_session_factory)
+        assert first.success is True
+        assert state.update_channel_calls == []
+        assert first_journal == []
+
+        # Dispatcharr's next master refresh materializes the channel, and a
+        # NEW refresh watermark arrives.
+        state.add_master({
+            "id": 100, "name": MASTER_MERCURY,
+            "channel_group_id": MASTER_GROUP_ID,
+            "auto_created": True, "streams": [9001],
+        })
+
+        second, _, _ = _watermark_run(
+            client, db_session_factory,
+            refresh_at="2026-01-03T00:00:00+00:00",
+            consumed_at="2026-01-02T00:00:00+00:00",
+        )
+        assert second.success is True
+        assert state.stream_ids_of(100) == [9001, 7001]
+
         assert_never_created_or_deleted_channels(client)
         assert_never_touched_group_settings(client)

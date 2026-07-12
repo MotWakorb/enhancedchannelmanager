@@ -47,6 +47,12 @@ export interface EventSyncConfig {
    */
   max_attach_per_run?: number;
   enabled?: boolean;
+  /**
+   * Phase 2 opt-in (bead ti939.3.1): when true, the rule also runs
+   * UNATTENDED from the refresh-watermark task. Backend default false —
+   * absent means manual-run-only.
+   */
+  auto_run?: boolean;
 }
 
 // =============================================================================

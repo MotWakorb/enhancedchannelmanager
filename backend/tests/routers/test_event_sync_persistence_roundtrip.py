@@ -39,6 +39,9 @@ def _event_sync_config(**overrides) -> dict:
         # attach cap, so a round-tripped stored config carries it explicitly.
         "max_attach_per_run": 100,
         "enabled": True,
+        # ti939.3.1: same default-fill convention for the Phase 2 auto-run
+        # opt-in — round-tripped configs carry the explicit false.
+        "auto_run": False,
     }
     config.update(overrides)
     return config

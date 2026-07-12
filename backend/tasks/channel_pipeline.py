@@ -194,12 +194,21 @@ class ChannelPipelineTask(TaskScheduler):
                 started_at=started_at, completed_at=datetime.utcnow(), total_items=0,
             )
 
-        # (c) At least one enabled run_on_refresh rule. Only this rule set runs.
-        # event_sync rules are EXPLICITLY excluded (ti939.2.1): they are
-        # manual-run-only in this phase and must NEVER fire from this
-        # unattended watermark path, even if an operator sets run_on_refresh
-        # on one. The engine's triggered_by gate ("m3u_refresh" is not an
-        # allowed event_sync trigger) is the second, independent layer.
+        # (c) At least one rule eligible for the unattended path. Two
+        # DISJOINT rule sets ride it:
+        #
+        # * Standard rules: enabled AND run_on_refresh=True (Q2 — unchanged).
+        #   The query still excludes every event_sync rule, even one with
+        #   run_on_refresh set — that flag is not the event_sync opt-in.
+        # * event_sync rules (ti939.3.1): enabled AND the config carries the
+        #   EXPLICIT auto_run=true opt-in. The flag lives inside the JSON
+        #   config column, so candidates are selected by SQL
+        #   (event_sync_config IS NOT NULL) and the flag is read in Python —
+        #   only the literal True opts in (absent == false, the
+        #   backward-compat rail for stored configs). The engine's per-rule
+        #   trigger gate (event_sync_trigger_allowed) is the second,
+        #   independent layer, and the attach phase re-checks the breaker +
+        #   pre-flight as the third.
         self._set_progress(status="loading_rules")
         session = get_session()
         try:
@@ -208,13 +217,30 @@ class ChannelPipelineTask(TaskScheduler):
                 ChannelPipelineRule.run_on_refresh == True,
                 ChannelPipelineRule.event_sync_config.is_(None),
             ).all()
-            rule_ids = [r.id for r in rules_to_run]
-            rule_names = [r.name for r in rules_to_run]
+            event_sync_candidates = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.enabled == True,
+                ChannelPipelineRule.event_sync_config.isnot(None),
+            ).all()
+            event_sync_to_run = [
+                r for r in event_sync_candidates
+                if (r.get_event_sync_config() or {}).get("auto_run") is True
+            ]
+            rule_ids = (
+                [r.id for r in rules_to_run]
+                + [r.id for r in event_sync_to_run]
+            )
+            rule_names = (
+                [r.name for r in rules_to_run]
+                + [r.name for r in event_sync_to_run]
+            )
         finally:
             session.close()
 
         if not rule_ids:
-            logger.debug("[%s] No enabled run_on_refresh rules — skipping auto-fire", self.task_id)
+            logger.debug(
+                "[%s] No enabled run_on_refresh or auto_run event_sync rules "
+                "— skipping auto-fire", self.task_id,
+            )
             return TaskResult(
                 success=True, message="No auto-creation rules with run_on_refresh enabled",
                 started_at=started_at, completed_at=datetime.utcnow(), total_items=0,
@@ -346,6 +372,12 @@ class ChannelPipelineTask(TaskScheduler):
                 self.task_id, duration, created, updated, pending_merges, matched, evaluated,
             )
 
+            # ti939.3.1: unattended event_sync attach count (structured
+            # per-rule summaries ride the run result).
+            event_sync_attached = sum(
+                s.get("attached", 0) for s in result.get("event_sync", [])
+            )
+
             # Notify: completed
             parts = []
             if created:
@@ -354,6 +386,11 @@ class ChannelPipelineTask(TaskScheduler):
                 parts.append(f"{updated} updated")
             if pending_merges:
                 parts.append(f"{pending_merges} pending merge{'s' if pending_merges != 1 else ''} queued")
+            if event_sync_attached:
+                parts.append(
+                    f"{event_sync_attached} event stream"
+                    f"{'s' if event_sync_attached != 1 else ''} attached"
+                )
             title = f"Auto-Creation: {', '.join(parts)}" if parts else "Auto-Creation: No changes"
             ntype = "success" if parts else "info"
 
@@ -366,6 +403,18 @@ class ChannelPipelineTask(TaskScheduler):
                 source_id="m3u_refresh",
                 send_alerts=False,
             )
+
+            # ti939.3.1: event_sync warnings from an unattended run (attach
+            # cap overage, pre-flight failures) must notify — no operator is
+            # watching the run surface at 3 AM. Best-effort like every other
+            # notification here.
+            try:
+                await self._notify_event_sync_warnings(result)
+            except Exception as e:  # pragma: no cover — notification best-effort
+                logger.warning(
+                    "[%s] Failed to emit event_sync warning notifications: %s",
+                    self.task_id, e,
+                )
 
             # bd-h2xnl: a capped run must NOT be silent — warn with the N-of-M.
             if result.get("capped"):
@@ -430,4 +479,54 @@ class ChannelPipelineTask(TaskScheduler):
                 error=str(e),
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
+            )
+
+    # Warning types an UNATTENDED event_sync run must never leave silent
+    # (bead ti939.3.1): attach-cap overage and pre-flight failures. Other
+    # event_sync warnings (invalid config, fetch failure) stay run-surface
+    # only, same as manual runs.
+    _EVENT_SYNC_NOTIFY_WARNING_TITLES = {
+        "event_sync_attach_capped": "Event Sync: Attach cap reached",
+        "event_sync_preflight_failed": "Event Sync: Pre-flight failed (rule skipped)",
+    }
+
+    async def _notify_event_sync_warnings(self, result: dict) -> None:
+        """Turn persisted event_sync run warnings into notifications.
+
+        The engine pops ``event_sync_warnings`` off the transient results
+        before returning (they are persisted on the execution record so the
+        API/UI is not double-fed), so they are read back here by execution
+        id. One warning notification per cap-overage / pre-flight failure,
+        with alerts ON — an unattended misconfiguration must surface via the
+        notification channel rather than silence.
+        """
+        from database import get_session
+        from models import ChannelPipelineExecution
+        from services.notification_service import create_notification_internal
+
+        execution_id = result.get("execution_id")
+        if execution_id is None:
+            return
+        session = get_session()
+        try:
+            execution = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
+            ).first()
+            warnings = execution.get_warnings() if execution else []
+        finally:
+            session.close()
+
+        for warning in warnings or []:
+            title = self._EVENT_SYNC_NOTIFY_WARNING_TITLES.get(
+                warning.get("type")
+            )
+            if not title:
+                continue
+            await create_notification_internal(
+                notification_type="warning",
+                title=title,
+                message=warning.get("message", ""),
+                source="auto_creation",
+                source_id="event_sync_auto_run",
+                send_alerts=True,
             )
