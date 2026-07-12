@@ -228,3 +228,81 @@ class TestChannelGroupOverride:
             all_settings=settings,
         )
         client.get_all_m3u_group_settings.assert_not_awaited()
+
+
+class _ProviderScopedClient:
+    """Client double exposing BOTH the collapsed and the per-(provider, group)
+    read methods — for provider-scoped pre-flight (bead jiscc)."""
+
+    def __init__(self, collapsed: dict, by_provider: dict):
+        self.get_all_m3u_group_settings = AsyncMock(return_value=collapsed)
+        self.get_m3u_group_settings_by_provider = AsyncMock(
+            return_value=by_provider
+        )
+
+
+class TestProviderScopedPreflight:
+    """bead jiscc: on a SHARED group, the pre-flight must check the SPECIFIC
+    provider's junction row, not the collapsed (auto-sync-ON-preferring) view.
+    """
+
+    def _shared_group_config(self):
+        # Master = group 10 / provider 3; secondary = group 10 / provider 7.
+        return {
+            "master": {"group_id": 10, "m3u_account_id": 3},
+            "secondary": [{"group_id": 10, "m3u_account_id": 7}],
+        }
+
+    async def test_shared_group_diff_providers_passes(self):
+        # Provider 3's group-10 row is ON (master), provider 7's is OFF
+        # (secondary) — valid, even though the COLLAPSED group 10 reads ON.
+        client = _ProviderScopedClient(
+            collapsed={10: _group(auto_sync=True)},
+            by_provider={
+                (3, 10): _group(auto_sync=True),
+                (7, 10): _group(auto_sync=False),
+            },
+        )
+        result = await check_event_sync_group_settings(
+            client, self._shared_group_config()
+        )
+        assert result == {"ok": True, "failures": []}
+
+    async def test_secondary_providers_row_auto_sync_on_fails(self):
+        client = _ProviderScopedClient(
+            collapsed={10: _group(auto_sync=True)},
+            by_provider={
+                (3, 10): _group(auto_sync=True),
+                (7, 10): _group(auto_sync=True),  # secondary provider ON -> bad
+            },
+        )
+        result = await check_event_sync_group_settings(
+            client, self._shared_group_config()
+        )
+        assert result["ok"] is False
+        assert any(f["check"] == CHECK_SECONDARY_AUTO_SYNC_OFF
+                   for f in result["failures"])
+
+    async def test_master_provider_not_carrying_group_fails(self):
+        client = _ProviderScopedClient(
+            collapsed={10: _group(auto_sync=True)},
+            by_provider={(7, 10): _group(auto_sync=False)},  # no (3,10) row
+        )
+        result = await check_event_sync_group_settings(
+            client, self._shared_group_config()
+        )
+        assert result["ok"] is False
+        assert any(f["check"] == CHECK_GROUP_SETTINGS_FOUND
+                   for f in result["failures"])
+
+    async def test_whole_group_scope_does_not_fetch_by_provider(self):
+        # A null-provider (whole-group) config must NOT call the per-provider
+        # read — the collapsed path is preserved for legacy configs.
+        client = _ProviderScopedClient(
+            collapsed={10: _group(True), 20: _group(False)},
+            by_provider={},
+        )
+        await check_event_sync_group_settings(
+            client, _config(master=10, secondaries=(20,))
+        )
+        client.get_m3u_group_settings_by_provider.assert_not_awaited()

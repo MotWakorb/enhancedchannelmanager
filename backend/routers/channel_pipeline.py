@@ -2550,7 +2550,16 @@ async def preview_event_sync(
     try:
         accounts = await client.get_m3u_accounts() or []
         account_names = {a.get("id"): a.get("name") for a in accounts}
-        for gid in secondary_group_ids:
+        # bead jiscc: provider-scoped secondary scopes (mirrors the engine
+        # fetch so preview and run stay in lockstep). m3u_account_id filters
+        # the fetch to one provider; None = the whole group.
+        secondary_scopes = config.get("secondary") or [
+            {"group_id": g, "m3u_account_id": None}
+            for g in secondary_group_ids
+        ]
+        for scope in secondary_scopes:
+            gid = scope["group_id"]
+            provider_filter = scope.get("m3u_account_id")
             gname = await client._channel_group_name_for_id(gid)
             group_names[gid] = gname
             if not gname:
@@ -2566,6 +2575,7 @@ async def preview_event_sync(
                 resp = await client.get_streams(
                     page=spage, page_size=_PREVIEW_FETCH_PAGE_SIZE,
                     channel_group_name=gname,
+                    m3u_account=provider_filter,
                 )
                 batch = resp.get("results", []) if isinstance(resp, dict) else (resp or [])
                 for s in batch:

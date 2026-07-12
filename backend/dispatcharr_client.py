@@ -664,6 +664,29 @@ class DispatcharrClient:
         logger.info("[DISPATCHARR]   Unique channel group IDs extracted: %s", len(all_settings))
         return all_settings
 
+    async def get_m3u_group_settings_by_provider(self) -> dict:
+        """Per-(m3u_account_id, channel_group_id) group settings, NON-collapsed.
+
+        Complements :meth:`get_all_m3u_group_settings`, which collapses to one
+        entry per channel-group id (preferring auto_channel_sync ON). Provider-
+        scoped event_sync needs the SPECIFIC junction row for a (provider,
+        group) pair — e.g. on a group shared by two providers, provider A's row
+        may be auto_channel_sync ON while provider B's is OFF. Keyed by the
+        ``(m3u_account_id, channel_group_id)`` tuple.
+        """
+        accounts = await self.get_m3u_accounts()
+        by_pair: dict = {}
+        for account in accounts:
+            for setting in account.get("channel_groups", []):
+                channel_group_id = setting.get("channel_group")
+                if channel_group_id:
+                    by_pair[(account["id"], channel_group_id)] = {
+                        **setting,
+                        "m3u_account_id": account["id"],
+                        "m3u_account_name": account.get("name", ""),
+                    }
+        return by_pair
+
     async def get_m3u_account(self, account_id: int) -> dict:
         """Get a single M3U account by ID."""
         response = await self._request("GET", f"/api/m3u/accounts/{account_id}/")
