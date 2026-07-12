@@ -292,6 +292,19 @@ export function EventSyncReviewQueue() {
                   )}
                 </div>
 
+                {ev.ambiguous_reason === 'contested_top_candidates' && (
+                  <p className="event-sync-review-contested-note" role="note">
+                    <span className="material-icons" aria-hidden="true">info</span>
+                    <span>
+                      Contested between two masters. Rejecting this pairing may
+                      let the other (sibling) master attach automatically on the
+                      next run if that pairing scores in the attach band —
+                      rejecting one side is how you steer the stream to the
+                      other.
+                    </span>
+                  </p>
+                )}
+
                 <div className="event-sync-review-actions">
                   <button
                     type="button"

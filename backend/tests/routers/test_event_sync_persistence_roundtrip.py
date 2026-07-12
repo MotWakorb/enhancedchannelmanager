@@ -111,6 +111,66 @@ class TestDbasRestoreRoundTrip:
         )
         assert restored.get_event_sync_config() == _event_sync_config()
 
+    def test_restore_preserves_answered_review_decisions_by_name(self, test_session):
+        """bead 8fq6x: an ANSWERED accept/reject decision survives a config
+        restore, re-keyed onto the recreated rule by NAME (the rule_id FK
+        breaks across delete+recreate; the fingerprint is content-based)."""
+        from routers.backup import _restore_auto_creation_rules
+        from models import EventSyncReview
+
+        rule = _create_rule(test_session, name="RoundTrip")
+        test_session.add(EventSyncReview(
+            rule_id=rule.id, provider_id=7, stream_name_hash="hash-abc",
+            event_key="evt-xyz", status="accepted",
+            created_at=1000, last_seen_at=1000, resolved_at=1200,
+            resolution_source="operator", evidence="{}",
+        ))
+        test_session.commit()
+        exported = rule.to_dict()
+
+        with patch("routers.backup.get_session", return_value=test_session):
+            result = _restore_auto_creation_rules([exported])
+
+        assert result["warnings"] == []
+        restored = test_session.query(ChannelPipelineRule).filter(
+            ChannelPipelineRule.name == "RoundTrip"
+        ).one()
+        rows = test_session.query(EventSyncReview).filter(
+            EventSyncReview.rule_id == restored.id
+        ).all()
+        assert len(rows) == 1, "answered review decision was not preserved"
+        assert rows[0].status == "accepted"
+        assert rows[0].event_key == "evt-xyz"
+        assert rows[0].provider_id == 7
+
+    def test_restore_drops_review_rows_for_a_rule_not_in_the_set(self, test_session):
+        """A review whose rule is absent from the restore set is dropped with
+        a warning (its rule no longer exists to re-key onto)."""
+        from routers.backup import _restore_auto_creation_rules
+        from models import EventSyncReview
+
+        keep = _create_rule(test_session, name="Keep")
+        gone = _create_rule(test_session, name="Gone")
+        for r in (keep, gone):
+            test_session.add(EventSyncReview(
+                rule_id=r.id, provider_id=1, stream_name_hash=f"h-{r.name}",
+                event_key="evt", status="rejected",
+                created_at=1, last_seen_at=1, evidence="{}",
+            ))
+        test_session.commit()
+
+        # Restore only "Keep".
+        with patch("routers.backup.get_session", return_value=test_session):
+            result = _restore_auto_creation_rules([keep.to_dict()])
+
+        assert any("dropped on restore" in w for w in result["warnings"])
+        restored = test_session.query(ChannelPipelineRule).filter(
+            ChannelPipelineRule.name == "Keep"
+        ).one()
+        all_rows = test_session.query(EventSyncReview).all()
+        assert len(all_rows) == 1
+        assert all_rows[0].rule_id == restored.id
+
     def test_restore_standard_rule_stays_standard(self, test_session):
         from routers.backup import _restore_auto_creation_rules
 
