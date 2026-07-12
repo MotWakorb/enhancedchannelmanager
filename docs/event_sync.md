@@ -5,14 +5,17 @@
 > [Developer reference](#developer-reference) at the bottom is for engineers
 > working on the matcher, resolver, or schema.
 
-> **Phase status: attach path implemented (Phase 1B, bead ti939.2.1),
-> manual-run-only.** event_sync rules stay excluded from the pipeline's
+> **Phase status: attach path implemented (Phase 1B, bead ti939.2.1);
+> opt-in auto-run implemented (Phase 2, bead ti939.3.1) — manual-run-only
+> by default.** event_sync rules stay excluded from the pipeline's
 > per-stream Pass 1/2 evaluation; on a **manually triggered** pipeline run
 > they execute via a dedicated attach phase that resolves matches through
 > the same resolver the preview uses and attaches streams via the existing
-> merge internals. They never fire from the unattended post-refresh task or
-> any scheduled path (auto-run is a Phase 2 explicit opt-in). See
-> [Running the attach path](#running-the-attach-path-phase-1b).
+> merge internals. A rule additionally runs from the unattended
+> post-refresh watermark task **only** when its config carries the explicit
+> `auto_run: true` opt-in; scheduled paths stay denied for every rule. See
+> [Running the attach path](#running-the-attach-path-phase-1b) and
+> [Automatic runs after refresh](#automatic-runs-after-refresh-phase-2-opt-in).
 
 ## Overview
 
@@ -256,6 +259,7 @@ the rule.
 | `attach_threshold` | no (default 0.80) | Auto-attach score floor on the parsed-title score. **Hard-clamped ≥ 0.80** — it can be raised per rule, never lowered. |
 | `max_attach_per_run` | no (default 100) | Per-run attach cap (1–1000). On overage the run stops attaching, warns in the execution log, and records the overage count. Runs are idempotent — run again to continue. |
 | `enabled` | no (default true) | Feature toggle within the rule. |
+| `auto_run` | no (default **false**) | Phase 2 opt-in (bead ti939.3.1): when true, the rule also runs **unattended** after each M3U refresh (the watermark task). Absent means false — manual-run-only. See [Automatic runs after refresh](#automatic-runs-after-refresh-phase-2-opt-in). |
 
 ### Why validation is strict
 
@@ -464,10 +468,14 @@ in practice.
 * **No persisted channel IDs.** Matching is recomputed statelessly every
   run; master channels are the identity anchor. See [No durable cluster
   state](#no-durable-cluster-state) below.
-* **No auto-run.** Manual-run-only until Phase 2's explicit opt-in flag.
-  Enforced twice: the unattended watermark task excludes event_sync rules
-  from its query, and the engine refuses to execute them for any
-  non-manual trigger (deny-by-default).
+* **No silent auto-run.** Manual-run-only unless a rule carries the
+  explicit `auto_run: true` opt-in (Phase 2, bead ti939.3.1 — see
+  [Automatic runs after refresh](#automatic-runs-after-refresh-phase-2-opt-in)).
+  Enforced in layers: the unattended watermark task selects only opted-in
+  event_sync rules, the engine's per-rule trigger gate refuses everything
+  else (deny-by-default — "scheduled" and unidentified triggers stay
+  denied even for opted-in rules), and the attach phase re-checks the gate
+  plus the circuit breaker and a pre-flight before any unattended write.
 
 ## Previewing matches (Phase 1A)
 
@@ -514,6 +522,72 @@ dedicated attach phase:
   undoes attaches. Master channels are restored **streams-only** (never
   their Dispatcharr-owned name/group/EPG metadata) and are never deleted.
   Step-by-step: [Undo a bad event_sync run](#undo-a-bad-event_sync-run).
+
+## Automatic runs after refresh (Phase 2 opt-in)
+
+By default, event_sync rules run only when you run them. Once you trust a
+rule's manual runs (clean previews, correct attaches), you can opt that
+**one rule** into unattended runs on the existing post-refresh watermark
+task (bead ti939.3.1).
+
+### How to enable it
+
+Set `auto_run: true` on the rule — in the rule editor it is the
+**"Run automatically after each M3U refresh (auto-run)"** checkbox under
+**Advanced**, or set the key in `event_sync_config` via the API. The flag
+is per rule and **defaults to false**; rules saved before the flag existed
+behave exactly as before (absent means false). The pipeline's scheduled
+task must also be enabled (Settings → Scheduled Tasks — the same master
+switch that governs standard run-on-refresh rules).
+
+An unattended run is deliberately indistinguishable from a manual run on
+the audit surfaces: the same journal provenance (category `event_sync`,
+`batch_id` = execution id, names alongside IDs plus score, band, time
+delta, team verdict), the same `event_sync: X attached, …` summary line on
+the execution record, the same per-run attach cap, and the same rollback
+path.
+
+### Notifications you should expect
+
+Because nobody is watching an unattended run, misconfigurations notify
+instead of hiding in the run record (existing notification channel — the
+bell in the UI plus any configured alert methods):
+
+* **Attach cap reached** — the run stopped at `max_attach_per_run`; the
+  overage count is in the message. Runs are idempotent, so the remainder
+  attaches on the next refresh (or run manually / raise the cap).
+* **Pre-flight failed (rule skipped)** — unattended runs pre-flight the
+  Dispatcharr group settings and **fail closed**: if the master group's
+  `auto_channel_sync` is OFF, a configured group is missing, or the check
+  itself errors, the rule is skipped that run and you get a warning
+  notification. Fix the group settings (ECM never toggles them for you);
+  the rule runs again on the next refresh. Manual runs are unchanged —
+  they do not pre-flight; the preview is your pre-flight surface.
+
+The completion notification also carries the unattended attach count
+("N event streams attached").
+
+### Circuit breaker interaction
+
+The channel pipeline's run-on-refresh circuit breaker (tripped by the
+startup crash-sentinel after an abandoned run, e.g. an OOM kill) now gates
+the event_sync auto-run chain too (bead ixujz): while tripped, opted-in
+event_sync rules do **not** run unattended. Manual runs stay available —
+manual is the recovery surface. Clear the breaker deliberately via
+`POST /api/channel-pipeline/reset-circuit-breaker` (or the UI banner);
+auto-runs resume on the next refresh. The `ECM_DISABLE_RUN_ON_REFRESH`
+break-glass environment variable suppresses the unattended chain the same
+way.
+
+### Timing note — refresh ordering
+
+Dispatcharr materializes master channels from a Celery task **after** its
+M3U refresh completes, so an ECM watermark run can occasionally land
+before a brand-new event's master channel exists. This is accepted, not
+engineered around: the stream counts as `unmatched` that run (zero writes,
+never a guess) and attaches on the **next** run — convergence, not
+immediacy. Covered by the lifecycle race tests
+(`backend/tests/unit/test_event_sync_lifecycle.py`).
 
 ## Testing & pre-release verification
 

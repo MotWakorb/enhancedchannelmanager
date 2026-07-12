@@ -38,7 +38,8 @@ def _event_sync_config(**overrides) -> dict:
 
 
 def _make_rule(name: str, *, event_sync: bool = False, enabled: bool = True,
-               priority: int = 0) -> ChannelPipelineRule:
+               priority: int = 0,
+               es_config: dict | None = None) -> ChannelPipelineRule:
     return ChannelPipelineRule(
         name=name,
         enabled=enabled,
@@ -46,7 +47,9 @@ def _make_rule(name: str, *, event_sync: bool = False, enabled: bool = True,
         conditions=json.dumps([{"type": "always"}]),
         actions=json.dumps([{"type": "skip"}]),
         event_sync_config=(
-            json.dumps(_event_sync_config()) if event_sync else None
+            json.dumps(es_config if es_config is not None
+                       else _event_sync_config())
+            if event_sync else None
         ),
     )
 
@@ -221,6 +224,161 @@ class TestPass12Exclusion:
         with patch("channel_pipeline_engine.get_session", return_value=test_session):
             result = asyncio.get_event_loop().run_until_complete(
                 self.engine.run_pipeline(dry_run=True)  # no triggered_by
+            )
+
+        assert result["success"] is True
+        assert "manual-run-only" in result["message"]
+        self.client.get_streams.assert_not_awaited()
+
+
+class TestAutoRunTriggerGate:
+    """Phase 2 (ti939.3.1): the per-rule trigger gate. Deny-by-default is
+    preserved — the ONLY relaxation is the watermark trigger for rules whose
+    config carries the explicit auto_run=true opt-in."""
+
+    def test_manual_and_api_always_allowed(self):
+        from channel_pipeline_engine import event_sync_trigger_allowed
+        for trig in ("manual", "api"):
+            assert event_sync_trigger_allowed(trig, {"auto_run": False}) is True
+            assert event_sync_trigger_allowed(trig, {}) is True
+            assert event_sync_trigger_allowed(trig, None) is True
+
+    def test_watermark_trigger_requires_explicit_opt_in(self):
+        from channel_pipeline_engine import (
+            EVENT_SYNC_AUTO_RUN_TRIGGER,
+            event_sync_trigger_allowed,
+        )
+        assert event_sync_trigger_allowed(
+            EVENT_SYNC_AUTO_RUN_TRIGGER, {"auto_run": True}) is True
+        assert event_sync_trigger_allowed(
+            EVENT_SYNC_AUTO_RUN_TRIGGER, {"auto_run": False}) is False
+        # Absent key == false — the backward-compat rail for stored configs.
+        assert event_sync_trigger_allowed(
+            EVENT_SYNC_AUTO_RUN_TRIGGER, {}) is False
+        assert event_sync_trigger_allowed(
+            EVENT_SYNC_AUTO_RUN_TRIGGER, None) is False
+
+    def test_truthy_non_bool_auto_run_is_not_an_opt_in(self):
+        """Only literal True opts in — a schema-bypassing caller that stored
+        a truthy non-bool never enables unattended runs."""
+        from channel_pipeline_engine import event_sync_trigger_allowed
+        assert event_sync_trigger_allowed(
+            "m3u_refresh", {"auto_run": "true"}) is False
+        assert event_sync_trigger_allowed(
+            "m3u_refresh", {"auto_run": 1}) is False
+
+    def test_scheduled_and_unspecified_denied_even_with_opt_in(self):
+        """auto_run opts into the WATERMARK trigger only — every other
+        unattended trigger stays denied (deny-by-default posture)."""
+        from channel_pipeline_engine import (
+            TRIGGERED_BY_UNSPECIFIED,
+            event_sync_trigger_allowed,
+        )
+        assert event_sync_trigger_allowed(
+            "scheduled", {"auto_run": True}) is False
+        assert event_sync_trigger_allowed(
+            TRIGGERED_BY_UNSPECIFIED, {"auto_run": True}) is False
+
+
+class TestAutoRunRouting:
+    """run_pipeline routes the watermark trigger per rule (ti939.3.1)."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_channel_groups = AsyncMock(return_value=[])
+        self.client.get_m3u_accounts = AsyncMock(return_value=[])
+        self.client.get_streams = AsyncMock(return_value={"count": 0, "results": []})
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _run_with_captured_process_streams(self, test_session, triggered_by):
+        captured: dict = {}
+
+        async def fake_process_streams(streams, rules, execution, dry_run,
+                                       triggered_by="manual",
+                                       event_sync_rules=None):
+            captured["rules"] = list(rules)
+            captured["event_sync_rules"] = list(event_sync_rules or [])
+            return {
+                "streams_evaluated": 0, "streams_matched": 0,
+                "channels_created": 0, "channels_updated": 0,
+                "groups_created": 0, "streams_merged": 0,
+                "channels_touched": 0, "streams_skipped": 0,
+                "streams_removed": 0, "channels_removed": 0,
+                "channels_moved": 0, "pending_merges_added": 0,
+                "created_entities": [], "modified_entities": [],
+                "dry_run_results": [], "conflicts": [],
+                "execution_log": [], "rule_match_counts": {},
+                "streams_probed": 0,
+            }
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("channel_pipeline_engine.get_session", return_value=test_session), \
+             patch.object(self.engine, "_fetch_streams", new=AsyncMock(return_value=[])), \
+             patch.object(self.engine, "_apply_global_filters", new=AsyncMock(return_value=([], []))), \
+             patch.object(self.engine, "_create_execution", new=AsyncMock(return_value=mock_execution)), \
+             patch.object(self.engine, "_save_execution", new=AsyncMock()), \
+             patch.object(self.engine, "_process_streams", new=fake_process_streams):
+            result = asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=True, triggered_by=triggered_by)
+            )
+        return result, captured
+
+    def test_watermark_run_routes_only_opted_in_event_sync_rules(
+        self, test_session
+    ):
+        """On the watermark trigger, ONLY rules carrying auto_run=true reach
+        the attach phase; a non-opted rule keeps current behavior exactly."""
+        opted = _make_rule(
+            "Opted", event_sync=True,
+            es_config=_event_sync_config(auto_run=True),
+        )
+        not_opted = _make_rule("Not Opted", event_sync=True, priority=1)
+        test_session.add_all([opted, not_opted])
+        test_session.commit()
+
+        result, captured = self._run_with_captured_process_streams(
+            test_session, "m3u_refresh"
+        )
+
+        assert result["success"] is True
+        assert captured["rules"] == []
+        assert [r.name for r in captured["event_sync_rules"]] == ["Opted"]
+
+    def test_manual_run_still_routes_non_opted_rules(self, test_session):
+        """The opt-in changes nothing about manual runs: both rules run."""
+        opted = _make_rule(
+            "Opted", event_sync=True,
+            es_config=_event_sync_config(auto_run=True),
+        )
+        not_opted = _make_rule("Not Opted", event_sync=True, priority=1)
+        test_session.add_all([opted, not_opted])
+        test_session.commit()
+
+        result, captured = self._run_with_captured_process_streams(
+            test_session, "manual"
+        )
+
+        assert result["success"] is True
+        assert sorted(r.name for r in captured["event_sync_rules"]) == [
+            "Not Opted", "Opted",
+        ]
+
+    def test_scheduled_trigger_noop_even_with_opt_in(self, test_session):
+        """Deny-by-default survives the opt-in: auto_run only ever admits the
+        watermark trigger, never 'scheduled' or the unspecified sentinel."""
+        rule = _make_rule(
+            "Opted", event_sync=True,
+            es_config=_event_sync_config(auto_run=True),
+        )
+        test_session.add(rule)
+        test_session.commit()
+
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
+            result = asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=True, triggered_by="scheduled")
             )
 
         assert result["success"] is True
