@@ -38,7 +38,8 @@
  * (`m3u_account_id: null`); saving emits the nested `master` / `secondary`
  * and lets the backend derive the flat keys.
  */
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { ChannelPipelineRule, CreateRuleData } from '../../types/channelPipeline';
 import type {
   EventSyncConfig,
@@ -59,6 +60,8 @@ import { EventSyncTestPatternsPanel } from './EventSyncTestPatternsPanel';
 import type { LabeledEventSyncPattern } from './EventSyncTestPatternsPanel';
 import { EventSyncPreviewPanel } from './EventSyncPreviewPanel';
 import { EventSyncAutoSyncFixDialog } from './EventSyncAutoSyncFixDialog';
+import { ModalOverlay } from '../ModalOverlay';
+import '../ModalBase.css';
 import type { AutoSyncFixTarget } from './EventSyncAutoSyncFixDialog';
 import { ProviderScopedGroupPicker } from './ProviderScopedGroupPicker';
 import { joinProviderRows, type GroupProviderRow } from './providerScopedGroups';
@@ -71,7 +74,17 @@ import {
   clampAttachThreshold,
   selectionIsBuiltinDefaults,
 } from './eventSyncDefaults';
+import { stableStringify } from '../../utils/configDirty';
 import './EventSyncRuleEditor.css';
+
+/** The four wizard steps. */
+type WizardStep = 1 | 2 | 3 | 4;
+const WIZARD_STEPS: { n: WizardStep; label: string }[] = [
+  { n: 1, label: 'Scope' },
+  { n: 2, label: 'Matching' },
+  { n: 3, label: 'Behavior' },
+  { n: 4, label: 'Review' },
+];
 
 export interface EventSyncRuleEditorProps {
   /** Existing event_sync rule to edit; omit to create a new one. */
@@ -79,6 +92,13 @@ export interface EventSyncRuleEditorProps {
   onSave: (data: CreateRuleData) => Promise<void> | void;
   onCancel: () => void;
   isLoading?: boolean;
+  /**
+   * S4a dirty-guard: the editor owns the discard confirm and registers its
+   * guarded-close here so parent-owned dismissors (the modal overlay's Escape
+   * handler and the header × button) route through the same guard instead of
+   * discarding a half-configured rule. Called with null on unmount.
+   */
+  onRegisterClose?: (attemptClose: (() => void) | null) => void;
 }
 
 interface GroupPatternDraft {
@@ -180,6 +200,62 @@ function sameDraft(a: GroupPatternDraft, b: GroupPatternDraft): boolean {
   );
 }
 
+/** Initial master scope from a config (bead 38dzi migration): nested `master`
+ * if present, else the flat legacy key as a whole-group scope. */
+function initialMasterScope(
+  config: EventSyncConfig | null | undefined
+): EventSyncGroupScope | null {
+  if (config?.master) return config.master;
+  if (config?.master_group_id != null) {
+    return { group_id: config.master_group_id, m3u_account_id: null };
+  }
+  return null;
+}
+
+/** Initial secondary scopes from a config (same migration). */
+function initialSecondaryScopes(
+  config: EventSyncConfig | null | undefined
+): EventSyncGroupScope[] {
+  if (config?.secondary) return config.secondary;
+  return (config?.secondary_group_ids ?? []).map(gid => ({
+    group_id: gid,
+    m3u_account_id: null,
+  }));
+}
+
+/** Order-insensitive equality of two group scopes. */
+function sameScope(
+  a: EventSyncGroupScope | null,
+  b: EventSyncGroupScope | null
+): boolean {
+  if (a == null || b == null) return a === b;
+  return a.group_id === b.group_id && (a.m3u_account_id ?? null) === (b.m3u_account_id ?? null);
+}
+
+/** Set-like equality of two scope lists (S4a dirty check — reordering in the
+ * picker is not an edit). */
+function sameScopes(a: EventSyncGroupScope[], b: EventSyncGroupScope[]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (s: EventSyncGroupScope) => `${s.group_id}:${s.m3u_account_id ?? 'any'}`;
+  const bKeys = b.map(key).sort();
+  return a.map(key).sort().every((k, i) => k === bKeys[i]);
+}
+
+/** Canonical string for a group-overrides map, ignoring empty drafts (an
+ * override typed then cleared is not an edit). */
+function normalizeOverrides(o: Record<number, GroupPatternDraft>): string {
+  const entries = Object.entries(o)
+    .map(([k, d]) => [
+      k,
+      d.title_pattern.trim(),
+      d.time_pattern.trim(),
+      d.date_pattern.trim(),
+    ])
+    .filter(([, t, tm, dt]) => t || tm || dt)
+    .sort((x, y) => (x[0] < y[0] ? -1 : 1));
+  return JSON.stringify(entries);
+}
+
 /** Selection equality is set-like: toggling a box off and back on again is
  * not an edit. */
 function sameIds(a: string[], b: string[]): boolean {
@@ -191,6 +267,7 @@ export function EventSyncRuleEditor({
   onSave,
   onCancel,
   isLoading = false,
+  onRegisterClose,
 }: EventSyncRuleEditorProps) {
   const id = useId();
   const config = rule?.event_sync_config ?? null;
@@ -203,20 +280,12 @@ export function EventSyncRuleEditor({
   // Scoping (bead 38dzi): provider-scoped master + secondary. Initialize from
   // the nested `master` / `secondary` when present; otherwise migrate the flat
   // legacy keys to WHOLE-GROUP scopes (m3u_account_id null).
-  const [masterScope, setMasterScope] = useState<EventSyncGroupScope | null>(() => {
-    if (config?.master) return config.master;
-    if (config?.master_group_id != null) {
-      return { group_id: config.master_group_id, m3u_account_id: null };
-    }
-    return null;
-  });
-  const [secondaryScopes, setSecondaryScopes] = useState<EventSyncGroupScope[]>(() => {
-    if (config?.secondary) return config.secondary;
-    return (config?.secondary_group_ids ?? []).map(gid => ({
-      group_id: gid,
-      m3u_account_id: null,
-    }));
-  });
+  const [masterScope, setMasterScope] = useState<EventSyncGroupScope | null>(() =>
+    initialMasterScope(config)
+  );
+  const [secondaryScopes, setSecondaryScopes] = useState<EventSyncGroupScope[]>(() =>
+    initialSecondaryScopes(config)
+  );
   // bead x82s3: both group pickers default to enabled-only junctions (hundreds
   // of groups on a real instance is noisy); this reveals the full list for
   // edge cases (temporarily-disabled group). Default OFF.
@@ -298,9 +367,51 @@ export function EventSyncRuleEditor({
   const [preview, setPreview] = useState<EventSyncPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Stale-marking (bead m1s38.1): the built-config signature captured when the
+  // last preview ran. Results are marked stale (not cleared) when the current
+  // built config diverges from it, via the shared dirty-comparator.
+  const [previewSignature, setPreviewSignature] = useState<string | null>(null);
+  // Last Test-patterns run verdict, surfaced in the Matching impact block
+  // (null = not run yet). Fed by the panel's onParseFailuresChange callback.
+  const [lastTestFailures, setLastTestFailures] = useState<boolean | null>(null);
 
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // S1 (F4): Test Patterns is collapsed by default so it does not compete with
+  // the always-visible Preview rail; a test run that produces parse failures
+  // auto-expands it so the failing rows are never hidden below the fold.
+  const [testPatternsOpen, setTestPatternsOpen] = useState(false);
+
+  // Wizard (bead m1s38.1): full-width step pills drive the LEFT column only.
+  // All four step sections stay MOUNTED and are toggled with `hidden`, so
+  // picker state, the Test Patterns panel, and every ref survive step changes.
+  // Editing an existing rule (rule prop present) exposes Save on every step;
+  // a brand-new rule can Save only from the Review step.
+  const isEditing = rule != null;
+  const [currentStep, setCurrentStep] = useState<WizardStep>(1);
+  // Step headings are focus targets (tabIndex=-1) so a screen reader announces
+  // the new step when nav happens. A field-focus request (Save-from-Review)
+  // overrides the heading focus for one transition.
+  const scopeHeadingRef = useRef<HTMLHeadingElement>(null);
+  const matchingHeadingRef = useRef<HTMLHeadingElement>(null);
+  const behaviorHeadingRef = useRef<HTMLHeadingElement>(null);
+  const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
+  const pendingFieldFocus = useRef<string | null>(null);
+  const didInitStep = useRef(false);
+
+  // S4a: dirty-state discard guard. The confirm is shown when a dismiss is
+  // attempted with unsaved changes; a pristine editor closes immediately.
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  // S4b: the Secondary section's inline anchor expands the Behavior ->
+  // Scope-extension subgroup and focuses the master-self-attach checkbox
+  // (recognition over recall). The subgroup's open state is therefore
+  // controlled, and a pending-focus ref defers the focus until after it opens.
+  const [scopeExtOpen, setScopeExtOpen] = useState(false);
+  const scopeExtRef = useRef<HTMLDetailsElement>(null);
+  const includeMasterRef = useRef<HTMLInputElement>(null);
+  const pendingMasterFocus = useRef(false);
 
   useEffect(() => {
     // The junction rows carry no group name; join them against the channel
@@ -600,6 +711,8 @@ export function EventSyncRuleEditor({
   const handleRunPreview = async () => {
     const builtConfig = buildConfig();
     if (!builtConfig) return;
+    // Snapshot the config this run reflects; later edits mark the results stale.
+    setPreviewSignature(stableStringify(builtConfig));
     setPreviewLoading(true);
     setPreviewError(null);
     try {
@@ -616,11 +729,20 @@ export function EventSyncRuleEditor({
   const handleSave = async () => {
     if (!name.trim()) {
       setSaveError('Name is required');
-      document.getElementById(`${id}-name`)?.focus();
+      navigateToField(1, `${id}-name`);
       return;
     }
     if (validationError) {
       setSaveError(validationError);
+      // Save-from-Review (and edit-mode Save on any step): jump to the step
+      // that owns the offending field and focus its heading.
+      const targetsScope =
+        masterScope == null ||
+        (secondaryScopes.length === 0 && !includeMasterGroupStreams);
+      const [step, fieldId] = targetsScope
+        ? ([1, `${id}-scope-title`] as const)
+        : ([2, `${id}-matching-title`] as const);
+      navigateToField(step, fieldId);
       return;
     }
     const builtConfig = buildConfig();
@@ -651,541 +773,1245 @@ export function EventSyncRuleEditor({
     }));
   };
 
+  // Wizard nav + focus management (bead m1s38.1). On each step change focus the
+  // step heading so a screen reader announces it — unless a specific field
+  // focus was requested (Save-from-Review jumps to the offending field). The
+  // very first mount does not steal focus. The S4b master-self-attach anchor
+  // sets pendingMasterFocus, which suppresses the heading focus so the checkbox
+  // focus effect below wins.
+  useEffect(() => {
+    if (!didInitStep.current) {
+      didInitStep.current = true;
+      return;
+    }
+    const fieldId = pendingFieldFocus.current;
+    pendingFieldFocus.current = null;
+    if (fieldId) {
+      document.getElementById(fieldId)?.focus();
+      return;
+    }
+    // S4b anchor jumped us to Behavior to focus the master-self-attach box.
+    if (pendingMasterFocus.current) {
+      pendingMasterFocus.current = false;
+      scopeExtRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      includeMasterRef.current?.focus();
+      return;
+    }
+    const headingRef =
+      currentStep === 1
+        ? scopeHeadingRef
+        : currentStep === 2
+          ? matchingHeadingRef
+          : currentStep === 3
+            ? behaviorHeadingRef
+            : reviewHeadingRef;
+    headingRef.current?.focus();
+  }, [currentStep]);
+
+  /** Plain step change (Back / Next / step pill / Review jump-back). Never
+   * routes through the dirty guard — only Cancel / Escape / × do. */
+  const goToStep = (step: WizardStep) => setCurrentStep(step);
+
+  /** Navigate to a step and focus a specific field once it is visible. */
+  const navigateToField = (step: WizardStep, fieldId: string) => {
+    if (step === currentStep) {
+      document.getElementById(fieldId)?.focus();
+    } else {
+      pendingFieldFocus.current = fieldId;
+      setCurrentStep(step);
+    }
+  };
+
+  // S4a: does the form diverge from the rule as loaded? (showAllGroups is a
+  // view toggle, not config — deliberately excluded.)
+  const dirty = useMemo(() => {
+    return (
+      name !== (rule?.name || '') ||
+      description !== (rule?.description || '') ||
+      enabled !== (rule?.enabled ?? true) ||
+      !sameScope(masterScope, initialMasterScope(config)) ||
+      !sameScopes(secondaryScopes, initialSecondaryScopes(config)) ||
+      !sameIds(selectedPatternIds, initial.patternIds) ||
+      !sameDraft(customShared, customSharedMeta.draft) ||
+      normalizeOverrides(groupOverrides) !== normalizeOverrides(initial.groupOverrides) ||
+      timeWindowText !== String(config?.time_window_minutes ?? DEFAULT_TIME_WINDOW_MINUTES) ||
+      thresholdText !== (config?.attach_threshold ?? EVENT_ATTACH_FLOOR).toFixed(2) ||
+      enforceTimeWindow !== (config?.enforce_time_window ?? true) ||
+      autoRun !== (config?.auto_run ?? false) ||
+      includeMasterGroupStreams !== (config?.include_master_group_streams ?? false) ||
+      assumeCurrentDate !== (config?.assume_current_date ?? false) ||
+      parseMasterFromStream !== (config?.parse_master_from_stream ?? false) ||
+      dummyEpgProfileId !== (config?.dummy_epg_profile_id ?? null)
+    );
+  }, [
+    name, description, enabled, masterScope, secondaryScopes, selectedPatternIds,
+    customShared, groupOverrides, timeWindowText, thresholdText, enforceTimeWindow,
+    autoRun, includeMasterGroupStreams, assumeCurrentDate, parseMasterFromStream,
+    dummyEpgProfileId, config, rule, initial, customSharedMeta,
+  ]);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+
+  // S4a: the guarded close. Confirm only when dirty; otherwise close at once so
+  // a modal opened by mistake is not held hostage by a prompt.
+  const attemptClose = useCallback(() => {
+    if (dirtyRef.current) setShowDiscardConfirm(true);
+    else onCancel();
+  }, [onCancel]);
+
+  // Register the guard so the parent's Escape/× dismissors route through it.
+  useEffect(() => {
+    onRegisterClose?.(attemptClose);
+    return () => onRegisterClose?.(null);
+  }, [onRegisterClose, attemptClose]);
+
+  // S4b: focus the master-self-attach checkbox once its subgroup has opened.
+  useEffect(() => {
+    if (scopeExtOpen && pendingMasterFocus.current) {
+      pendingMasterFocus.current = false;
+      scopeExtRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      includeMasterRef.current?.focus();
+    }
+  }, [scopeExtOpen]);
+
+  const handleUseMasterStreams = () => {
+    // The master-self-attach checkbox lives in the Behavior step's Scope-
+    // extension subgroup — jump there, open the subgroup, and focus it.
+    if (currentStep === 3 && scopeExtOpen) {
+      scopeExtRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      includeMasterRef.current?.focus();
+      return;
+    }
+    pendingMasterFocus.current = true;
+    setScopeExtOpen(true);
+    setCurrentStep(3);
+  };
+
+  // S3: plain-language rule-intent sentence. Bold clauses are the non-default
+  // or risk-carrying choices (time ignored, auto-run, assume-current-date) so
+  // the operator can see at a glance what the rule will actually do.
+  const currentThreshold = (() => {
+    const parsed = parseFloat(thresholdText);
+    return Number.isFinite(parsed) ? clampAttachThreshold(parsed) : EVENT_ATTACH_FLOOR;
+  })();
+  const currentTimeWindow = (() => {
+    const parsed = parseInt(timeWindowText, 10);
+    return Number.isFinite(parsed) ? parsed : DEFAULT_TIME_WINDOW_MINUTES;
+  })();
+
+  const intent: ReactNode = useMemo(() => {
+    if (masterScope == null) {
+      return (
+        <span className="modal-intent-placeholder">
+          Pick a master group to see what this rule will do.
+        </span>
+      );
+    }
+    const masterName = groupName(masterScope.group_id);
+    const secCount = secondaryScopes.length;
+    const source =
+      secCount === 0 && includeMasterGroupStreams ? (
+        <>the master group&apos;s own streams</>
+      ) : (
+        <>
+          streams from {secCount} secondary group{secCount === 1 ? '' : 's'}
+        </>
+      );
+    const matchClause = !enforceTimeWindow ? (
+      <strong>title only (time ignored)</strong>
+    ) : (
+      <>
+        title + start time within ±{currentTimeWindow} min
+      </>
+    );
+    const thresholdIsDefault = Math.abs(currentThreshold - EVENT_ATTACH_FLOOR) < 1e-9;
+    const scoreClause = thresholdIsDefault ? (
+      <>score ≥ {currentThreshold.toFixed(2)}</>
+    ) : (
+      <strong>score ≥ {currentThreshold.toFixed(2)}</strong>
+    );
+    return (
+      <>
+        Attach {source} to master <strong>{masterName}</strong>, matching on{' '}
+        {matchClause}, auto-attaching at {scoreClause}.{' '}
+        {autoRun ? (
+          <strong>Runs automatically after each M3U refresh.</strong>
+        ) : (
+          <>Runs only when you run it manually.</>
+        )}
+        {includeMasterGroupStreams && secCount > 0 && (
+          <> Also matches the master group&apos;s own streams.</>
+        )}
+        {assumeCurrentDate && (
+          <> <strong>Assumes today&apos;s date for dateless listings.</strong></>
+        )}
+        {dummyEpgProfileId != null && <> Assigns dummy EPG guide data on every run.</>}
+      </>
+    );
+  }, [
+    masterScope,
+    secondaryScopes,
+    includeMasterGroupStreams,
+    enforceTimeWindow,
+    currentTimeWindow,
+    currentThreshold,
+    autoRun,
+    assumeCurrentDate,
+    dummyEpgProfileId,
+    groupName,
+  ]);
+
+  // S2: per-subgroup "N changed" counts — non-default flag values inside a
+  // collapsed subgroup surface as a badge on its summary.
+  const timeTuningChanged =
+    (!enforceTimeWindow ? 1 : 0) +
+    (enforceTimeWindow && currentTimeWindow !== DEFAULT_TIME_WINDOW_MINUTES ? 1 : 0);
+  const scoreChanged = Math.abs(currentThreshold - EVENT_ATTACH_FLOOR) < 1e-9 ? 0 : 1;
+  const dateHandlingChanged = assumeCurrentDate ? 1 : 0;
+  const overridesChanged = scopedGroups.filter(
+    g => (groupOverrides[g.id]?.title_pattern ?? '').trim().length > 0
+  ).length;
+  const automationChanged = autoRun ? 1 : 0;
+  const scopeExtChanged =
+    (includeMasterGroupStreams ? 1 : 0) + (parseMasterFromStream ? 1 : 0);
+  const guideChanged = dummyEpgProfileId != null ? 1 : 0;
+
+  /** Collapsed-subgroup "N changed" badge (S2). */
+  const changedBadge = (count: number) =>
+    count > 0 ? (
+      <span className="badge badge-sm badge-info modal-subgroup-badge">
+        {count} changed
+      </span>
+    ) : null;
+
+  // Stale-marking (bead m1s38.1): the results reflect a config that has since
+  // diverged from the one captured when the preview ran (shared comparator).
+  const previewStale =
+    preview != null &&
+    previewSignature != null &&
+    stableStringify(buildConfig()) !== previewSignature;
+
+  /** Auto-sync verdict for a scope, rolled up across its provider junctions. */
+  const autoSyncForScope = (
+    scope: EventSyncGroupScope
+  ): 'on' | 'off' | 'mixed' | 'unknown' => {
+    const rows = junctions.filter(
+      j =>
+        j.groupId === scope.group_id &&
+        (scope.m3u_account_id == null || j.m3uAccountId === scope.m3u_account_id)
+    );
+    if (rows.length === 0) return 'unknown';
+    const on = rows.filter(r => r.autoChannelSync).length;
+    if (on === 0) return 'off';
+    if (on === rows.length) return 'on';
+    return 'mixed';
+  };
+
+  const syncChip = (verdict: ReturnType<typeof autoSyncForScope>): ReactNode => {
+    if (verdict === 'on') return <span className="badge badge-sm badge-info">Auto-sync ON</span>;
+    if (verdict === 'off') return <span className="badge badge-sm">Auto-sync OFF</span>;
+    if (verdict === 'mixed')
+      return <span className="badge badge-sm badge-warning">Auto-sync mixed</span>;
+    return <span className="badge badge-sm">Auto-sync ?</span>;
+  };
+
+  const masterProviderLabel: string | null = (() => {
+    if (masterScope == null) return null;
+    if (masterScope.m3u_account_id == null) return 'Any provider';
+    const row = junctions.find(
+      j => j.groupId === masterScope.group_id && j.m3uAccountId === masterScope.m3u_account_id
+    );
+    return row?.m3uAccountName ?? `Provider ${masterScope.m3u_account_id}`;
+  })();
+
+  const secondaryAutoSyncOnCount = secondaryScopes.filter(s => {
+    const v = autoSyncForScope(s);
+    return v === 'on' || v === 'mixed';
+  }).length;
+
+  // Persistent, step-reactive impact block (bead m1s38.1). All client-side and
+  // instant — no server round-trips (the Preview panel below is the only
+  // server dry-run).
+  const impactBlock: ReactNode = (() => {
+    if (currentStep === 1) {
+      if (masterScope == null) {
+        return (
+          <p className="form-hint">
+            Pick a master group to see its sync status and scope impact.
+          </p>
+        );
+      }
+      return (
+        <>
+          <h4 className="event-sync-impact-title">Scope impact</h4>
+          <p className="event-sync-impact-line">
+            Master <strong>{groupName(masterScope.group_id)}</strong>
+            {masterProviderLabel ? <> · {masterProviderLabel}</> : null}{' '}
+            {syncChip(autoSyncForScope(masterScope))}
+          </p>
+          <p className="event-sync-impact-line">
+            {secondaryScopes.length} secondary group
+            {secondaryScopes.length === 1 ? '' : 's'}
+            {includeMasterGroupStreams && secondaryScopes.length === 0
+              ? ' (master group’s own streams)'
+              : ''}
+          </p>
+          {secondaryAutoSyncOnCount > 0 && (
+            <p className="event-sync-impact-line">
+              <span className="badge badge-sm badge-warning">
+                {secondaryAutoSyncOnCount} secondary with auto-sync ON
+              </span>
+            </p>
+          )}
+        </>
+      );
+    }
+    if (currentStep === 2) {
+      return (
+        <>
+          <h4 className="event-sync-impact-title">Matching impact</h4>
+          <p className="event-sync-impact-line">
+            {effectivePatterns.length} parse pattern
+            {effectivePatterns.length === 1 ? '' : 's'} active
+          </p>
+          <p className="event-sync-impact-line">
+            {enforceTimeWindow
+              ? `Time window ±${currentTimeWindow} min`
+              : 'Time window ignored'}{' '}
+            · score ≥ {currentThreshold.toFixed(2)}
+          </p>
+          <p className="event-sync-impact-line">
+            {lastTestFailures == null ? (
+              <span className="form-hint">Test patterns not run yet.</span>
+            ) : lastTestFailures ? (
+              <span className="badge badge-sm badge-warning">Last test: parse failures</span>
+            ) : (
+              <span className="badge badge-sm badge-info">Last test: all parsed</span>
+            )}
+          </p>
+        </>
+      );
+    }
+    if (currentStep === 3) {
+      const chips: ReactNode[] = [];
+      if (autoRun)
+        chips.push(<span key="ar" className="badge badge-sm badge-warning">Auto-run</span>);
+      if (!enforceTimeWindow)
+        chips.push(<span key="to" className="badge badge-sm badge-warning">Title-only</span>);
+      if (assumeCurrentDate)
+        chips.push(<span key="ad" className="badge badge-sm badge-warning">Assumes date</span>);
+      if (dummyEpgProfileId != null)
+        chips.push(<span key="gd" className="badge badge-sm badge-info">Guide data</span>);
+      return (
+        <>
+          <h4 className="event-sync-impact-title">Behavior impact</h4>
+          {chips.length > 0 ? (
+            <p className="event-sync-impact-chips">{chips}</p>
+          ) : (
+            <p className="form-hint">
+              No risk flags set — manual, time-gated, no assumptions.
+            </p>
+          )}
+        </>
+      );
+    }
+    return (
+      <>
+        <h4 className="event-sync-impact-title">Ready to save</h4>
+        <p className="form-hint">
+          Run a preview below, then Save. Use the jump-back links to revisit any
+          section.
+        </p>
+      </>
+    );
+  })();
+
   return (
     <div className="event-sync-editor" data-testid="event-sync-editor">
       <div className="event-sync-editor-content">
-        <p className="form-hint event-sync-quick-path">
-          Quick path: pick the master group, pick the secondary groups, keep
-          the default patterns, then Preview. Preview never writes; a manual
-          pipeline Run attaches matched streams to master channels — capped
-          per run, journaled, and reversible via execution rollback. Event
-          Sync runs unattended only if you explicitly enable auto-run under
-          Advanced (off by default).
-        </p>
+        {/* Full-width step wizard strip — pills drive the LEFT column only.
+            Free non-linear nav: any pill is clickable at any time. */}
+        <nav className="modal-stepper" aria-label="Editor steps">
+          {WIZARD_STEPS.map(({ n, label }) => (
+            <button
+              key={n}
+              type="button"
+              className="modal-stepper-item"
+              aria-current={currentStep === n ? 'step' : undefined}
+              onClick={() => goToStep(n)}
+              data-testid={`event-sync-step-${n}`}
+            >
+              <span className="modal-stepper-num">{n}</span> {label}
+            </button>
+          ))}
+        </nav>
 
-        {/* Basic Info */}
-        <section className="event-sync-section-block">
-          <h3 className="event-sync-section-title">Basic Information</h3>
-          <div className="form-group">
-            <label htmlFor={`${id}-name`}>Rule Name *</label>
-            <input
-              id={`${id}-name`}
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Enter rule name"
-              disabled={isLoading}
-              aria-required="true"
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor={`${id}-description`}>Description</label>
-            <textarea
-              id={`${id}-description`}
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder="Optional description"
-              rows={2}
-              disabled={isLoading}
-            />
-          </div>
-          <label className="checkbox-option">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={e => setEnabled(e.target.checked)}
-              disabled={isLoading}
-            />
-            <span>Enabled</span>
-          </label>
-        </section>
+        <div className="modal-twopane">
+          <div className="modal-main">
+            <p className="form-hint event-sync-quick-path">
+              Quick path: pick the master group, pick the secondary groups, keep
+              the default patterns, then Preview. Preview never writes; a manual
+              pipeline Run attaches matched streams to master channels — capped
+              per run, journaled, and reversible via execution rollback. Event
+              Sync runs unattended only if you explicitly enable auto-run under
+              Behavior (off by default).
+            </p>
 
-        {/* Group visibility (bead x82s3): shared toggle for both the master
-            and secondary group pickers below. */}
-        <section className="event-sync-section-block">
-          <label className="checkbox-option">
-            <input
-              type="checkbox"
-              checked={showAllGroups}
-              onChange={e => setShowAllGroups(e.target.checked)}
-              disabled={isLoading}
-              data-testid="event-sync-show-all-groups"
-            />
-            <span>Show all groups</span>
-          </label>
-          <span className="form-hint">
-            The master and secondary pickers below list only groups whose
-            provider (M3U) junction is enabled by default. Turn this on to see
-            every provider junction too — useful for a temporarily-disabled
-            group.
-          </span>
-        </section>
+            {/* ── Step 1: Scope ──────────────────────────────────────────── */}
+            <section
+              hidden={currentStep !== 1}
+              className="event-sync-phase"
+              aria-labelledby={`${id}-scope-title`}
+            >
+              <h2
+                className="event-sync-phase-title"
+                id={`${id}-scope-title`}
+                ref={scopeHeadingRef}
+                tabIndex={-1}
+              >
+                <span className="event-sync-phase-num">1</span> Scope
+              </h2>
 
-        {/* Master group (bead 38dzi: provider-scoped picker) */}
-        <section className="event-sync-section-block">
-          <h3 className="event-sync-section-title">Master group</h3>
-          <span className="form-hint">
-            The ONE group whose channels Dispatcharr owns — auto-sync must be
-            ON for it. Secondary streams attach to these channels. A group
-            carried by more than one provider expands so you can scope the
-            master to a specific provider.
-          </span>
-          <ProviderScopedGroupPicker
-            role="master"
-            rows={junctions}
-            value={masterScope}
-            onChange={s => setMasterScope(s as EventSyncGroupScope | null)}
-            showAll={showAllGroups}
-            excludeScope={null}
-            onRequestFix={t => requestFix(t, true)}
-            disabled={isLoading}
-          />
-        </section>
+              {/* Basic Info */}
+              <div className="event-sync-section-block">
+                <h3 className="event-sync-section-title">Basic Information</h3>
+                <div className="form-group">
+                  <label htmlFor={`${id}-name`}>Rule Name *</label>
+                  <input
+                    id={`${id}-name`}
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="Enter rule name"
+                    disabled={isLoading}
+                    aria-required="true"
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor={`${id}-description`}>Description</label>
+                  <textarea
+                    id={`${id}-description`}
+                    value={description}
+                    onChange={e => setDescription(e.target.value)}
+                    placeholder="Optional description"
+                    rows={2}
+                    disabled={isLoading}
+                  />
+                </div>
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={e => setEnabled(e.target.checked)}
+                    disabled={isLoading}
+                  />
+                  <span>Enabled</span>
+                </label>
+              </div>
 
-        {/* Secondary groups (bead 38dzi: provider-scoped picker) */}
-        <section className="event-sync-section-block">
-          <h3 className="event-sync-section-title">Secondary groups</h3>
-          <span className="form-hint">
-            Pure stream sources from other providers — auto-sync should be OFF
-            for each (otherwise Dispatcharr keeps creating duplicate channels
-            from them). The same group under a different provider than the
-            master IS selectable here.
-          </span>
-          <ProviderScopedGroupPicker
-            role="secondary"
-            rows={junctions}
-            value={secondaryScopes}
-            onChange={s => setSecondaryScopes(s as EventSyncGroupScope[])}
-            showAll={showAllGroups}
-            excludeScope={masterScope}
-            onRequestFix={t => requestFix(t, false)}
-            disabled={isLoading}
-          />
-        </section>
-
-        {/* Parse patterns */}
-        <section className="event-sync-section-block">
-          <h3 className="event-sync-section-title">Parse patterns</h3>
-          <span className="form-hint">
-            Shipped patterns cover the common shapes — most rules never need a
-            custom regex. Patterns are tried in order; the first one that
-            extracts a complete title + date + time wins.
-          </span>
-          <div className="checkbox-group event-sync-pattern-list">
-            {SHIPPED_EVENT_SYNC_PATTERNS.map(shipped => (
-              <label key={shipped.id} className="checkbox-option event-sync-pattern-option">
-                <input
-                  type="checkbox"
-                  checked={selectedPatternIds.includes(shipped.id)}
-                  onChange={() =>
-                    setSelectedPatternIds(ids =>
-                      ids.includes(shipped.id)
-                        ? ids.filter(i => i !== shipped.id)
-                        : [...ids, shipped.id]
-                    )
-                  }
-                  disabled={isLoading}
-                />
-                <span>
-                  <span className="event-sync-pattern-label">{shipped.label}</span>
-                  <span className="event-sync-pattern-desc">{shipped.description}</span>
-                  <span className="event-sync-pattern-example">e.g. {shipped.example}</span>
+              {/* Group visibility (bead x82s3): shared toggle for both the
+                  master and secondary group pickers below. */}
+              <div className="event-sync-section-block">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={showAllGroups}
+                    onChange={e => setShowAllGroups(e.target.checked)}
+                    disabled={isLoading}
+                    data-testid="event-sync-show-all-groups"
+                  />
+                  <span>Show all groups</span>
+                </label>
+                <span className="form-hint">
+                  The master and secondary pickers below list only groups whose
+                  provider (M3U) junction is enabled by default. Turn this on to
+                  see every provider junction too — useful for a
+                  temporarily-disabled group.
                 </span>
-              </label>
-            ))}
-          </div>
+              </div>
 
-          <details className="event-sync-details">
-            <summary>Custom shared pattern (regex fallback)</summary>
-            <div className="event-sync-details-body">
-              <span className="form-hint">
-                Python-style named groups: <code>(?P&lt;title&gt;...)</code>,{' '}
-                <code>(?P&lt;hour&gt;...)</code>/<code>(?P&lt;minute&gt;...)</code>/
-                <code>(?P&lt;ampm&gt;...)</code>,{' '}
-                <code>(?P&lt;day&gt;...)</code>/<code>(?P&lt;month&gt;...)</code>/
-                <code>(?P&lt;year&gt;...)</code>. Verify with the Test Patterns
-                panel below.
-              </span>
-              <div className="form-group">
-                <label htmlFor={`${id}-custom-title`}>Title pattern</label>
-                <input
-                  id={`${id}-custom-title`}
-                  type="text"
-                  value={customShared.title_pattern}
-                  onChange={e => setCustomShared(c => ({ ...c, title_pattern: e.target.value }))}
-                  placeholder="^(?P<title>.+?)\s*@"
+              {/* Master group (bead 38dzi: provider-scoped picker) */}
+              <div className="event-sync-section-block">
+                <h3 className="event-sync-section-title">Master group</h3>
+                <span className="form-hint">
+                  The ONE group whose channels Dispatcharr owns — auto-sync must
+                  be ON for it. Secondary streams attach to these channels. A
+                  group carried by more than one provider expands so you can
+                  scope the master to a specific provider.
+                </span>
+                <ProviderScopedGroupPicker
+                  role="master"
+                  rows={junctions}
+                  value={masterScope}
+                  onChange={s => setMasterScope(s as EventSyncGroupScope | null)}
+                  showAll={showAllGroups}
+                  excludeScope={null}
+                  onRequestFix={t => requestFix(t, true)}
                   disabled={isLoading}
                 />
               </div>
-              <div className="form-group">
-                <label htmlFor={`${id}-custom-time`}>Time pattern</label>
-                <input
-                  id={`${id}-custom-time`}
-                  type="text"
-                  value={customShared.time_pattern}
-                  onChange={e => setCustomShared(c => ({ ...c, time_pattern: e.target.value }))}
-                  placeholder="(?P<hour>\d{1,2}):(?P<minute>\d{2})"
-                  disabled={isLoading}
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor={`${id}-custom-date`}>Date pattern</label>
-                <input
-                  id={`${id}-custom-date`}
-                  type="text"
-                  value={customShared.date_pattern}
-                  onChange={e => setCustomShared(c => ({ ...c, date_pattern: e.target.value }))}
-                  placeholder="(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})"
-                  disabled={isLoading}
-                />
-              </div>
-              {customSharedMeta.extras.length > 0 && (
-                <span
-                  className="form-hint"
-                  data-testid="custom-shared-extras"
+
+              {/* Secondary groups (bead 38dzi: provider-scoped picker) */}
+              <div className="event-sync-section-block">
+                <h3 className="event-sync-section-title">Secondary groups</h3>
+                <span className="form-hint">
+                  Pure stream sources from other providers — auto-sync should be
+                  OFF for each (otherwise Dispatcharr keeps creating duplicate
+                  channels from them). The same group under a different provider
+                  than the master IS selectable here.
+                </span>
+                <button
+                  type="button"
+                  className="event-sync-inline-link"
+                  onClick={handleUseMasterStreams}
+                  data-testid="event-sync-use-master-streams"
                 >
-                  {customSharedMeta.extras.length} additional API-authored
-                  shared pattern{customSharedMeta.extras.length === 1 ? '' : 's'}{' '}
-                  ({customSharedMeta.extras
-                    .map((p, i) => p.name || `#${i + 2}`)
-                    .join(', ')}) {customSharedMeta.extras.length === 1 ? 'is' : 'are'}{' '}
-                  preserved as saved — this editor can edit only the first
-                  custom pattern; the rest are applied after it and never
-                  dropped on save.
-                </span>
-              )}
-            </div>
-          </details>
-        </section>
+                  No separate secondary? Use the master group&apos;s own streams →
+                </button>
+                <ProviderScopedGroupPicker
+                  role="secondary"
+                  rows={junctions}
+                  value={secondaryScopes}
+                  onChange={s => setSecondaryScopes(s as EventSyncGroupScope[])}
+                  showAll={showAllGroups}
+                  excludeScope={masterScope}
+                  onRequestFix={t => requestFix(t, false)}
+                  disabled={isLoading}
+                />
+              </div>
+            </section>
 
-        {/* Test Patterns */}
-        <section className="event-sync-section-block">
-          <details className="event-sync-details" open>
-            <summary>Test patterns against sample names</summary>
-            <div className="event-sync-details-body">
-              <EventSyncTestPatternsPanel
-                patterns={effectivePatterns}
-                groupOptions={scopedGroups}
+            {/* ── Step 2: Matching ───────────────────────────────────────── */}
+            <section
+              hidden={currentStep !== 2}
+              className="event-sync-phase"
+              aria-labelledby={`${id}-matching-title`}
+            >
+              <h2
+                className="event-sync-phase-title"
+                id={`${id}-matching-title`}
+                ref={matchingHeadingRef}
+                tabIndex={-1}
+              >
+                <span className="event-sync-phase-num">2</span> Matching
+              </h2>
+
+              {/* Parse patterns */}
+              <div className="event-sync-section-block">
+                <h3 className="event-sync-section-title">Parse patterns</h3>
+                <span className="form-hint">
+                  Shipped patterns cover the common shapes — most rules never
+                  need a custom regex. Patterns are tried in order; the first
+                  one that extracts a complete title + date + time wins.
+                </span>
+                <div className="checkbox-group event-sync-pattern-list">
+                  {SHIPPED_EVENT_SYNC_PATTERNS.map(shipped => (
+                    <label key={shipped.id} className="checkbox-option event-sync-pattern-option">
+                      <input
+                        type="checkbox"
+                        checked={selectedPatternIds.includes(shipped.id)}
+                        onChange={() =>
+                          setSelectedPatternIds(ids =>
+                            ids.includes(shipped.id)
+                              ? ids.filter(i => i !== shipped.id)
+                              : [...ids, shipped.id]
+                          )
+                        }
+                        disabled={isLoading}
+                      />
+                      <span>
+                        <span className="event-sync-pattern-label">{shipped.label}</span>
+                        <span className="event-sync-pattern-desc">{shipped.description}</span>
+                        <span className="event-sync-pattern-example">e.g. {shipped.example}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+
+                <details className="event-sync-details">
+                  <summary>Custom shared pattern (regex fallback)</summary>
+                  <div className="event-sync-details-body">
+                    <span className="form-hint">
+                      Python-style named groups: <code>(?P&lt;title&gt;...)</code>,{' '}
+                      <code>(?P&lt;hour&gt;...)</code>/<code>(?P&lt;minute&gt;...)</code>/
+                      <code>(?P&lt;ampm&gt;...)</code>,{' '}
+                      <code>(?P&lt;day&gt;...)</code>/<code>(?P&lt;month&gt;...)</code>/
+                      <code>(?P&lt;year&gt;...)</code>. Verify with the Test
+                      Patterns panel below.
+                    </span>
+                    <div className="form-group">
+                      <label htmlFor={`${id}-custom-title`}>Title pattern</label>
+                      <input
+                        id={`${id}-custom-title`}
+                        type="text"
+                        value={customShared.title_pattern}
+                        onChange={e => setCustomShared(c => ({ ...c, title_pattern: e.target.value }))}
+                        placeholder="^(?P<title>.+?)\s*@"
+                        disabled={isLoading}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor={`${id}-custom-time`}>Time pattern</label>
+                      <input
+                        id={`${id}-custom-time`}
+                        type="text"
+                        value={customShared.time_pattern}
+                        onChange={e => setCustomShared(c => ({ ...c, time_pattern: e.target.value }))}
+                        placeholder="(?P<hour>\d{1,2}):(?P<minute>\d{2})"
+                        disabled={isLoading}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor={`${id}-custom-date`}>Date pattern</label>
+                      <input
+                        id={`${id}-custom-date`}
+                        type="text"
+                        value={customShared.date_pattern}
+                        onChange={e => setCustomShared(c => ({ ...c, date_pattern: e.target.value }))}
+                        placeholder="(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})"
+                        disabled={isLoading}
+                      />
+                    </div>
+                    {customSharedMeta.extras.length > 0 && (
+                      <span
+                        className="form-hint"
+                        data-testid="custom-shared-extras"
+                      >
+                        {customSharedMeta.extras.length} additional API-authored
+                        shared pattern{customSharedMeta.extras.length === 1 ? '' : 's'}{' '}
+                        ({customSharedMeta.extras
+                          .map((p, i) => p.name || `#${i + 2}`)
+                          .join(', ')}) {customSharedMeta.extras.length === 1 ? 'is' : 'are'}{' '}
+                        preserved as saved — this editor can edit only the first
+                        custom pattern; the rest are applied after it and never
+                        dropped on save.
+                      </span>
+                    )}
+                  </div>
+                </details>
+              </div>
+
+              {/* Test Patterns — collapsed by default (S1/F4); auto-expands
+                  when a test run turns up parse failures. */}
+              <div className="event-sync-section-block">
+                <details
+                  className="event-sync-details"
+                  data-testid="event-sync-test-patterns-details"
+                  open={testPatternsOpen}
+                  onToggle={e => setTestPatternsOpen(e.currentTarget.open)}
+                >
+                  <summary>Test patterns against sample names</summary>
+                  <div className="event-sync-details-body">
+                    <EventSyncTestPatternsPanel
+                      patterns={effectivePatterns}
+                      groupOptions={scopedGroups}
+                      onParseFailuresChange={has => {
+                        setLastTestFailures(has);
+                        if (has) setTestPatternsOpen(true);
+                      }}
+                    />
+                  </div>
+                </details>
+              </div>
+
+              {/* Matching-tuning subgroups (S2). */}
+              <details className="modal-subgroup">
+                <summary>
+                  Time tuning {changedBadge(timeTuningChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <div className="form-group">
+                    <label htmlFor={`${id}-time-window`}>Time window (minutes)</label>
+                    <input
+                      id={`${id}-time-window`}
+                      type="number"
+                      min={1}
+                      max={MAX_TIME_WINDOW_MINUTES}
+                      value={timeWindowText}
+                      onChange={e => setTimeWindowText(e.target.value)}
+                      disabled={isLoading || !enforceTimeWindow}
+                    />
+                    <span className="form-hint">
+                      Parsed start times must be within ± this window to become
+                      candidate pairs (default {DEFAULT_TIME_WINDOW_MINUTES}, max{' '}
+                      {MAX_TIME_WINDOW_MINUTES}).
+                    </span>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={!enforceTimeWindow}
+                        onChange={e => setEnforceTimeWindow(!e.target.checked)}
+                        disabled={isLoading}
+                        data-testid="event-sync-ignore-time-window"
+                      />
+                      <span>Ignore time window (match on title only)</span>
+                    </label>
+                    <span className="form-hint">
+                      When on, the time window is ignored and every parsed
+                      master event is a candidate, ranked by title/team score
+                      alone.
+                    </span>
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Off by default. This rescues events whose providers
+                          publish different start times for the same fixture.
+                          Safe when the master group is a single
+                          provider&apos;s same-day event list. Leave it OFF for
+                          recurring or serial titles (a daily show, weekly
+                          numbered cards): without the time gate a stream can
+                          match the wrong day&apos;s channel. The 0.90 no-teams
+                          score floor and the team/numeric-identity rails still
+                          apply, so borderline pairs land in the review queue
+                          rather than auto-attaching.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
+
+              <details className="modal-subgroup">
+                <summary>
+                  Score threshold {changedBadge(scoreChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <div className="form-group">
+                    <label htmlFor={`${id}-threshold`}>Attach threshold</label>
+                    <input
+                      id={`${id}-threshold`}
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={thresholdText}
+                      onChange={e => setThresholdText(e.target.value)}
+                      onBlur={() =>
+                        setThresholdText(clampAttachThreshold(parseFloat(thresholdText)).toFixed(2))
+                      }
+                      disabled={isLoading}
+                    />
+                    <span className="form-hint">
+                      Auto-attach score floor on the parsed-title score. Default{' '}
+                      {EVENT_ATTACH_FLOOR.toFixed(2)} (precision over recall).
+                    </span>
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          You can raise it for stricter matching, or lower it
+                          when a provider&apos;s titles carry slot/venue noise
+                          that caps the score — but a lower floor auto-attaches
+                          weaker matches, so review the preview first.
+                          Team-conflict and different-event-number pairs are
+                          still hard-rejected at any threshold.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
+
+              <details className="modal-subgroup">
+                <summary>
+                  Date handling {changedBadge(dateHandlingChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <div className="form-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={assumeCurrentDate}
+                        onChange={e => setAssumeCurrentDate(e.target.checked)}
+                        disabled={isLoading}
+                        data-testid="event-sync-assume-current-date"
+                      />
+                      <span>Assume today&apos;s date for dateless listings</span>
+                    </label>
+                    <span className="form-hint">
+                      Places time-only listings (no date) on the current date so
+                      they match same-day events.
+                    </span>
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Off by default. Some providers list a live schedule
+                          with a time but <em>no date</em> (e.g. &quot;FURY vs
+                          HALL 6PM&quot;). Normally those can&apos;t be matched
+                          (the time could be any day). Turn this on to place
+                          such listings on the <strong>current date</strong> so
+                          they match same-day events. Risk: a listing that is
+                          really for another day (e.g. a replay at the same time
+                          tomorrow) can mis-match — the ±time window still
+                          applies, but same-time-of-day collisions can slip
+                          through. Leave off unless the group only ever lists
+                          today.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
+
+              <details className="modal-subgroup">
+                <summary>
+                  Per-group pattern overrides {changedBadge(overridesChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <span className="form-hint">
+                    A group with an override uses ONLY its own patterns; other
+                    groups keep the shared selection above.
+                  </span>
+                  {scopedGroups.length === 0 ? (
+                    <span className="form-hint">Pick groups first.</span>
+                  ) : (
+                    scopedGroups.map(group => {
+                      const draft = groupOverrides[group.id] ?? EMPTY_GROUP_PATTERN;
+                      const savedExtras = (
+                        config?.group_patterns?.[String(group.id)] ?? []
+                      ).slice(1);
+                      return (
+                        <details key={group.id} className="event-sync-details event-sync-override">
+                          <summary>
+                            {group.name}
+                            {draft.title_pattern.trim() ? ' — override set' : ''}
+                          </summary>
+                          <div className="event-sync-details-body">
+                            <div className="form-group">
+                              <label htmlFor={`${id}-ov-${group.id}-title`}>Title pattern</label>
+                              <input
+                                id={`${id}-ov-${group.id}-title`}
+                                type="text"
+                                value={draft.title_pattern}
+                                onChange={e => updateOverride(group.id, 'title_pattern', e.target.value)}
+                                placeholder="Leave empty for no override"
+                                disabled={isLoading}
+                              />
+                            </div>
+                            <div className="form-group">
+                              <label htmlFor={`${id}-ov-${group.id}-time`}>Time pattern</label>
+                              <input
+                                id={`${id}-ov-${group.id}-time`}
+                                type="text"
+                                value={draft.time_pattern}
+                                onChange={e => updateOverride(group.id, 'time_pattern', e.target.value)}
+                                disabled={isLoading}
+                              />
+                            </div>
+                            <div className="form-group">
+                              <label htmlFor={`${id}-ov-${group.id}-date`}>Date pattern</label>
+                              <input
+                                id={`${id}-ov-${group.id}-date`}
+                                type="text"
+                                value={draft.date_pattern}
+                                onChange={e => updateOverride(group.id, 'date_pattern', e.target.value)}
+                                disabled={isLoading}
+                              />
+                            </div>
+                            {savedExtras.length > 0 && (
+                              <span
+                                className="form-hint"
+                                data-testid={`group-override-extras-${group.id}`}
+                              >
+                                {savedExtras.length} additional API-authored
+                                pattern{savedExtras.length === 1 ? '' : 's'} for
+                                this group (
+                                {savedExtras
+                                  .map((p, i) => p.name || `#${i + 2}`)
+                                  .join(', ')}
+                                ) {savedExtras.length === 1 ? 'is' : 'are'}{' '}
+                                preserved as saved — this editor edits only the
+                                group&apos;s first pattern; the rest are applied
+                                after it and never dropped on save.
+                              </span>
+                            )}
+                          </div>
+                        </details>
+                      );
+                    })
+                  )}
+                </div>
+              </details>
+            </section>
+
+            {/* ── Step 3: Behavior ───────────────────────────────────────── */}
+            <section
+              hidden={currentStep !== 3}
+              className="event-sync-phase"
+              aria-labelledby={`${id}-behavior-title`}
+            >
+              <h2
+                className="event-sync-phase-title"
+                id={`${id}-behavior-title`}
+                ref={behaviorHeadingRef}
+                tabIndex={-1}
+              >
+                <span className="event-sync-phase-num">3</span> Behavior
+              </h2>
+
+              {/* Automation subgroup (S2). */}
+              <details className="modal-subgroup">
+                <summary>
+                  Automation {changedBadge(automationChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <div className="form-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={autoRun}
+                        onChange={e => setAutoRun(e.target.checked)}
+                        disabled={isLoading}
+                        data-testid="event-sync-auto-run"
+                      />
+                      <span>Run automatically after each M3U refresh (auto-run)</span>
+                    </label>
+                    <span className="form-hint">
+                      When on, the rule runs unattended after every M3U refresh —
+                      same journaling, attach cap, and summary as a manual run.
+                    </span>
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Off by default — enable it only after you trust this
+                          rule&apos;s manual runs. When on, the rule runs
+                          unattended after every M3U refresh with the same
+                          journaling, per-run attach cap, and run summary line as
+                          a manual run. Attach-cap overages and failed pre-flight
+                          checks (e.g. master auto-sync turned OFF) raise warning
+                          notifications. A tripped auto-creation circuit breaker
+                          pauses auto-runs until you reset it; manual runs stay
+                          available. A run landing right after a refresh can
+                          precede Dispatcharr creating a brand-new event&apos;s
+                          master channel — that stream attaches on the next run.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
+
+              {/* Scope-extension subgroup (S2); controlled open for the S4b
+                  secondary anchor. */}
+              <details
+                className="modal-subgroup"
+                ref={scopeExtRef}
+                open={scopeExtOpen}
+                onToggle={e => setScopeExtOpen(e.currentTarget.open)}
+              >
+                <summary>
+                  Scope extension {changedBadge(scopeExtChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <div className="form-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        ref={includeMasterRef}
+                        checked={includeMasterGroupStreams}
+                        onChange={e => setIncludeMasterGroupStreams(e.target.checked)}
+                        disabled={isLoading}
+                        data-testid="event-sync-include-master-group-streams"
+                      />
+                      <span>Also attach the master group&apos;s own streams</span>
+                    </label>
+                    <span className="form-hint">
+                      Matches the master group&apos;s own streams too — lets you
+                      leave the secondary list empty in the same-named
+                      cross-provider case.
+                    </span>
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Off by default. Turn this on when a second
+                          provider&apos;s streams live in the <em>same-named</em>{' '}
+                          channel group as the master (Dispatcharr requires
+                          channel-group names to be unique, so both providers
+                          share <strong>one</strong> group — it cannot be picked
+                          twice). When on, the master group&apos;s streams are
+                          matched to the master channels too; streams already
+                          attached (the auto-synced provider&apos;s own) are
+                          skipped, so only the unsynced provider&apos;s streams
+                          attach.{' '}
+                          <strong>With this on you can leave the secondary list empty</strong>
+                          {' '}— the master group is the stream source.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={parseMasterFromStream}
+                        onChange={e => setParseMasterFromStream(e.target.checked)}
+                        disabled={isLoading}
+                        data-testid="event-sync-parse-master-from-stream"
+                      />
+                      <span>Read master event time from the attached stream</span>
+                    </label>
+                    <span className="form-hint">
+                      Reads the master event time from its first attached stream
+                      instead of the channel name.
+                    </span>
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Off by default. Event Sync normally reads a master
+                          channel&apos;s date/time from its <em>name</em>. Turn
+                          this on to read it from the master channel&apos;s{' '}
+                          <strong>first attached stream</strong> instead — so you
+                          can name the master channels however you like while the
+                          event time still comes from the underlying auto-synced
+                          stream. (If a master channel has no attached stream, it
+                          is skipped.)
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
+
+              {/* Guide-data subgroup (S2). */}
+              <details className="modal-subgroup">
+                <summary>
+                  Guide data {changedBadge(guideChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <div className="form-group">
+                    <label>Dummy EPG profile (optional)</label>
+                    <CustomSelect
+                      value={dummyEpgProfileId != null ? dummyEpgProfileId.toString() : ''}
+                      onChange={value =>
+                        setDummyEpgProfileId(value ? parseInt(value, 10) : null)
+                      }
+                      options={[
+                        { value: '', label: 'None — no automatic guide data' },
+                        ...dummyProfiles.map(p => ({
+                          value: p.id.toString(),
+                          label: p.enabled ? p.name : `${p.name} (disabled)`,
+                        })),
+                      ]}
+                      placeholder="None — no automatic guide data"
+                      disabled={isLoading}
+                    />
+                    <span className="form-hint">
+                      Assigns this dummy EPG profile to the master group&apos;s
+                      event channels on every run, so new events get guide data
+                      automatically.
+                    </span>
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Assigns this dummy EPG profile to the master
+                          group&apos;s event channels on every run (manual and
+                          auto-run), so new events get guide data automatically.
+                          Channels the profile&apos;s XMLTV does not cover yet
+                          are retried after an automatic regenerate + refresh in
+                          the same run. Existing guide data from other sources is
+                          never overwritten. Tip: the profile&apos;s title/time
+                          patterns can reuse this rule&apos;s parse patterns —
+                          the master provider&apos;s naming is the same in both
+                          places.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
+            </section>
+
+            {/* ── Step 4: Review & Preview ───────────────────────────────── */}
+            <section
+              hidden={currentStep !== 4}
+              className="event-sync-phase"
+              aria-labelledby={`${id}-review-title`}
+            >
+              <h2
+                className="event-sync-phase-title"
+                id={`${id}-review-title`}
+                ref={reviewHeadingRef}
+                tabIndex={-1}
+              >
+                <span className="event-sync-phase-num">4</span> Review &amp; Preview
+              </h2>
+              <p className="form-hint">
+                Review each section, then run the preview in the rail before
+                saving. Use a jump-back link to fix anything.
+              </p>
+              <dl className="event-sync-review" data-testid="event-sync-review">
+                <div className="event-sync-review-row">
+                  <dt>
+                    <button
+                      type="button"
+                      className="event-sync-review-jump"
+                      onClick={() => goToStep(1)}
+                      aria-label="Edit Scope"
+                    >
+                      <span className="material-icons" aria-hidden="true">arrow_back</span>
+                    </button>
+                    Scope
+                  </dt>
+                  <dd>
+                    {masterScope == null ? (
+                      <span className="event-sync-review-warn">No master group selected</span>
+                    ) : (
+                      <>
+                        Master <strong>{groupName(masterScope.group_id)}</strong>
+                        {masterProviderLabel ? ` · ${masterProviderLabel}` : ''} ·{' '}
+                        {secondaryScopes.length} secondary group
+                        {secondaryScopes.length === 1 ? '' : 's'}
+                        {includeMasterGroupStreams && secondaryScopes.length === 0
+                          ? ' · master group’s own streams'
+                          : ''}
+                      </>
+                    )}
+                  </dd>
+                </div>
+                <div className="event-sync-review-row">
+                  <dt>
+                    <button
+                      type="button"
+                      className="event-sync-review-jump"
+                      onClick={() => goToStep(2)}
+                      aria-label="Edit Matching"
+                    >
+                      <span className="material-icons" aria-hidden="true">arrow_back</span>
+                    </button>
+                    Matching
+                  </dt>
+                  <dd>
+                    {effectivePatterns.length} pattern
+                    {effectivePatterns.length === 1 ? '' : 's'} ·{' '}
+                    {enforceTimeWindow
+                      ? `time ±${currentTimeWindow} min`
+                      : 'time ignored'}{' '}
+                    · score ≥ {currentThreshold.toFixed(2)}
+                    {assumeCurrentDate ? ' · assumes date' : ''}
+                    {overridesChanged > 0
+                      ? ` · ${overridesChanged} group override${
+                          overridesChanged === 1 ? '' : 's'
+                        }`
+                      : ''}
+                  </dd>
+                </div>
+                <div className="event-sync-review-row">
+                  <dt>
+                    <button
+                      type="button"
+                      className="event-sync-review-jump"
+                      onClick={() => goToStep(3)}
+                      aria-label="Edit Behavior"
+                    >
+                      <span className="material-icons" aria-hidden="true">arrow_back</span>
+                    </button>
+                    Behavior
+                  </dt>
+                  <dd>
+                    {autoRun ? 'Auto-run after each M3U refresh' : 'Manual runs only'}
+                    {parseMasterFromStream ? ' · master time from stream' : ''}
+                    {dummyEpgProfileId != null ? ' · dummy EPG guide data' : ''}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+          </div>
+
+          {/* Persistent rail (bead m1s38.1): intent sentence + step-reactive
+              impacts + a single manual Preview (compact on steps 1-3, expanded
+              on Review, stale-marked when the config changes). Drops below the
+              main column under ~820px. */}
+          <aside className="modal-rail" aria-label="Rule intent, impacts, and preview">
+            <div className="modal-intent" data-testid="event-sync-intent">
+              <h3 className="modal-intent-title">What this rule will do</h3>
+              <p className="modal-intent-text">{intent}</p>
+            </div>
+            <div className="event-sync-impact" data-testid="event-sync-impact" aria-live="polite">
+              {impactBlock}
+            </div>
+            <div className="event-sync-rail-preview">
+              <h3 className="event-sync-section-title">Preview</h3>
+              <EventSyncPreviewPanel
+                preview={preview}
+                loading={previewLoading}
+                error={previewError}
+                onRunPreview={handleRunPreview}
+                disabledReason={validationError}
+                compact={currentStep !== 4}
+                stale={previewStale}
               />
             </div>
-          </details>
-        </section>
-
-        {/* Advanced */}
-        <section className="event-sync-section-block">
-          <details className="event-sync-details">
-            <summary>Advanced</summary>
-            <div className="event-sync-details-body">
-              <div className="form-group">
-                <label htmlFor={`${id}-time-window`}>Time window (minutes)</label>
-                <input
-                  id={`${id}-time-window`}
-                  type="number"
-                  min={1}
-                  max={MAX_TIME_WINDOW_MINUTES}
-                  value={timeWindowText}
-                  onChange={e => setTimeWindowText(e.target.value)}
-                  disabled={isLoading || !enforceTimeWindow}
-                />
-                <span className="form-hint">
-                  Parsed start times must be within ± this window to become
-                  candidate pairs (default {DEFAULT_TIME_WINDOW_MINUTES}, max{' '}
-                  {MAX_TIME_WINDOW_MINUTES}).
-                </span>
-              </div>
-
-              <div className="form-group">
-                <label className="checkbox-option">
-                  <input
-                    type="checkbox"
-                    checked={!enforceTimeWindow}
-                    onChange={e => setEnforceTimeWindow(!e.target.checked)}
-                    disabled={isLoading}
-                    data-testid="event-sync-ignore-time-window"
-                  />
-                  <span>Ignore time window (match on title only)</span>
-                </label>
-                <span className="form-hint">
-                  Off by default. When on, the time window above is ignored and
-                  every parsed master event is a candidate, ranked by
-                  title/team score alone — this rescues events whose providers
-                  publish different start times for the same fixture. Safe when
-                  the master group is a single provider&apos;s same-day event
-                  list. Leave it OFF for recurring or serial titles (a daily
-                  show, weekly numbered cards): without the time gate a stream
-                  can match the wrong day&apos;s channel. The 0.90 no-teams
-                  score floor and the team/numeric-identity rails still apply,
-                  so borderline pairs land in the review queue rather than
-                  auto-attaching.
-                </span>
-              </div>
-              <div className="form-group">
-                <label htmlFor={`${id}-threshold`}>Attach threshold</label>
-                <input
-                  id={`${id}-threshold`}
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={thresholdText}
-                  onChange={e => setThresholdText(e.target.value)}
-                  onBlur={() =>
-                    setThresholdText(clampAttachThreshold(parseFloat(thresholdText)).toFixed(2))
-                  }
-                  disabled={isLoading}
-                />
-                <span className="form-hint">
-                  Auto-attach score floor on the parsed-title score. Default{' '}
-                  {EVENT_ATTACH_FLOOR.toFixed(2)} (precision over recall). You
-                  can raise it for stricter matching, or lower it when a
-                  provider&apos;s titles carry slot/venue noise that caps the
-                  score — but a lower floor auto-attaches weaker matches, so
-                  review the preview first. Team-conflict and
-                  different-event-number pairs are still hard-rejected at any
-                  threshold.
-                </span>
-              </div>
-
-              <div className="form-group">
-                <label className="checkbox-option">
-                  <input
-                    type="checkbox"
-                    checked={autoRun}
-                    onChange={e => setAutoRun(e.target.checked)}
-                    disabled={isLoading}
-                    data-testid="event-sync-auto-run"
-                  />
-                  <span>Run automatically after each M3U refresh (auto-run)</span>
-                </label>
-                <span className="form-hint">
-                  Off by default — enable it only after you trust this
-                  rule&apos;s manual runs. When on, the rule runs unattended
-                  after every M3U refresh with the same journaling, per-run
-                  attach cap, and run summary line as a manual run. Attach-cap
-                  overages and failed pre-flight checks (e.g. master
-                  auto-sync turned OFF) raise warning notifications. A
-                  tripped auto-creation circuit breaker pauses auto-runs
-                  until you reset it; manual runs stay available. A run
-                  landing right after a refresh can precede Dispatcharr
-                  creating a brand-new event&apos;s master channel — that
-                  stream attaches on the next run.
-                </span>
-              </div>
-
-              <div className="form-group">
-                <label className="checkbox-option">
-                  <input
-                    type="checkbox"
-                    checked={includeMasterGroupStreams}
-                    onChange={e => setIncludeMasterGroupStreams(e.target.checked)}
-                    disabled={isLoading}
-                    data-testid="event-sync-include-master-group-streams"
-                  />
-                  <span>Also attach the master group&apos;s own streams</span>
-                </label>
-                <span className="form-hint">
-                  Off by default. Turn this on when a second provider&apos;s
-                  streams live in the <em>same-named</em> channel group as the
-                  master (Dispatcharr requires channel-group names to be
-                  unique, so both providers share <strong>one</strong> group —
-                  it cannot be picked twice). When on, the master group&apos;s
-                  streams are matched to the master channels too; streams
-                  already attached (the auto-synced provider&apos;s own) are
-                  skipped, so only the unsynced provider&apos;s streams attach.
-                  <strong> With this on you can leave the secondary list empty</strong>
-                  {' '}— the master group is the stream source.
-                </span>
-              </div>
-
-              <div className="form-group">
-                <label className="checkbox-option">
-                  <input
-                    type="checkbox"
-                    checked={parseMasterFromStream}
-                    onChange={e => setParseMasterFromStream(e.target.checked)}
-                    disabled={isLoading}
-                    data-testid="event-sync-parse-master-from-stream"
-                  />
-                  <span>Read master event time from the attached stream</span>
-                </label>
-                <span className="form-hint">
-                  Off by default. Event Sync normally reads a master
-                  channel&apos;s date/time from its <em>name</em>. Turn this on
-                  to read it from the master channel&apos;s <strong>first
-                  attached stream</strong> instead — so you can name the master
-                  channels however you like while the event time still comes
-                  from the underlying auto-synced stream. (If a master channel
-                  has no attached stream, it is skipped.)
-                </span>
-              </div>
-
-              <div className="form-group">
-                <label className="checkbox-option">
-                  <input
-                    type="checkbox"
-                    checked={assumeCurrentDate}
-                    onChange={e => setAssumeCurrentDate(e.target.checked)}
-                    disabled={isLoading}
-                    data-testid="event-sync-assume-current-date"
-                  />
-                  <span>Assume today&apos;s date for dateless listings</span>
-                </label>
-                <span className="form-hint">
-                  Off by default. Some providers list a live schedule with a
-                  time but <em>no date</em> (e.g. &quot;FURY vs HALL 6PM&quot;).
-                  Normally those can&apos;t be matched (the time could be any
-                  day). Turn this on to place such listings on the{' '}
-                  <strong>current date</strong> so they match same-day events.
-                  Risk: a listing that is really for another day (e.g. a replay
-                  at the same time tomorrow) can mis-match — the ±time window
-                  still applies, but same-time-of-day collisions can slip
-                  through. Leave off unless the group only ever lists today.
-                </span>
-              </div>
-
-              <div className="form-group">
-                <label>Dummy EPG profile (optional)</label>
-                <CustomSelect
-                  value={dummyEpgProfileId != null ? dummyEpgProfileId.toString() : ''}
-                  onChange={value =>
-                    setDummyEpgProfileId(value ? parseInt(value, 10) : null)
-                  }
-                  options={[
-                    { value: '', label: 'None — no automatic guide data' },
-                    ...dummyProfiles.map(p => ({
-                      value: p.id.toString(),
-                      label: p.enabled ? p.name : `${p.name} (disabled)`,
-                    })),
-                  ]}
-                  placeholder="None — no automatic guide data"
-                  disabled={isLoading}
-                />
-                <span className="form-hint">
-                  Assigns this dummy EPG profile to the master group&apos;s
-                  event channels on every run (manual and auto-run), so new
-                  events get guide data automatically. Channels the
-                  profile&apos;s XMLTV does not cover yet are retried after an
-                  automatic regenerate + refresh in the same run. Existing
-                  guide data from other sources is never overwritten. Tip: the
-                  profile&apos;s title/time patterns can reuse this rule&apos;s
-                  parse patterns — the master provider&apos;s naming is the
-                  same in both places.
-                </span>
-              </div>
-
-              <div className="form-group">
-                <label>Per-group pattern overrides</label>
-                <span className="form-hint">
-                  A group with an override uses ONLY its own patterns; other
-                  groups keep the shared selection above.
-                </span>
-                {scopedGroups.length === 0 ? (
-                  <span className="form-hint">Pick groups first.</span>
-                ) : (
-                  scopedGroups.map(group => {
-                    const draft = groupOverrides[group.id] ?? EMPTY_GROUP_PATTERN;
-                    const savedExtras = (
-                      config?.group_patterns?.[String(group.id)] ?? []
-                    ).slice(1);
-                    return (
-                      <details key={group.id} className="event-sync-details event-sync-override">
-                        <summary>
-                          {group.name}
-                          {draft.title_pattern.trim() ? ' — override set' : ''}
-                        </summary>
-                        <div className="event-sync-details-body">
-                          <div className="form-group">
-                            <label htmlFor={`${id}-ov-${group.id}-title`}>Title pattern</label>
-                            <input
-                              id={`${id}-ov-${group.id}-title`}
-                              type="text"
-                              value={draft.title_pattern}
-                              onChange={e => updateOverride(group.id, 'title_pattern', e.target.value)}
-                              placeholder="Leave empty for no override"
-                              disabled={isLoading}
-                            />
-                          </div>
-                          <div className="form-group">
-                            <label htmlFor={`${id}-ov-${group.id}-time`}>Time pattern</label>
-                            <input
-                              id={`${id}-ov-${group.id}-time`}
-                              type="text"
-                              value={draft.time_pattern}
-                              onChange={e => updateOverride(group.id, 'time_pattern', e.target.value)}
-                              disabled={isLoading}
-                            />
-                          </div>
-                          <div className="form-group">
-                            <label htmlFor={`${id}-ov-${group.id}-date`}>Date pattern</label>
-                            <input
-                              id={`${id}-ov-${group.id}-date`}
-                              type="text"
-                              value={draft.date_pattern}
-                              onChange={e => updateOverride(group.id, 'date_pattern', e.target.value)}
-                              disabled={isLoading}
-                            />
-                          </div>
-                          {savedExtras.length > 0 && (
-                            <span
-                              className="form-hint"
-                              data-testid={`group-override-extras-${group.id}`}
-                            >
-                              {savedExtras.length} additional API-authored
-                              pattern{savedExtras.length === 1 ? '' : 's'} for
-                              this group (
-                              {savedExtras
-                                .map((p, i) => p.name || `#${i + 2}`)
-                                .join(', ')}
-                              ) {savedExtras.length === 1 ? 'is' : 'are'}{' '}
-                              preserved as saved — this editor edits only the
-                              group&apos;s first pattern; the rest are applied
-                              after it and never dropped on save.
-                            </span>
-                          )}
-                        </div>
-                      </details>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          </details>
-        </section>
-
-        {/* Preview */}
-        <section className="event-sync-section-block">
-          <h3 className="event-sync-section-title">Preview</h3>
-          <EventSyncPreviewPanel
-            preview={preview}
-            loading={previewLoading}
-            error={previewError}
-            onRunPreview={handleRunPreview}
-            disabledReason={validationError}
-          />
-        </section>
+          </aside>
+        </div>
       </div>
 
-      {/* Footer */}
+      {/* Footer: Cancel (far left, dirty-guarded) · Back (hidden on step 1) ·
+          Next (steps 1-3, becomes Save on step 4). Editing an existing rule
+          also exposes Save on every step. Back/Next NEVER route through the
+          dirty guard — only Cancel/Escape/× do. */}
       <div className="event-sync-editor-footer">
-        {saveError && (
-          <span className="event-sync-save-error" role="alert">{saveError}</span>
-        )}
         <button
           type="button"
           className="btn-secondary"
-          onClick={onCancel}
+          onClick={attemptClose}
           disabled={saving}
         >
           Cancel
         </button>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={handleSave}
-          disabled={saving || isLoading}
-        >
-          {saving ? 'Saving...' : 'Save'}
-        </button>
+        {saveError && (
+          <span className="event-sync-save-error" role="alert">{saveError}</span>
+        )}
+        <div className="event-sync-footer-nav">
+          {currentStep > 1 && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => goToStep((currentStep - 1) as WizardStep)}
+              disabled={saving}
+            >
+              Back
+            </button>
+          )}
+          {isEditing && currentStep < 4 && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleSave}
+              disabled={saving || isLoading}
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          {currentStep < 4 ? (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => goToStep((currentStep + 1) as WizardStep)}
+              disabled={saving}
+            >
+              Next
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSave}
+              disabled={saving || isLoading}
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Guided setup (ti939.3.4): the toggle API is reachable ONLY through
@@ -1198,6 +2024,44 @@ export function EventSyncRuleEditor({
           onCancel={() => setPendingFix(null)}
           onConfirm={handleConfirmFix}
         />
+      )}
+
+      {/* S4a: dirty-state discard confirm — reuses the modal-sm confirm pattern.
+          Rendered inside the editor (topmost overlay) so Escape dismisses this
+          prompt rather than the whole rule builder. */}
+      {showDiscardConfirm && (
+        <ModalOverlay
+          onClose={() => setShowDiscardConfirm(false)}
+          data-testid="event-sync-discard-dialog"
+        >
+          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true">
+            <div className="modal-header">
+              <h3 className="modal-title">Discard this rule?</h3>
+            </div>
+            <div className="modal-body">
+              <p>Your patterns and scope selections will be lost.</p>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="modal-btn-secondary"
+                onClick={() => setShowDiscardConfirm(false)}
+                data-testid="event-sync-discard-keep"
+              >
+                Keep editing
+              </button>
+              <button
+                className="modal-btn-danger"
+                onClick={() => {
+                  setShowDiscardConfirm(false);
+                  onCancel();
+                }}
+                data-testid="event-sync-discard-confirm"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
       )}
     </div>
   );

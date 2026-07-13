@@ -1639,6 +1639,12 @@ def register(mcp: FastMCP):
                 if row.get("disposition") == "would_attach":
                     master = row.get("would_attach_master") or {}
                     top = (row.get("candidates") or [{}])[0]
+                    # S5 (bead sf8dj): flag rows admitted only by an optional
+                    # relaxation so the operator can double-check them.
+                    via = [v.get("label") for v in (row.get("matched_via") or [])]
+                    via_suffix = (
+                        f" (matched via: {', '.join(via)})" if via else ""
+                    )
                     lines.append(
                         f"  ATTACH  [{row.get('provider')}] "
                         f"'{row.get('stream_name')}' -> channel "
@@ -1646,6 +1652,7 @@ def register(mcp: FastMCP):
                         f"(score={top.get('score')}, "
                         f"teams={top.get('team_verdict')}, "
                         f"dt={top.get('time_delta_minutes')}m)"
+                        f"{via_suffix}"
                     )
                 elif row.get("disposition") == "ambiguous":
                     top = (row.get("candidates") or [{}])[0]
