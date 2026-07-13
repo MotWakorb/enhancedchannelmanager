@@ -283,7 +283,20 @@
   gap: 10px;
 }
 
+/* Keep the checkbox inline with the pattern title rather than wrapped onto its
+   own line above it. The base .checkbox-option is `flex-wrap: wrap` +
+   `align-items: center`, and the text column has no width bound, so the long
+   description pushes the column below the box. Top-align the box to the first
+   line, forbid wrapping, and let the text column take the remaining width and
+   wrap its own text (min-width: 0 lets it shrink below content size). */
+.event-sync-pattern-option {
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+
 .event-sync-pattern-option > span {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
