@@ -109,7 +109,7 @@ describe('EventSyncRuleEditor', () => {
       stubGroupSettings({ 1: true, 2: false });
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Score threshold'));
       const input = screen.getByLabelText(/attach threshold/i);
       await user.clear(input);
       await user.type(input, '0.5');
@@ -125,7 +125,7 @@ describe('EventSyncRuleEditor', () => {
       stubGroupSettings({ 1: true, 2: false });
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Score threshold'));
       const input = screen.getByLabelText(/attach threshold/i);
       await user.clear(input);
       await user.type(input, '1.5');
@@ -141,7 +141,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Score threshold'));
       const input = screen.getByLabelText(/attach threshold/i);
       await user.clear(input);
       // A sub-default value is honored (only out-of-[0,1] values are clamped).
@@ -161,7 +161,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Time tuning'));
       const windowInput = screen.getByLabelText(/time window \(minutes\)/i);
       expect(windowInput).not.toBeDisabled();
 
@@ -277,7 +277,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Scope extension'));
       expect(
         screen.getByTestId('event-sync-include-master-group-streams')
       ).not.toBeChecked();
@@ -296,7 +296,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Scope extension'));
       await user.click(
         screen.getByTestId('event-sync-include-master-group-streams')
       );
@@ -322,7 +322,7 @@ describe('EventSyncRuleEditor', () => {
       };
       render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Scope extension'));
       expect(
         screen.getByTestId('event-sync-include-master-group-streams')
       ).toBeChecked();
@@ -343,7 +343,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Scope extension'));
       expect(
         screen.getByTestId('event-sync-parse-master-from-stream')
       ).not.toBeChecked();
@@ -362,7 +362,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Scope extension'));
       await user.click(
         screen.getByTestId('event-sync-parse-master-from-stream')
       );
@@ -383,7 +383,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Date handling'));
       expect(
         screen.getByTestId('event-sync-assume-current-date')
       ).not.toBeChecked();
@@ -402,7 +402,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Date handling'));
       await user.click(screen.getByTestId('event-sync-assume-current-date'));
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -421,7 +421,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Automation'));
       expect(screen.getByTestId('event-sync-auto-run')).not.toBeChecked();
 
       await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -436,7 +436,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Automation'));
       await user.click(screen.getByTestId('event-sync-auto-run'));
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -458,7 +458,7 @@ describe('EventSyncRuleEditor', () => {
       };
       render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Automation'));
       expect(screen.getByTestId('event-sync-auto-run')).toBeChecked();
 
       await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -499,7 +499,7 @@ describe('EventSyncRuleEditor', () => {
       };
       render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Automation'));
       await user.click(screen.getByTestId('event-sync-auto-run'));
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -513,7 +513,7 @@ describe('EventSyncRuleEditor', () => {
       stubGroupSettings({ 1: true, 2: false });
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Automation'));
       expect(
         screen.getByText(/enable it only after you trust/i)
       ).toBeInTheDocument();
@@ -894,7 +894,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={apiRule} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Per-group pattern overrides'));
       // Open the secondary group's override editor and change its title.
       await user.click(screen.getByText(/Secondary Events/, { selector: 'summary' }));
       const overrideTitle = screen.getAllByLabelText('Title pattern')
@@ -923,7 +923,7 @@ describe('EventSyncRuleEditor', () => {
       const sharedIndicator = screen.getByTestId('custom-shared-extras');
       expect(sharedIndicator).toHaveTextContent(/preserved as saved/i);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Per-group pattern overrides'));
       await user.click(screen.getByText(/Secondary Events/, { selector: 'summary' }));
       const groupIndicator = screen.getByTestId('group-override-extras-2');
       expect(groupIndicator).toHaveTextContent(/preserved as saved/i);
@@ -1004,7 +1004,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
-      await user.click(screen.getByText('Advanced'));
+      await user.click(screen.getByText('Guide data'));
       // Open the profile picker (shows the None placeholder) and pick one.
       await user.click(
         screen.getByRole('button', { name: /none — no automatic guide data/i })
@@ -1182,6 +1182,109 @@ describe('EventSyncRuleEditor', () => {
       expect(screen.getByTestId('psg-secondary-2-any')).toBeInTheDocument();
       expect(screen.queryByTestId('psg-secondary-3-any')).toBeNull();
       expect(screen.queryByTestId('psg-secondary-1-any')).toBeNull();
+    });
+  });
+
+  describe('UX redesign (bead dvzrf): 3-phase spine, intent, subgroups', () => {
+    it('renders the three phase headings and the Advanced subgroups by purpose', async () => {
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      // Phase spine headings.
+      expect(await screen.findByText('Scope', { selector: 'h2' })).toBeInTheDocument();
+      expect(screen.getByText('Matching', { selector: 'h2' })).toBeInTheDocument();
+      expect(screen.getByText('Behavior', { selector: 'h2' })).toBeInTheDocument();
+
+      // The flat Advanced wall is gone; the flags are grouped into labeled
+      // subgroups by purpose.
+      expect(screen.queryByText('Advanced', { selector: 'summary' })).toBeNull();
+      for (const label of [
+        'Time tuning',
+        'Score threshold',
+        'Date handling',
+        'Per-group pattern overrides',
+        'Automation',
+        'Scope extension',
+        'Guide data',
+      ]) {
+        expect(screen.getByText(label, { selector: 'summary' })).toBeInTheDocument();
+      }
+    });
+
+    it('shows a plain-language rule-intent sentence derived from the current config', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      const intent = await screen.findByTestId('event-sync-intent');
+      // Default (enforced time window, manual runs, default threshold).
+      expect(intent).toHaveTextContent(/Attach streams from 1 secondary group to master Master Events/i);
+      expect(intent).toHaveTextContent(/title \+ start time within ±30 min/i);
+      expect(intent).toHaveTextContent(/Runs only when you run it manually\./i);
+
+      // Turning on Ignore-time-window flips the matching clause to the risky
+      // (bold) phrasing, and auto-run flips the run clause.
+      await user.click(screen.getByText('Time tuning'));
+      await user.click(screen.getByTestId('event-sync-ignore-time-window'));
+      expect(intent).toHaveTextContent(/title only \(time ignored\)/i);
+
+      await user.click(screen.getByText('Automation'));
+      await user.click(screen.getByTestId('event-sync-auto-run'));
+      expect(intent).toHaveTextContent(/Runs automatically after each M3U refresh\./i);
+    });
+
+    it('badges a subgroup with the count of non-default flags it holds', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      // Automation starts at its default — no badge.
+      const automation = screen.getByText('Automation', { selector: 'summary' });
+      expect(within(automation).queryByText(/changed/i)).toBeNull();
+
+      await user.click(automation);
+      await user.click(screen.getByTestId('event-sync-auto-run'));
+      expect(within(automation).getByText('1 changed')).toBeInTheDocument();
+    });
+  });
+
+  describe('Test Patterns collapse (bead dvzrf / F4)', () => {
+    /** The batch preview endpoint the Test Patterns panel calls; return one
+     * non-matching row so the run registers a parse failure. */
+    function stubBatchParseFailure() {
+      server.use(
+        http.post('/api/dummy-epg/preview/batch', () =>
+          HttpResponse.json([{ matched: false, groups: {}, event_sync_start_valid: false }])
+        )
+      );
+    }
+
+    it('is collapsed by default so it does not compete with the Preview rail', async () => {
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      const details = await screen.findByTestId('event-sync-test-patterns-details');
+      expect(details).not.toHaveAttribute('open');
+    });
+
+    it('auto-expands when a test run turns up parse failures', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      stubBatchParseFailure();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      const details = await screen.findByTestId('event-sync-test-patterns-details');
+      expect(details).not.toHaveAttribute('open');
+
+      await user.type(screen.getByLabelText('Sample stream names'), 'Totally Unparseable Name');
+      await user.click(screen.getByRole('button', { name: /test patterns/i }));
+
+      await waitFor(() => expect(details).toHaveAttribute('open'));
     });
   });
 });
