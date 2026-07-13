@@ -170,8 +170,11 @@ class TestMigration0032:
 
         db_url = f"sqlite:///{tmp_path / 'mig0032_roundtrip.db'}"
         cfg = _make_alembic_config(db_url)
-        command.upgrade(cfg, "head")
-        command.downgrade(cfg, "-1")
+        # Target 0032 explicitly (not "head"/"-1") so this round-trip stays
+        # pinned to the 0032 migration under test even as newer revisions
+        # (0033+) land on top of it.
+        command.upgrade(cfg, "0032")
+        command.downgrade(cfg, "0031")
 
         engine = _engine(db_url)
         try:
@@ -179,7 +182,7 @@ class TestMigration0032:
         finally:
             engine.dispose()
 
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0032")
         engine = _engine(db_url)
         try:
             assert TABLE in set(inspect(engine).get_table_names())

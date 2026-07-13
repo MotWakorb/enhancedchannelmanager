@@ -457,6 +457,70 @@ class TestDryRunParity:
         assert len(run_pairs) == run_summary["attached"] == 1
 
 
+class TestExecutionSummaryPersistence:
+    """enhancedchannelmanager-7wuhd: a live event_sync run must persist the
+    structured per-rule counters + the pure-event_sync kind flag on the
+    execution row, so the executions UI can render an event_sync-aware summary
+    (compute -> persist -> serialize, end to end through the real attach path)."""
+
+    @pytest.mark.asyncio
+    async def test_pure_event_sync_run_persists_summary_and_flag(
+        self, test_session
+    ):
+        from models import ChannelPipelineExecution
+
+        config = event_sync_config()
+        rule = ChannelPipelineRule(
+            name="Event Rule", enabled=True, priority=0,
+            conditions=json.dumps([{"type": "always"}]),
+            actions=json.dumps([{"type": "skip"}]),
+            event_sync_config=json.dumps(config),
+        )
+        test_session.add(rule)
+        test_session.commit()
+
+        state = FakeDispatcharrState(
+            channels=live_master_channels(),
+            secondary_streams=SECONDARY_STREAMS,
+        )
+        engine = ChannelPipelineEngine(make_stateful_client(state))
+        with patch("channel_pipeline_engine.get_session",
+                   return_value=test_session), \
+             patch("journal.log_entries"), \
+             patch("services.event_sync_resolver.datetime") as mock_dt:
+            mock_dt.now.return_value = FROZEN_NOW
+            result = await engine.run_pipeline(
+                dry_run=False, triggered_by="manual"
+            )
+        assert result["success"] is True
+        run_summary = result["event_sync"][0]
+
+        # The persisted execution row (what the executions API reads) must
+        # carry the pure-event_sync flag and the structured counters.
+        execution = (
+            test_session.query(ChannelPipelineExecution)
+            .order_by(ChannelPipelineExecution.id.desc())
+            .first()
+        )
+        assert execution is not None
+        assert execution.is_event_sync is True, (
+            "a run scoped to only event_sync rules must persist is_event_sync=True"
+        )
+        persisted = execution.get_event_sync_summary()
+        assert len(persisted) == 1
+        # Counters survive the round-trip and match the live run summary.
+        for key in ("secondary_streams", "attached", "already_attached",
+                    "ambiguous_skipped", "unmatched", "parse_failed"):
+            assert persisted[0][key] == run_summary[key]
+        # Heavy review_candidates payload is stripped from the persisted copy.
+        assert "review_candidates" not in persisted[0]
+
+        # to_dict (the API serialization) exposes both fields.
+        d = execution.to_dict()
+        assert d["is_event_sync"] is True
+        assert d["event_sync_summary"] == persisted
+
+
 class TestManualRunOnly:
     def test_unattended_watermark_task_never_executes_event_sync_rules(
         self, db_session_factory

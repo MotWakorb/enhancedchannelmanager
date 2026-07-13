@@ -1775,6 +1775,19 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_rules "
                     "ADD COLUMN event_sync_config TEXT"
                 ))
+                # 0033 (enhancedchannelmanager-7wuhd): persisted event_sync run
+                # summary + pure-event_sync kind flag on the pre-0005
+                # auto_creation_executions table — create_all() can't add
+                # columns to an already-existing table, so add both by hand so
+                # the live schema genuinely matches head for the fast-path.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_executions "
+                    "ADD COLUMN event_sync_summary TEXT"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_executions "
+                    "ADD COLUMN is_event_sync BOOLEAN NOT NULL DEFAULT 0"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.
