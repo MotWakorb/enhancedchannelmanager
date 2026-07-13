@@ -9,6 +9,8 @@ import type {
   UpdateRuleData,
   BulkUpdateRulesPatch,
   BulkUpdateRulesResponse,
+  AnalyzeRuleBodyRequest,
+  RuleAnalyzerResponse,
   RulesListResponse,
   ExecutionsListResponse,
   ChannelPipelineExecution,
@@ -106,6 +108,28 @@ export async function bulkUpdateChannelPipelineRules(
   return fetchJson<BulkUpdateRulesResponse>(`${API_BASE}/channel-pipeline/rules/bulk-update`, {
     method: 'POST',
     body: JSON.stringify({ rule_ids: ruleIds, ...patch }),
+  });
+}
+
+// =============================================================================
+// Rule analyzer (advisory — never gates a save)
+// =============================================================================
+
+/**
+ * Analyze an UNSAVED rule body and return advisory findings without saving it.
+ *
+ * Backs live authoring feedback in the rule builder. The rule is NOT persisted;
+ * findings are warnings/info only and never block a save (bd-0gntx contract).
+ * Reuses the same analyzer as the saved-rule and from-bundle endpoints, so the
+ * response shape is identical. Debouncing is the caller's responsibility
+ * (bd-m1s38.3 owns the rail + debounce).
+ */
+export async function analyzeChannelPipelineRuleBody(
+  body: AnalyzeRuleBodyRequest
+): Promise<RuleAnalyzerResponse> {
+  return fetchJson<RuleAnalyzerResponse>(`${API_BASE}/channel-pipeline/rules/analyze-body`, {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 }
 
