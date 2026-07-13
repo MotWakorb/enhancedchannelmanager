@@ -133,11 +133,15 @@ docker cp <local-file> ecm-ecm-1:/app/<destination-path>
 
 **Frontend deploy:**
 ```bash
+scripts/deploy-frontend.sh          # build + clean stale assets + copy, in one step
+```
+The script bakes in the stale-asset cleanup below so it can't be skipped. Equivalent manual sequence (use `--no-build` to skip the rebuild):
+```bash
 cd frontend && npm run build
 docker exec ecm-ecm-1 sh -c 'rm -rf /app/static/assets/*'
 docker cp dist/. ecm-ecm-1:/app/static/
 ```
-Always clean `/app/static/assets/` before copying — `docker cp` only adds files, never removes stale bundles.
+Always clean `/app/static/assets/` before copying — `docker cp` only adds files, never removes stale bundles. Set `ECM_CONTAINER` to target a container other than `ecm-ecm-1`.
 
 **Backend deploy** (to `/app/`, NOT `/app/backend/`):
 ```bash

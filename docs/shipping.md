@@ -17,6 +17,8 @@ cd frontend && npm test && npm run build
 
 **CRITICAL**: If syntax checks or tests fail, fix errors before proceeding. Never commit broken code.
 
+> **Deploying to the dev container** (the local edit→deploy→verify loop, separate from this PR flow): use `scripts/deploy-frontend.sh` for the frontend — it clears stale `/app/static/assets/*` before copying, which a hand-run `docker cp` skips. See CLAUDE.md → "Container-First Development".
+
 ### 2. Update the Bead
 
 ```bash
