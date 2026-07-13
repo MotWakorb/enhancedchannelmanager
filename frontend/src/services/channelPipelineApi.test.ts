@@ -17,6 +17,8 @@ import {
   updateChannelPipelineRule,
   deleteChannelPipelineRule,
   toggleChannelPipelineRule,
+  // Rule analyzer
+  analyzeChannelPipelineRuleBody,
   // Validation & Schema
   validateChannelPipelineRule,
   getConditionSchema,
@@ -234,6 +236,70 @@ describe('Channel Pipeline API Service', () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('analyzeChannelPipelineRuleBody', () => {
+    it('POSTs the rule body and returns typed findings', async () => {
+      let captured: unknown;
+      server.use(
+        http.post('/api/channel-pipeline/rules/analyze-body', async ({ request }) => {
+          captured = await request.json();
+          return HttpResponse.json({
+            rules: [
+              {
+                rule_id: null,
+                rule_name: 'Draft',
+                findings: [
+                  {
+                    code: 'REGEX_TRIVIALLY_MATCHES_ALL',
+                    severity: 'warning',
+                    field: 'conditions[0].value',
+                    message: 'matches everything',
+                    suggestion: '',
+                    detail: { reason: 'empty-alternation' },
+                  },
+                ],
+              },
+            ],
+            summary: { error: 0, warning: 1, info: 0 },
+          });
+        }),
+      );
+
+      const result = await analyzeChannelPipelineRuleBody({
+        name: 'Draft',
+        conditions: [{ type: 'stream_group_matches', value: 'UK|' }],
+        actions: [],
+      });
+
+      // Body is forwarded verbatim.
+      expect(captured).toEqual({
+        name: 'Draft',
+        conditions: [{ type: 'stream_group_matches', value: 'UK|' }],
+        actions: [],
+      });
+      // Response is the shared analyzer shape.
+      expect(result.summary).toEqual({ error: 0, warning: 1, info: 0 });
+      expect(result.rules[0].rule_id).toBeNull();
+      expect(result.rules[0].findings[0].code).toBe('REGEX_TRIVIALLY_MATCHES_ALL');
+      expect(result.rules[0].findings[0].severity).toBe('warning');
+    });
+
+    it('returns an empty summary for a clean draft', async () => {
+      server.use(
+        http.post('/api/channel-pipeline/rules/analyze-body', () => {
+          return HttpResponse.json({
+            rules: [{ rule_id: null, rule_name: '', findings: [] }],
+            summary: { error: 0, warning: 0, info: 0 },
+          });
+        }),
+      );
+
+      const result = await analyzeChannelPipelineRuleBody({ conditions: [], actions: [] });
+
+      expect(result.summary).toEqual({ error: 0, warning: 0, info: 0 });
+      expect(result.rules[0].findings).toHaveLength(0);
     });
   });
 

@@ -35,6 +35,13 @@ export interface EventSyncTestPatternsPanelProps {
   patterns: LabeledEventSyncPattern[];
   /** Groups the rule scopes to (master + secondaries), for live samples. */
   groupOptions: { id: number; name: string }[];
+  /**
+   * Fires after each test run with whether any sample was a parse failure
+   * (no match, or matched but the matcher would reject the start time). The
+   * editor uses this to auto-expand the collapsed Test Patterns panel so the
+   * failures are never hidden below the fold.
+   */
+  onParseFailuresChange?: (hasParseFailures: boolean) => void;
 }
 
 interface PatternRow {
@@ -76,6 +83,7 @@ function formatTimeParts(groups: Record<string, string | null>): string | null {
 export function EventSyncTestPatternsPanel({
   patterns,
   groupOptions,
+  onParseFailuresChange,
 }: EventSyncTestPatternsPanelProps) {
   const id = useId();
   const [sampleText, setSampleText] = useState('');
@@ -149,6 +157,13 @@ export function EventSyncTestPatternsPanel({
         })
       );
       setResults(perPattern);
+      // A row is a parse failure when the matcher would not build a valid
+      // start time from it (no match, or matched-but-invalid). Surface it so
+      // the editor can auto-expand the panel.
+      const hasParseFailures = perPattern.some(result =>
+        result.rows.some(row => !(row.matched && row.startValid))
+      );
+      onParseFailuresChange?.(hasParseFailures);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Pattern test failed');
       setResults(null);
