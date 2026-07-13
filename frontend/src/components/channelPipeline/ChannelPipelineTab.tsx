@@ -119,6 +119,12 @@ export function ChannelPipelineTab() {
   const [createRuleKind, setCreateRuleKind] = useState<'standard' | 'event_sync' | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<ChannelPipelineRule | null>(null);
   const [showRollbackConfirm, setShowRollbackConfirm] = useState<ChannelPipelineExecution | null>(null);
+  // Live-run confirm for event_sync rules (utswf). The per-rule Run on an
+  // event_sync row WRITES (attaches streams), unlike the in-editor Preview
+  // which is dry-run only — so the live run gets a one-step "this will attach"
+  // confirm. The Test (dry-run) icon stays confirm-free; standard rules keep
+  // their no-confirm parity.
+  const [showEventSyncRunConfirm, setShowEventSyncRunConfirm] = useState<ChannelPipelineRule | null>(null);
   // Snapshot-restore state (ADR-010 §D5 / uc51o.7)
   const [showRevertConfirm, setShowRevertConfirm] = useState<ChannelPipelineExecution | null>(null);
   const [revertLoading, setRevertLoading] = useState(false);
@@ -429,10 +435,26 @@ export function ChannelPipelineTab() {
         const created = response.channels_created ?? 0;
         const status = response.status;
         const succeeded = status === 'completed';
+        // Event Sync runs attach streams rather than create channels, so the
+        // "Created N channels" figure is always 0 and reads as "nothing
+        // happened". When every targeted rule is an event_sync rule, point the
+        // operator at the Execution History, where the run's
+        // `event_sync: X attached, …` summary line lives (utswf). We don't
+        // fabricate the attach count — it isn't on the client-side response.
+        const targetedRules =
+          ruleIds !== undefined ? rules.filter(r => ruleIds.includes(r.id)) : [];
+        const isEventSyncRun =
+          ruleIds !== undefined &&
+          targetedRules.length > 0 &&
+          targetedRules.every(r => r.event_sync_config);
         const msg = succeeded
-          ? (dryRun
-            ? `Dry run complete - Would create ${created} channel${created !== 1 ? 's' : ''}`
-            : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}`)
+          ? (isEventSyncRun
+            ? (dryRun
+              ? 'Event Sync dry run complete — see Execution History for match details'
+              : 'Event Sync run complete — streams attached where matched; see Execution History for attach details')
+            : (dryRun
+              ? `Dry run complete - Would create ${created} channel${created !== 1 ? 's' : ''}`
+              : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}`))
           : `Pipeline ${status}`;
         if (succeeded) {
           notifications.success(msg, 'Channel Pipeline');
@@ -468,7 +490,7 @@ export function ChannelPipelineTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Pipeline failed', 'Channel Pipeline');
     }
-  }, [runPipelineApi, fetchExecutions, fetchRules, notifications]);
+  }, [runPipelineApi, fetchExecutions, fetchRules, notifications, rules]);
 
   const handleRunSingleRule = useCallback(async (ruleId: number, dryRun: boolean) => {
     setRunningSingleRule(ruleId);
@@ -478,6 +500,16 @@ export function ChannelPipelineTab() {
       setRunningSingleRule(null);
     }
   }, [handleRun]);
+
+  // Live-run confirm (utswf): an event_sync live run attaches streams, so the
+  // row Run icon routes through a confirm. Reuses handleRunSingleRule — the
+  // run/attach semantics are unchanged.
+  const handleConfirmEventSyncRun = useCallback(async () => {
+    const rule = showEventSyncRunConfirm;
+    if (!rule) return;
+    setShowEventSyncRunConfirm(null);
+    await handleRunSingleRule(rule.id, false);
+  }, [showEventSyncRunConfirm, handleRunSingleRule]);
 
   const handleRollbackClick = useCallback((execution: ChannelPipelineExecution) => {
     setShowRollbackConfirm(execution);
@@ -926,34 +958,37 @@ export function ChannelPipelineTab() {
                       <td className="col-matches">{rule.match_count || 0}</td>
                       <td className="col-actions">
                         <div className="rule-actions-row">
-                          {/* event_sync rules hide the per-rule Run/Test
-                              icons — they execute via the pipeline-level
-                              manual Run or the single-rule API; the preview
-                              lives inside the editor. */}
-                          {!rule.event_sync_config && (
-                            <>
-                              <button
-                                className="action-btn"
-                                onClick={() => handleRunSingleRule(rule.id, false)}
-                                disabled={runningSingleRule === rule.id || runningPipeline}
-                                aria-label={`Run ${rule.name}`}
-                                title="Run rule"
-                              >
-                                <span className={`material-icons ${runningSingleRule === rule.id ? 'spinning' : ''}`}>
-                                  {runningSingleRule === rule.id ? 'sync' : 'play_arrow'}
-                                </span>
-                              </button>
-                              <button
-                                className="action-btn"
-                                onClick={() => handleRunSingleRule(rule.id, true)}
-                                disabled={runningSingleRule === rule.id || runningPipeline}
-                                aria-label={`Test ${rule.name}`}
-                                title="Test (dry run)"
-                              >
-                                <span className="material-icons">visibility</span>
-                              </button>
-                            </>
-                          )}
+                          {/* Per-rule Run/Test icons for every rule kind.
+                              Standard rules run directly; an event_sync live
+                              run WRITES (attaches streams), so it routes
+                              through a one-step confirm (utswf). The Test
+                              (dry-run) icon is confirm-free for both kinds —
+                              the richer event_sync preview still lives in the
+                              editor. */}
+                          <button
+                            className="action-btn"
+                            onClick={() =>
+                              rule.event_sync_config
+                                ? setShowEventSyncRunConfirm(rule)
+                                : handleRunSingleRule(rule.id, false)
+                            }
+                            disabled={runningSingleRule === rule.id || runningPipeline}
+                            aria-label={`Run ${rule.name}`}
+                            title={rule.event_sync_config ? 'Run rule (attaches streams)' : 'Run rule'}
+                          >
+                            <span className={`material-icons ${runningSingleRule === rule.id ? 'spinning' : ''}`}>
+                              {runningSingleRule === rule.id ? 'sync' : 'play_arrow'}
+                            </span>
+                          </button>
+                          <button
+                            className="action-btn"
+                            onClick={() => handleRunSingleRule(rule.id, true)}
+                            disabled={runningSingleRule === rule.id || runningPipeline}
+                            aria-label={`Test ${rule.name}`}
+                            title="Test (dry run)"
+                          >
+                            <span className="material-icons">visibility</span>
+                          </button>
                           <button
                             className="action-btn"
                             onClick={() => handleToggleEnabled(rule)}
@@ -1227,6 +1262,52 @@ export function ChannelPipelineTab() {
                 aria-label="Confirm"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Event Sync Live-Run Confirmation Dialog (utswf). Only the LIVE run
+          hits this — the Test (dry-run) icon runs immediately. Attaches are
+          journaled and reversible via rollback, so this is a light "you're
+          about to write" gate, not a hard warning. */}
+      {showEventSyncRunConfirm && (
+        <ModalOverlay
+          onClose={() => setShowEventSyncRunConfirm(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="event-sync-run-confirm-title"
+        >
+          <div className="modal-container modal-sm" data-testid="event-sync-run-confirm">
+            <div className="modal-header">
+              <h2 id="event-sync-run-confirm-title">Run Event Sync rule</h2>
+            </div>
+            <div className="modal-body">
+              <p>
+                Running &quot;{showEventSyncRunConfirm.name}&quot; will{' '}
+                <strong>attach streams</strong> to their master channels where
+                they match. Attaches are journaled and reversible via rollback.
+              </p>
+              <p>
+                To see what would attach without writing, use the Test (dry run)
+                action instead.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowEventSyncRunConfirm(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={handleConfirmEventSyncRun}
+                aria-label="Confirm run"
+                data-testid="event-sync-run-confirm-btn"
+              >
+                Run &amp; attach
               </button>
             </div>
           </div>
