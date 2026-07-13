@@ -48,6 +48,7 @@ channel IDs against Dispatcharr on every run.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -75,6 +76,8 @@ from services.event_sync_review import (
     master_event_key,
     stream_name_hash,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "AMBIGUOUS_REASON_BAND",
@@ -499,6 +502,47 @@ def _matched_via(
     return tuple(via)
 
 
+def _log_resolved_debug(
+    stream: SecondaryStream,
+    result: StreamMatchResult,
+    resolved: ResolvedStream,
+    via: tuple[tuple[str, str], ...],
+) -> None:
+    """Emit per-stream + per-candidate DEBUG evidence for live tailing.
+
+    OBSERVABILITY ONLY (bead 03nji) — reads what the matcher already decided;
+    never scores, bands, or attaches. Callers MUST guard this with
+    ``logger.isEnabledFor(logging.DEBUG)`` so the string/round work below costs
+    nothing when DEBUG is off (Python evaluates a log call's args eagerly
+    regardless of level, so lazy %-args alone would not spare the computation).
+    """
+    parsed = result.parsed
+    best = resolved.best
+    logger.debug(
+        "[EVENT-SYNC] resolve stream=%r group=%s -> %s parsed_title=%r "
+        "parsed_start=%s best_master=%r score=%s band=%s teams=%s dt=%s "
+        "reason=%s matched_via=%s",
+        stream.name, stream.group_id, resolved.disposition,
+        parsed.title,
+        parsed.start.isoformat() if parsed.start else None,
+        best.master_name if best is not None else None,
+        round(best.score, 4) if best is not None else None,
+        best.band if best is not None else None,
+        best.team_verdict if best is not None else None,
+        round(best.time_delta_minutes, 1) if best is not None else None,
+        result.unmatchable_reason or resolved.ambiguous_reason,
+        [key for key, _ in via],
+    )
+    for c in result.candidates:
+        logger.debug(
+            "[EVENT-SYNC]   candidate stream=%r master=%r score=%.4f band=%s "
+            "teams=%s dt=%s reject=%s",
+            stream.name, c.master_name, c.score, c.band, c.team_verdict,
+            round(c.time_delta_minutes, 1),
+            c.reject_reasons[0] if c.reject_reasons else None,
+        )
+
+
 def resolve_event_sync(
     config: dict,
     master_names: list[str],
@@ -627,6 +671,11 @@ def resolve_event_sync(
             )
             if via:
                 rs = replace(rs, matched_via=via)
+            # Gated per-candidate DEBUG evidence (bead 03nji) — no-op unless
+            # LOG_LEVEL=DEBUG. Guarded so the formatting/round work is skipped
+            # entirely below DEBUG. Observability only; the match is unchanged.
+            if logger.isEnabledFor(logging.DEBUG):
+                _log_resolved_debug(stream, result, rs, via)
             resolved.append(rs)
 
     return EventSyncResolution(

@@ -2322,6 +2322,212 @@ class TestDebugBundle:
         assert settings_in_bundle["mcp_api_key"] == "***REDACTED***"
 
 
+class TestDebugBundleEventSyncMatching:
+    """event_sync_matching.json — Event Sync matching diagnostics (bead 03nji).
+
+    For each ENABLED event_sync rule the bundle runs the ZERO-WRITE resolver
+    (via the shared preview fetch/resolve path) and serializes the full
+    per-stream matching evidence a user can send to PROVE OUT matching.
+    """
+
+    def _es_mock_client(self):
+        from tests.event_sync_fixtures import (
+            GROUP_NAMES,
+            GROUP_SETTINGS_OK,
+            M3U_ACCOUNTS,
+            MASTER_CHANNELS,
+            MASTER_GROUP_ID,
+            SECONDARY_STREAMS,
+        )
+
+        client = MagicMock()
+        client.get_channel_groups = AsyncMock(return_value=[
+            {"id": gid, "name": name} for gid, name in GROUP_NAMES.items()
+        ])
+        client.get_streams_by_ids = AsyncMock(return_value=[])
+        client.get_m3u_accounts = AsyncMock(return_value=M3U_ACCOUNTS)
+        client.get_all_m3u_group_settings = AsyncMock(return_value=GROUP_SETTINGS_OK)
+
+        async def _group_name_for_id(group_id):
+            return GROUP_NAMES.get(group_id)
+
+        client._channel_group_name_for_id = AsyncMock(side_effect=_group_name_for_id)
+
+        async def _get_channels(page=1, page_size=100, search=None,
+                                channel_group=None, **kwargs):
+            if channel_group is not None:
+                results = [
+                    c for c in MASTER_CHANNELS
+                    if c["channel_group_id"] == channel_group
+                ]
+            else:
+                results = list(MASTER_CHANNELS)
+            return {"count": len(results), "next": None, "results": results}
+
+        client.get_channels = AsyncMock(side_effect=_get_channels)
+
+        async def _get_streams(page=1, page_size=100, search=None,
+                               channel_group_name=None, m3u_account=None,
+                               **kwargs):
+            results = list(SECONDARY_STREAMS.get(channel_group_name, []))
+            return {"count": len(results), "next": None, "results": results}
+
+        client.get_streams = AsyncMock(side_effect=_get_streams)
+
+        # Mutating methods — the bundle path must NEVER call them.
+        client.update_channel = AsyncMock()
+        client.create_channel = AsyncMock()
+        client.delete_channel = AsyncMock()
+        client.add_stream_to_channel = AsyncMock()
+        client.update_m3u_group_settings = AsyncMock()
+        client.update_channel_group = AsyncMock()
+        return client, MASTER_GROUP_ID
+
+    async def _run_bundle(self, async_client, client):
+        import asyncio as _asyncio
+        import io as _io
+        import tarfile as _tarfile
+
+        with patch("routers.channel_pipeline.get_client", return_value=client), \
+             patch("log_utils.get_recent_logs", return_value=[]):
+            enqueue = await async_client.post("/api/auto-creation/debug-bundle")
+            assert enqueue.status_code == 202
+            job_id = enqueue.json()["job_id"]
+            # Poll to completion. The event_sync resolve is offloaded to a
+            # thread pool (run_cpu_bound), so real (non-zero) sleeps are needed
+            # to let the worker thread finish before we read the artifact.
+            response = None
+            for _ in range(200):
+                response = await async_client.get(
+                    f"/api/auto-creation/debug-bundle/{job_id}")
+                ctype = response.headers.get("content-type", "")
+                if ctype.startswith("application/gzip"):
+                    break
+                body = response.json()
+                assert body.get("status") != "failed", body
+                await _asyncio.sleep(0.02)
+        assert response is not None
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/gzip")
+        members: dict[str, bytes] = {}
+        with _tarfile.open(fileobj=_io.BytesIO(response.content), mode="r:gz") as tf:
+            for name in tf.getnames():
+                members[name] = tf.extractfile(name).read()
+        return members, response.content
+
+    @pytest.mark.asyncio
+    async def test_bundle_includes_event_sync_matching_with_per_stream_fields(
+        self, async_client, test_session
+    ):
+        from tests.event_sync_fixtures import event_sync_config
+
+        client, master_group_id = self._es_mock_client()
+        rule = _create_rule(
+            test_session,
+            name="Test Sync",
+            event_sync_config=json.dumps(event_sync_config()),
+        )
+
+        members, _ = await self._run_bundle(async_client, client)
+        assert "event_sync_matching.json" in members, list(members)
+        section = json.loads(members["event_sync_matching.json"])
+
+        assert section["rule_count"] == 1
+        assert len(section["rules"]) == 1
+        entry = section["rules"][0]
+        assert entry["rule_id"] == rule.id
+        assert entry["rule_name"] == "Test Sync"
+        assert entry["master_group_id"] == master_group_id
+        assert "error" not in entry
+
+        # Matching controls are captured so a reader knows the effective policy.
+        controls = entry["matching_controls"]
+        assert controls["attach_threshold"] == 0.80
+        assert controls["enforce_time_window"] is True
+
+        summary = entry["summary"]
+        for key in (
+            "secondary_streams", "would_attach", "ambiguous_skipped",
+            "unmatched", "parse_failed", "master_channels",
+            "master_channels_unparsed",
+        ):
+            assert key in summary
+        # Counts reconcile with the per-stream rows by construction.
+        assert (
+            summary["would_attach"] + summary["ambiguous_skipped"]
+            + summary["unmatched"] + summary["parse_failed"]
+        ) == summary["secondary_streams"] == len(entry["streams"])
+        # The Mercury vs. Aces fixture stream attaches at score 1.0.
+        assert summary["would_attach"] >= 1
+
+        # Every per-stream row carries the full diagnostic contract.
+        row = entry["streams"][0]
+        for field in (
+            "stream_id", "stream_name", "group_id", "provider",
+            "parsed_title", "parsed_start", "matched_pattern", "disposition",
+            "unmatchable_reason", "ambiguous_reason", "attach_source",
+            "matched_via", "best_candidate",
+        ):
+            assert field in row, field
+
+        # A would_attach row proves out best-candidate evidence.
+        attach_rows = [
+            s for s in entry["streams"] if s["disposition"] == "would_attach"
+        ]
+        assert attach_rows
+        best = attach_rows[0]["best_candidate"]
+        assert best is not None
+        for field in (
+            "master_channel_name", "master_channel_id", "score", "band",
+            "team_verdict", "time_delta_minutes", "reject_reason",
+        ):
+            assert field in best
+        assert best["band"] == "attach"
+
+        # Manifest advertises the count so a reviewer needn't grep the JSON.
+        manifest = json.loads(members["manifest.json"])
+        assert manifest["event_sync_rule_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_bundle_matching_handles_no_event_sync_rules(
+        self, async_client, test_session
+    ):
+        """A standard (non-event_sync) rule yields an empty, note-bearing
+        section — never a crash or a missing member."""
+        client, _ = self._es_mock_client()
+        _create_rule(test_session, name="Standard Rule")  # no event_sync_config
+
+        members, _ = await self._run_bundle(async_client, client)
+        assert "event_sync_matching.json" in members
+        section = json.loads(members["event_sync_matching.json"])
+        assert section["rules"] == []
+        assert section["rule_count"] == 0
+        assert "note" in section
+
+        manifest = json.loads(members["manifest.json"])
+        assert manifest["event_sync_rule_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_bundle_matching_skips_disabled_event_sync_rule(
+        self, async_client, test_session
+    ):
+        """A DISABLED event_sync rule is not resolved (matches run behavior)."""
+        from tests.event_sync_fixtures import event_sync_config
+
+        client, _ = self._es_mock_client()
+        _create_rule(
+            test_session,
+            name="Disabled Sync",
+            enabled=False,
+            event_sync_config=json.dumps(event_sync_config()),
+        )
+
+        members, _ = await self._run_bundle(async_client, client)
+        section = json.loads(members["event_sync_matching.json"])
+        assert section["rules"] == []
+        assert "note" in section
+
+
 # =========================================================================
 # Rule analyzer endpoints (bd-0gntx).
 #

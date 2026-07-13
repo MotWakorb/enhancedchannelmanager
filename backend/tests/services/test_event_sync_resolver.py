@@ -701,3 +701,72 @@ class TestMatchedViaProvenance:
             MATCHED_VIA_TIME_WINDOW_IGNORED[0],
             MATCHED_VIA_LOWERED_THRESHOLD[0],
         ]
+
+
+class TestDebugLogging:
+    """Gated per-candidate DEBUG logging (bead 03nji) — observability only.
+
+    The resolver emits one structured DEBUG line per stream plus one per
+    candidate for live tailing. Guarded by ``logger.isEnabledFor(DEBUG)`` so
+    it is a no-op below DEBUG; it never alters the match.
+    """
+
+    _STREAMS = [
+        SecondaryStream(
+            name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            group_id=20, stream_id=201, provider="FuboProvider",
+        ),
+        SecondaryStream(
+            name="Fubo Sports Network 07 : NO EVENT",
+            group_id=30, stream_id=302, provider="DaznProvider",
+        ),
+    ]
+
+    def test_emits_per_stream_and_per_candidate_records_at_debug(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.DEBUG, logger="services.event_sync_resolver"):
+            resolve_event_sync(_config(), MASTERS, self._STREAMS, now=NOW)
+
+        msgs = [
+            r.getMessage() for r in caplog.records
+            if r.name == "services.event_sync_resolver"
+        ]
+        # One resolve line per stream (2), each tagged [EVENT-SYNC].
+        resolve_lines = [m for m in msgs if "resolve stream=" in m]
+        assert len(resolve_lines) == 2
+        assert all("[EVENT-SYNC]" in m for m in resolve_lines)
+        # The attach stream's line names its winning master + disposition.
+        attach_line = next(m for m in resolve_lines if "WNBA TV 01" in m)
+        assert "would_attach" in attach_line
+        assert "Mercury vs. Aces" in attach_line
+        # At least one per-candidate line was emitted.
+        assert any("candidate stream=" in m for m in msgs)
+
+    def test_silent_below_debug(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="services.event_sync_resolver"):
+            resolve_event_sync(_config(), MASTERS, self._STREAMS, now=NOW)
+
+        assert not [
+            r for r in caplog.records
+            if r.name == "services.event_sync_resolver"
+        ]
+
+    def test_logging_does_not_change_resolution(self, caplog):
+        import logging
+
+        baseline = resolve_event_sync(_config(), MASTERS, self._STREAMS, now=NOW)
+        with caplog.at_level(logging.DEBUG, logger="services.event_sync_resolver"):
+            debugged = resolve_event_sync(_config(), MASTERS, self._STREAMS, now=NOW)
+
+        assert [
+            (r.stream.stream_id, r.disposition,
+             r.best.master_name if r.best else None)
+            for r in baseline.resolved
+        ] == [
+            (r.stream.stream_id, r.disposition,
+             r.best.master_name if r.best else None)
+            for r in debugged.resolved
+        ]
