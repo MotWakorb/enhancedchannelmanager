@@ -1,12 +1,36 @@
 /**
  * Component for building and editing channel pipeline rules.
+ *
+ * Layout (bead m1s38.3): a grouped two-pane consuming the SHARED modal-layout
+ * primitives from ModalBase.css (.modal-twopane / .modal-main / .modal-rail /
+ * .modal-stepper / .modal-intent / .modal-why). It is NOT a Next/Back wizard —
+ * conditions + actions are one "when X do Y" statement, so all phases stay
+ * visible and a scroll-spy phase spine tracks the active section. Phases are
+ * ordered logic-FIRST: 1 Logic (conditions -> actions), 2 Targeting (merge
+ * scope, manual protection, normalization), 3 Output & Run (channel/stream
+ * sort, orphan cleanup, run-behavior flags).
+ *
+ * The right rail carries a client-side intent sentence (plain-language, with
+ * bold destructive/risky clauses), advisory analyzer chips (debounced, from the
+ * advisory analyze-body endpoint — NEVER gates Save), and a live save hint.
+ *
+ * Dirty-guard (correctness-critical): the header × / overlay Escape route
+ * through the registered `attemptClose`, and the dirty check is a FULL-FIELD
+ * comparison via the shared configDirty comparator (catches deep edits to
+ * existing conditions/actions and every option/sort/scope field), so no edit is
+ * ever discarded silently.
  */
-import { useState, useEffect, useId, useCallback } from 'react';
+import { useState, useEffect, useId, useCallback, useMemo, useRef } from 'react';
+import type { ReactNode } from 'react';
 import type { ChannelPipelineRule, CreateRuleData, Condition, Action, ConditionType, ActionType } from '../../types/channelPipeline';
+import type { RuleAnalyzerFinding } from '../../types/channelPipeline';
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
 import { CustomSelect } from '../CustomSelect';
+import { ModalOverlay } from '../ModalOverlay';
 import { getNormalizationRules, getChannelGroups } from '../../services/api';
+import { analyzeChannelPipelineRuleBody } from '../../services/channelPipelineApi';
+import { stableStringify } from '../../utils/configDirty';
 import './RuleBuilder.css';
 
 export interface RuleBuilderProps {
@@ -14,6 +38,12 @@ export interface RuleBuilderProps {
   onSave: (data: CreateRuleData) => Promise<void> | void;
   onCancel: () => void;
   isLoading?: boolean;
+  /**
+   * Register a guarded-close callback with the parent (mirrors the Event Sync
+   * editor). The parent's overlay Escape / header × invoke this so a dirty form
+   * routes through the discard confirm instead of dropping edits silently.
+   */
+  onRegisterClose?: (attemptClose: (() => void) | null) => void;
 }
 
 interface ValidationErrors {
@@ -22,11 +52,61 @@ interface ValidationErrors {
   actions?: string;
 }
 
+/** Debounce for the advisory analyzer call (home-lab: 250-500ms is plenty). */
+const ANALYZE_DEBOUNCE_MS = 400;
+
+const PHASES = [
+  { id: 'logic', num: 1, label: 'Logic' },
+  { id: 'targeting', num: 2, label: 'Targeting' },
+  { id: 'output', num: 3, label: 'Output & Run' },
+] as const;
+
+const ACTION_LABELS: Record<string, string> = {
+  create_channel: 'create a channel',
+  create_group: 'create a group',
+  merge_streams: 'merge streams',
+  skip: 'skip the stream',
+  set_logo: 'set the logo',
+  assign_epg: 'assign EPG',
+  assign_channel_number: 'assign a channel number',
+  set_channel_group: 'set the channel group',
+  rename_channel: 'rename the channel',
+};
+
+function actionLabel(type: string): string {
+  return ACTION_LABELS[type] || (type ? type.replace(/_/g, ' ') : 'an action');
+}
+
+const CHANNEL_SORT_LABELS: Record<string, string> = {
+  stream_name: 'stream name',
+  stream_name_natural: 'stream name (natural)',
+  group_name: 'group name',
+  quality: 'quality',
+  stream_name_regex: 'a stream-name pattern',
+  provider_order: 'provider order',
+  channel_number: 'channel number',
+};
+
+const STREAM_SORT_LABELS: Record<string, string> = {
+  smart_sort: 'smart sort',
+  quality: 'quality',
+  stream_name: 'stream name',
+  stream_name_natural: 'stream name (natural)',
+  provider_order: 'provider order',
+};
+
+function severityBadge(severity: RuleAnalyzerFinding['severity']): string {
+  if (severity === 'error') return 'badge-error';
+  if (severity === 'warning') return 'badge-warning';
+  return 'badge-info';
+}
+
 export function RuleBuilder({
   rule,
   onSave,
   onCancel,
   isLoading = false,
+  onRegisterClose,
 }: RuleBuilderProps) {
   const id = useId();
   const [name, setName] = useState(rule?.name || '');
@@ -60,8 +140,20 @@ export function RuleBuilder({
   const [availableChannelGroups, setAvailableChannelGroups] = useState<{id: number; name: string}[]>([]);
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [saving, setSaving] = useState(false);
-  const [isDirty, setIsDirty] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [analyzerFindings, setAnalyzerFindings] = useState<RuleAnalyzerFinding[]>([]);
+  const [activePhase, setActivePhase] = useState<string>('logic');
+
+  // Scroll-spy phase spine (NOT a wizard): all phases stay visible; the spine
+  // tracks which one is in view and its pills scroll the main column.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const logicRef = useRef<HTMLElement>(null);
+  const targetingRef = useRef<HTMLElement>(null);
+  const outputRef = useRef<HTMLElement>(null);
+  const phaseRefs = useMemo(
+    () => ({ logic: logicRef, targeting: targetingRef, output: outputRef }),
+    [],
+  );
 
   // Load available normalization groups
   useEffect(() => {
@@ -77,18 +169,28 @@ export function RuleBuilder({
     }).catch(() => {});
   }, []);
 
-  // Escape key closes the cancel confirm dialog (capture phase to intercept before parent ModalOverlay)
+  // Scroll-spy: highlight the phase pill for the section most in view. In test
+  // environments IntersectionObserver is a no-op mock, so the spine simply
+  // stays on the first phase — harmless.
   useEffect(() => {
-    if (!showCancelConfirm) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopImmediatePropagation();
-        setShowCancelConfirm(false);
-      }
-    };
-    document.addEventListener('keydown', handler, true);
-    return () => document.removeEventListener('keydown', handler, true);
-  }, [showCancelConfirm]);
+    if (typeof IntersectionObserver === 'undefined') return;
+    const sections = [logicRef.current, targetingRef.current, outputRef.current].filter(
+      (el): el is HTMLElement => el != null,
+    );
+    if (sections.length === 0) return;
+    const observer = new IntersectionObserver(
+      entries => {
+        const visible = entries
+          .filter(e => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        const phase = visible[0]?.target.getAttribute('data-phase');
+        if (phase) setActivePhase(phase);
+      },
+      { root: contentRef.current, threshold: [0.15, 0.5], rootMargin: '-10% 0px -55% 0px' },
+    );
+    sections.forEach(el => observer.observe(el));
+    return () => observer.disconnect();
+  }, []);
 
   const handleReorderCondition = (fromIndex: number, newPosition: number) => {
     const toIndex = newPosition - 1;
@@ -108,16 +210,79 @@ export function RuleBuilder({
     setActions(newActions);
   };
 
-  // Track if form has been modified
+  // The full rule config as currently authored. This is the single source of
+  // truth for BOTH the dirty check and the advisory analyzer body, so the two
+  // can never diverge from what Save persists.
+  const buildConfig = useCallback((): CreateRuleData => ({
+    name: name.trim(),
+    description: description.trim() || undefined,
+    enabled,
+    priority,
+    conditions,
+    actions,
+    run_on_refresh: runOnRefresh,
+    stop_on_first_match: stopOnFirstMatch,
+    sort_field: sortField || '',
+    sort_order: sortOrder,
+    probe_on_sort: probeOnSort,
+    sort_regex: sortRegex || '',
+    stream_sort_field: streamSortField || '',
+    stream_sort_order: streamSortOrder,
+    quality_tie_break_order: qualityTieBreakOrder,
+    quality_m3u_tie_break_enabled: qualityM3uTieBreakEnabled,
+    normalization_group_ids: normalizationGroupIds,
+    skip_struck_streams: skipStruckStreams,
+    orphan_action: orphanAction,
+    match_scope_target_group: matchScopeTargetGroup,
+    match_scope_group_id: matchScopeTargetGroup ? matchScopeGroupId : null,
+    allow_manual_channel_merge: allowManualChannelMerge,
+  }), [
+    name, description, enabled, priority, conditions, actions, runOnRefresh,
+    stopOnFirstMatch, sortField, sortOrder, probeOnSort, sortRegex, streamSortField,
+    streamSortOrder, qualityTieBreakOrder, qualityM3uTieBreakEnabled, normalizationGroupIds,
+    skipStruckStreams, orphanAction, matchScopeTargetGroup, matchScopeGroupId,
+    allowManualChannelMerge,
+  ]);
+
+  // FULL-FIELD dirty check (bead m1s38.3 data-loss fix). Replaces the old
+  // count-only comparison — a deep edit to an existing condition/action, or a
+  // change to any option/sort/scope/normalization/orphan field, now counts as
+  // dirty. A reorder without content change counts as dirty too: for a
+  // data-loss guard a false-positive confirm is the safe direction. Uses the
+  // SHARED stableStringify so RuleBuilder and the Event Sync editor agree on
+  // what "changed" means.
+  const currentConfigString = useMemo(() => stableStringify(buildConfig()), [buildConfig]);
+  const baselineRef = useRef<string | null>(null);
+  if (baselineRef.current === null) {
+    // First render — state equals the rule as loaded, so this snapshot is the
+    // clean baseline to diff against.
+    baselineRef.current = currentConfigString;
+  }
+  const [savedConfigString, setSavedConfigString] = useState<string | null>(null);
+  const dirty = currentConfigString !== (savedConfigString ?? baselineRef.current);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+
+  // Advisory analyzer chips (bead m1s38.2 endpoint). Debounced; advisory ONLY —
+  // findings never disable or gate Save. Superseded / unmounted calls are
+  // dropped via the `active` guard.
   useEffect(() => {
-    const hasChanges =
-      name !== (rule?.name || '') ||
-      description !== (rule?.description || '') ||
-      enabled !== (rule?.enabled ?? true) ||
-      conditions.length !== (rule?.conditions?.length || 0) ||
-      actions.length !== (rule?.actions?.length || 0);
-    setIsDirty(hasChanges);
-  }, [name, description, enabled, conditions, actions, rule]);
+    let active = true;
+    const body = buildConfig();
+    const handle = window.setTimeout(() => {
+      analyzeChannelPipelineRuleBody(body)
+        .then(res => {
+          if (active) setAnalyzerFindings(res.rules?.[0]?.findings ?? []);
+        })
+        .catch(() => {
+          if (active) setAnalyzerFindings([]);
+        });
+    }, ANALYZE_DEBOUNCE_MS);
+    return () => {
+      active = false;
+      window.clearTimeout(handle);
+    };
+  }, [buildConfig]);
 
   const validate = useCallback((): ValidationErrors | null => {
     const newErrors: ValidationErrors = {};
@@ -159,6 +324,18 @@ export function RuleBuilder({
     return Object.keys(newErrors).length === 0 ? null : newErrors;
   }, [name, conditions, actions]);
 
+  // Advisory-only save hint shown in the rail. Deliberately NOT tied to the
+  // Save button's disabled state (Save stays clickable and validates on click).
+  // Wording avoids the "at least one ..." validation phrasing so the two never
+  // collide in the DOM.
+  const saveHint: string | null = !name.trim()
+    ? 'Name the rule to save it.'
+    : conditions.length === 0
+      ? 'Add a condition to save it.'
+      : actions.length === 0
+        ? 'Add an action to save it.'
+        : null;
+
   const handleSave = async () => {
     const validationErrors = validate();
     if (validationErrors) {
@@ -169,44 +346,32 @@ export function RuleBuilder({
       return;
     }
 
+    const configAtSave = currentConfigString;
     setSaving(true);
     try {
-      await onSave({
-        name: name.trim(),
-        description: description.trim() || undefined,
-        enabled,
-        priority,
-        conditions,
-        actions,
-        run_on_refresh: runOnRefresh,
-        stop_on_first_match: stopOnFirstMatch,
-        sort_field: sortField || '',
-        sort_order: sortOrder,
-        probe_on_sort: probeOnSort,
-        sort_regex: sortRegex || '',
-        stream_sort_field: streamSortField || '',
-        stream_sort_order: streamSortOrder,
-        quality_tie_break_order: qualityTieBreakOrder,
-        quality_m3u_tie_break_enabled: qualityM3uTieBreakEnabled,
-        normalization_group_ids: normalizationGroupIds,
-        skip_struck_streams: skipStruckStreams,
-        orphan_action: orphanAction,
-        match_scope_target_group: matchScopeTargetGroup,
-        match_scope_group_id: matchScopeTargetGroup ? matchScopeGroupId : null,
-        allow_manual_channel_merge: allowManualChannelMerge,
-      });
+      await onSave(buildConfig());
+      // Save succeeded — this config is now the clean baseline, so closing
+      // afterward does not re-prompt the discard guard.
+      setSavedConfigString(configAtSave);
     } finally {
       setSaving(false);
     }
   };
 
-  const handleCancel = () => {
-    if (isDirty) {
-      setShowCancelConfirm(true);
-    } else {
-      onCancel();
-    }
-  };
+  // Guarded close (bead m1s38.3): confirm only when dirty; otherwise close at
+  // once so a modal opened by mistake is not held hostage by a prompt.
+  const attemptClose = useCallback(() => {
+    if (dirtyRef.current) setShowCancelConfirm(true);
+    else onCancel();
+  }, [onCancel]);
+
+  // Register the guard so the parent overlay's Escape / header × route through
+  // the same confirm (previously only the footer Cancel was guarded — ×/Escape
+  // discarded silently).
+  useEffect(() => {
+    onRegisterClose?.(attemptClose);
+    return () => onRegisterClose?.(null);
+  }, [onRegisterClose, attemptClose]);
 
   const handleAddCondition = () => {
     const newCondition: Condition = { type: 'stream_name_contains', connector: 'and' };
@@ -252,6 +417,14 @@ export function RuleBuilder({
     }
   };
 
+  const goToPhase = (phaseId: string) => {
+    setActivePhase(phaseId);
+    phaseRefs[phaseId as keyof typeof phaseRefs]?.current?.scrollIntoView?.({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  };
+
   // GH #298: an effective scope group resolves for create_channel when a
   // Create Channel action carries a target group, OR a Create Group action
   // exists (which sets the group used by a later Create Channel). When neither
@@ -261,6 +434,58 @@ export function RuleBuilder({
     actions.some(a => a.type === 'create_channel' && a.group_id != null) ||
     actions.some(a => a.type === 'create_group');
 
+  const orphansDeleted = orphanAction === 'delete' || orphanAction === 'delete_and_cleanup_groups';
+
+  // Client-side, plain-language intent sentence. Bold clauses are the
+  // destructive / risky choices (orphan delete, manual-channel merge, stop-on-
+  // first-match) so the operator sees at a glance what the rule will do.
+  const intent: ReactNode = useMemo(() => {
+    if (conditions.length === 0 && actions.length === 0) {
+      return (
+        <span className="modal-intent-placeholder">
+          Add a condition and an action to see what this rule will do.
+        </span>
+      );
+    }
+    const condClause =
+      conditions.length === 0 ? (
+        <>every stream</>
+      ) : (
+        <>
+          a stream matches {conditions.length} condition{conditions.length === 1 ? '' : 's'}
+        </>
+      );
+    const distinctActions = Array.from(new Set(actions.map(a => a.type).filter(Boolean))) as string[];
+    const actClause =
+      actions.length === 0 ? (
+        <>do nothing yet</>
+      ) : distinctActions.length === 0 ? (
+        <>run {actions.length} action{actions.length === 1 ? '' : 's'}</>
+      ) : (
+        <>{distinctActions.map(actionLabel).join(', ')}</>
+      );
+    return (
+      <>
+        When {condClause}, {actClause}.
+        {sortField && <> Renumbers channels by {CHANNEL_SORT_LABELS[sortField] || sortField}.</>}
+        {streamSortField && (
+          <> Orders streams by {STREAM_SORT_LABELS[streamSortField] || streamSortField}.</>
+        )}
+        {orphansDeleted ? (
+          <> <strong>Orphaned channels are deleted.</strong></>
+        ) : orphanAction === 'move_uncategorized' ? (
+          <> Orphaned channels move to Uncategorized.</>
+        ) : null}
+        {allowManualChannelMerge && <> <strong>May merge streams into manual channels.</strong></>}
+        {stopOnFirstMatch && <> <strong>Stops after the first matching rule.</strong></>}
+        {runOnRefresh && <> Runs automatically after each M3U refresh.</>}
+      </>
+    );
+  }, [
+    conditions, actions, sortField, streamSortField, orphansDeleted, orphanAction,
+    allowManualChannelMerge, stopOnFirstMatch, runOnRefresh,
+  ]);
+
   return (
     <div className="rule-builder" data-testid="rule-builder" onKeyDown={handleKeyDown}>
       {isLoading && (
@@ -269,32 +494,42 @@ export function RuleBuilder({
           <span>Loading...</span>
         </div>
       )}
-      <div className="rule-builder-content">
-        {/* Basic Info Section */}
-        <section className="rule-section">
-          <h3 className="section-title">Basic Information</h3>
 
-          <div className="form-field">
-            <label htmlFor={`${id}-name`}>Rule Name *</label>
-            <input
-              id={`${id}-name`}
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Enter rule name"
-              disabled={isLoading}
-              aria-required="true"
-              aria-describedby={errors.name ? `${id}-name-error` : undefined}
-              aria-invalid={!!errors.name}
-              aria-label="Rule name"
-            />
-            {errors.name && (
-              <div id={`${id}-name-error`} className="field-error" role="alert">
-                {errors.name}
-              </div>
-            )}
+      <div className="rule-builder-content" ref={contentRef}>
+        {/* Compact always-visible header: name*, enabled, description. */}
+        <div className="rule-builder-headerbar">
+          <div className="rule-builder-headerbar-row">
+            <div className="form-field rule-builder-name-field">
+              <label htmlFor={`${id}-name`}>Rule Name *</label>
+              <input
+                id={`${id}-name`}
+                type="text"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Enter rule name"
+                disabled={isLoading}
+                aria-required="true"
+                aria-describedby={errors.name ? `${id}-name-error` : undefined}
+                aria-invalid={!!errors.name}
+                aria-label="Rule name"
+              />
+              {errors.name && (
+                <div id={`${id}-name-error`} className="field-error" role="alert">
+                  {errors.name}
+                </div>
+              )}
+            </div>
+            <label className="checkbox-item rule-builder-enabled">
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={e => setEnabled(e.target.checked)}
+                disabled={isLoading}
+                aria-label="Enabled"
+              />
+              <span>Enabled</span>
+            </label>
           </div>
-
           <div className="form-field">
             <label htmlFor={`${id}-description`}>Description</label>
             <textarea
@@ -307,436 +542,545 @@ export function RuleBuilder({
               aria-label="Description"
             />
           </div>
+        </div>
 
-          <div className="form-field">
-            <label>Options</label>
-            <div className="checkbox-group horizontal">
-              <label className="checkbox-item">
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={e => setEnabled(e.target.checked)}
-                  disabled={isLoading}
-                  aria-label="Enabled"
-                />
-                <span>Enabled</span>
-              </label>
-              <label className="checkbox-item">
-                <input
-                  type="checkbox"
-                  checked={runOnRefresh}
-                  onChange={e => setRunOnRefresh(e.target.checked)}
-                  disabled={isLoading}
-                  aria-label="Run on M3U refresh"
-                />
-                <span>Run on M3U refresh</span>
-              </label>
-              <label className="checkbox-item">
-                <input
-                  type="checkbox"
-                  checked={stopOnFirstMatch}
-                  onChange={e => setStopOnFirstMatch(e.target.checked)}
-                  disabled={isLoading}
-                  aria-label="Stop on first match"
-                />
-                <span>Stop on first match</span>
-              </label>
-              <label className="checkbox-item">
-                <input
-                  type="checkbox"
-                  checked={skipStruckStreams}
-                  onChange={e => setSkipStruckStreams(e.target.checked)}
-                  disabled={isLoading}
-                  aria-label="Skip struck-out streams"
-                />
-                <span>Skip struck-out streams</span>
-              </label>
-            </div>
-          </div>
+        {/* Scroll-spy phase spine — logic FIRST. Pills scroll the main column;
+            the rail is persistent across phases. This is NOT a wizard. */}
+        <nav className="modal-stepper" aria-label="Rule sections">
+          {PHASES.map(phase => (
+            <button
+              key={phase.id}
+              type="button"
+              className="modal-stepper-item"
+              aria-current={activePhase === phase.id ? 'step' : undefined}
+              onClick={() => goToPhase(phase.id)}
+              data-testid={`rule-phase-pill-${phase.id}`}
+            >
+              <span className="modal-stepper-num">{phase.num}</span> {phase.label}
+            </button>
+          ))}
+        </nav>
 
-          <div className="form-field">
-            <label>Merge lookup scope</label>
-            <span className="field-hint">
-              On (default): when this rule merges into an existing channel, only look within a single target group —
-              so the rule creates a new channel in that group instead of merging into a same-name channel in another
-              group. Pick the group below, or leave it on Auto to use the Create Channel action&apos;s target group.
-              Off: search all channel groups for a matching name (the original behavior).
-            </span>
-            <div className="checkbox-group">
-              <label className="checkbox-item">
-                <input
-                  type="checkbox"
-                  checked={matchScopeTargetGroup}
-                  onChange={e => setMatchScopeTargetGroup(e.target.checked)}
-                  disabled={isLoading}
-                  aria-label="Scope merge lookups to a target group"
-                />
-                <span>Scope merge lookups to a target group</span>
-              </label>
-            </div>
-            {matchScopeTargetGroup && (
-              <div className="form-field" style={{ marginTop: '8px' }}>
-                <label>Scope group</label>
-                <CustomSelect
-                  value={matchScopeGroupId != null ? matchScopeGroupId.toString() : ''}
-                  onChange={val => setMatchScopeGroupId(val ? parseInt(val, 10) : null)}
-                  options={[
-                    { value: '', label: 'Auto — use the Create Channel action\'s target group' },
-                    ...availableChannelGroups.map(group => ({
-                      value: group.id.toString(),
-                      label: group.name,
-                    })),
-                  ]}
-                  disabled={isLoading}
-                  searchable
-                  searchPlaceholder="Search groups..."
-                />
-                {matchScopeGroupId == null && !ruleResolvesAScopeGroup && (
-                  <span className="norm-hint">
-                    <span className="material-icons norm-hint-icon">warning</span>
-                    No scope group will resolve — this rule has no Create Channel target group, so merge lookups will
-                    fall back to ALL channel groups. Pick a Scope group above to restrict matching to one group.
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
+        <div className="modal-twopane">
+          <div className="modal-main">
+            {/* ── Phase 1: LOGIC (conditions -> actions) — the star ───────── */}
+            <section
+              ref={logicRef}
+              data-phase="logic"
+              className="rule-phase"
+              aria-labelledby={`${id}-logic-title`}
+            >
+              <h2 className="rule-phase-title" id={`${id}-logic-title`}>
+                <span className="rule-phase-num">1</span> Logic
+              </h2>
 
-          <div className="form-field">
-            <label>Manual channel protection</label>
-            <span className="field-hint">
-              Off (default): channels you built by hand are protected — if this rule&apos;s merge target matches a
-              manual channel, the match is treated as not found (the blocked merge is recorded in the execution log
-              and journal) and the rule may create a new auto channel instead of merging. On: this rule may merge
-              streams into manual channels; each adoption is recorded in the journal.
-            </span>
-            <div className="checkbox-group">
-              <label className="checkbox-item">
-                <input
-                  type="checkbox"
-                  checked={allowManualChannelMerge}
-                  onChange={e => setAllowManualChannelMerge(e.target.checked)}
-                  disabled={isLoading}
-                  aria-label="Allow merging into manual channels"
-                />
-                <span>Allow merging into manual channels</span>
-              </label>
-            </div>
-          </div>
-
-          <div className="form-field">
-            <label>Normalization Groups</label>
-            <span className="field-hint">Select which normalization rule groups to apply to channel names</span>
-            {availableNormGroups.length === 0 ? (
-              <span className="norm-hint">
-                <span className="material-icons norm-hint-icon">info</span>
-                No normalization rule groups configured
-              </span>
-            ) : (
-              <>
-                <div className="norm-group-actions">
-                  <button type="button" className="text-button" disabled={isLoading}
-                    onClick={() => setNormalizationGroupIds(availableNormGroups.filter(g => g.enabled).map(g => g.id))}>
-                    Select all enabled
-                  </button>
-                  <button type="button" className="text-button" disabled={isLoading}
-                    onClick={() => setNormalizationGroupIds([])}>
-                    Clear all
-                  </button>
+              <div className="rule-section">
+                <div className="section-header">
+                  <h3 className="section-title">Conditions</h3>
+                  <span className="section-hint">Define when this rule should apply</span>
                 </div>
-                <div className="checkbox-group vertical">
-                  {availableNormGroups.map(group => (
-                    <label key={group.id} className="checkbox-item">
-                      <input
-                        type="checkbox"
-                        checked={normalizationGroupIds.includes(group.id)}
-                        onChange={e => {
-                          if (e.target.checked) {
-                            setNormalizationGroupIds([...normalizationGroupIds, group.id]);
-                          } else {
-                            setNormalizationGroupIds(normalizationGroupIds.filter(id => id !== group.id));
-                          }
-                        }}
-                        disabled={isLoading}
+
+                {errors.conditions && (
+                  <div className="section-error" role="alert">{errors.conditions}</div>
+                )}
+
+                <div className="conditions-list">
+                  {conditions.map((condition, index) => (
+                    <div key={index}>
+                      {index > 0 && (
+                        <div className="condition-connector">
+                          <button
+                            type="button"
+                            className={`connector-toggle ${(condition.connector || 'and') === 'or' ? 'connector-or' : ''}`}
+                            onClick={() => handleToggleConnector(index)}
+                            title="Click to toggle between AND/OR"
+                          >
+                            {(condition.connector || 'and').toUpperCase()}
+                          </button>
+                        </div>
+                      )}
+                      <ConditionEditor
+                        condition={condition}
+                        onChange={updated => handleUpdateCondition(index, updated)}
+                        onRemove={() => handleRemoveCondition(index)}
+                        showValidation={Object.keys(errors).length > 0}
+                        showNegateOption
+                        showCaseSensitiveOption
+                        orderNumber={index + 1}
+                        totalItems={conditions.length}
+                        onReorder={newPos => handleReorderCondition(index, newPos)}
                       />
-                      <span className={!group.enabled ? 'norm-group-disabled' : ''}>
-                        {group.name}{!group.enabled ? ' (disabled)' : ''}
-                      </span>
-                    </label>
+                    </div>
                   ))}
                 </div>
-                {normalizationGroupIds.length === 0 && availableNormGroups.some(g => g.enabled) && (
+
+                <div className="add-item-wrapper">
+                  <button
+                    type="button"
+                    className="add-item-btn"
+                    onClick={handleAddCondition}
+                    aria-label="Add condition"
+                  >
+                    <span className="material-icons">add</span>
+                    Add Condition
+                  </button>
+                </div>
+              </div>
+
+              <div className="rule-section">
+                <div className="section-header">
+                  <h3 className="section-title">Actions</h3>
+                  <span className="section-hint">Define what happens when conditions match</span>
+                </div>
+
+                {errors.actions && (
+                  <div className="section-error" role="alert">{errors.actions}</div>
+                )}
+
+                <div className="actions-list">
+                  {actions.map((action, index) => (
+                    <ActionEditor
+                      key={index}
+                      action={action}
+                      onChange={updated => handleUpdateAction(index, updated)}
+                      onRemove={() => handleRemoveAction(index)}
+                      showValidation={Object.keys(errors).length > 0}
+                      showPreview
+                      previousActions={actions.slice(0, index)}
+                      orderNumber={index + 1}
+                      totalItems={actions.length}
+                      onReorder={newPos => handleReorderAction(index, newPos)}
+                    />
+                  ))}
+                </div>
+
+                <div className="add-item-wrapper">
+                  <button
+                    type="button"
+                    className="add-item-btn"
+                    onClick={handleAddAction}
+                    aria-label="Add action"
+                  >
+                    <span className="material-icons">add</span>
+                    Add Action
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {/* ── Phase 2: TARGETING ──────────────────────────────────────── */}
+            <section
+              ref={targetingRef}
+              data-phase="targeting"
+              className="rule-phase"
+              aria-labelledby={`${id}-targeting-title`}
+            >
+              <h2 className="rule-phase-title" id={`${id}-targeting-title`}>
+                <span className="rule-phase-num">2</span> Targeting
+              </h2>
+
+              <div className="form-field">
+                <label>Merge lookup scope</label>
+                <span className="field-hint">
+                  On (default): scope merge lookups to a single target group so a same-name channel in
+                  another group is not merged into.
+                </span>
+                <details className="modal-why">
+                  <summary>Why / when to use</summary>
+                  <p className="rule-why-body">
+                    On (default): when this rule merges into an existing channel, only look within a single
+                    target group — so the rule creates a new channel in that group instead of merging into a
+                    same-name channel in another group. Pick the group below, or leave it on Auto to use the
+                    Create Channel action&apos;s target group. Off: search all channel groups for a matching
+                    name (the original behavior).
+                  </p>
+                </details>
+                <div className="checkbox-group">
+                  <label className="checkbox-item">
+                    <input
+                      type="checkbox"
+                      checked={matchScopeTargetGroup}
+                      onChange={e => setMatchScopeTargetGroup(e.target.checked)}
+                      disabled={isLoading}
+                      aria-label="Scope merge lookups to a target group"
+                    />
+                    <span>Scope merge lookups to a target group</span>
+                  </label>
+                </div>
+                {matchScopeTargetGroup && (
+                  <div className="form-field" style={{ marginTop: '8px' }}>
+                    <label>Scope group</label>
+                    <CustomSelect
+                      value={matchScopeGroupId != null ? matchScopeGroupId.toString() : ''}
+                      onChange={val => setMatchScopeGroupId(val ? parseInt(val, 10) : null)}
+                      options={[
+                        { value: '', label: 'Auto — use the Create Channel action\'s target group' },
+                        ...availableChannelGroups.map(group => ({
+                          value: group.id.toString(),
+                          label: group.name,
+                        })),
+                      ]}
+                      disabled={isLoading}
+                      searchable
+                      searchPlaceholder="Search groups..."
+                    />
+                    {matchScopeGroupId == null && !ruleResolvesAScopeGroup && (
+                      <span className="norm-hint">
+                        <span className="material-icons norm-hint-icon">warning</span>
+                        No scope group will resolve — this rule has no Create Channel target group, so merge
+                        lookups will fall back to ALL channel groups. Pick a Scope group above to restrict
+                        matching to one group.
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="form-field">
+                <label>Manual channel protection</label>
+                <span className="field-hint">
+                  Off (default): hand-built channels are protected — this rule will not merge streams into them.
+                </span>
+                <details className="modal-why">
+                  <summary>Why / when to use</summary>
+                  <p className="rule-why-body">
+                    Off (default): channels you built by hand are protected — if this rule&apos;s merge target
+                    matches a manual channel, the match is treated as not found (the blocked merge is recorded
+                    in the execution log and journal) and the rule may create a new auto channel instead of
+                    merging. On: this rule may merge streams into manual channels; each adoption is recorded in
+                    the journal.
+                  </p>
+                </details>
+                <div className="checkbox-group">
+                  <label className="checkbox-item">
+                    <input
+                      type="checkbox"
+                      checked={allowManualChannelMerge}
+                      onChange={e => setAllowManualChannelMerge(e.target.checked)}
+                      disabled={isLoading}
+                      aria-label="Allow merging into manual channels"
+                    />
+                    <span>Allow merging into manual channels</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label>Normalization Groups</label>
+                <span className="field-hint">Select which normalization rule groups to apply to channel names</span>
+                {availableNormGroups.length === 0 ? (
                   <span className="norm-hint">
                     <span className="material-icons norm-hint-icon">info</span>
-                    No normalization groups selected — names won't be normalized
+                    No normalization rule groups configured
                   </span>
+                ) : (
+                  <>
+                    <div className="norm-group-actions">
+                      <button type="button" className="text-button" disabled={isLoading}
+                        onClick={() => setNormalizationGroupIds(availableNormGroups.filter(g => g.enabled).map(g => g.id))}>
+                        Select all enabled
+                      </button>
+                      <button type="button" className="text-button" disabled={isLoading}
+                        onClick={() => setNormalizationGroupIds([])}>
+                        Clear all
+                      </button>
+                    </div>
+                    <div className="checkbox-group vertical">
+                      {availableNormGroups.map(group => (
+                        <label key={group.id} className="checkbox-item">
+                          <input
+                            type="checkbox"
+                            checked={normalizationGroupIds.includes(group.id)}
+                            onChange={e => {
+                              if (e.target.checked) {
+                                setNormalizationGroupIds([...normalizationGroupIds, group.id]);
+                              } else {
+                                setNormalizationGroupIds(normalizationGroupIds.filter(gid => gid !== group.id));
+                              }
+                            }}
+                            disabled={isLoading}
+                          />
+                          <span className={!group.enabled ? 'norm-group-disabled' : ''}>
+                            {group.name}{!group.enabled ? ' (disabled)' : ''}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    {normalizationGroupIds.length === 0 && availableNormGroups.some(g => g.enabled) && (
+                      <span className="norm-hint">
+                        <span className="material-icons norm-hint-icon">info</span>
+                        No normalization groups selected — names won't be normalized
+                      </span>
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </div>
-
-          <div className="form-field">
-            <label>Channel Sort</label>
-            <span className="field-hint">Controls the order channels are numbered (renumbers on every run)</span>
-            <div className="sort-config-row">
-              <CustomSelect
-                options={[
-                  { value: '', label: 'No sorting (keep manual numbers)' },
-                  { value: 'stream_name', label: 'Stream Name' },
-                  { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
-                  { value: 'group_name', label: 'Group Name' },
-                  { value: 'quality', label: 'Quality (Resolution)' },
-                  { value: 'stream_name_regex', label: 'Stream Name (Regex)' },
-                  { value: 'provider_order', label: 'Provider Order (M3U)' },
-                  { value: 'channel_number', label: 'Channel Number' },
-                ]}
-                value={sortField}
-                onChange={setSortField}
-                placeholder="No sorting"
-              />
-              {sortField && (
-                <CustomSelect
-                  options={[
-                    { value: 'asc', label: 'Ascending' },
-                    { value: 'desc', label: 'Descending' },
-                  ]}
-                  value={sortOrder}
-                  onChange={(val) => setSortOrder(val as 'asc' | 'desc')}
-                />
-              )}
-            </div>
-            {sortField === 'stream_name_regex' && (
-              <div className="form-field" style={{ marginTop: '8px' }}>
-                <label>Sort Regex Pattern</label>
-                <input
-                  type="text"
-                  className="action-input"
-                  value={sortRegex}
-                  onChange={e => setSortRegex(e.target.value)}
-                  placeholder="(\d{4}-\d{2}-\d{2})"
-                  disabled={isLoading}
-                />
-                <p className="form-hint">
-                  Enter a regex with a capture group. Streams are sorted by the first captured group.
-                  Example: (\d{"{4}"}-\d{"{2}"}-\d{"{2}"}) captures dates like 2024-03-09
-                </p>
               </div>
-            )}
-            {sortField === 'quality' && (
-              <div className="checkbox-group">
-                <label className="checkbox-option">
-                  <input
-                    type="checkbox"
-                    checked={probeOnSort}
-                    onChange={e => setProbeOnSort(e.target.checked)}
-                    disabled={isLoading}
-                    aria-label="Probe unprobed streams before sorting"
+            </section>
+
+            {/* ── Phase 3: OUTPUT & RUN ───────────────────────────────────── */}
+            <section
+              ref={outputRef}
+              data-phase="output"
+              className="rule-phase"
+              aria-labelledby={`${id}-output-title`}
+            >
+              <h2 className="rule-phase-title" id={`${id}-output-title`}>
+                <span className="rule-phase-num">3</span> Output &amp; Run
+              </h2>
+
+              <div className="form-field">
+                <label>Channel Sort</label>
+                <span className="field-hint">Controls the order channels are numbered (renumbers on every run)</span>
+                <div className="sort-config-row">
+                  <CustomSelect
+                    options={[
+                      { value: '', label: 'No sorting (keep manual numbers)' },
+                      { value: 'stream_name', label: 'Stream Name' },
+                      { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
+                      { value: 'group_name', label: 'Group Name' },
+                      { value: 'quality', label: 'Quality (Resolution)' },
+                      { value: 'stream_name_regex', label: 'Stream Name (Regex)' },
+                      { value: 'provider_order', label: 'Provider Order (M3U)' },
+                      { value: 'channel_number', label: 'Channel Number' },
+                    ]}
+                    value={sortField}
+                    onChange={setSortField}
+                    placeholder="No sorting"
                   />
-                  <span>Probe unprobed streams before sorting</span>
-                </label>
-                <p className="form-hint">
-                  Gathers resolution data for streams that haven't been probed. Adds time to execution.
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="form-field">
-            <label>Stream Sort</label>
-            <span className="field-hint">Reorders streams within each channel (e.g. best quality first)</span>
-            <div className="sort-config-row">
-              <CustomSelect
-                options={[
-                  { value: 'smart_sort', label: 'Smart Sort (default)' },
-                  { value: '', label: 'No sorting' },
-                  { value: 'quality', label: 'Quality (Resolution)' },
-                  { value: 'stream_name', label: 'Stream Name' },
-                  { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
-                  { value: 'provider_order', label: 'Provider Order (M3U)' },
-                ]}
-                value={streamSortField}
-                onChange={setStreamSortField}
-                placeholder="No sorting"
-              />
-              {streamSortField && streamSortField !== 'smart_sort' && (
-                <CustomSelect
-                  options={[
-                    { value: 'asc', label: 'Ascending' },
-                    { value: 'desc', label: 'Descending' },
-                  ]}
-                  value={streamSortOrder}
-                  onChange={(val) => setStreamSortOrder(val as 'asc' | 'desc')}
-                />
-              )}
-            </div>
-            {streamSortField === 'quality' && (
-              <>
-                <div className="checkbox-group">
-                  <label className="checkbox-option">
-                    <input
-                      type="checkbox"
-                      checked={qualityM3uTieBreakEnabled}
-                      onChange={e => setQualityM3uTieBreakEnabled(e.target.checked)}
-                      disabled={isLoading}
-                      aria-label="Break resolution ties using M3U priority"
-                    />
-                    <span>Break resolution ties using M3U priority</span>
-                  </label>
-                  <p className="form-hint">
-                    Off: equal-resolution streams stay in numeric stream-id order only. On: uses Save Priorities below.
-                  </p>
-                </div>
-                <div className="form-field" style={{ marginTop: '8px' }}>
-                  <label>Equal resolution — tie-break direction</label>
-                  <div className="sort-config-row">
+                  {sortField && (
                     <CustomSelect
                       options={[
-                        { value: 'desc', label: 'Higher priority first' },
-                        { value: 'asc', label: 'Lower priority first' },
+                        { value: 'asc', label: 'Ascending' },
+                        { value: 'desc', label: 'Descending' },
                       ]}
-                      value={qualityTieBreakOrder}
-                      onChange={(val) => setQualityTieBreakOrder(val as 'asc' | 'desc')}
-                      disabled={isLoading || !qualityM3uTieBreakEnabled}
+                      value={sortOrder}
+                      onChange={(val) => setSortOrder(val as 'asc' | 'desc')}
                     />
-                  </div>
-                  <p className="form-hint">
-                    When two streams match resolution and tie-break is on, order by ECM M3U priorities (Save Priorities). Same meaning as Provider Order stream sort.
-                  </p>
+                  )}
                 </div>
-                <div className="checkbox-group">
-                  <label className="checkbox-option">
+                {sortField === 'stream_name_regex' && (
+                  <div className="form-field" style={{ marginTop: '8px' }}>
+                    <label>Sort Regex Pattern</label>
                     <input
-                      type="checkbox"
-                      checked={probeOnSort}
-                      onChange={e => setProbeOnSort(e.target.checked)}
+                      type="text"
+                      className="action-input"
+                      value={sortRegex}
+                      onChange={e => setSortRegex(e.target.value)}
+                      placeholder="(\d{4}-\d{2}-\d{2})"
                       disabled={isLoading}
-                      aria-label="Probe unprobed streams before sorting"
                     />
-                    <span>Probe unprobed streams before sorting</span>
-                  </label>
-                  <p className="form-hint">
-                    Gathers resolution data for streams that haven't been probed. Adds time to execution.
-                  </p>
-                </div>
-              </>
-            )}
-            {streamSortField === 'provider_order' && (
-              <p className="form-hint">
-                Uses priority values from M3U Manager (Save Priorities). Choose Descending so the highest priority number is first; Ascending puts the lowest priority first.
-              </p>
-            )}
-          </div>
-
-          <div className="form-field">
-            <label>Orphan Cleanup</label>
-            <span className="field-hint">What to do with channels that no longer match this rule</span>
-            <CustomSelect
-              options={[
-                { value: 'delete', label: 'Delete orphaned channels' },
-                { value: 'move_uncategorized', label: 'Move to Uncategorized' },
-                { value: 'delete_and_cleanup_groups', label: 'Delete channels + empty groups' },
-                { value: 'none', label: 'Do nothing (keep orphans)' },
-              ]}
-              value={orphanAction}
-              onChange={(val) => setOrphanAction(val as 'delete' | 'none' | 'move_uncategorized' | 'delete_and_cleanup_groups')}
-            />
-          </div>
-        </section>
-
-        {/* Conditions Section */}
-        <section className="rule-section">
-          <div className="section-header">
-            <h3 className="section-title">Conditions</h3>
-            <span className="section-hint">Define when this rule should apply</span>
-          </div>
-
-          {errors.conditions && (
-            <div className="section-error" role="alert">{errors.conditions}</div>
-          )}
-
-          <div className="conditions-list">
-            {conditions.map((condition, index) => (
-              <div key={index}>
-                {index > 0 && (
-                  <div className="condition-connector">
-                    <button
-                      type="button"
-                      className={`connector-toggle ${(condition.connector || 'and') === 'or' ? 'connector-or' : ''}`}
-                      onClick={() => handleToggleConnector(index)}
-                      title="Click to toggle between AND/OR"
-                    >
-                      {(condition.connector || 'and').toUpperCase()}
-                    </button>
+                    <p className="form-hint">
+                      Enter a regex with a capture group. Streams are sorted by the first captured group.
+                      Example: (\d{"{4}"}-\d{"{2}"}-\d{"{2}"}) captures dates like 2024-03-09
+                    </p>
                   </div>
                 )}
-                <ConditionEditor
-                  condition={condition}
-                  onChange={updated => handleUpdateCondition(index, updated)}
-                  onRemove={() => handleRemoveCondition(index)}
-                  showValidation={Object.keys(errors).length > 0}
-                  showNegateOption
-                  showCaseSensitiveOption
-                  orderNumber={index + 1}
-                  totalItems={conditions.length}
-                  onReorder={newPos => handleReorderCondition(index, newPos)}
+                {sortField === 'quality' && (
+                  <div className="checkbox-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={probeOnSort}
+                        onChange={e => setProbeOnSort(e.target.checked)}
+                        disabled={isLoading}
+                        aria-label="Probe unprobed streams before sorting"
+                      />
+                      <span>Probe unprobed streams before sorting</span>
+                    </label>
+                    <p className="form-hint">
+                      Gathers resolution data for streams that haven't been probed. Adds time to execution.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="form-field">
+                <label>Stream Sort</label>
+                <span className="field-hint">Reorders streams within each channel (e.g. best quality first)</span>
+                <div className="sort-config-row">
+                  <CustomSelect
+                    options={[
+                      { value: 'smart_sort', label: 'Smart Sort (default)' },
+                      { value: '', label: 'No sorting' },
+                      { value: 'quality', label: 'Quality (Resolution)' },
+                      { value: 'stream_name', label: 'Stream Name' },
+                      { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
+                      { value: 'provider_order', label: 'Provider Order (M3U)' },
+                    ]}
+                    value={streamSortField}
+                    onChange={setStreamSortField}
+                    placeholder="No sorting"
+                  />
+                  {streamSortField && streamSortField !== 'smart_sort' && (
+                    <CustomSelect
+                      options={[
+                        { value: 'asc', label: 'Ascending' },
+                        { value: 'desc', label: 'Descending' },
+                      ]}
+                      value={streamSortOrder}
+                      onChange={(val) => setStreamSortOrder(val as 'asc' | 'desc')}
+                    />
+                  )}
+                </div>
+                {streamSortField === 'quality' && (
+                  <>
+                    <div className="checkbox-group">
+                      <label className="checkbox-option">
+                        <input
+                          type="checkbox"
+                          checked={qualityM3uTieBreakEnabled}
+                          onChange={e => setQualityM3uTieBreakEnabled(e.target.checked)}
+                          disabled={isLoading}
+                          aria-label="Break resolution ties using M3U priority"
+                        />
+                        <span>Break resolution ties using M3U priority</span>
+                      </label>
+                      <details className="modal-why">
+                        <summary>Why / when to use</summary>
+                        <p className="rule-why-body">
+                          Off: equal-resolution streams stay in numeric stream-id order only. On: uses Save
+                          Priorities below.
+                        </p>
+                      </details>
+                    </div>
+                    <div className="form-field" style={{ marginTop: '8px' }}>
+                      <label>Equal resolution — tie-break direction</label>
+                      <div className="sort-config-row">
+                        <CustomSelect
+                          options={[
+                            { value: 'desc', label: 'Higher priority first' },
+                            { value: 'asc', label: 'Lower priority first' },
+                          ]}
+                          value={qualityTieBreakOrder}
+                          onChange={(val) => setQualityTieBreakOrder(val as 'asc' | 'desc')}
+                          disabled={isLoading || !qualityM3uTieBreakEnabled}
+                        />
+                      </div>
+                      <details className="modal-why">
+                        <summary>Why / when to use</summary>
+                        <p className="rule-why-body">
+                          When two streams match resolution and tie-break is on, order by ECM M3U priorities
+                          (Save Priorities). Same meaning as Provider Order stream sort.
+                        </p>
+                      </details>
+                    </div>
+                    <div className="checkbox-group">
+                      <label className="checkbox-option">
+                        <input
+                          type="checkbox"
+                          checked={probeOnSort}
+                          onChange={e => setProbeOnSort(e.target.checked)}
+                          disabled={isLoading}
+                          aria-label="Probe unprobed streams before sorting"
+                        />
+                        <span>Probe unprobed streams before sorting</span>
+                      </label>
+                      <p className="form-hint">
+                        Gathers resolution data for streams that haven't been probed. Adds time to execution.
+                      </p>
+                    </div>
+                  </>
+                )}
+                {streamSortField === 'provider_order' && (
+                  <p className="form-hint">
+                    Uses priority values from M3U Manager (Save Priorities). Choose Descending so the highest priority number is first; Ascending puts the lowest priority first.
+                  </p>
+                )}
+              </div>
+
+              <div className="form-field">
+                <label>Orphan Cleanup</label>
+                <span className="field-hint">What to do with channels that no longer match this rule</span>
+                <CustomSelect
+                  options={[
+                    { value: 'delete', label: 'Delete orphaned channels' },
+                    { value: 'move_uncategorized', label: 'Move to Uncategorized' },
+                    { value: 'delete_and_cleanup_groups', label: 'Delete channels + empty groups' },
+                    { value: 'none', label: 'Do nothing (keep orphans)' },
+                  ]}
+                  value={orphanAction}
+                  onChange={(val) => setOrphanAction(val as 'delete' | 'none' | 'move_uncategorized' | 'delete_and_cleanup_groups')}
                 />
               </div>
-            ))}
+
+              {/* Run behavior — the former "Options" grab-bag, dissolved into
+                  the purpose group it belongs to. */}
+              <div className="form-field">
+                <label>Run behavior</label>
+                <span className="field-hint">Controls when and how this rule runs</span>
+                <div className="checkbox-group horizontal">
+                  <label className="checkbox-item">
+                    <input
+                      type="checkbox"
+                      checked={runOnRefresh}
+                      onChange={e => setRunOnRefresh(e.target.checked)}
+                      disabled={isLoading}
+                      aria-label="Run on M3U refresh"
+                    />
+                    <span>Run on M3U refresh</span>
+                  </label>
+                  <label className="checkbox-item">
+                    <input
+                      type="checkbox"
+                      checked={stopOnFirstMatch}
+                      onChange={e => setStopOnFirstMatch(e.target.checked)}
+                      disabled={isLoading}
+                      aria-label="Stop on first match"
+                    />
+                    <span>Stop on first match</span>
+                  </label>
+                  <label className="checkbox-item">
+                    <input
+                      type="checkbox"
+                      checked={skipStruckStreams}
+                      onChange={e => setSkipStruckStreams(e.target.checked)}
+                      disabled={isLoading}
+                      aria-label="Skip struck-out streams"
+                    />
+                    <span>Skip struck-out streams</span>
+                  </label>
+                </div>
+              </div>
+            </section>
           </div>
 
-          <div className="add-item-wrapper">
-            <button
-              type="button"
-              className="add-item-btn"
-              onClick={handleAddCondition}
-              aria-label="Add condition"
-            >
-              <span className="material-icons">add</span>
-              Add Condition
-            </button>
-          </div>
-        </section>
+          {/* Persistent rail (bead m1s38.1 primitives): intent sentence, save
+              hint, and advisory analyzer chips. Advisory ONLY — nothing here
+              gates Save. Drops below the main column under ~820px. */}
+          <aside className="modal-rail" aria-label="Rule intent and advisories">
+            <div className="modal-intent" data-testid="rule-intent-card">
+              <h3 className="modal-intent-title">What this rule will do</h3>
+              <p className="modal-intent-text" data-testid="rule-intent">{intent}</p>
+            </div>
 
-        {/* Actions Section */}
-        <section className="rule-section">
-          <div className="section-header">
-            <h3 className="section-title">Actions</h3>
-            <span className="section-hint">Define what happens when conditions match</span>
-          </div>
+            {saveHint && (
+              <div className="rule-save-hint" role="status" data-testid="rule-save-hint">
+                <span className="material-icons" aria-hidden="true">info</span>
+                <span>{saveHint}</span>
+              </div>
+            )}
 
-          {errors.actions && (
-            <div className="section-error" role="alert">{errors.actions}</div>
-          )}
-
-          <div className="actions-list">
-            {actions.map((action, index) => (
-              <ActionEditor
-                key={index}
-                action={action}
-                onChange={updated => handleUpdateAction(index, updated)}
-                onRemove={() => handleRemoveAction(index)}
-                showValidation={Object.keys(errors).length > 0}
-                showPreview
-                previousActions={actions.slice(0, index)}
-                orderNumber={index + 1}
-                totalItems={actions.length}
-                onReorder={newPos => handleReorderAction(index, newPos)}
-              />
-            ))}
-          </div>
-
-          <div className="add-item-wrapper">
-            <button
-              type="button"
-              className="add-item-btn"
-              onClick={handleAddAction}
-              aria-label="Add action"
-            >
-              <span className="material-icons">add</span>
-              Add Action
-            </button>
-          </div>
-        </section>
+            <div className="rule-analyzer" data-testid="rule-analyzer" aria-live="polite">
+              {analyzerFindings.length > 0 && (
+                <>
+                  <h3 className="modal-intent-title">Advisories</h3>
+                  <ul className="rule-analyzer-chips">
+                    {analyzerFindings.map((finding, index) => (
+                      <li
+                        key={`${finding.code}-${index}`}
+                        className={`badge badge-sm ${severityBadge(finding.severity)} rule-analyzer-chip`}
+                        title={finding.suggestion || finding.message}
+                        data-testid="rule-analyzer-chip"
+                      >
+                        {finding.message}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          </aside>
+        </div>
       </div>
 
       {/* Footer */}
@@ -744,7 +1088,7 @@ export function RuleBuilder({
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={handleCancel}
+          onClick={attemptClose}
           disabled={saving}
         >
           Cancel
@@ -759,10 +1103,15 @@ export function RuleBuilder({
         </button>
       </div>
 
-      {/* Cancel Confirmation Dialog */}
+      {/* Discard confirmation (bead m1s38.3): role=alertdialog. Nested in a
+          ModalOverlay so Escape dismisses THIS prompt (topmost) rather than the
+          whole builder. */}
       {showCancelConfirm && (
-        <div className="modal-overlay">
-          <div className="modal-container modal-sm">
+        <ModalOverlay
+          onClose={() => setShowCancelConfirm(false)}
+          data-testid="rule-discard-dialog"
+        >
+          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true">
             <div className="modal-header">
               <h2>Unsaved Changes</h2>
             </div>
@@ -774,19 +1123,24 @@ export function RuleBuilder({
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => setShowCancelConfirm(false)}
+                data-testid="rule-discard-keep"
               >
                 Keep Editing
               </button>
               <button
                 type="button"
                 className="btn btn-danger"
-                onClick={onCancel}
+                onClick={() => {
+                  setShowCancelConfirm(false);
+                  onCancel();
+                }}
+                data-testid="rule-discard-confirm"
               >
                 Discard
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );
@@ -797,5 +1151,3 @@ function needsValue(type: ConditionType): boolean {
   const noValueTypes: ConditionType[] = ['always', 'never', 'tvg_id_exists', 'logo_exists', 'has_channel', 'channel_has_streams', 'has_audio_tracks', 'normalized_name_exists', 'normalized_name_not_exists'];
   return !noValueTypes.includes(type);
 }
-
-
