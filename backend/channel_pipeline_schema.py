@@ -787,6 +787,7 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "patterns",
     "group_patterns",
     "time_window_minutes",
+    "enforce_time_window",
     "attach_threshold",
     "max_attach_per_run",
     "enabled",
@@ -936,11 +937,13 @@ def validate_event_sync_config(config: Any) -> list[str]:
     * **safe_regex at save time** — operator parse regexes are the ReDoS
       surface (bd-ltjyx); they compile through the exact compiler the
       runtime uses.
-    * **attach_threshold hard floor** — never below
-      services.event_sync_matcher.EVENT_ATTACH_FLOOR (0.80). The floor
+    * **attach_threshold** — any value in [0.0, 1.0].
+      services.event_sync_matcher.EVENT_ATTACH_FLOOR (0.80) is the DEFAULT,
+      not a hard floor (bead krkm4-sibling): the value is
+      operator-authoritative and may be lowered per rule. The default
       constant is IMPORTED from the matcher — the single source of truth —
-      and the matcher's is_event_attachable() clamps again at runtime, so
-      the schema and execution layers cannot drift apart.
+      and is_event_attachable() honors the stored value directly at runtime,
+      so the schema and execution layers cannot drift apart.
 
     Mirrors Action.validate()'s convention of filling defaults in place
     (time_window_minutes, attach_threshold, enabled) so stored configs are
@@ -1124,26 +1127,40 @@ def validate_event_sync_config(config: Any) -> list[str]:
             f"matcher's precision guarantees do not cover",
         ))
 
+    # enforce_time_window (bead krkm4): opt-out of the time-window gate.
+    # Defaults True (gate enforced at time_window_minutes). When False the
+    # resolver passes window=None to the matcher — ranking by title/team
+    # alone. time_window_minutes stays validated above regardless, so it
+    # keeps its meaning if the operator re-enables the gate later.
+    enforce_time_window = config.get("enforce_time_window")
+    if enforce_time_window is None:
+        config["enforce_time_window"] = True
+    elif not isinstance(enforce_time_window, bool):
+        errors.append(_event_sync_error(
+            "enforce_time_window", enforce_time_window,
+            "a boolean — True (default) enforces the time-window candidacy "
+            "gate at time_window_minutes; False disables it so streams match "
+            "on title/team alone (safe only for a single-provider, same-day "
+            "master group — recurring/serial titles risk cross-day matches)",
+        ))
+
     attach_threshold = config.get("attach_threshold")
     if attach_threshold is None:
         config["attach_threshold"] = EVENT_ATTACH_FLOOR
     elif (isinstance(attach_threshold, bool)
             or not isinstance(attach_threshold, (int, float))
             or not (0.0 <= float(attach_threshold) <= 1.0)):
+        # bead krkm4-sibling (PO decision): EVENT_ATTACH_FLOOR (0.80) is the
+        # DEFAULT, not a hard clamp. attach_threshold is operator-authoritative
+        # and may be any value in [0.0, 1.0] — a rule whose provider data needs
+        # a lower auto-attach bar (e.g. teamless events whose master titles
+        # carry slot/venue noise) can set one. is_event_attachable() honors the
+        # value directly; the team-conflict and numeric-identity hard-reject
+        # rails still fire at any threshold, so lowering the floor trades
+        # precision for recall without reopening the contradiction classes.
         errors.append(_event_sync_error(
             "attach_threshold", attach_threshold,
-            f"a number in [{EVENT_ATTACH_FLOOR}, 1.0]",
-        ))
-    elif float(attach_threshold) < EVENT_ATTACH_FLOOR:
-        # Hard clamp (PO decision, epic ti939): the floor is not adjustable
-        # downward. The matcher's is_event_attachable() enforces the same
-        # clamp at runtime; rejecting here keeps stored configs honest.
-        errors.append(_event_sync_error(
-            "attach_threshold", attach_threshold,
-            f"a number >= the event attach floor {EVENT_ATTACH_FLOOR} — "
-            f"the floor is hard-clamped (precision over recall; "
-            f"1,341-incident trust benchmark) and cannot be lowered "
-            f"per rule",
+            "a number in [0.0, 1.0]",
         ))
 
     # Per-run attach cap (bead ti939.2.1 — Phase 1B blast-radius control).

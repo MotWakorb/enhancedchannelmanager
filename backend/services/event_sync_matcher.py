@@ -37,8 +37,8 @@ Layered matching (in order):
    mismatches like "W" / "U21") is a HARD REJECT: score 0.0, mirroring the
    M1 callsign hard-reject rail. Token agreement raises confidence.
 5. **Event admission policy** — :func:`is_event_attachable`, gated by its
-   OWN floor constant :data:`EVENT_ATTACH_FLOOR` (0.80, per-rule adjustable,
-   hard-clamped ≥ 0.80). Deliberately NOT the dedup matcher's
+   OWN floor constant :data:`EVENT_ATTACH_FLOOR` (0.80 default, per-rule
+   adjustable — operator-authoritative, may be lowered). Deliberately NOT the dedup matcher's
    admission policy — two different risk profiles must never share one knob.
 
 **Identity contract.** Master channels are identified by NAME / parsed
@@ -111,7 +111,8 @@ __all__ = [
 # deliberately NOT dedup's no-callsign floor: the event path and the dedup
 # path carry different risk profiles and must never share one constant
 # (drift protection). Default auto-attach threshold 0.80 (PO: "calibrated"),
-# per-rule adjustable, hard-clamped >= 0.80 by is_event_attachable().
+# per-rule adjustable and operator-authoritative (0.80 is the default, not a
+# hard minimum) — see is_event_attachable().
 EVENT_ATTACH_FLOOR: float = 0.80
 
 # Scores in [EVENT_AMBIGUOUS_FLOOR, effective attach threshold) land in the
@@ -922,15 +923,114 @@ def _numeric_identity_conflict(title_a: str, title_b: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# Hyphens/dashes in event titles (bead — provider spelling variance).
+# ``clean_name`` (shared with dedup) keeps hyphens, so 'Shangri-La' stays one
+# token and never matches the two-token 'Shangri La'; 'Off-Road' vs 'Off Road'
+# likewise. ASCII hyphen-minus plus the common Unicode dashes (‐ … ―).
+_TITLE_HYPHEN_RE = re.compile(r"[-‐-―]+")
+
+
+def _contains_run(tokens: list[str], run: list[str]) -> bool:
+    """True when ``run`` appears as a consecutive slice of ``tokens``."""
+    k = len(run)
+    return any(tokens[i:i + k] == run for i in range(len(tokens) - k + 1))
+
+
+def _bridge_hyphen_variants(
+    tokens: list[str], other: list[str]
+) -> list[str]:
+    """Split a hyphenated token into its parts ONLY when the other title
+    carries those parts as a consecutive run ('shangri-la' -> 'shangri la'
+    because the other side has 'shangri la'; 'off-road' -> 'off road').
+
+    Corroboration-gated on purpose: a blanket hyphen split spuriously lifts
+    unrelated pairs (frozen corpus: 'Pre-Race Show' splitting to 'pre race'
+    then matching 'Race Day Live' at the same venue/slot). Requiring the split
+    form on the other side keeps the compound intact unless the pair itself
+    proves the two spellings denote the same words. Order-preserving.
+    """
+    result: list[str] = []
+    for tok in tokens:
+        parts = [p for p in _TITLE_HYPHEN_RE.split(tok) if p]
+        if len(parts) >= 2 and _contains_run(other, parts):
+            result.extend(parts)
+        else:
+            result.append(tok)
+    return result
+
+
+# Initialism bridge bounds (bead — title-level acronym matching). An acronym
+# token is 2..6 letters; the run it spells is 2..5 consecutive words. Both
+# bounds keep the scan cheap and avoid crediting coincidental single-letter or
+# runaway-length "acronyms".
+_TITLE_ACRONYM_MIN_LEN = 2
+_TITLE_ACRONYM_MAX_LEN = 6
+_TITLE_ACRONYM_MAX_RUN = 5
+
+
+def _collapse_title_initialisms(
+    expansion_tokens: list[str], acronym_tokens: list[str]
+) -> list[str]:
+    """Collapse a consecutive word-run in ``expansion_tokens`` to the acronym
+    that spells it whenever that acronym appears as a standalone token in
+    ``acronym_tokens`` ('race of champions' + ['roc', …] -> 'roc').
+
+    Reuses the team layer's :func:`_initialism_matches` (exact initial-letter
+    spelling, FC-style suffix aware), so 'mufc' also collapses 'manchester
+    united'. Order-preserving, longest run first. This only ever ADDS token
+    agreement for the subsequent ``token_set_ratio`` — it never drops a token
+    that already matched, so a pair cannot score LOWER than its plain fuzzy.
+    """
+    shorts = {
+        t for t in acronym_tokens
+        if _TITLE_ACRONYM_MIN_LEN <= len(t) <= _TITLE_ACRONYM_MAX_LEN
+    }
+    if not shorts:
+        return expansion_tokens
+    result: list[str] = []
+    i, n = 0, len(expansion_tokens)
+    while i < n:
+        hit = None
+        for run_len in range(min(_TITLE_ACRONYM_MAX_RUN, n - i), 1, -1):
+            window = expansion_tokens[i:i + run_len]
+            hit = next(
+                (s for s in shorts if _initialism_matches(s, window)), None
+            )
+            if hit:
+                result.append(hit)
+                i += run_len
+                break
+        if not hit:
+            result.append(expansion_tokens[i])
+            i += 1
+    return result
+
+
 def _fuzzy_title_score(title_a: str, title_b: str) -> float:
-    """RapidFuzz token_set_ratio on LOCALS-cleaned parsed titles."""
+    """RapidFuzz token_set_ratio on LOCALS-cleaned parsed titles.
+
+    Before scoring, an initialism bridge (bead — title acronyms) canonicalizes
+    acronym/expansion pairs across the two titles so a teamless title like
+    'RoC Modifieds …' credits its match against 'Race of Champions Modifieds
+    …'. The team-token layer already resolves acronyms on the vs/@ split; this
+    extends the same idea to titles that never split into teams.
+    """
     norm_a = clean_name(title_a, mode=NameCleanMode.LOCALS)
     norm_b = clean_name(title_b, mode=NameCleanMode.LOCALS)
     if not norm_a or not norm_b:
         return 0.0
     if norm_a == norm_b:
         return 1.0
-    return fuzz.token_set_ratio(norm_a, norm_b) / 100.0
+    tokens_a, tokens_b = norm_a.split(), norm_b.split()
+    # Corroborated hyphen split first (so the initialism bridge below sees
+    # clean words), then the acronym bridge. Both only ADD token agreement.
+    tokens_a = _bridge_hyphen_variants(tokens_a, tokens_b)
+    tokens_b = _bridge_hyphen_variants(tokens_b, tokens_a)
+    bridged_a = _collapse_title_initialisms(tokens_a, tokens_b)
+    bridged_b = _collapse_title_initialisms(tokens_b, tokens_a)
+    return fuzz.token_set_ratio(
+        " ".join(bridged_a), " ".join(bridged_b)
+    ) / 100.0
 
 
 # ---------------------------------------------------------------------------
@@ -952,17 +1052,32 @@ def is_event_attachable(
 
     * A team-token ``conflict`` is NEVER attachable, at any score — the
       hard-reject rail mirrors the M1 callsign rail (non-negotiable).
-    * ``threshold`` is per-rule adjustable but hard-clamped to
-      ``EVENT_ATTACH_FLOOR``: a request for 0.50 gets 0.80 behavior.
+    * ``threshold`` is operator-authoritative (bead krkm4-sibling): it is
+      used DIRECTLY as the auto-attach floor, no longer clamped up to
+      ``EVENT_ATTACH_FLOOR``. :data:`EVENT_ATTACH_FLOOR` (0.80) is the
+      DEFAULT value, not a hard minimum — a rule whose provider data needs
+      it may lower the bar (e.g. teamless events whose master titles carry
+      slot/venue noise that caps the fuzzy score). Precision is a per-rule
+      trade-off the operator owns.
     * Without positive team-token agreement (verdict ``absent`` or
       ``uncertain``) the bar additionally rises to
-      :data:`EVENT_NO_TEAMS_FLOOR` — lexical overlap alone must clear a
-      higher score to auto-attach.
+      :data:`EVENT_NO_TEAMS_FLOOR` — but ONLY while the operator stays at or
+      above the standard floor. Lexical overlap alone is a weaker signal, so
+      default configs keep the stricter 0.90 teamless bar (and the frozen
+      corpus's teamless-sibling rejections hold). Once an operator
+      deliberately drops ``threshold`` below ``EVENT_ATTACH_FLOOR`` they are
+      in full manual-control territory and their exact number is honored for
+      teamless pairs too — otherwise the 0.90 raise would silently veto the
+      very lowering they asked for.
+
+    The hard-reject rails upstream of this policy (team-token conflict,
+    numeric-identity conflict) are independent of ``threshold`` and always
+    force a 0.0 reject — lowering the floor never resurrects a contradiction.
     """
     if team_verdict == TEAM_VERDICT_CONFLICT:
         return False
-    effective_threshold = max(threshold, EVENT_ATTACH_FLOOR)
-    if team_verdict != TEAM_VERDICT_AGREE:
+    effective_threshold = threshold
+    if team_verdict != TEAM_VERDICT_AGREE and threshold >= EVENT_ATTACH_FLOOR:
         effective_threshold = max(effective_threshold, EVENT_NO_TEAMS_FLOOR)
     return score >= effective_threshold
 
@@ -976,7 +1091,7 @@ def _score_parsed_pair(
     parsed_a: ParsedEvent,
     parsed_b: ParsedEvent,
     *,
-    window_minutes: int,
+    window_minutes: int | None,
     threshold: float,
 ) -> PairScore:
     def _result(
@@ -1017,9 +1132,15 @@ def _score_parsed_pair(
     verdict, team_score = _team_pair_verdict(parsed_a.teams, parsed_b.teams)
     fuzzy = _fuzzy_title_score(parsed_a.title, parsed_b.title)
 
-    if delta > window_minutes:
+    if window_minutes is not None and delta > window_minutes:
         # Time-window blocking: not a candidate pair at all. Diagnostic
         # fields (verdict, fuzzy) are still populated for the preview UI.
+        # ``window_minutes is None`` disables the gate entirely (per-rule
+        # opt-in, bead krkm4): every parsed master becomes a candidate and
+        # ranking falls to title/team score alone — the time delta is still
+        # reported but never rejects. The 0.90 no-teams floor, team-conflict
+        # rail, and numeric-identity rail below stay in force, so borderline
+        # collisions land in the review queue rather than auto-attaching.
         return _result(
             0.0, BAND_REJECT, verdict, fuzzy, team_score, delta,
             (REJECT_OUTSIDE_TIME_WINDOW,),
@@ -1079,7 +1200,7 @@ def score_pair(
     name_b: str,
     *,
     patterns: Sequence[dict] | None = None,
-    window_minutes: int = DEFAULT_TIME_WINDOW_MINUTES,
+    window_minutes: int | None = DEFAULT_TIME_WINDOW_MINUTES,
     threshold: float = EVENT_ATTACH_FLOOR,
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
     now: datetime | None = None,
@@ -1112,7 +1233,7 @@ def match_streams(
     *,
     patterns: Sequence[dict] | None = None,
     master_patterns: Sequence[dict] | None = None,
-    window_minutes: int = DEFAULT_TIME_WINDOW_MINUTES,
+    window_minutes: int | None = DEFAULT_TIME_WINDOW_MINUTES,
     threshold: float = EVENT_ATTACH_FLOOR,
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
     now: datetime | None = None,
@@ -1181,8 +1302,8 @@ def match_streams(
         candidates: list[MasterCandidate] = []
         for master in usable_masters:
             delta = abs((parsed.start - master.start).total_seconds()) / 60.0
-            if delta > window_minutes:
-                continue  # blocked — not a candidate
+            if window_minutes is not None and delta > window_minutes:
+                continue  # blocked — not a candidate (gate disabled when None)
             pair = _score_parsed_pair(
                 parsed, master, window_minutes=window_minutes, threshold=threshold
             )
@@ -1210,7 +1331,7 @@ def match_stream_to_masters(
     master_names: Sequence[str],
     *,
     patterns: Sequence[dict] | None = None,
-    window_minutes: int = DEFAULT_TIME_WINDOW_MINUTES,
+    window_minutes: int | None = DEFAULT_TIME_WINDOW_MINUTES,
     threshold: float = EVENT_ATTACH_FLOOR,
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
     now: datetime | None = None,

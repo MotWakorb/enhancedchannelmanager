@@ -3,9 +3,10 @@
 Covers every branch of ``channel_pipeline_schema.validate_event_sync_config``:
 the mandatory-scoping rail (master present, secondaries non-empty, master not
 in secondaries), safe_regex compilation of operator parse patterns, the
-attach_threshold hard floor (imported from services.event_sync_matcher — the
-single source of truth), default filling, and the teaching-error format
-(field, got, expected, doc link).
+attach_threshold [0, 1] bounds (0.80 default imported from
+services.event_sync_matcher — operator-authoritative, lowerable per rule),
+default filling, and the teaching-error format (field, got, expected, doc
+link).
 """
 from __future__ import annotations
 
@@ -50,6 +51,8 @@ class TestValidConfigs:
         assert config["time_window_minutes"] == DEFAULT_TIME_WINDOW_MINUTES
         assert config["attach_threshold"] == EVENT_ATTACH_FLOOR
         assert config["enabled"] is True
+        # bead krkm4: the time-window gate is enforced by default.
+        assert config["enforce_time_window"] is True
 
     def test_full_config_passes(self):
         config = _valid_config(
@@ -68,6 +71,18 @@ class TestValidConfigs:
     def test_threshold_exactly_at_floor_passes(self):
         config = _valid_config(attach_threshold=EVENT_ATTACH_FLOOR)
         assert validate_event_sync_config(config) == []
+
+    def test_enforce_time_window_false_passes(self):
+        # bead krkm4: explicit opt-out of the candidacy gate.
+        config = _valid_config(enforce_time_window=False)
+        assert validate_event_sync_config(config) == []
+        assert config["enforce_time_window"] is False
+
+    def test_enforce_time_window_non_bool_rejected(self):
+        errors = validate_event_sync_config(
+            _valid_config(enforce_time_window="yes")
+        )
+        assert any("enforce_time_window" in e for e in errors)
 
     def test_group_patterns_int_keys_accepted(self):
         """Dict callers may use int keys; JSON round-trips produce strings."""
@@ -248,20 +263,22 @@ class TestMatchingKnobs:
         )
         assert any("attach_threshold" in e for e in errors)
 
-    def test_attach_threshold_below_floor_rejected(self):
-        """The 0.80 floor is hard-clamped — schema-enforced, not convention."""
-        errors = validate_event_sync_config(
-            _valid_config(attach_threshold=0.79)
-        )
-        assert any(
-            "attach_threshold" in e and str(EVENT_ATTACH_FLOOR) in e
-            for e in errors
-        )
+    def test_attach_threshold_below_default_accepted(self):
+        # bead krkm4-sibling: 0.80 is the DEFAULT, not a hard floor.
+        # Operator-authoritative — any value in [0, 1] is accepted and stored
+        # verbatim.
+        for value in (0.79, 0.5, 0.0):
+            config = _valid_config(attach_threshold=value)
+            assert validate_event_sync_config(config) == []
+            assert config["attach_threshold"] == value
 
-    def test_floor_error_references_matcher_constant(self):
-        """The floor in the error is the MATCHER's constant, not a duplicate."""
-        errors = validate_event_sync_config(_valid_config(attach_threshold=0.5))
-        assert any(str(EVENT_ATTACH_FLOOR) in e for e in errors)
+    def test_attach_threshold_out_of_bounds_rejected(self):
+        # Only the [0, 1] bounds are enforced now.
+        for bad in (-0.1, 1.1):
+            errors = validate_event_sync_config(
+                _valid_config(attach_threshold=bad)
+            )
+            assert any("attach_threshold" in e for e in errors)
 
     @pytest.mark.parametrize("bad", ["true", 1, 0])
     def test_enabled_non_bool_rejected(self, bad):
@@ -555,7 +572,7 @@ class TestTeachingErrorFormat:
             "secondary_group_ids": [],
             "patterns": "nope",
             "time_window_minutes": -1,
-            "attach_threshold": 0.1,
+            "attach_threshold": 1.5,  # out of [0, 1] bounds
             "enabled": "yes",
             "bogus_key": 1,
         }

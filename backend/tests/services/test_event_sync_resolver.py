@@ -233,21 +233,30 @@ class TestUnparsedMasters:
         assert resolution.unparsed_master_names == ("Peacock 40: NO EVENT",)
 
 
-class TestThresholdClamp:
-    def test_sub_floor_threshold_is_clamped_by_the_matcher(self):
-        # A (hypothetically stored) sub-floor threshold must behave as 0.80 —
-        # the matcher's is_event_attachable clamps; the resolver passes the
-        # value through rather than re-implementing policy.
-        config = _config(attach_threshold=0.10)
+class TestThresholdFloor:
+    def test_default_threshold_leaves_ambiguous_pair_ambiguous(self):
+        # Baseline: at the default 0.80 floor the different-IMSA-session pair
+        # scores in the ambiguous band and is NOT attached.
         streams = [SecondaryStream(
-            # Same slot as the IMSA master but a different session: scores in
-            # the ambiguous band, must NOT attach at 0.10.
-            name=AMBIGUOUS_STREAM_NAME,
-            group_id=20, stream_id=201,
+            name=AMBIGUOUS_STREAM_NAME, group_id=20, stream_id=201,
+        )]
+        resolution = resolve_event_sync(_config(), MASTERS, streams, now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_AMBIGUOUS
+
+    def test_operator_lowered_threshold_attaches_the_ambiguous_pair(self):
+        # bead krkm4-sibling: 0.80 is a default, not a hard clamp. An operator
+        # who lowers attach_threshold gets exactly that lower bar — the same
+        # ambiguous-band pair now auto-attaches. The resolver passes the value
+        # straight through; is_event_attachable honors it.
+        config = _config(attach_threshold=0.50)
+        streams = [SecondaryStream(
+            name=AMBIGUOUS_STREAM_NAME, group_id=20, stream_id=201,
         )]
         resolution = resolve_event_sync(config, MASTERS, streams, now=NOW)
         (resolved,) = resolution.resolved
-        assert resolved.disposition == DISPOSITION_AMBIGUOUS
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.best is not None
 
 
 class TestContestedRail:
@@ -507,3 +516,55 @@ def _candidate(master_name: str, *, score: float, band: str) -> MasterCandidate:
         master_name=master_name, parsed=parsed, score=score, band=band,
         team_verdict="agree", time_delta_minutes=0.0, reject_reasons=(),
     )
+
+
+class TestEnforceTimeWindowToggle:
+    """bead krkm4: enforce_time_window=False disables the candidacy gate so
+    a stream whose true master sits outside the window still attaches on
+    title/team score alone. Default (True) preserves the gate exactly."""
+
+    # Same fixture as MASTERS[0] (Mercury vs. Aces @ 6:00 PM) but the
+    # secondary provider timestamps it 3 hours later — far outside the
+    # 30-minute window. Team tokens agree, so with the gate off it scores
+    # into the attach band.
+    FAR_STREAM = SecondaryStream(
+        name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 09:00 PM ET",
+        group_id=20, stream_id=201, provider="FuboProvider",
+    )
+
+    def test_far_master_is_unmatched_when_window_enforced(self):
+        # Default config (gate on): no master within 30 min -> no candidate.
+        resolution = resolve_event_sync(
+            _config(), MASTERS, [self.FAR_STREAM], now=NOW
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_UNMATCHED
+        assert resolved.result.candidates == ()
+
+    def test_far_master_attaches_when_window_disabled(self):
+        # enforce_time_window=False -> gate off, true master becomes a
+        # candidate and the agreeing team tokens lift it to the attach band.
+        config = _config(enforce_time_window=False)
+        resolution = resolve_event_sync(
+            config, MASTERS, [self.FAR_STREAM], now=NOW
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.best is not None
+        assert resolved.best.master_name == MASTERS[0]
+        # The time delta is still reported (~180 min) even though it no
+        # longer rejects — diagnostics survive the gate being off.
+        assert resolved.best.time_delta_minutes == pytest.approx(180.0)
+
+    def test_disabled_gate_still_rejects_team_conflict(self):
+        # A same-name-different-teams stream must NOT attach even with the
+        # time gate off — the team-conflict rail is independent of the window.
+        conflict = SecondaryStream(
+            name="WNBA TV 02: Sparks vs. Liberty @ 11 Jul 09:00 PM ET",
+            group_id=20, stream_id=202,
+        )
+        config = _config(enforce_time_window=False)
+        resolution = resolve_event_sync(config, MASTERS, [conflict], now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition != DISPOSITION_WOULD_ATTACH
+        assert resolved.best is None

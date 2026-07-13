@@ -430,7 +430,8 @@ def resolve_event_sync(
         config: A VALIDATED event_sync_config (defaults filled by
             ``channel_pipeline_schema.validate_event_sync_config``). The
             attach threshold rides through to the matcher, whose
-            ``is_event_attachable`` hard-clamps it >= 0.80 — this module
+            ``is_event_attachable`` treats it as authoritative (0.80 is the
+            default, not a hard minimum) — this module
             deliberately re-implements no policy.
         master_names: Names of the master group's channels (caller keeps
             the name → channel-ID mapping; this module never sees IDs).
@@ -463,7 +464,18 @@ def resolve_event_sync(
     if now is None:
         now = datetime.now(pytz.timezone(DEFAULT_EVENT_TIMEZONE))
 
-    window_minutes = config.get("time_window_minutes", DEFAULT_TIME_WINDOW_MINUTES)
+    # bead krkm4: per-rule opt-out of the time-window candidacy gate.
+    # enforce_time_window defaults True (gate on at time_window_minutes);
+    # when explicitly False the matcher's window is None — no time gate,
+    # candidates ranked by title/team alone. Safe for a single-provider
+    # same-day master list; the 0.90 no-teams floor + team/numeric rails
+    # still route borderline collisions to the review queue.
+    if config.get("enforce_time_window", True):
+        window_minutes = config.get(
+            "time_window_minutes", DEFAULT_TIME_WINDOW_MINUTES
+        )
+    else:
+        window_minutes = None
     threshold = config.get("attach_threshold", EVENT_ATTACH_FLOOR)
     master_patterns = effective_patterns(config, config["master_group_id"])
     # bead assume-current-date: opt-in dateless matching (both master and
