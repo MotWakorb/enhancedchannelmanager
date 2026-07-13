@@ -166,6 +166,29 @@ class BulkUpdateChannelPipelineRulesRequest(UpdateChannelPipelineRuleRequest):
         return data
 
 
+class AnalyzeRuleBodyRequest(CreateChannelPipelineRuleRequest):
+    """Analyze an UNSAVED rule body — advisory findings, no persistence
+    (enhancedchannelmanager-m1s38.2).
+
+    Reuses the create-rule field set so the rule builder can POST the same
+    shape it would save, but relaxes and bounds it for live authoring:
+
+    * ``name`` is optional — the analyzer runs while the rule is still being
+      drafted, before the operator has typed a name.
+    * ``conditions``/``actions`` are optional (an empty draft yields empty
+      findings) and CAPPED at 200 each. No saved-rule cap exists today; 200
+      is ~10x the largest rule seen in production and exists only to stop a
+      giant pasted body from self-inflicting a slow AST-walk regex lint. The
+      analyzer never executes user regex (regex_lint does a safe AST walk),
+      so this is a work bound, not a ReDoS control. Advisory endpoint: the
+      cap bounds the analyze request only — it never blocks a save.
+    """
+
+    name: str = ""
+    conditions: list = Field(default_factory=list, max_length=200)
+    actions: list = Field(default_factory=list, max_length=200)
+
+
 class RunPipelineRequest(BaseModel):
     """Request to run the auto-creation pipeline."""
     dry_run: bool = False
@@ -532,6 +555,118 @@ async def analyze_auto_creation_rules_from_bundle(
         sum(result["summary"].values()),
     )
     return result
+
+
+@router.post("/rules/analyze-body")
+async def analyze_channel_pipeline_rule_body(request: AnalyzeRuleBodyRequest):
+    """Analyze an UNSAVED rule body; return advisory findings WITHOUT saving.
+
+    Enables live authoring feedback in the rule builder (the rail is
+    enhancedchannelmanager-m1s38.3). Same advisory-only contract and same
+    response shape as ``POST /rules/analyze``::
+
+        {
+          "rules": [{"rule_id", "rule_name", "findings": [...]}],
+          "summary": {"error": int, "warning": int, "info": int}
+        }
+
+    Advisory-only (bd-0gntx contract): findings are warnings/info, never a
+    gate — this endpoint never refuses a save. It reuses the same
+    ``analyze_rules`` engine as the saved-rule and from-bundle routes; the
+    only new behavior vs those routes is that the body is caller-supplied
+    (validated by ``AnalyzeRuleBodyRequest`` and length-capped) rather than
+    read from the DB or a debug bundle.
+
+    Auth: inherits the global ``/api/*`` gate (any authenticated user),
+    matching the sibling ``/rules/analyze`` surface — no per-route admin
+    dependency.
+    """
+    logger.debug("[AUTO-CREATE] POST /rules/analyze-body")
+    try:
+        from channel_pipeline_rule_analyzer import analyze_rules
+        from models import NormalizationRuleGroup
+
+        # The analyzer reads a dict shaped like a rule's to_dict(). Only the
+        # fields it consumes are forwarded; the rest of the create-shaped body
+        # (sort fields, orphan_action, etc.) is accepted for forward-compat but
+        # not needed by any current check.
+        rule_dict = {
+            "id": None,
+            "name": request.name,
+            "conditions": request.conditions,
+            "actions": request.actions,
+            "target_group_id": request.target_group_id,
+            "normalization_group_ids": request.normalization_group_ids,
+            "match_scope_target_group": request.match_scope_target_group,
+        }
+
+        # Richer findings (bd-m1s38.2): normalization-group enabled-state lets
+        # the disabled-normalization-group advisory fire; live channel-group
+        # counts let the merge-empty-target advisory fire. Both are best-effort
+        # — the analyzer no-ops when they're absent — so a lookup failure must
+        # NOT 500 an advisory endpoint; we log and degrade to fewer findings.
+        norm_groups = None
+        try:
+            session = get_session()
+            try:
+                norm_groups = [
+                    g.to_dict()
+                    for g in session.query(NormalizationRuleGroup).all()
+                ]
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(
+                "[AUTO-CREATE] analyze-body: normalization groups unavailable, "
+                "skipping disabled-group advisory: %s", e,
+            )
+
+        # Only pay the Dispatcharr round-trip when the merge-empty-target check
+        # could actually fire (a merge_streams action AND an explicit target
+        # group). Keeps the common debounced authoring call from fetching all
+        # channel groups on every keystroke.
+        diagnostic = None
+        has_merge = any(
+            isinstance(a, dict) and a.get("type") == "merge_streams"
+            for a in request.actions
+        )
+        if has_merge and request.target_group_id is not None:
+            try:
+                client = get_client()
+                groups = await client.get_channel_groups() or []
+                diagnostic = {
+                    "groups": [
+                        {
+                            "id": g.get("id"),
+                            "name": g.get("name"),
+                            "channel_count": g.get("channel_count"),
+                        }
+                        for g in groups
+                        if isinstance(g, dict)
+                    ]
+                }
+            except Exception as e:
+                logger.warning(
+                    "[AUTO-CREATE] analyze-body: channel groups unavailable, "
+                    "skipping merge-empty-target advisory: %s", e,
+                )
+
+        result = analyze_rules(
+            [rule_dict],
+            channel_groups_diagnostic=diagnostic,
+            normalization_groups=norm_groups,
+        )
+        logger.info(
+            "[AUTO-CREATE] Analyzed unsaved rule body (%s conditions, "
+            "%s actions): %s findings",
+            len(request.conditions),
+            len(request.actions),
+            sum(result["summary"].values()),
+        )
+        return result
+    except Exception as e:
+        logger.exception("[AUTO-CREATE] Failed to analyze rule body: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/rules/{rule_id}")
@@ -2737,6 +2872,13 @@ async def preview_event_sync(
             # a queue-driven attach prediction is visibly not a score-driven
             # one. None for every other disposition.
             "attach_source": r.attach_source,
+            # S5 (bead sf8dj): diagnostic provenance — the optional relaxations
+            # (assume_current_date / time_window_ignored / lowered_threshold /
+            # master_from_stream) that admitted this would-attach row. Empty
+            # for a plain in-window default-threshold match. Additive field.
+            "matched_via": [
+                {"key": key, "label": label} for key, label in r.matched_via
+            ],
             "would_attach_master": (
                 {
                     "channel_id": name_to_id.get(r.best.master_name),

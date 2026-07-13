@@ -286,4 +286,46 @@ describe('EventSyncPreviewPanel', () => {
     expect(screen.getByText('Accepted (auto-attaches)')).toBeInTheDocument();
     expect(screen.getByText('Pending review')).toBeInTheDocument();
   });
+
+  describe('S5 provenance chips (bead sf8dj)', () => {
+    it('renders a chip per matched_via entry with a caution title', () => {
+      const preview = buildPreview();
+      preview.streams[0].matched_via = [
+        { key: 'time_window_ignored', label: 'time ignored' },
+        { key: 'assume_current_date', label: 'assumed date' },
+      ];
+      render(
+        <EventSyncPreviewPanel
+          preview={preview}
+          loading={false}
+          error={null}
+          onRunPreview={vi.fn()}
+        />
+      );
+
+      const timeChip = screen.getByText('time ignored');
+      expect(timeChip).toHaveClass('badge', 'badge-sm');
+      expect(timeChip).toHaveAttribute('title', expect.stringMatching(/window gate is off/i));
+      expect(screen.getByText('assumed date')).toHaveAttribute(
+        'title',
+        expect.stringMatching(/assumed to be today/i)
+      );
+    });
+
+    it('renders no provenance chip on a plain default-threshold match', () => {
+      render(
+        <EventSyncPreviewPanel
+          preview={buildPreview()}
+          loading={false}
+          error={null}
+          onRunPreview={vi.fn()}
+        />
+      );
+
+      expect(screen.queryByText('time ignored')).toBeNull();
+      expect(screen.queryByText('assumed date')).toBeNull();
+      expect(screen.queryByText('low threshold')).toBeNull();
+      expect(screen.queryByText('master-from-stream')).toBeNull();
+    });
+  });
 });

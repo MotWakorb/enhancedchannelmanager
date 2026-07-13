@@ -186,6 +186,17 @@ export interface EventSyncCandidate {
   review_status: EventSyncReviewStatus;
 }
 
+/**
+ * S5 (bead sf8dj): diagnostic provenance for a `would_attach` row — the
+ * optional relaxation (`key`) that admitted it, with a short display `label`.
+ * Keys: `assume_current_date` | `time_window_ignored` | `lowered_threshold` |
+ * `master_from_stream`. Empty for a plain in-window default-threshold match.
+ */
+export interface EventSyncMatchedVia {
+  key: string;
+  label: string;
+}
+
 export interface EventSyncStreamRow {
   stream_id: number | null;
   stream_name: string;
@@ -199,6 +210,9 @@ export interface EventSyncStreamRow {
   attach_source: EventSyncAttachSource;
   would_attach_master: { channel_id: number | null; name: string } | null;
   candidates: EventSyncCandidate[];
+  /** S5 (bead sf8dj): provenance chips for a would-attach row (may be absent
+   * on older payloads → treat as empty). */
+  matched_via?: EventSyncMatchedVia[];
 }
 
 export interface EventSyncUnmatchedStream {
