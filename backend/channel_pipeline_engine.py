@@ -2828,6 +2828,192 @@ class ChannelPipelineEngine:
                     page += 1
         return secondary_streams
 
+    async def _resolve_event_sync_refresh_accounts(
+        self, config: dict, provider_cache: dict
+    ) -> set[int]:
+        """Resolve a rule's scopes to the M3U account ids to pre-refresh (y8yby).
+
+        The rule's master + secondary scopes each identify a channel group and,
+        optionally, the ONE provider account that scope draws from:
+
+        * a provider-scoped scope (``m3u_account_id`` set) → that account id
+          directly;
+        * a whole-group scope (``m3u_account_id`` None) → EVERY provider
+          account that carries that channel group, resolved via
+          ``get_m3u_group_settings_by_provider()`` (keyed by
+          ``(m3u_account_id, channel_group_id)``).
+
+        The master group is always included (its provider(s) back the master
+        channels, and with ``include_master_group_streams`` it is also a stream
+        source). Account ids are deduped. The by-provider settings map is
+        fetched at most once per phase via ``provider_cache``.
+        """
+        master = config.get("master") or {
+            "group_id": config.get("master_group_id"), "m3u_account_id": None,
+        }
+        secondary = config.get("secondary") or [
+            {"group_id": g, "m3u_account_id": None}
+            for g in config.get("secondary_group_ids", [])
+        ]
+
+        account_ids: set[int] = set()
+        whole_group_ids: set[int] = set()
+        for scope in [master, *secondary]:
+            pid = scope.get("m3u_account_id")
+            gid = scope.get("group_id")
+            if pid is not None:
+                account_ids.add(pid)
+            elif gid is not None:
+                whole_group_ids.add(gid)
+
+        if whole_group_ids:
+            by_provider = provider_cache.get("by_provider")
+            if by_provider is None:
+                try:
+                    by_provider = (
+                        await self.client.get_m3u_group_settings_by_provider()
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[EVENT-SYNC] Pre-refresh: failed to resolve provider "
+                        "accounts for whole-group scopes (%s) — those groups' "
+                        "providers will not be pre-refreshed", e,
+                    )
+                    by_provider = {}
+                provider_cache["by_provider"] = by_provider
+            for key in by_provider:
+                # key is (m3u_account_id, channel_group_id).
+                acc_id, group_id = key
+                if group_id in whole_group_ids and acc_id is not None:
+                    account_ids.add(acc_id)
+
+        return account_ids
+
+    async def _prerefresh_event_sync_providers(
+        self, rule, config: dict, results: dict, provider_cache: dict
+    ) -> None:
+        """Pre-refresh a rule's M3U providers before a manual run (bead y8yby).
+
+        Resolves the rule's master + secondary scopes to their backing M3U
+        account ids and refreshes exactly those via the existing
+        ``M3URefreshTask`` (``account_ids=[...]``) — synchronous refresh-then-
+        run. **Best-effort**: a single failed account (or a wholesale failure)
+        WARNs and records a run warning but never aborts the run — the run
+        proceeds against current data, mirroring the M3U refresh watermark's
+        partial-success behavior. Progress + outcome ride the execution log.
+
+        Manual-run-only: the caller gates this out of the unattended auto-run
+        path (that path already runs after a refresh).
+        """
+        account_ids = await self._resolve_event_sync_refresh_accounts(
+            config, provider_cache
+        )
+        if not account_ids:
+            logger.warning(
+                "[EVENT-SYNC] Rule '%s' (id=%s): refresh_providers_before_run "
+                "is on but no M3U provider accounts could be resolved from its "
+                "scopes — skipping pre-refresh, running against current data",
+                rule.name, rule.id,
+            )
+            results["event_sync_warnings"].append({
+                "type": "event_sync_prerefresh_no_accounts",
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "message": (
+                    f"event_sync rule '{rule.name}': 'refresh providers "
+                    f"before run' is on but no M3U provider accounts could be "
+                    f"resolved from the rule's groups — the run proceeded "
+                    f"without a pre-refresh, against current data."
+                ),
+            })
+            return
+
+        ids = sorted(account_ids)
+        logger.info(
+            "[EVENT-SYNC] Rule '%s' (id=%s): pre-refreshing %d M3U provider "
+            "account(s) before run: %s",
+            rule.name, rule.id, len(ids), ids,
+        )
+        results["execution_log"].append({
+            "stream_id": None,
+            "stream_name": (
+                f"[EVENT-SYNC] {rule.name}: refreshing "
+                f"{len(ids)} M3U provider(s) before run"
+            ),
+            "m3u_account_id": None,
+            "rules_evaluated": [],
+            "actions_executed": [{
+                "type": "event_sync_prerefresh",
+                "description": (
+                    f"Refreshing {len(ids)} M3U provider account(s) "
+                    f"{ids} before running rule '{rule.name}'"
+                ),
+            }],
+        })
+
+        from tasks.m3u_refresh import M3URefreshTask
+        task = M3URefreshTask()
+        task.update_config({"account_ids": ids, "skip_inactive": True})
+        try:
+            task_result = await task.execute()
+        except Exception as e:
+            logger.warning(
+                "[EVENT-SYNC] Rule '%s' (id=%s): pre-refresh FAILED wholesale "
+                "(%s) — best-effort, running against current data",
+                rule.name, rule.id, e,
+            )
+            results["event_sync_warnings"].append({
+                "type": "event_sync_prerefresh_failed",
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "message": (
+                    f"event_sync rule '{rule.name}': pre-run provider refresh "
+                    f"failed ({e}) — the run proceeded against current data "
+                    f"(best-effort)."
+                ),
+            })
+            return
+
+        ok = getattr(task_result, "success_count", 0) or 0
+        failed = getattr(task_result, "failed_count", 0) or 0
+        details = getattr(task_result, "details", None) or {}
+        errors = details.get("errors", []) if isinstance(details, dict) else []
+        if failed:
+            logger.warning(
+                "[EVENT-SYNC] Rule '%s' (id=%s): pre-refresh partial success "
+                "(%d ok, %d failed) — best-effort, running against current "
+                "data. Errors: %s",
+                rule.name, rule.id, ok, failed, errors,
+            )
+            results["event_sync_warnings"].append({
+                "type": "event_sync_prerefresh_partial",
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "ok": ok,
+                "failed": failed,
+                "message": (
+                    f"event_sync rule '{rule.name}': pre-run provider refresh "
+                    f"partially failed ({ok} refreshed, {failed} failed) — "
+                    f"the run proceeded against current data (best-effort). "
+                    f"{'; '.join(str(x) for x in errors)}"
+                ),
+            })
+        results["execution_log"].append({
+            "stream_id": None,
+            "stream_name": (
+                f"[EVENT-SYNC] {rule.name}: provider pre-refresh complete"
+            ),
+            "m3u_account_id": None,
+            "rules_evaluated": [],
+            "actions_executed": [{
+                "type": "event_sync_prerefresh_result",
+                "description": (
+                    f"Pre-run provider refresh complete: {ok} refreshed"
+                    + (f", {failed} failed (best-effort)" if failed else "")
+                ),
+            }],
+        })
+
     async def _run_event_sync_rules(
         self,
         event_sync_rules: list,
@@ -2933,6 +3119,11 @@ class ChannelPipelineEngine:
 
         results.setdefault("event_sync", [])
         results.setdefault("event_sync_warnings", [])
+
+        # bead y8yby: per-phase cache for the (m3u_account, group) settings map
+        # used to resolve whole-group scopes to their backing provider accounts
+        # for the optional pre-refresh-on-run step. Filled lazily on first use.
+        prerefresh_provider_cache: dict = {}
 
         # Provider display names, fetched once for the whole phase.
         try:
@@ -3040,6 +3231,20 @@ class ChannelPipelineEngine:
                         ),
                     })
                     continue
+
+            # bead y8yby: optional pre-refresh of the rule's M3U providers
+            # before a MANUAL run (live Run AND dry-run Test), so the match
+            # runs against fresh provider data — closing the refresh-ordering
+            # staleness window. NEVER on the unattended auto-run path: that
+            # path already fires right after an M3U refresh, so pre-refreshing
+            # there would be circular. Best-effort: a failed provider refresh
+            # warns but the run PROCEEDS against current data (mirrors the M3U
+            # refresh watermark's partial-success posture). Runs before the
+            # secondary fetch below so the fetch sees post-refresh streams.
+            if not unattended and config.get("refresh_providers_before_run"):
+                await self._prerefresh_event_sync_providers(
+                    rule, config, results, prerefresh_provider_cache
+                )
 
             try:
                 secondary_streams = (

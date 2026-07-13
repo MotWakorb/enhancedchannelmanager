@@ -82,6 +82,17 @@ export interface EventSyncConfig {
    */
   auto_run?: boolean;
   /**
+   * bead y8yby: when true, a MANUAL run of this rule (live Run AND dry-run
+   * Test) first refreshes the M3U provider accounts backing the rule's
+   * master + secondary groups, then runs the match/attach — closing the
+   * refresh-ordering staleness window. Never applies to unattended auto-runs
+   * (that path already follows a refresh). Backend default false.
+   *
+   * Consequence surfaced in the UI: with this ON the dry-run Test triggers a
+   * real Dispatcharr provider refresh, so Test is no longer zero-write.
+   */
+  refresh_providers_before_run?: boolean;
+  /**
    * Phase 2 (bead ti939.3.3): dummy EPG profile auto-assigned to master
    * event channels on every run. OPTIONAL — absent means off (the backend
    * never default-fills it). Must reference an existing dummy EPG profile.

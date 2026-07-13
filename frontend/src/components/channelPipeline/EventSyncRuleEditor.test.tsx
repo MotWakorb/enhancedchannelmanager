@@ -534,6 +534,76 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
+  describe('refresh_providers_before_run toggle (bead y8yby)', () => {
+    it('defaults OFF and omits the key for a rule that never had it', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Automation'));
+      expect(
+        screen.getByTestId('event-sync-refresh-providers-before-run')
+      ).not.toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config).not.toHaveProperty(
+        'refresh_providers_before_run'
+      );
+    });
+
+    it('emits refresh_providers_before_run: true when checked, and surfaces the Test-writes warning', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Automation'));
+      await user.click(
+        screen.getByTestId('event-sync-refresh-providers-before-run')
+      );
+      // The "Test is no longer zero-write" consequence is surfaced inline.
+      expect(
+        screen.getByTestId('event-sync-refresh-test-writes-note')
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.refresh_providers_before_run
+      ).toBe(true);
+    });
+
+    it('initializes checked from a stored true and round-trips it', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          refresh_providers_before_run: true,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Automation'));
+      expect(
+        screen.getByTestId('event-sync-refresh-providers-before-run')
+      ).toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.refresh_providers_before_run
+      ).toBe(true);
+    });
+  });
+
   describe('inline auto-sync status (picker; toggles ONLY via the confirmed fix)', () => {
     it('shows an inline mismatch + Fix when the master scope has auto-sync OFF', async () => {
       seedGroups();

@@ -459,11 +459,17 @@ describe('ChannelPipelineTab', () => {
       return bodies;
     };
 
-    const pushEventSyncRule = (name: string) => {
+    const pushEventSyncRule = (
+      name: string,
+      extraConfig: Record<string, unknown> = {}
+    ) => {
       const rule = createMockChannelPipelineRule({
         name,
         enabled: true,
-        event_sync_config: { master_group_id: 1, secondary_group_ids: [2], auto_run: false },
+        event_sync_config: {
+          master_group_id: 1, secondary_group_ids: [2], auto_run: false,
+          ...extraConfig,
+        },
       });
       mockDataStore.channelPipelineRules.push(rule);
       return rule;
@@ -534,6 +540,52 @@ describe('ChannelPipelineTab', () => {
         expect(screen.queryByTestId('event-sync-run-confirm')).not.toBeInTheDocument()
       );
       expect(bodies).toHaveLength(0);
+    });
+
+    it('Test on an event_sync row with refresh_providers_before_run routes through a confirm that warns Test is not zero-write (bead y8yby)', async () => {
+      const user = userEvent.setup();
+      const bodies = installRunCapture();
+      const rule = pushEventSyncRule('ES Refresh Rule', {
+        refresh_providers_before_run: true,
+      });
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('ES Refresh Rule')).toBeInTheDocument());
+      const row = screen.getByText('ES Refresh Rule').closest('tr')!;
+
+      await user.click(within(row).getByRole('button', { name: `Test ${rule.name}` }));
+
+      // A confirm appears (Test is no longer zero-write) and nothing has run.
+      expect(await screen.findByTestId('event-sync-run-confirm')).toBeInTheDocument();
+      expect(
+        screen.getByTestId('event-sync-test-refresh-warning')
+      ).toBeInTheDocument();
+      expect(bodies).toHaveLength(0);
+
+      await user.click(screen.getByTestId('event-sync-run-confirm-btn'));
+
+      await waitFor(() => expect(bodies).toHaveLength(1));
+      // Still a dry run — the refresh happens server-side, no attaches.
+      expect(bodies[0]).toEqual({ dry_run: true, rule_ids: [rule.id] });
+    });
+
+    it('Run confirm on a refresh-before-run rule notes the pre-refresh (bead y8yby)', async () => {
+      const user = userEvent.setup();
+      installRunCapture();
+      const rule = pushEventSyncRule('ES Refresh Rule', {
+        refresh_providers_before_run: true,
+      });
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('ES Refresh Rule')).toBeInTheDocument());
+      const row = screen.getByText('ES Refresh Rule').closest('tr')!;
+
+      await user.click(within(row).getByRole('button', { name: `Run ${rule.name}` }));
+
+      expect(await screen.findByTestId('event-sync-run-confirm')).toBeInTheDocument();
+      expect(
+        screen.getByTestId('event-sync-run-refresh-note')
+      ).toBeInTheDocument();
     });
 
     it('a standard rule Run runs directly with no confirm (parity)', async () => {

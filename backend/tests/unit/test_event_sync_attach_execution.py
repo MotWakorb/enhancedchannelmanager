@@ -592,6 +592,210 @@ def _breaker_clear():
                  return_value=(False, ""))
 
 
+class TestEnginePhasePreRefresh:
+    """bead y8yby: optional pre-refresh of the rule's M3U providers before a
+    MANUAL run (live Run AND dry-run Test). Never on the unattended auto-run
+    path. Best-effort — a failed refresh warns but the run still proceeds.
+    """
+
+    @staticmethod
+    def _refresh_instance(*, success_count=1, failed_count=0, errors=None):
+        inst = MagicMock()
+        inst.update_config = MagicMock()
+        result = MagicMock()
+        result.success_count = success_count
+        result.failed_count = failed_count
+        result.details = {"errors": errors or []}
+        inst.execute = AsyncMock(return_value=result)
+        return inst
+
+    def test_manual_run_with_flag_triggers_provider_refresh(self):
+        """Flag on + manual run → M3URefreshTask fires with exactly the rule's
+        provider-scoped account ids, BEFORE the attach still happens."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        config = _config(
+            master={"group_id": 10, "m3u_account_id": 3},
+            secondary=[{"group_id": 20, "m3u_account_id": 7}],
+            refresh_providers_before_run=True,
+        )
+        results = _results()
+        inst = self._refresh_instance(success_count=2)
+
+        with patch("tasks.m3u_refresh.M3URefreshTask",
+                   return_value=inst) as mock_cls:
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=config)], executor, results,
+                dry_run=False, triggered_by="manual",
+                channels_touched_ids=set(),
+            ))
+
+        # Refresh fired with exactly the rule's provider accounts (deduped,
+        # sorted); no whole-group resolution was needed.
+        mock_cls.assert_called_once()
+        inst.execute.assert_awaited_once()
+        passed = inst.update_config.call_args[0][0]
+        assert passed["account_ids"] == [3, 7]
+        client.get_m3u_group_settings_by_provider.assert_not_called()
+        # The attach still ran after the refresh.
+        assert results["event_sync"][0]["attached"] == 1
+        client.update_channel.assert_awaited_once()
+
+    def test_whole_group_scopes_resolve_all_backing_providers(self):
+        """Whole-group scopes (m3u_account_id None) resolve to EVERY provider
+        account carrying that channel group via the by-provider settings."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_m3u_group_settings_by_provider = AsyncMock(return_value={
+            (3, 10): {}, (5, 10): {}, (7, 20): {},
+        })
+        config = _config(refresh_providers_before_run=True)  # flat → whole-group
+        results = _results()
+        inst = self._refresh_instance()
+
+        with patch("tasks.m3u_refresh.M3URefreshTask", return_value=inst):
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=config)], executor, results,
+                dry_run=False, triggered_by="manual",
+                channels_touched_ids=set(),
+            ))
+
+        passed = inst.update_config.call_args[0][0]
+        assert passed["account_ids"] == [3, 5, 7]
+
+    def test_manual_run_without_flag_never_refreshes(self):
+        """Flag off (absent → false) → no refresh; the run is unchanged."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        results = _results()
+
+        with patch("tasks.m3u_refresh.M3URefreshTask") as mock_cls:
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=_config())], executor, results,
+                dry_run=False, triggered_by="manual",
+                channels_touched_ids=set(),
+            ))
+
+        mock_cls.assert_not_called()
+        assert results["event_sync"][0]["attached"] == 1
+
+    def test_dry_run_test_with_flag_still_refreshes(self):
+        """PO decision: the flag applies to the dry-run Test too — so a Test
+        with the flag on triggers a real refresh (Test is not zero-write)."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        config = _config(
+            master={"group_id": 10, "m3u_account_id": 3},
+            secondary=[{"group_id": 20, "m3u_account_id": 3}],
+            refresh_providers_before_run=True,
+        )
+        results = _results()
+        inst = self._refresh_instance()
+
+        with patch("tasks.m3u_refresh.M3URefreshTask", return_value=inst):
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=config)], executor, results,
+                dry_run=True, triggered_by="manual",
+                channels_touched_ids=set(),
+            ))
+
+        inst.execute.assert_awaited_once()
+        # Dry run writes nothing itself (the attach is simulated).
+        client.update_channel.assert_not_awaited()
+
+    def test_failed_refresh_warns_but_run_proceeds(self):
+        """Best-effort: a failed provider refresh warns but the attach still
+        runs against current data (mirrors the watermark partial-success)."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        config = _config(
+            master={"group_id": 10, "m3u_account_id": 3},
+            secondary=[{"group_id": 20, "m3u_account_id": 7}],
+            refresh_providers_before_run=True,
+        )
+        results = _results()
+        inst = self._refresh_instance(
+            success_count=1, failed_count=1, errors=["ProvB: boom"],
+        )
+
+        with patch("tasks.m3u_refresh.M3URefreshTask", return_value=inst):
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=config)], executor, results,
+                dry_run=False, triggered_by="manual",
+                channels_touched_ids=set(),
+            ))
+
+        # Run proceeded: the stream still attached.
+        assert results["event_sync"][0]["attached"] == 1
+        client.update_channel.assert_awaited_once()
+        # A best-effort partial-failure warning was recorded.
+        partial = [
+            w for w in results["event_sync_warnings"]
+            if w["type"] == "event_sync_prerefresh_partial"
+        ]
+        assert len(partial) == 1
+        assert partial[0]["failed"] == 1
+
+    def test_wholesale_refresh_exception_warns_but_run_proceeds(self):
+        """If the refresh raises entirely, the run still proceeds (best-effort);
+        a event_sync_prerefresh_failed warning is recorded."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        config = _config(
+            master={"group_id": 10, "m3u_account_id": 3},
+            secondary=[{"group_id": 20, "m3u_account_id": 7}],
+            refresh_providers_before_run=True,
+        )
+        results = _results()
+        inst = MagicMock()
+        inst.update_config = MagicMock()
+        inst.execute = AsyncMock(side_effect=RuntimeError("dispatcharr down"))
+
+        with patch("tasks.m3u_refresh.M3URefreshTask", return_value=inst):
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=config)], executor, results,
+                dry_run=False, triggered_by="manual",
+                channels_touched_ids=set(),
+            ))
+
+        assert results["event_sync"][0]["attached"] == 1
+        failed = [
+            w for w in results["event_sync_warnings"]
+            if w["type"] == "event_sync_prerefresh_failed"
+        ]
+        assert len(failed) == 1
+
+    def test_auto_run_path_never_prerefreshes(self):
+        """The unattended auto-run path must NOT pre-refresh even when the rule
+        carries the flag — pre-refreshing after a refresh would be circular."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.get_all_m3u_group_settings = AsyncMock(
+            return_value=GROUP_SETTINGS_OK
+        )
+        config = _config(auto_run=True, refresh_providers_before_run=True)
+        results = _results()
+
+        with _breaker_clear(), \
+                patch("tasks.m3u_refresh.M3URefreshTask") as mock_cls:
+            _run(engine._run_event_sync_rules(
+                [_event_rule(config=config)], executor, results,
+                dry_run=False, triggered_by="m3u_refresh",
+                channels_touched_ids=set(),
+            ))
+
+        # Auto-run attached, but NO pre-refresh task was constructed.
+        assert results["event_sync"][0]["attached"] == 1
+        mock_cls.assert_not_called()
+
+
 class TestEnginePhaseAutoRun:
     """ti939.3.1 + ixujz: the attach phase on the UNATTENDED watermark
     trigger — per-rule opt-in, circuit-breaker gate, and pre-flight.
