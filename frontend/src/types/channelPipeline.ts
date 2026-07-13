@@ -338,6 +338,47 @@ export interface BulkUpdateRulesResponse {
 }
 
 // =============================================================================
+// Rule analyzer (bd-0gntx / bd-m1s38.2)
+// =============================================================================
+
+/** Severity of an analyzer finding. Always advisory — never gates a save. */
+export type RuleAnalyzerSeverity = 'error' | 'warning' | 'info';
+
+/**
+ * A single advisory finding from the rule analyzer (e.g.
+ * `REGEX_TRIVIALLY_MATCHES_ALL`, `MERGE_SCOPE_NOT_TARGET_GROUP`).
+ * Shared shape across the saved-rule, from-bundle, and analyze-body endpoints.
+ */
+export interface RuleAnalyzerFinding {
+  code: string;
+  severity: RuleAnalyzerSeverity;
+  field: string;
+  message: string;
+  suggestion: string;
+  detail: Record<string, unknown>;
+}
+
+/** Per-rule findings block; `rule_id` is null for an unsaved analyze-body call. */
+export interface RuleAnalyzerRuleResult {
+  rule_id: number | null;
+  rule_name: string;
+  findings: RuleAnalyzerFinding[];
+}
+
+/** Response shape shared by every rule-analyzer endpoint. */
+export interface RuleAnalyzerResponse {
+  rules: RuleAnalyzerRuleResult[];
+  summary: Record<RuleAnalyzerSeverity, number>;
+}
+
+/**
+ * Request body for POST /channel-pipeline/rules/analyze-body — an UNSAVED rule.
+ * Any subset of the create-rule fields; the backend caps conditions/actions at
+ * 200 each and treats an empty body as a clean draft.
+ */
+export type AnalyzeRuleBodyRequest = Partial<CreateRuleData>;
+
+// =============================================================================
 // Execution
 // =============================================================================
 
