@@ -131,6 +131,27 @@ class TestPreviewEventSync:
         assert "1 would attach" in text
         assert "ATTACH" in text and "REVIEW" in text and "UNMATCHED" in text
         assert "channel 55" in text
+        # A plain default-threshold in-window match carries no provenance suffix.
+        assert "matched via" not in text
+
+    @pytest.mark.asyncio
+    async def test_matched_via_provenance_suffix_on_attach_line(self):
+        # S5 (bead sf8dj): would-attach rows admitted only by an optional
+        # relaxation get a "(matched via: ...)" suffix so the operator can
+        # double-check them.
+        mcp = _make_mcp_and_register()
+        response = _preview_response()
+        response["streams"][0]["matched_via"] = [
+            {"key": "time_window_ignored", "label": "time ignored"},
+            {"key": "assume_current_date", "label": "assumed date"},
+        ]
+        client = AsyncMock()
+        client.call_endpoint.return_value = response
+        text = await _call_tool(
+            mcp, client,
+            {"event_sync_config": {"master_group_id": 10, "secondary_group_ids": [20]}},
+        )
+        assert "matched via: time ignored, assumed date" in text
 
     @pytest.mark.asyncio
     async def test_include_master_group_streams_flag_forwarded_verbatim(self):

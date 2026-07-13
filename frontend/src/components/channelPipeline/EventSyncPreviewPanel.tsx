@@ -29,6 +29,22 @@ import './EventSyncPreviewPanel.css';
 /** Cards rendered before the "Show more" affordance kicks in. */
 const CARDS_PER_PAGE = 50;
 
+/**
+ * S5 (bead sf8dj): the caution behind each provenance chip — why this
+ * would-attach row deserves a second look. Keyed on the machine `key`;
+ * an unknown key falls back to the chip label alone.
+ */
+const MATCHED_VIA_TITLES: Record<string, string> = {
+  assume_current_date:
+    'Matched only because the missing date was assumed to be today — confirm the event really is today.',
+  time_window_ignored:
+    'Matched outside the time window because the window gate is off — confirm both start times refer to the same event.',
+  lowered_threshold:
+    'Matched on a score below the default floor because the attach threshold was lowered — double-check this is the right master.',
+  master_from_stream:
+    'The master identity was read from its attached stream name (parse-from-stream), not the channel name.',
+};
+
 export interface EventSyncPreviewPanelProps {
   preview: EventSyncPreviewResponse | null;
   loading: boolean;
@@ -104,6 +120,17 @@ function MatchCard({ stream }: { stream: EventSyncStreamRow }) {
           <span key={flag} className="event-sync-flag">
             <span className="material-icons" aria-hidden="true">flag</span>
             {flag}
+          </span>
+        ))}
+        {/* S5 (bead sf8dj): provenance chips — this row would attach only
+            because an optional relaxation was enabled. */}
+        {(stream.matched_via ?? []).map(via => (
+          <span
+            key={via.key}
+            className="badge badge-sm badge-warning event-sync-matched-via"
+            title={MATCHED_VIA_TITLES[via.key] ?? via.label}
+          >
+            {via.label}
           </span>
         ))}
       </div>

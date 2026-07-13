@@ -48,7 +48,7 @@ channel IDs against Dispatcharr on every run.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import pytz
@@ -59,6 +59,8 @@ from services.event_sync_matcher import (
     DEFAULT_EVENT_TIMEZONE,
     DEFAULT_TIME_WINDOW_MINUTES,
     EVENT_ATTACH_FLOOR,
+    EVENT_NO_TEAMS_FLOOR,
+    TEAM_VERDICT_AGREE,
     MasterCandidate,
     StreamMatchResult,
     match_streams,
@@ -114,6 +116,18 @@ AMBIGUOUS_REASON_CONTESTED = "contested_top_candidates"
 # into the matcher's AMBIGUOUS band.
 AMBIGUOUS_REASON_BAND = "top_candidate_ambiguous_band"
 
+# S5 (bead sf8dj) — provenance: which optional relaxation admitted a
+# would-attach row. Each entry is a (machine_key, human_label) pair. The list
+# is a DIAGNOSTIC annotation only — computed from data already on the resolved
+# result (and, for assume_current_date, one cheap single-name re-parse). It
+# NEVER changes any score, band, or attach decision; the frozen matcher corpus
+# is untouched. A flag "contributed" when reverting just it to its default
+# would drop this row out of the attach band.
+MATCHED_VIA_ASSUME_CURRENT_DATE = ("assume_current_date", "assumed date")
+MATCHED_VIA_TIME_WINDOW_IGNORED = ("time_window_ignored", "time ignored")
+MATCHED_VIA_LOWERED_THRESHOLD = ("lowered_threshold", "low threshold")
+MATCHED_VIA_MASTER_FROM_STREAM = ("master_from_stream", "master-from-stream")
+
 # Runner-up-within-epsilon-of-winner ⇒ contested. Deliberately generous
 # (more contested = fewer attaches = the conservative direction): two
 # distinct real-world events that both survive the time-window block and
@@ -167,6 +181,12 @@ class ResolvedStream:
       ``MAX_REVIEW_CANDIDATES_PER_STREAM``. Empty otherwise.
     * ``rejected_suppressed`` — how many of this stream's candidates were
       removed because the operator previously REJECTED that pairing.
+    * ``matched_via`` — S5 (bead sf8dj) diagnostic provenance: for a
+      ``would_attach`` row, the (machine_key, human_label) pairs of the
+      optional relaxations that admitted it (assume_current_date,
+      time_window_ignored, lowered_threshold, master_from_stream). Empty for a
+      plain in-window default-threshold match and for every non-attach
+      disposition. Annotation only — never influences the match.
     """
 
     stream: SecondaryStream
@@ -177,6 +197,7 @@ class ResolvedStream:
     attach_source: str | None = None
     review_candidates: tuple[MasterCandidate, ...] = ()
     rejected_suppressed: int = 0
+    matched_via: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -415,6 +436,69 @@ def _resolve_stream(
     )
 
 
+def _matched_via(
+    resolved: ResolvedStream,
+    *,
+    patterns: list[dict] | None,
+    now: datetime,
+    assume_current_date: bool,
+    enforce_time_window: bool,
+    time_window_minutes: int,
+    parse_master_from_stream: bool,
+) -> tuple[tuple[str, str], ...]:
+    """S5 provenance for one resolved stream (bead sf8dj).
+
+    Diagnostic only — reads what the matcher already decided; it never
+    re-scores, re-bands, or otherwise alters the match. Each entry marks an
+    optional relaxation without which this ``would_attach`` row would drop out
+    of the attach band. Non-attach dispositions carry no provenance.
+    """
+    if resolved.disposition != DISPOSITION_WOULD_ATTACH or resolved.best is None:
+        return ()
+    best = resolved.best
+    via: list[tuple[str, str]] = []
+
+    # assume_current_date: the stream had a time but no date, so its start was
+    # placed on "today". Counterfactual — re-parse the single stream name with
+    # the flag OFF (one cheap parse, not a re-resolution): a parse-fail (no
+    # start) proves the flag is what made this stream a candidate at all.
+    if assume_current_date and resolved.result.parsed.start is not None:
+        without = parse_event_name(
+            resolved.stream.name, patterns, now=now, assume_current_date=False
+        )
+        if without.start is None:
+            via.append(MATCHED_VIA_ASSUME_CURRENT_DATE)
+
+    # time_window_ignored: the gate is off AND the winner's time delta exceeds
+    # the configured window — with the gate on, that candidate would have been
+    # eliminated before scoring.
+    if not enforce_time_window and best.time_delta_minutes > time_window_minutes:
+        via.append(MATCHED_VIA_TIME_WINDOW_IGNORED)
+
+    # lowered_threshold: the winner's score is below the DEFAULT effective floor
+    # it would face (0.80, or 0.90 without team agreement — is_event_attachable
+    # policy). It only reached the attach band because the operator lowered
+    # attach_threshold beneath that default; the score is >= the configured
+    # threshold by attach-band membership.
+    default_floor = (
+        EVENT_ATTACH_FLOOR
+        if best.team_verdict == TEAM_VERDICT_AGREE
+        else EVENT_NO_TEAMS_FLOOR
+    )
+    if best.score < default_floor:
+        via.append(MATCHED_VIA_LOWERED_THRESHOLD)
+
+    # master_from_stream: the master identity was read from the master's own
+    # stream name rather than the channel name. A clean counterfactual would
+    # need the original channel names, which this pure resolver no longer holds
+    # (the caller maps identity->id upstream) — so, per the accepted-heuristic
+    # allowance, the flag being on for a would-attach row marks it.
+    if parse_master_from_stream:
+        via.append(MATCHED_VIA_MASTER_FROM_STREAM)
+
+    return tuple(via)
+
+
 def resolve_event_sync(
     config: dict,
     master_names: list[str],
@@ -481,6 +565,11 @@ def resolve_event_sync(
     # bead assume-current-date: opt-in dateless matching (both master and
     # secondary sides share the same "today" so their times compare on one day).
     assume_current_date = bool(config.get("assume_current_date", False))
+    # S5 provenance inputs (bead sf8dj) — read straight from the config; used
+    # only to annotate would-attach rows, never to change the match.
+    enforce_time_window = config.get("enforce_time_window", True)
+    configured_window = config.get("time_window_minutes", DEFAULT_TIME_WINDOW_MINUTES)
+    parse_master_from_stream = bool(config.get("parse_master_from_stream", False))
 
     # Master-as-ceiling diagnostic: masters with no complete parsed identity
     # can never be candidates (match_streams filters them the same way —
@@ -526,7 +615,19 @@ def resolve_event_sync(
             assume_current_date=assume_current_date,
         )
         for stream, result in zip(streams, results):
-            resolved.append(_resolve_stream(stream, result, decisions))
+            rs = _resolve_stream(stream, result, decisions)
+            via = _matched_via(
+                rs,
+                patterns=patterns,
+                now=now,
+                assume_current_date=assume_current_date,
+                enforce_time_window=enforce_time_window,
+                time_window_minutes=configured_window,
+                parse_master_from_stream=parse_master_from_stream,
+            )
+            if via:
+                rs = replace(rs, matched_via=via)
+            resolved.append(rs)
 
     return EventSyncResolution(
         resolved=tuple(resolved),
