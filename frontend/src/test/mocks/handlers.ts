@@ -1025,6 +1025,16 @@ export const handlers = [
     })
   }),
 
+  // Advisory rule analyzer for an UNSAVED rule body (bd-m1s38.2). Returns a
+  // clean (no-findings) result by default; specs override with server.use(...)
+  // to assert chip rendering. Advisory only — never gates a save.
+  http.post(`${API_BASE}/channel-pipeline/rules/analyze-body`, async () => {
+    return HttpResponse.json({
+      rules: [{ rule_id: null, rule_name: '', findings: [] }],
+      summary: { error: 0, warning: 0, info: 0 },
+    })
+  }),
+
   http.get(`${API_BASE}/channel-pipeline/schema/conditions`, () => {
     return HttpResponse.json({
       conditions: [

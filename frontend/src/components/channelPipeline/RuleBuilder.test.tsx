@@ -4,8 +4,9 @@
  * These tests define the expected behavior of the component BEFORE implementation.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import {
   server,
   resetMockDataStore,
@@ -501,6 +502,9 @@ describe('RuleBuilder', () => {
       const nameInput = screen.getByLabelText(/rule name/i);
       nameInput.focus();
 
+      // Compact header (m1s38.3): Name → Enabled → Description.
+      await user.tab();
+      expect(screen.getByLabelText(/enabled/i)).toHaveFocus();
       await user.tab();
       expect(screen.getByLabelText(/description/i)).toHaveFocus();
     });
@@ -717,6 +721,229 @@ describe('RuleBuilder', () => {
         expect(onSave).toHaveBeenCalledWith(
           expect.objectContaining({ allow_manual_channel_merge: true }),
         );
+      });
+    });
+  });
+
+  describe('grouped two-pane redesign (bead m1s38.3)', () => {
+    const VALID_RULE = {
+      name: 'Sports',
+      conditions: [{ type: 'stream_name_contains', value: 'ESPN' }],
+      actions: [{ type: 'skip' }],
+    } as unknown as ChannelPipelineRule;
+
+    /** Render + capture the guarded-close the parent's Escape/× would invoke. */
+    async function renderWithClose(
+      props: Partial<React.ComponentProps<typeof RuleBuilder>> = {},
+    ) {
+      let registeredClose: (() => void) | undefined;
+      const onCancel = props.onCancel ?? vi.fn();
+      render(
+        <RuleBuilder
+          rule={VALID_RULE}
+          onSave={vi.fn()}
+          onCancel={onCancel}
+          {...props}
+          onRegisterClose={fn => {
+            if (fn) registeredClose = fn;
+          }}
+        />,
+      );
+      await waitFor(() => expect(typeof registeredClose).toBe('function'));
+      return { registeredClose: () => registeredClose!(), onCancel };
+    }
+
+    describe('phase order (logic first)', () => {
+      it('renders the phase spine as Logic -> Targeting -> Output & Run', () => {
+        render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        const spine = screen.getByRole('navigation', { name: /rule sections/i });
+        const pills = within(spine).getAllByRole('button');
+        expect(pills.map(p => p.textContent)).toEqual([
+          '1 Logic',
+          '2 Targeting',
+          '3 Output & Run',
+        ]);
+      });
+    });
+
+    describe('full-field dirty guard (data-loss fix)', () => {
+      it('no change → the registered close closes at once with NO confirm', async () => {
+        const { registeredClose, onCancel } = await renderWithClose();
+
+        await act(async () => registeredClose());
+
+        expect(onCancel).toHaveBeenCalledTimes(1);
+        expect(screen.queryByTestId('rule-discard-dialog')).toBeNull();
+      });
+
+      it('a shallow name edit still guards the close', async () => {
+        const user = userEvent.setup();
+        const { registeredClose, onCancel } = await renderWithClose();
+
+        await user.type(screen.getByLabelText(/rule name/i), '!');
+        await act(async () => registeredClose());
+
+        expect(screen.getByTestId('rule-discard-dialog')).toBeInTheDocument();
+        expect(onCancel).not.toHaveBeenCalled();
+      });
+
+      it('a DEEP edit to an existing condition value (count unchanged) marks dirty', async () => {
+        const user = userEvent.setup();
+        const { registeredClose, onCancel } = await renderWithClose();
+
+        // Edit the existing condition's value — the count does not change.
+        await user.type(screen.getByDisplayValue('ESPN'), 'x');
+        await act(async () => registeredClose());
+
+        expect(screen.getByTestId('rule-discard-dialog')).toBeInTheDocument();
+        expect(onCancel).not.toHaveBeenCalled();
+      });
+
+      it('a DEEP edit to an existing action marks dirty', async () => {
+        const user = userEvent.setup();
+        const ruleWithTemplate = {
+          name: 'R',
+          conditions: [{ type: 'always' }],
+          actions: [{ type: 'create_channel', name_template: '{stream_name}' }],
+        } as unknown as ChannelPipelineRule;
+        const { registeredClose, onCancel } = await renderWithClose({ rule: ruleWithTemplate });
+
+        await user.type(await screen.findByDisplayValue('{stream_name}'), 'X');
+        await act(async () => registeredClose());
+
+        expect(screen.getByTestId('rule-discard-dialog')).toBeInTheDocument();
+        expect(onCancel).not.toHaveBeenCalled();
+      });
+
+      it('adding or removing a condition marks dirty', async () => {
+        const user = userEvent.setup();
+        const { registeredClose, onCancel } = await renderWithClose();
+
+        await user.click(screen.getByRole('button', { name: /add condition/i }));
+        await act(async () => registeredClose());
+
+        expect(screen.getByTestId('rule-discard-dialog')).toBeInTheDocument();
+        expect(onCancel).not.toHaveBeenCalled();
+      });
+
+      it('Escape/× routes through the guard: onCancel fires only after Confirm; "Keep editing" dismisses', async () => {
+        const user = userEvent.setup();
+        const { registeredClose, onCancel } = await renderWithClose();
+
+        await user.type(screen.getByLabelText(/rule name/i), '!');
+        await act(async () => registeredClose());
+
+        // The confirm is shown; nothing discarded yet.
+        expect(screen.getByTestId('rule-discard-dialog')).toBeInTheDocument();
+        expect(onCancel).not.toHaveBeenCalled();
+
+        // "Keep editing" dismisses without discarding.
+        await user.click(screen.getByTestId('rule-discard-keep'));
+        expect(screen.queryByTestId('rule-discard-dialog')).toBeNull();
+        expect(onCancel).not.toHaveBeenCalled();
+
+        // Re-open and confirm — only now is the discard committed.
+        await act(async () => registeredClose());
+        await user.click(screen.getByTestId('rule-discard-confirm'));
+        expect(onCancel).toHaveBeenCalledTimes(1);
+      });
+
+      it('the discard confirm is an alertdialog', async () => {
+        const user = userEvent.setup();
+        const { registeredClose } = await renderWithClose();
+
+        await user.type(screen.getByLabelText(/rule name/i), '!');
+        await act(async () => registeredClose());
+
+        expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+      });
+
+      it('a successful save clears the dirty state (no confirm on the next close)', async () => {
+        const user = userEvent.setup();
+        const onSave = vi.fn().mockResolvedValue(undefined);
+        const onCancel = vi.fn();
+        let registeredClose: (() => void) | undefined;
+        render(
+          <RuleBuilder
+            rule={VALID_RULE}
+            onSave={onSave}
+            onCancel={onCancel}
+            onRegisterClose={fn => {
+              if (fn) registeredClose = fn;
+            }}
+          />,
+        );
+        await waitFor(() => expect(typeof registeredClose).toBe('function'));
+
+        // Edit → dirty, then Save.
+        await user.type(screen.getByLabelText(/rule name/i), '!');
+        await user.click(screen.getByRole('button', { name: /save/i }));
+        await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+        // The saved config is now the clean baseline → closing does not prompt.
+        await act(async () => registeredClose!());
+        expect(screen.queryByTestId('rule-discard-dialog')).toBeNull();
+        expect(onCancel).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('intent sentence', () => {
+      it('renders destructive/risky clauses in bold', () => {
+        const riskyRule = {
+          name: 'Risky',
+          conditions: [{ type: 'always' }],
+          actions: [{ type: 'merge_streams' }],
+          orphan_action: 'delete',
+          allow_manual_channel_merge: true,
+          stop_on_first_match: true,
+        } as unknown as ChannelPipelineRule;
+        render(<RuleBuilder rule={riskyRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        const intent = screen.getByTestId('rule-intent');
+        expect(within(intent).getByText(/Orphaned channels are deleted/i).tagName).toBe('STRONG');
+        expect(
+          within(intent).getByText(/May merge streams into manual channels/i).tagName,
+        ).toBe('STRONG');
+        expect(
+          within(intent).getByText(/Stops after the first matching rule/i).tagName,
+        ).toBe('STRONG');
+      });
+    });
+
+    describe('analyzer advisory chips', () => {
+      it('renders findings from the endpoint and NEVER disables Save', async () => {
+        server.use(
+          http.post('/api/channel-pipeline/rules/analyze-body', () =>
+            HttpResponse.json({
+              rules: [
+                {
+                  rule_id: null,
+                  rule_name: 'Sports',
+                  findings: [
+                    {
+                      code: 'REGEX_TRIVIALLY_MATCHES_ALL',
+                      severity: 'warning',
+                      field: 'conditions',
+                      message: 'This pattern matches every stream.',
+                      suggestion: 'Tighten the pattern.',
+                      detail: {},
+                    },
+                  ],
+                },
+              ],
+              summary: { error: 0, warning: 1, info: 0 },
+            }),
+          ),
+        );
+        render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        // Chip appears (after the debounce) with the advisory message.
+        const chip = await screen.findByTestId('rule-analyzer-chip', {}, { timeout: 3000 });
+        expect(chip).toHaveTextContent(/matches every stream/i);
+
+        // Advisory only: Save is never gated by a finding.
+        expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled();
       });
     });
   });
