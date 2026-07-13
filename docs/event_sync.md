@@ -331,6 +331,7 @@ the rule.
     "34": [ { "title_pattern": "..." } ]
   },
   "time_window_minutes": 30,
+  "enforce_time_window": true,
   "attach_threshold": 0.80,
   "max_attach_per_run": 100,
   "enabled": true
@@ -370,8 +371,9 @@ backward compatibility; the rule editor now reads and writes the nested shape.
 | `secondary_group_ids` | derived | Legacy/derived list of secondary group IDs (derived from `secondary`). Must NOT contain `master_group_id`. |
 | `patterns` | no | Shared parse-pattern variants (title/time/date regexes with named capture groups, same shape as the built-in defaults in `backend/services/event_sync_matcher.py`). Omit to use the built-in defaults. API-authored arrays survive UI resaves: the rule editor round-trips the full array (an untouched save emits it verbatim; patterns beyond the one custom slot the UI can edit are preserved read-only, and built-ins are never silently re-added to an all-custom selection). |
 | `group_patterns` | no | Per-group pattern overrides, keyed by group ID (master or a secondary). A group with an override uses ONLY its own patterns for parsing; other groups keep the shared `patterns` selection. Multi-pattern lists round-trip through the UI the same way as `patterns` (the editor edits only the first pattern per group; the rest are preserved). |
-| `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. Capped at 1440 (24 hours). |
-| `attach_threshold` | no (default 0.80) | Auto-attach score floor on the parsed-title score. **Hard-clamped ≥ 0.80** — it can be raised per rule, never lowered. |
+| `time_window_minutes` | no (default 30) | Parsed start times must be within ± this window to become candidate pairs. Capped at 1440 (24 hours). Ignored entirely when `enforce_time_window` is false. |
+| `enforce_time_window` | no (default **true**) | When false, the time-window candidacy gate is disabled: every parsed master event is a candidate and matches rank on title/team score alone, ignoring `time_window_minutes`. Rescues events whose providers publish different start times for the same fixture. **Safe only for a single-provider, same-day master group** — for recurring or serial titles the missing time gate can match the wrong day's channel. The team-conflict/numeric-identity rails and the 0.90 no-teams floor still apply, so borderline pairs route to review, not auto-attach. See [Disabling the time window](#disabling-the-time-window). |
+| `attach_threshold` | no (default 0.80) | Auto-attach score floor on the parsed-title score. **0.80 is the default, not a hard minimum** (operator-authoritative): any value in `[0, 1]`. Raise it for stricter matching; lower it when a provider's titles carry slot/venue noise that caps the score. A lower floor auto-attaches weaker matches — review the preview first. Team-conflict and different-event-number pairs are hard-rejected at any threshold. See [Threshold and bands](#threshold-and-bands). |
 | `max_attach_per_run` | no (default 100) | Per-run attach cap (1–1000). On overage the run stops attaching, warns in the execution log, and records the overage count. Runs are idempotent — run again to continue. |
 | `enabled` | no (default true) | Feature toggle within the rule. |
 | `auto_run` | no (default **false**) | Phase 2 opt-in (bead ti939.3.1): when true, the rule also runs **unattended** after each M3U refresh (the watermark task). Absent means false — manual-run-only. See [Automatic runs after refresh](#automatic-runs-after-refresh-phase-2-opt-in). |
@@ -396,11 +398,14 @@ value you sent, what was expected, and a link back to this document.
 * **Parse regexes compile through `safe_regex` at save time.** Operator
   regex is the ReDoS surface; the save-time compiler is the exact one the
   runtime uses.
-* **The 0.80 attach floor is hard-clamped twice** — rejected below the
-  floor at save time, and clamped again at runtime by the matcher's
-  admission policy (`EVENT_ATTACH_FLOOR` in
-  `backend/services/event_sync_matcher.py`, the single source of truth).
-  See [Threshold and bands](#threshold-and-bands) for why 0.80.
+* **`attach_threshold` accepts any value in `[0, 1]`.** 0.80
+  (`EVENT_ATTACH_FLOOR` in `backend/services/event_sync_matcher.py`, the
+  single source of truth) is the DEFAULT the validator fills, not a hard
+  minimum — it is operator-authoritative and may be lowered per rule when a
+  provider's data needs it. The matcher's admission policy honors the stored
+  value directly at runtime. The hard-reject rails that *do* stay
+  unconditional are the team-token and numeric-identity conflicts, not the
+  threshold. See [Threshold and bands](#threshold-and-bands).
 * **`time_window_minutes` is capped at 1440 (24 hours).** The time window
   is the rail that keeps same-teams-different-day fixtures apart — an
   oversized window re-opens that false-positive class, and the frozen
@@ -469,20 +474,94 @@ an alphabetical tie-break winner would be wrong half the time. Skip +
 count, never attach. The preview surfaces the reason per stream
 (`ambiguous_reason`).
 
-The "effective threshold" is not always 0.80: without positive team-token
-agreement (the team-token check found no team pair on one side, or the
-pairs were inconclusive), the bar rises to 0.90 — lexical overlap alone
-has to clear a higher bar than lexical overlap corroborated by matching
-team names. A team-token *conflict* is a hard reject regardless of score.
+The "effective threshold" is not always the value you set: without
+positive team-token agreement (the team-token check found no team pair on
+one side, or the pairs were inconclusive), the bar rises to 0.90 — lexical
+overlap alone has to clear a higher bar than lexical overlap corroborated
+by matching team names. **This 0.90 no-teams raise applies only while your
+threshold stays at or above the 0.80 default**; once you deliberately lower
+the threshold below 0.80 (see below) your exact number is honored for
+teamless pairs too, otherwise the raise would silently veto the lowering
+you asked for. A team-token *conflict* is a hard reject regardless of
+score.
 
-**Why the floor is 0.80 and can only go up, never down**: 0.80 is the
-calibrated default the PO set for this feature. The schema rejects any
-per-rule threshold below 0.80 with a teaching error at save/preview time,
-and the matcher's runtime admission policy additionally clamps — so even
-a stored legacy value below the floor behaves as 0.80. This mirrors the
-philosophy behind the M1 callsign hard-reject rail elsewhere in the
-pipeline: precision over recall everywhere, because of what a wrong
-attach costs:
+### How the score is computed
+
+The score in the bands above is a **fuzzy similarity of the two parsed
+titles**, on a 0–1 scale, optionally lifted by team-token agreement:
+
+1. **Parse both names** into (title, start time) using the rule's patterns.
+   Only the extracted `title` is scored — never the raw provider string, and
+   never the slot prefix or the date/time. So `Peacock 14: Mercury vs. Aces
+   @ 11 Jul 06:00 PM ET` scores on `Mercury vs. Aces`.
+2. **Clean each title** (lowercase, strip punctuation/quality tags/locale
+   noise) with the same shared cleaner the dedup matcher uses.
+3. **Normalize spelling variance across the two titles** (both bridges only
+   ever *add* agreement — a pair can never score lower than its plain fuzzy):
+   * **Hyphen/dash split, corroborated.** `Shangri-La` (one token) is split
+     to `Shangri La` **only when the other title carries that exact
+     word-run** — so `Off-Road`↔`Off Road` and `Shangri-La`↔`Shangri La`
+     match fully, while a compound like `Pre-Race Show` stays intact against
+     an unrelated `Race Day Live` (splitting it there would spuriously match
+     `Race`).
+   * **Acronym/initialism bridge.** An acronym token on one side and the
+     consecutive words it spells on the other collapse to one token —
+     `RoC`↔`Race of Champions`, `MUFC`↔`Manchester United` (FC-style suffix
+     aware). This is the same initialism logic the team-token layer uses,
+     extended to titles that never split into teams.
+4. **Fuzzy score** = RapidFuzz `token_set_ratio` of the two normalized
+   titles, divided by 100. `token_set_ratio` is **order- and
+   duplicate-insensitive**: it compares the *sets* of words, so extra words
+   on one side (a year, a venue, a slot label the parse didn't strip) lower
+   the score but shared words still count regardless of position. Identical
+   cleaned titles short circuit to 1.0. A token set that is a **subset** of
+   the other scores 1.0 — which, after the bridges above, is why the noisy
+   FloRacing master `FLORACING 003 | 2026 AMSOIL CHAMPIONSHIP OFF-ROAD IN ELK
+   RIVER, MN` scores **1.0** against `AMSOIL Championship Off Road`: every
+   secondary token is present in the master.
+5. **Team-token check** (only when both titles split into two sides on
+   `vs`/`v.`/`@`): the two sides are compared order-insensitively. If they
+   **agree**, the final score is `max(fuzzy, team_score)` — agreeing teams at
+   the same kickoff can lift a lexically-distant abbreviation (`MUFC` /
+   `Manchester United`) that pure title fuzz under-scores. If they **conflict**
+   (`Rangers vs. Islanders` / `Rangers vs. Yankees`), it's a hard reject at
+   0.0. Racing/PPV events usually have **no** team pair (`teams=absent`), so
+   their score is pure title fuzz and they face the 0.90 no-teams bar.
+
+So to raise a score you either clean up the parsed titles (a `group_patterns`
+override on the master that strips the slot/year/venue noise) or, if the
+titles are as clean as they'll get, lower the threshold for that rule.
+
+### Lowering the threshold (operator-authoritative)
+
+**0.80 is the default, not a hard floor.** A rule may set `attach_threshold`
+to any value in `[0, 1]` — in the editor's **Advanced** section, or via the
+API. Lower it when a provider's titles carry unavoidable noise that caps the
+fuzzy score below 0.80 (the FloRacing case: teamless events whose master
+titles keep `FLORACING NNN |` and a venue string). A lower floor trades
+precision for recall — it auto-attaches weaker matches — so **preview first**
+and watch the runner-up scores. The rails that stay unconditional at *any*
+threshold are the team-token conflict and the different-event-number
+(numeric-identity) hard rejects: lowering the floor never resurrects a
+contradiction, it only admits lower-confidence *non*-contradictory pairs.
+
+### Disabling the time window
+
+By default a candidate pair must have parsed start times within
+±`time_window_minutes`. Set **`enforce_time_window: false`** (editor Advanced
+→ "Ignore time window") to drop that gate: every parsed master event becomes
+a candidate and matches rank on title/team score alone. Use it when two
+providers publish **different start times for the same fixture** (the
+FloRacing case — one lists a race at 09:45, the other at 09:00; a 6-hour
+disagreement on a third). **Only safe for a single-provider, same-day master
+group**: with the gate off and a recurring or serial title (a daily show,
+weekly numbered cards), a stream can match the *wrong day's* master channel.
+The time delta is still reported in the preview; it just no longer rejects.
+
+**Historically** the 0.80 floor was hard-clamped and could only be raised —
+that mirrored the M1 callsign hard-reject rail's precision-over-recall stance.
+It is now a per-rule trade-off the operator owns, because of what a wrong
+attach actually costs:
 
 Wrong attachments are reversible and non-compounding, but not self-healing — the matcher is deterministic, so a bad match repeats every run until you adjust a pattern or threshold, or the provider renames the stream.
 

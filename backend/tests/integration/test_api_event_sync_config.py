@@ -121,13 +121,26 @@ class TestCreateRuleEventSyncConfig:
         )
         assert response.status_code == 400
 
-    def test_create_with_below_floor_threshold_rejected(
+    def test_create_with_below_default_threshold_accepted(
+        self, test_client, mock_db_session
+    ):
+        # bead krkm4-sibling: 0.80 is the default, not a hard floor. A rule
+        # may set a lower operator-authoritative threshold through the API.
+        response = test_client.post(
+            "/api/auto-creation/rules",
+            json=_rule_body(
+                event_sync_config=_valid_config(attach_threshold=0.5)
+            ),
+        )
+        assert response.status_code in (200, 201)
+
+    def test_create_with_out_of_bounds_threshold_rejected(
         self, test_client, mock_db_session
     ):
         response = test_client.post(
             "/api/auto-creation/rules",
             json=_rule_body(
-                event_sync_config=_valid_config(attach_threshold=0.5)
+                event_sync_config=_valid_config(attach_threshold=1.5)
             ),
         )
         assert response.status_code == 400

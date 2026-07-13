@@ -252,6 +252,12 @@ export function EventSyncRuleEditor({
   const [thresholdText, setThresholdText] = useState(
     (config?.attach_threshold ?? EVENT_ATTACH_FLOOR).toFixed(2)
   );
+  // bead krkm4: enforce the time-window candidacy gate. Default ON — the
+  // backend treats an absent key as true. Unchecking it disables the gate so
+  // streams match on title/team score alone (see the warning in the UI).
+  const [enforceTimeWindow, setEnforceTimeWindow] = useState(
+    config?.enforce_time_window ?? true
+  );
   // Phase 2 opt-in (ti939.3.1): unattended auto-run on the refresh
   // watermark. Default OFF — the backend treats an absent key as false.
   const [autoRun, setAutoRun] = useState(config?.auto_run ?? false);
@@ -462,6 +468,13 @@ export function EventSyncRuleEditor({
       attach_threshold: clampAttachThreshold(parseFloat(thresholdText)),
       enabled: config?.enabled ?? true,
     };
+    // bead krkm4: emit enforce_time_window when disabled, and preserve an
+    // explicit stored value (the backend validator fills the key on save, so
+    // round-trips keep it). A legacy config without the key stays without it
+    // while the box is checked — absent means enforced (true) on the backend.
+    if (!enforceTimeWindow || config?.enforce_time_window != null) {
+      built.enforce_time_window = enforceTimeWindow;
+    }
     // ti939.2.1: the per-run attach cap has no editor control yet — preserve
     // an existing (API-set) value so a UI edit does not silently reset it to
     // the backend default.
@@ -872,7 +885,7 @@ export function EventSyncRuleEditor({
                   max={MAX_TIME_WINDOW_MINUTES}
                   value={timeWindowText}
                   onChange={e => setTimeWindowText(e.target.value)}
-                  disabled={isLoading}
+                  disabled={isLoading || !enforceTimeWindow}
                 />
                 <span className="form-hint">
                   Parsed start times must be within ± this window to become
@@ -880,12 +893,38 @@ export function EventSyncRuleEditor({
                   {MAX_TIME_WINDOW_MINUTES}).
                 </span>
               </div>
+
+              <div className="form-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={!enforceTimeWindow}
+                    onChange={e => setEnforceTimeWindow(!e.target.checked)}
+                    disabled={isLoading}
+                    data-testid="event-sync-ignore-time-window"
+                  />
+                  <span>Ignore time window (match on title only)</span>
+                </label>
+                <span className="form-hint">
+                  Off by default. When on, the time window above is ignored and
+                  every parsed master event is a candidate, ranked by
+                  title/team score alone — this rescues events whose providers
+                  publish different start times for the same fixture. Safe when
+                  the master group is a single provider&apos;s same-day event
+                  list. Leave it OFF for recurring or serial titles (a daily
+                  show, weekly numbered cards): without the time gate a stream
+                  can match the wrong day&apos;s channel. The 0.90 no-teams
+                  score floor and the team/numeric-identity rails still apply,
+                  so borderline pairs land in the review queue rather than
+                  auto-attaching.
+                </span>
+              </div>
               <div className="form-group">
                 <label htmlFor={`${id}-threshold`}>Attach threshold</label>
                 <input
                   id={`${id}-threshold`}
                   type="number"
-                  min={EVENT_ATTACH_FLOOR}
+                  min={0}
                   max={1}
                   step={0.01}
                   value={thresholdText}
@@ -896,9 +935,14 @@ export function EventSyncRuleEditor({
                   disabled={isLoading}
                 />
                 <span className="form-hint">
-                  Auto-attach score floor on the parsed-title score. Hard
-                  minimum {EVENT_ATTACH_FLOOR.toFixed(2)} — it can be raised,
-                  never lowered (precision over recall).
+                  Auto-attach score floor on the parsed-title score. Default{' '}
+                  {EVENT_ATTACH_FLOOR.toFixed(2)} (precision over recall). You
+                  can raise it for stricter matching, or lower it when a
+                  provider&apos;s titles carry slot/venue noise that caps the
+                  score — but a lower floor auto-attaches weaker matches, so
+                  review the preview first. Team-conflict and
+                  different-event-number pairs are still hard-rejected at any
+                  threshold.
                 </span>
               </div>
 
