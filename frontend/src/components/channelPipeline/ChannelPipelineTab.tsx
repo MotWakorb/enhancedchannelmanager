@@ -266,6 +266,14 @@ export function ChannelPipelineTab() {
     eventSyncCloseRef.current = fn;
   }, []);
 
+  // m1s38.3: the standard rule builder likewise registers its guarded close so
+  // Escape/× route through its dirty-state discard confirm (previously only the
+  // Event Sync editor did — the standard builder's ×/Escape discarded silently).
+  const standardCloseRef = useRef<(() => void) | null>(null);
+  const registerStandardClose = useCallback((fn: (() => void) | null) => {
+    standardCloseRef.current = fn;
+  }, []);
+
   const handleDeleteClick = useCallback((rule: ChannelPipelineRule) => {
     setShowDeleteConfirm(rule);
   }, []);
@@ -1117,21 +1125,26 @@ export function ChannelPipelineTab() {
         const title = showKindChooser
           ? 'Create Rule'
           : `${editingRule ? 'Edit' : 'Create'}${isEventSync ? ' Event Sync' : ''} Rule`;
-        // S4a: for the Event Sync editor, dismissors route through its
-        // registered dirty guard; everything else closes directly.
+        // For either editor, dismissors (overlay Escape / header ×) route
+        // through that editor's registered dirty guard; the kind chooser (no
+        // edits to lose) closes directly.
         const requestClose = () => {
-          if (isEventSync && !showKindChooser && eventSyncCloseRef.current) {
-            eventSyncCloseRef.current();
+          if (showKindChooser) {
+            handleCancelRuleBuilder();
+            return;
+          }
+          const registeredClose = isEventSync ? eventSyncCloseRef.current : standardCloseRef.current;
+          if (registeredClose) {
+            registeredClose();
           } else {
             handleCancelRuleBuilder();
           }
         };
         return (
           <ModalOverlay onClose={requestClose} role="dialog" aria-modal="true" aria-labelledby="rule-builder-title">
-            {/* Event Sync carries the app's densest form — give it modal-xxl
-                (1000px). The kind chooser and the standard rule builder keep
-                modal-lg. */}
-            <div className={`modal-container ${isEventSync && !showKindChooser ? 'modal-xxl' : 'modal-lg'} rule-builder-modal`}>
+            {/* Both rule editors carry dense two-pane forms — give either one
+                modal-xxl (1000px). Only the kind chooser keeps modal-lg. */}
+            <div className={`modal-container ${showKindChooser ? 'modal-lg' : 'modal-xxl'} rule-builder-modal`}>
               <div className="modal-header">
                 <h2 id="rule-builder-title">{title}</h2>
                 <button
@@ -1183,6 +1196,7 @@ export function ChannelPipelineTab() {
                   rule={editingRule || undefined}
                   onSave={handleSaveRule}
                   onCancel={handleCancelRuleBuilder}
+                  onRegisterClose={registerStandardClose}
                 />
               )}
             </div>
