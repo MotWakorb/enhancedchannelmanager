@@ -719,6 +719,154 @@ describe('ChannelPipelineTab', () => {
       expect(screen.queryByText(/normalization applied no changes/i)).toBeNull();
     });
 
+    // enhancedchannelmanager-7wuhd: event_sync runs need an event_sync-aware
+    // summary — the standard evaluated/matched/created counters are
+    // structurally 0 for them and read as "nothing happened".
+    const eventSyncSummary = (over = {}) => [{
+      rule_id: 7,
+      rule_name: 'NFL Sunday',
+      secondary_streams: 12,
+      attached: 3,
+      already_attached: 6,
+      ambiguous_skipped: 1,
+      unmatched: 2,
+      parse_failed: 0,
+      attach_errors: 0,
+      ...over,
+    }];
+
+    it('renders an event_sync-aware summary and drops Channels Created', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          is_event_sync: true,
+          streams_evaluated: 0,
+          streams_matched: 0,
+          channels_created: 0,
+          event_sync_summary: eventSyncSummary(),
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/secondary streams evaluated/i)).toBeInTheDocument();
+      });
+      // Scope to the details dialog — the compact list chip also carries
+      // event_sync words (e.g. "already attached").
+      const dialog = within(screen.getByRole('dialog'));
+      expect(dialog.getByText(/^attached:?$/i)).toBeInTheDocument();
+      expect(dialog.getByText(/^already attached:?$/i)).toBeInTheDocument();
+      expect(dialog.getByText(/ambiguous/i)).toBeInTheDocument();
+      expect(dialog.getByText(/^unmatched:?$/i)).toBeInTheDocument();
+      // Standard counters are gone for a pure event_sync run.
+      expect(dialog.queryByText(/channels created/i)).toBeNull();
+      expect(dialog.queryByText(/streams matched/i)).toBeNull();
+      // Exact match: the event_sync block's "Secondary Streams Evaluated:"
+      // contains this substring, so only the standard label must be absent.
+      expect(dialog.queryByText('Streams Evaluated:')).toBeNull();
+    });
+
+    it('shows the fully-in-sync success banner when everything is already attached', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          is_event_sync: true,
+          streams_evaluated: 0,
+          streams_matched: 0,
+          channels_created: 0,
+          event_sync_summary: eventSyncSummary({
+            attached: 0,
+            already_attached: 9,
+            ambiguous_skipped: 0,
+            unmatched: 0,
+            parse_failed: 0,
+          }),
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('event-sync-fully-in-sync')).toBeInTheDocument();
+      });
+      expect(screen.getByText(/fully in sync/i)).toBeInTheDocument();
+      expect(screen.getByText(/9 streams already attached/i)).toBeInTheDocument();
+    });
+
+    it('does not show the fully-in-sync banner when there is new work', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          is_event_sync: true,
+          event_sync_summary: eventSyncSummary({ attached: 2, already_attached: 3, ambiguous_skipped: 0, unmatched: 0, parse_failed: 0 }),
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/secondary streams evaluated/i)).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('event-sync-fully-in-sync')).toBeNull();
+    });
+
+    it('uses "Would Attach" wording for a dry-run event_sync execution', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          mode: 'dry_run',
+          is_event_sync: true,
+          event_sync_summary: eventSyncSummary(),
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/secondary streams evaluated/i)).toBeInTheDocument();
+      });
+      const dialog = within(screen.getByRole('dialog'));
+      expect(dialog.getByText(/^would attach:?$/i)).toBeInTheDocument();
+      expect(dialog.queryByText(/^attached:?$/i)).toBeNull();
+    });
+
+    it('keeps the standard summary for a standard (non-event_sync) execution', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ streams_matched: 25, channels_created: 10 }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/channels created/i)).toBeInTheDocument();
+      });
+      // No event_sync block for a standard run.
+      expect(screen.queryByText(/secondary streams evaluated/i)).toBeNull();
+      expect(screen.queryByTestId('event-sync-fully-in-sync')).toBeNull();
+    });
+
     it('allows rolling back an execution', async () => {
       const user = userEvent.setup();
       mockDataStore.channelPipelineExecutions.push(
