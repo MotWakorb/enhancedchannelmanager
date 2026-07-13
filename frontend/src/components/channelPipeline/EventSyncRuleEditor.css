@@ -156,6 +156,12 @@
   font-weight: 600;
 }
 
+/* bead y8yby: emphasise the "Test is no longer zero-write" consequence of the
+   refresh-providers-before-run toggle. */
+.event-sync-warning-hint {
+  color: var(--warning, #f59e0b);
+}
+
 .event-sync-review-jump {
   display: inline-flex;
   align-items: center;

@@ -330,6 +330,12 @@ export function EventSyncRuleEditor({
   // Phase 2 opt-in (ti939.3.1): unattended auto-run on the refresh
   // watermark. Default OFF — the backend treats an absent key as false.
   const [autoRun, setAutoRun] = useState(config?.auto_run ?? false);
+  // bead y8yby: refresh the rule's M3U providers before a MANUAL run (live Run
+  // AND dry-run Test). Default OFF — the backend treats an absent key as false.
+  // With it on, Test is no longer zero-write (it triggers a real refresh).
+  const [refreshProvidersBeforeRun, setRefreshProvidersBeforeRun] = useState(
+    config?.refresh_providers_before_run ?? false
+  );
   // bead 6xxmp: also match the master group's own streams (a second provider
   // sharing the master group's name) to the master channels.
   const [includeMasterGroupStreams, setIncludeMasterGroupStreams] = useState(
@@ -599,6 +605,16 @@ export function EventSyncRuleEditor({
     if (autoRun || config?.auto_run != null) {
       built.auto_run = autoRun;
     }
+    // bead y8yby: emit refresh_providers_before_run when checked, and preserve
+    // an explicit stored value (the backend validator fills the key on save).
+    // A legacy config without the key stays without it while the box is
+    // unchecked — absent means false on the backend.
+    if (
+      refreshProvidersBeforeRun ||
+      config?.refresh_providers_before_run != null
+    ) {
+      built.refresh_providers_before_run = refreshProvidersBeforeRun;
+    }
     // ti939.3.3: emit the dummy EPG profile reference when selected; a
     // cleared selection omits the key (absent means OFF on the backend —
     // the key is never emitted as null).
@@ -838,6 +854,7 @@ export function EventSyncRuleEditor({
       thresholdText !== (config?.attach_threshold ?? EVENT_ATTACH_FLOOR).toFixed(2) ||
       enforceTimeWindow !== (config?.enforce_time_window ?? true) ||
       autoRun !== (config?.auto_run ?? false) ||
+      refreshProvidersBeforeRun !== (config?.refresh_providers_before_run ?? false) ||
       includeMasterGroupStreams !== (config?.include_master_group_streams ?? false) ||
       assumeCurrentDate !== (config?.assume_current_date ?? false) ||
       parseMasterFromStream !== (config?.parse_master_from_stream ?? false) ||
@@ -846,8 +863,8 @@ export function EventSyncRuleEditor({
   }, [
     name, description, enabled, masterScope, secondaryScopes, selectedPatternIds,
     customShared, groupOverrides, timeWindowText, thresholdText, enforceTimeWindow,
-    autoRun, includeMasterGroupStreams, assumeCurrentDate, parseMasterFromStream,
-    dummyEpgProfileId, config, rule, initial, customSharedMeta,
+    autoRun, refreshProvidersBeforeRun, includeMasterGroupStreams, assumeCurrentDate,
+    parseMasterFromStream, dummyEpgProfileId, config, rule, initial, customSharedMeta,
   ]);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -939,6 +956,10 @@ export function EventSyncRuleEditor({
         ) : (
           <>Runs only when you run it manually.</>
         )}
+        {refreshProvidersBeforeRun && (
+          <> <strong>Refreshes this rule&apos;s M3U providers before each
+          manual Run/Test</strong> (so Test is no longer zero-write).</>
+        )}
         {includeMasterGroupStreams && secCount > 0 && (
           <> Also matches the master group&apos;s own streams.</>
         )}
@@ -956,6 +977,7 @@ export function EventSyncRuleEditor({
     currentTimeWindow,
     currentThreshold,
     autoRun,
+    refreshProvidersBeforeRun,
     assumeCurrentDate,
     dummyEpgProfileId,
     groupName,
@@ -971,7 +993,8 @@ export function EventSyncRuleEditor({
   const overridesChanged = scopedGroups.filter(
     g => (groupOverrides[g.id]?.title_pattern ?? '').trim().length > 0
   ).length;
-  const automationChanged = autoRun ? 1 : 0;
+  const automationChanged =
+    (autoRun ? 1 : 0) + (refreshProvidersBeforeRun ? 1 : 0);
   const scopeExtChanged =
     (includeMasterGroupStreams ? 1 : 0) + (parseMasterFromStream ? 1 : 0);
   const guideChanged = dummyEpgProfileId != null ? 1 : 0;
@@ -1096,6 +1119,8 @@ export function EventSyncRuleEditor({
       const chips: ReactNode[] = [];
       if (autoRun)
         chips.push(<span key="ar" className="badge badge-sm badge-warning">Auto-run</span>);
+      if (refreshProvidersBeforeRun)
+        chips.push(<span key="rp" className="badge badge-sm badge-warning">Refresh before run</span>);
       if (!enforceTimeWindow)
         chips.push(<span key="to" className="badge badge-sm badge-warning">Title-only</span>);
       if (assumeCurrentDate)
@@ -1694,6 +1719,62 @@ export function EventSyncRuleEditor({
                       </div>
                     </details>
                   </div>
+
+                  {/* bead y8yby: pre-refresh the rule's M3U providers before a
+                      manual Run/Test. */}
+                  <div className="form-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={refreshProvidersBeforeRun}
+                        onChange={e => setRefreshProvidersBeforeRun(e.target.checked)}
+                        disabled={isLoading}
+                        data-testid="event-sync-refresh-providers-before-run"
+                      />
+                      <span>Refresh this rule&apos;s M3U providers before running</span>
+                    </label>
+                    <span className="form-hint">
+                      Before each <strong>manual</strong> Run or Test, refresh
+                      the M3U accounts backing this rule&apos;s master +
+                      secondary groups, then run — so the match works against
+                      fresh provider data.
+                    </span>
+                    {refreshProvidersBeforeRun && (
+                      <span
+                        className="form-hint event-sync-warning-hint"
+                        data-testid="event-sync-refresh-test-writes-note"
+                      >
+                        Heads up: with this on, <strong>Test is no longer a
+                        zero-write dry run</strong> — it triggers a real
+                        Dispatcharr provider refresh (a write to the stream
+                        list) before previewing.
+                      </span>
+                    )}
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Off by default. Turn this on to close the
+                          refresh-ordering staleness window: without it, a run
+                          matches against whatever streams Dispatcharr last
+                          fetched, so a secondary provider refreshed after the
+                          run (or a master refreshed after a secondary) leaves
+                          events attaching only on a later run. With it on, ECM
+                          refreshes exactly this rule&apos;s providers first,
+                          then runs. It applies to the live Run <em>and</em> the
+                          dry-run Test — so <strong>Test is no longer
+                          zero-write</strong> when this is on. It does{' '}
+                          <strong>not</strong> apply to unattended auto-runs
+                          (those already follow a refresh). The refresh is
+                          best-effort: a single failed provider warns but the
+                          run still proceeds against current data. A run landing
+                          right after the refresh can still precede Dispatcharr
+                          creating a brand-new event&apos;s master channel — that
+                          stream is picked up on a later run (convergence).
+                        </span>
+                      </div>
+                    </details>
+                  </div>
                 </div>
               </details>
 
@@ -1919,6 +2000,7 @@ export function EventSyncRuleEditor({
                   </dt>
                   <dd>
                     {autoRun ? 'Auto-run after each M3U refresh' : 'Manual runs only'}
+                    {refreshProvidersBeforeRun ? ' · refresh providers before run (Test writes)' : ''}
                     {parseMasterFromStream ? ' · master time from stream' : ''}
                     {dummyEpgProfileId != null ? ' · dummy EPG guide data' : ''}
                   </dd>

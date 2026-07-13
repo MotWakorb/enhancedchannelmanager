@@ -357,6 +357,46 @@ class TestAutoRunFlag:
         assert stored["auto_run"] is False
 
 
+class TestRefreshProvidersBeforeRunFlag:
+    """refresh_providers_before_run opt-in flag (bead y8yby).
+
+    Pre-refreshes the rule's M3U providers before a MANUAL run (live Run AND
+    dry-run Test). Same default-off / absent-reads-false / backward-compat
+    convention as auto_run: an absent key must always read as false and
+    pre-existing stored configs must validate unchanged.
+    """
+
+    def test_default_filled_false(self):
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert config["refresh_providers_before_run"] is False
+
+    @pytest.mark.parametrize("good", [True, False])
+    def test_bool_accepted_and_round_trips(self, good):
+        config = _valid_config(refresh_providers_before_run=good)
+        assert validate_event_sync_config(config) == []
+        assert config["refresh_providers_before_run"] is good
+
+    @pytest.mark.parametrize("bad", ["true", 1, 0])
+    def test_non_bool_rejected(self, bad):
+        config = _valid_config()
+        config["refresh_providers_before_run"] = bad
+        errors = validate_event_sync_config(config)
+        assert any("refresh_providers_before_run" in e for e in errors)
+
+    def test_existing_stored_config_without_key_still_validates(self):
+        """Backward compat: a stored config that predates the flag validates
+        clean and reads as false — manual-run behavior unchanged."""
+        stored = _valid_config(
+            time_window_minutes=30,
+            attach_threshold=0.85,
+            max_attach_per_run=50,
+            enabled=True,
+        )
+        assert validate_event_sync_config(stored) == []
+        assert stored["refresh_providers_before_run"] is False
+
+
 class TestIncludeMasterGroupStreamsFlag:
     """include_master_group_streams flag (bead 6xxmp — master self-attach).
 
