@@ -2550,6 +2550,293 @@ rules:
         assert response.status_code == 400
 
 
+class TestAnalyzeRuleBody:
+    """POST /api/channel-pipeline/rules/analyze-body — analyze an UNSAVED
+    rule body (enhancedchannelmanager-m1s38.2).
+
+    These tests exercise routing, auth, deserialization/validation, the
+    input cap, and the diagnostic wiring — NOT the analyzer's own 100+
+    finding cases (those live in tests/unit/test_channel_pipeline_rule_analyzer.py).
+    They assert the endpoint forwards the right data to analyze_rules and
+    returns the shared response shape.
+    """
+
+    ANALYZE_BODY_PATH = "/api/channel-pipeline/rules/analyze-body"
+
+    @pytest.mark.asyncio
+    async def test_match_all_regex_flags_trivially_matches_all(self, async_client):
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={
+                "name": "Draft",
+                "conditions": [
+                    {"type": "stream_group_matches", "value": "UK|", "connector": "and"},
+                ],
+                "actions": [],
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        # Shared analyzer response shape.
+        assert set(body.keys()) == {"rules", "summary"}
+        assert set(body["summary"].keys()) == {"error", "warning", "info"}
+        codes = {f["code"] for r in body["rules"] for f in r["findings"]}
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+
+    @pytest.mark.asyncio
+    async def test_merge_scope_not_target_group_fires(self, async_client):
+        """create_channel + if_exists=merge with match_scope_target_group off
+        → MERGE_SCOPE_NOT_TARGET_GROUP (info)."""
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={
+                "conditions": [],
+                "actions": [{"type": "create_channel", "if_exists": "merge"}],
+                "match_scope_target_group": False,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        findings = [f for r in body["rules"] for f in r["findings"]]
+        codes = {f["code"] for f in findings}
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" in codes
+        scope = next(f for f in findings if f["code"] == "MERGE_SCOPE_NOT_TARGET_GROUP")
+        assert scope["severity"] == "info"
+
+    @pytest.mark.asyncio
+    async def test_clean_rule_produces_no_findings(self, async_client):
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={
+                "name": "Movie Networks - UK add",
+                "conditions": [
+                    {"type": "normalized_name_in_group", "value": 1473, "connector": "and"},
+                    {"type": "stream_group_matches", "value": r"^UK\|", "connector": "and"},
+                ],
+                "actions": [{"type": "merge_streams", "target": "auto"}],
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["summary"] == {"error": 0, "warning": 0, "info": 0}
+        assert body["rules"][0]["findings"] == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_findings_in_one_body(self, async_client):
+        """The 2026-04-28 Sports rule shape surfaces several codes at once."""
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={
+                "conditions": [
+                    {"type": "normalized_name_in_group", "value": 1464, "connector": "and"},
+                    {"type": "stream_group_matches", "value": "UK|", "connector": "and"},
+                    {"type": "stream_group_matches", "value": "US|", "connector": "or"},
+                    {"type": "stream_group_contains", "value": "^4K", "connector": "or"},
+                ],
+                "actions": [{"type": "merge_streams", "target": "auto"}],
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        codes = {f["code"] for r in body["rules"] for f in r["findings"]}
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+        assert "OPERATOR_VALUE_LOOKS_LIKE_REGEX" in codes
+        assert len(codes) >= 2
+
+    @pytest.mark.asyncio
+    async def test_andor_drops_guard_fires(self, async_client):
+        """Guard condition in the first AND-group but not the OR-arms →
+        ANDOR_DROPS_GUARD."""
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={
+                "conditions": [
+                    {"type": "normalized_name_in_group", "value": 1464, "connector": "and"},
+                    {"type": "stream_group_is", "value": "Sports", "connector": "and"},
+                    {"type": "stream_group_is", "value": "News", "connector": "or"},
+                ],
+                "actions": [{"type": "merge_streams", "target": "auto"}],
+            },
+        )
+        assert response.status_code == 200
+        codes = {
+            f["code"]
+            for r in response.json()["rules"]
+            for f in r["findings"]
+        }
+        assert "ANDOR_DROPS_GUARD" in codes
+
+    @pytest.mark.asyncio
+    async def test_fifty_wellformed_conditions_are_clean(self, async_client):
+        """A large but benign body analyzes to empty findings (guardrail f)."""
+        conditions = [
+            {"type": "stream_name_contains", "value": f"Channel{i}", "connector": "and"}
+            for i in range(50)
+        ]
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={"conditions": conditions, "actions": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["rules"][0]["findings"] == []
+
+    @pytest.mark.asyncio
+    async def test_conditions_over_cap_rejected(self, async_client):
+        """>200 conditions is rejected by the Pydantic cap, not analyzed."""
+        conditions = [
+            {"type": "stream_name_contains", "value": "x", "connector": "and"}
+            for _ in range(201)
+        ]
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={"conditions": conditions, "actions": []},
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_malformed_conditions_type_is_validation_error_not_500(
+        self, async_client,
+    ):
+        """conditions must be a list — a string body is a 4xx validation
+        error, never a 500."""
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={"conditions": "not a list", "actions": []},
+        )
+        assert response.status_code in (400, 422)
+
+    @pytest.mark.asyncio
+    async def test_null_conditions_is_validation_error(self, async_client):
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={"conditions": None, "actions": []},
+        )
+        assert response.status_code in (400, 422)
+
+    @pytest.mark.asyncio
+    async def test_empty_body_returns_clean_summary(self, async_client):
+        """No conditions/actions at all (fresh draft) → empty findings, 200."""
+        response = await async_client.post(self.ANALYZE_BODY_PATH, json={})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["summary"] == {"error": 0, "warning": 0, "info": 0}
+
+    @pytest.mark.asyncio
+    async def test_disabled_normalization_group_advisory_fires(
+        self, async_client, test_session,
+    ):
+        """A body referencing a DISABLED normalization group surfaces the
+        disabled-group advisory — proves normalization_groups is wired in
+        from the DB."""
+        group = _create_normalization_group(
+            test_session, name="Disabled Group", enabled=False,
+        )
+        response = await async_client.post(
+            self.ANALYZE_BODY_PATH,
+            json={
+                "conditions": [],
+                "actions": [{"type": "merge_streams", "target": "auto"}],
+                "normalization_group_ids": [group.id],
+            },
+        )
+        assert response.status_code == 200
+        codes = {
+            f["code"]
+            for r in response.json()["rules"]
+            for f in r["findings"]
+        }
+        assert "RULE_REFERENCES_DISABLED_NORMALIZATION_GROUP" in codes
+
+    @pytest.mark.asyncio
+    async def test_merge_empty_target_group_advisory_fires(self, async_client):
+        """merge_streams + explicit target_group_id pointing at an empty
+        group → MERGE_STREAMS_NO_TARGET_CHANNELS. Proves the live channel-
+        group diagnostic is built and forwarded to the analyzer."""
+        mock_client = MagicMock()
+        mock_client.get_channel_groups = AsyncMock(
+            return_value=[{"id": 99, "name": "Empty", "channel_count": 0}]
+        )
+        with patch(
+            "routers.channel_pipeline.get_client", return_value=mock_client
+        ):
+            response = await async_client.post(
+                self.ANALYZE_BODY_PATH,
+                json={
+                    "conditions": [],
+                    "actions": [{"type": "merge_streams", "target": "auto"}],
+                    "target_group_id": 99,
+                },
+            )
+        assert response.status_code == 200
+        mock_client.get_channel_groups.assert_awaited_once()
+        codes = {
+            f["code"]
+            for r in response.json()["rules"]
+            for f in r["findings"]
+        }
+        assert "MERGE_STREAMS_NO_TARGET_CHANNELS" in codes
+
+    @pytest.mark.asyncio
+    async def test_no_dispatcharr_call_without_merge_target(self, async_client):
+        """No merge_streams action ⇒ the endpoint must NOT fetch channel
+        groups (keeps the debounced authoring call cheap)."""
+        mock_client = MagicMock()
+        mock_client.get_channel_groups = AsyncMock(return_value=[])
+        with patch(
+            "routers.channel_pipeline.get_client", return_value=mock_client
+        ):
+            response = await async_client.post(
+                self.ANALYZE_BODY_PATH,
+                json={
+                    "conditions": [
+                        {"type": "stream_name_contains", "value": "ESPN"},
+                    ],
+                    "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+                    "target_group_id": 99,
+                },
+            )
+        assert response.status_code == 200
+        mock_client.get_channel_groups.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_channel_groups_fetch_failure_degrades_not_500(
+        self, async_client,
+    ):
+        """If the Dispatcharr channel-groups fetch fails, the advisory
+        endpoint degrades to fewer findings — it must not 500."""
+        mock_client = MagicMock()
+        mock_client.get_channel_groups = AsyncMock(
+            side_effect=RuntimeError("dispatcharr down")
+        )
+        with patch(
+            "routers.channel_pipeline.get_client", return_value=mock_client
+        ):
+            response = await async_client.post(
+                self.ANALYZE_BODY_PATH,
+                json={
+                    "conditions": [],
+                    "actions": [{"type": "merge_streams", "target": "auto"}],
+                    "target_group_id": 99,
+                },
+            )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_requires_auth_when_enabled(self, async_client):
+        """The route inherits the global /api/* auth gate — an unauthenticated
+        request with auth enabled is rejected (401). Proves it is NOT in
+        AUTH_EXEMPT_PATHS (guardrail c/f)."""
+        with patch("main.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await async_client.post(
+                self.ANALYZE_BODY_PATH,
+                json={"conditions": [], "actions": []},
+            )
+        assert response.status_code == 401
+
+
 # ---------------------------------------------------------------------------
 # Admin gating (bd-757hc) — destructive / mutating endpoints carry
 # RequireAdminIfEnabled, matching backup.py's create_backup / restore_backup.
