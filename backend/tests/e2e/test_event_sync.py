@@ -199,8 +199,10 @@ class TestEventSyncHappyPath:
             g["id"] for g in event_sync_groups["secondaries"]
         ]
         # Save-time validation fills these defaults in place (ti939.1.3);
-        # the attach threshold is hard-floored at 0.80 (PO decision #2).
-        assert config["attach_threshold"] >= 0.80
+        # attach_threshold defaults to 0.80 when the rule doesn't set one
+        # (the default is operator-lowerable per rule, bead krkm4-sibling —
+        # this rule just doesn't override it).
+        assert config["attach_threshold"] == 0.80
         assert config["time_window_minutes"] > 0
         assert config["enabled"] is True
         # Shipped defaults in use: the stored contract is that the

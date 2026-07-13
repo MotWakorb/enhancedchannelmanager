@@ -56,6 +56,16 @@ export interface EventSyncConfig {
   group_patterns?: Record<string, EventSyncPattern[]>;
   /** 1..1440; backend default 30. */
   time_window_minutes?: number;
+  /**
+   * Enforce the time-window candidacy gate (bead krkm4). Backend default
+   * true — parsed start times must be within ±time_window_minutes to become
+   * candidate pairs. Set false to disable the gate entirely: streams match
+   * on title/team score alone, ignoring time. Safe only for a
+   * single-provider, same-day master group — recurring/serial titles risk
+   * cross-day matches. The 0.90 no-teams floor and team/numeric rails still
+   * route borderline pairs to the review queue.
+   */
+  enforce_time_window?: boolean;
   /** Hard-clamped >= 0.80 by the backend schema; backend default 0.80. */
   attach_threshold?: number;
   /**

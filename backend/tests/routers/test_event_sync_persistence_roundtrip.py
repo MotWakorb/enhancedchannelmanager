@@ -34,6 +34,9 @@ def _event_sync_config(**overrides) -> dict:
         "master_group_id": 10,
         "secondary_group_ids": [20, 30],
         "time_window_minutes": 30,
+        # bead krkm4: time-window gate enforcement flag, same default-fill —
+        # a round-tripped stored config carries the explicit true.
+        "enforce_time_window": True,
         "attach_threshold": 0.80,
         # ti939.2.1: the write-time validator default-fills the per-run
         # attach cap, so a round-tripped stored config carries it explicitly.

@@ -103,7 +103,7 @@ const EXISTING_RULE: Partial<ChannelPipelineRule> = {
 
 describe('EventSyncRuleEditor', () => {
   describe('attach threshold clamp', () => {
-    it('clamps a value below the 0.80 floor back to 0.80 on blur', async () => {
+    it('preserves a value below the 0.80 default on blur (operator-authoritative)', async () => {
       const user = userEvent.setup();
       seedGroups();
       stubGroupSettings({ 1: true, 2: false });
@@ -115,7 +115,8 @@ describe('EventSyncRuleEditor', () => {
       await user.type(input, '0.5');
       await user.tab();
 
-      expect(input).toHaveValue(0.8);
+      // 0.80 is the default, not a hard floor — the operator's 0.50 stands.
+      expect(input).toHaveValue(0.5);
     });
 
     it('clamps a value above 1.0 down to 1.00 on blur', async () => {
@@ -133,7 +134,7 @@ describe('EventSyncRuleEditor', () => {
       expect(input).toHaveValue(1);
     });
 
-    it('clamps the threshold in the saved config even without blur', async () => {
+    it('clamps the threshold to the [0,1] bounds in the saved config', async () => {
       const user = userEvent.setup();
       seedGroups();
       stubGroupSettings({ 1: true, 2: false });
@@ -143,11 +144,49 @@ describe('EventSyncRuleEditor', () => {
       await user.click(screen.getByText('Advanced'));
       const input = screen.getByLabelText(/attach threshold/i);
       await user.clear(input);
-      await user.type(input, '0.2');
+      // A sub-default value is honored (only out-of-[0,1] values are clamped).
+      await user.type(input, '0.65');
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
       await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-      expect(onSave.mock.calls[0][0].event_sync_config.attach_threshold).toBe(0.8);
+      expect(onSave.mock.calls[0][0].event_sync_config.attach_threshold).toBe(0.65);
+    });
+  });
+
+  describe('ignore time window toggle (krkm4)', () => {
+    it('disables the time-window input and saves enforce_time_window=false when checked', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Advanced'));
+      const windowInput = screen.getByLabelText(/time window \(minutes\)/i);
+      expect(windowInput).not.toBeDisabled();
+
+      await user.click(screen.getByTestId('event-sync-ignore-time-window'));
+      expect(windowInput).toBeDisabled();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.enforce_time_window
+      ).toBe(false);
+    });
+
+    it('omits enforce_time_window when left enforced (absent means true)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config
+      ).not.toHaveProperty('enforce_time_window');
     });
   });
 
