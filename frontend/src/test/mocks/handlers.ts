@@ -188,6 +188,8 @@ export function createMockChannelPipelineExecution(overrides: Partial<MockChanne
     error: overrides.error ?? undefined,
     has_snapshot: overrides.has_snapshot ?? false,
     warnings: overrides.warnings ?? undefined,
+    is_event_sync: overrides.is_event_sync ?? false,
+    event_sync_summary: overrides.event_sync_summary ?? undefined,
   }
 }
 
@@ -360,6 +362,23 @@ interface MockChannelPipelineExecution {
     rule_id: number
     rule_name: string
     disabled_groups: { id: number; name: string | null; missing: boolean }[]
+  }[]
+  /** enhancedchannelmanager-7wuhd — pure-event_sync run flag. */
+  is_event_sync?: boolean
+  /** enhancedchannelmanager-7wuhd — structured per-rule event_sync counters. */
+  event_sync_summary?: {
+    rule_id: number | null
+    rule_name?: string | null
+    secondary_streams: number
+    attached: number
+    already_attached: number
+    ambiguous_skipped: number
+    unmatched: number
+    parse_failed: number
+    attach_errors: number
+    review_enqueued?: number
+    capped?: boolean
+    cap_overage?: number
   }[]
 }
 

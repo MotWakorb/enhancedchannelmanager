@@ -2207,6 +2207,28 @@ class ChannelPipelineExecution(Base):
     # completes; these are advisory config problems the operator should fix.
     warnings = Column(Text, nullable=True)
 
+    # Structured Event Sync per-rule run summaries (enhancedchannelmanager-7wuhd).
+    # JSON array of the per-rule summary dicts the event_sync attach phase
+    # computes (secondary_streams, attached, already_attached, ambiguous_skipped,
+    # unmatched, parse_failed, attach_errors, capped, review_enqueued, ...) —
+    # persisted so the executions UI can render an event_sync-aware summary
+    # instead of the standard evaluated/matched/created counters, which are
+    # structurally 0 for event_sync runs. Nullable; get_event_sync_summary()
+    # returns [] for NULL.
+    event_sync_summary = Column(Text, nullable=True)
+
+    # True only for a PURE event_sync run — event_sync rule(s) ran and NO
+    # standard rules were in scope. Lets the executions UI swap the standard
+    # counter block for the event_sync block reliably even after the source
+    # rule is deleted (rule_id is ON DELETE SET NULL, so the rule kind can't be
+    # re-derived from the rule). A MIXED run (both kinds in one execution) is
+    # False so the UI stacks both blocks. server_default="0" so the NOT NULL
+    # add succeeds on tables with existing rows; the drift test filters the
+    # modify_default noise.
+    is_event_sync = Column(
+        Boolean, nullable=False, server_default=sa_text("0"), default=False
+    )
+
     # Rollback tracking
     rolled_back_at = Column(DateTime, nullable=True)
     rolled_back_by = Column(String(100), nullable=True)  # username or "system"
@@ -2310,6 +2332,19 @@ class ChannelPipelineExecution(Base):
         """Set warnings from list."""
         self.warnings = json.dumps(warnings) if warnings else None
 
+    def get_event_sync_summary(self) -> list:
+        """Parse event_sync_summary JSON into list (empty list when none)."""
+        if not self.event_sync_summary:
+            return []
+        try:
+            return json.loads(self.event_sync_summary)
+        except (ValueError, TypeError):
+            return []
+
+    def set_event_sync_summary(self, summaries: list) -> None:
+        """Set event_sync_summary from list (JSON), NULL when empty."""
+        self.event_sync_summary = json.dumps(summaries) if summaries else None
+
     def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
         """Convert to dictionary for API responses."""
         result = {
@@ -2338,6 +2373,15 @@ class ChannelPipelineExecution(Base):
             # Advisory, non-fatal run warnings (e.g. disabled normalization
             # groups). Always present so the UI can render unconditionally.
             "warnings": self.get_warnings(),
+            # Event Sync run-kind flag + structured per-rule summaries
+            # (enhancedchannelmanager-7wuhd). Always present so the executions
+            # UI can branch its layout unconditionally: is_event_sync True ⇒
+            # pure event_sync run (swap the standard counter block), and
+            # event_sync_summary is [] for standard runs.
+            # bool() coerces the pre-flush None (Python default not yet applied)
+            # and any legacy NULL row to a real boolean.
+            "is_event_sync": bool(self.is_event_sync),
+            "event_sync_summary": self.get_event_sync_summary(),
         }
         if include_entities:
             result["created_entities"] = self.get_created_entities()

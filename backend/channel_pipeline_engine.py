@@ -510,6 +510,24 @@ class ChannelPipelineEngine:
         )
         execution.set_warnings(run_warnings)
 
+        # enhancedchannelmanager-7wuhd: persist the structured event_sync
+        # per-rule summaries + the pure-event_sync kind flag so the executions
+        # UI renders an event_sync-aware summary (secondary streams evaluated /
+        # attached / already-attached / ambiguous / unmatched / parse failures)
+        # instead of the standard evaluated/matched/created counters, which are
+        # structurally 0 for event_sync runs. The heavy ``review_candidates``
+        # payloads are stripped — they are already enqueued to the review table
+        # on live runs and the UI needs only the counters. A run is PURE
+        # event_sync when event_sync rule(s) ran and NO standard rules were in
+        # scope; a mixed run keeps ``is_event_sync`` False so the UI stacks both
+        # summary blocks.
+        event_sync_summaries = [
+            {k: v for k, v in summary.items() if k != "review_candidates"}
+            for summary in results.get("event_sync", [])
+        ]
+        execution.set_event_sync_summary(event_sync_summaries)
+        execution.is_event_sync = bool(event_sync_to_run) and not bool(rules)
+
         if dry_run:
             execution.set_dry_run_results(results["dry_run_results"])
 
