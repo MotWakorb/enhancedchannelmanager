@@ -29,6 +29,22 @@ import './EventSyncPreviewPanel.css';
 /** Cards rendered before the "Show more" affordance kicks in. */
 const CARDS_PER_PAGE = 50;
 
+/**
+ * S5 (bead sf8dj): the caution behind each provenance chip — why this
+ * would-attach row deserves a second look. Keyed on the machine `key`;
+ * an unknown key falls back to the chip label alone.
+ */
+const MATCHED_VIA_TITLES: Record<string, string> = {
+  assume_current_date:
+    'Matched only because the missing date was assumed to be today — confirm the event really is today.',
+  time_window_ignored:
+    'Matched outside the time window because the window gate is off — confirm both start times refer to the same event.',
+  lowered_threshold:
+    'Matched on a score below the default floor because the attach threshold was lowered — double-check this is the right master.',
+  master_from_stream:
+    'The master identity was read from its attached stream name (parse-from-stream), not the channel name.',
+};
+
 export interface EventSyncPreviewPanelProps {
   preview: EventSyncPreviewResponse | null;
   loading: boolean;
@@ -36,6 +52,19 @@ export interface EventSyncPreviewPanelProps {
   onRunPreview: () => void;
   /** Non-null blocks the preview button and explains why. */
   disabledReason?: string | null;
+  /**
+   * Compact mode (bead m1s38.1): render only the run affordance, pre-flight
+   * warnings, and the one-line summary — the detailed match cards, unmatched
+   * table, and parse-failure lists are omitted so the panel fits the rail on
+   * the configuration steps. The Review step passes false to show everything.
+   */
+  compact?: boolean;
+  /**
+   * Stale marking (bead m1s38.1): the results reflect a config that has since
+   * changed. Dim them and show a "Settings changed — re-run" notice; the
+   * results are NOT cleared (the operator can still read the last run).
+   */
+  stale?: boolean;
 }
 
 function formatStart(iso: string | null): string {
@@ -104,6 +133,17 @@ function MatchCard({ stream }: { stream: EventSyncStreamRow }) {
           <span key={flag} className="event-sync-flag">
             <span className="material-icons" aria-hidden="true">flag</span>
             {flag}
+          </span>
+        ))}
+        {/* S5 (bead sf8dj): provenance chips — this row would attach only
+            because an optional relaxation was enabled. */}
+        {(stream.matched_via ?? []).map(via => (
+          <span
+            key={via.key}
+            className="badge badge-sm badge-warning event-sync-matched-via"
+            title={MATCHED_VIA_TITLES[via.key] ?? via.label}
+          >
+            {via.label}
           </span>
         ))}
       </div>
@@ -209,6 +249,8 @@ export function EventSyncPreviewPanel({
   error,
   onRunPreview,
   disabledReason = null,
+  compact = false,
+  stale = false,
 }: EventSyncPreviewPanelProps) {
   const [visibleCards, setVisibleCards] = useState(CARDS_PER_PAGE);
 
@@ -217,7 +259,7 @@ export function EventSyncPreviewPanel({
       <div className="event-sync-preview-actions">
         <button
           type="button"
-          className="btn-primary"
+          className="btn-primary event-sync-preview-run"
           onClick={() => {
             setVisibleCards(CARDS_PER_PAGE);
             onRunPreview();
@@ -230,6 +272,16 @@ export function EventSyncPreviewPanel({
           </span>
           {loading ? 'Previewing...' : 'Preview matches'}
         </button>
+        {stale && preview && (
+          <span
+            className="event-sync-preview-stale"
+            role="status"
+            data-testid="event-sync-preview-stale"
+          >
+            <span className="material-icons" aria-hidden="true">warning</span>
+            Settings changed — re-run
+          </span>
+        )}
         <span className="form-hint">
           Read-only dry run against live Dispatcharr data — nothing is written
           and no group settings are touched. A manual pipeline Run attaches
@@ -250,7 +302,11 @@ export function EventSyncPreviewPanel({
       )}
 
       {preview && (
-        <div className="event-sync-preview-results">
+        <div
+          className={`event-sync-preview-results${
+            stale ? ' event-sync-preview-results--stale' : ''
+          }`}
+        >
           {/* Pre-flight failures never block the preview — surface them loudly */}
           {!preview.preflight.ok && (
             <div className="event-sync-preflight" data-testid="event-sync-preflight">
@@ -284,6 +340,9 @@ export function EventSyncPreviewPanel({
             )}
           </p>
 
+          {/* Compact mode (rail on steps 1-3) stops at the summary; the Review
+              step renders the full detail below. */}
+          {!compact && (<>
           {preview.streams.length === 0 ? (
             <p className="form-hint">No secondary streams were found in the configured groups.</p>
           ) : (
@@ -393,6 +452,7 @@ export function EventSyncPreviewPanel({
               </ul>
             </details>
           )}
+          </>)}
         </div>
       )}
     </div>

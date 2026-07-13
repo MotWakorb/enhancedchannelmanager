@@ -378,6 +378,14 @@
   max-width: 800px;
 }
 
+/* Event Sync wizard (the wide modal-xxl branch): pin a constant height so the
+   modal does not resize/re-center when a shorter step (Behavior, Review) is
+   shown. Without this the container sizes to the active step's content and
+   jumps between steps. Bounded by the modal-container max-height (90vh). */
+.rule-builder-modal.modal-xxl {
+  height: 90vh;
+}
+
 .rule-builder-modal .rule-builder {
   flex: 1;
   overflow: hidden;

@@ -2872,6 +2872,13 @@ async def preview_event_sync(
             # a queue-driven attach prediction is visibly not a score-driven
             # one. None for every other disposition.
             "attach_source": r.attach_source,
+            # S5 (bead sf8dj): diagnostic provenance — the optional relaxations
+            # (assume_current_date / time_window_ignored / lowered_threshold /
+            # master_from_stream) that admitted this would-attach row. Empty
+            # for a plain in-window default-threshold match. Additive field.
+            "matched_via": [
+                {"key": key, "label": label} for key, label in r.matched_via
+            ],
             "would_attach_master": (
                 {
                     "channel_id": name_to_id.get(r.best.master_name),
