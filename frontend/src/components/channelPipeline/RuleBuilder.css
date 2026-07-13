@@ -477,3 +477,125 @@
 .norm-hint-icon {
   font-size: 14px;
 }
+
+/* ============================================================================
+   Grouped two-pane redesign (bead m1s38.3) — consumes the shared .modal-*
+   primitives from ModalBase.css (.modal-twopane / .modal-main / .modal-rail /
+   .modal-stepper / .modal-intent / .modal-why). Only the standard-builder-
+   specific pieces live here.
+   ============================================================================ */
+
+/* Compact always-visible header: name*, enabled, description. */
+.rule-builder-headerbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.rule-builder-headerbar-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.rule-builder-name-field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.rule-builder-headerbar .form-field {
+  margin-bottom: 0;
+}
+
+.rule-builder-enabled {
+  flex-shrink: 0;
+  padding-bottom: 10px;
+}
+
+/* Phase sections + scroll-spy titles. */
+.rule-phase {
+  scroll-margin-top: 8px;
+}
+
+.rule-phase + .rule-phase {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.rule-phase-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+  margin: 0 0 16px;
+}
+
+.rule-phase-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--button-primary-bg, #6366f1);
+  color: var(--button-primary-text, #fff);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Collapsible "Why / when to use" body text. */
+.rule-why-body {
+  margin: 0;
+  padding: 8px 10px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Rail: advisory save hint. */
+.rule-save-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rule-save-hint .material-icons {
+  font-size: 16px;
+  color: var(--info, #3b82f6);
+  flex-shrink: 0;
+}
+
+/* Rail: advisory analyzer chips. */
+.rule-analyzer-chips {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rule-analyzer-chip {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.35;
+  text-align: left;
+}
