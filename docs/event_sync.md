@@ -377,6 +377,7 @@ backward compatibility; the rule editor now reads and writes the nested shape.
 | `max_attach_per_run` | no (default 100) | Per-run attach cap (1–1000). On overage the run stops attaching, warns in the execution log, and records the overage count. Runs are idempotent — run again to continue. |
 | `enabled` | no (default true) | Feature toggle within the rule. |
 | `auto_run` | no (default **false**) | Phase 2 opt-in (bead ti939.3.1): when true, the rule also runs **unattended** after each M3U refresh (the watermark task). Absent means false — manual-run-only. See [Automatic runs after refresh](#automatic-runs-after-refresh-phase-2-opt-in). |
+| `refresh_providers_before_run` | no (default **false**) | bead y8yby: when true, a **manual** run of this rule (live **Run** AND dry-run **Test**) first refreshes the M3U provider accounts backing the rule's master + secondary groups, then runs the match/attach — closing the refresh-ordering staleness window. **Consequence:** with this on, **Test is no longer zero-write** (it triggers a real Dispatcharr provider refresh). Best-effort (a failed provider warns, the run proceeds). Never applies to unattended auto-runs (that path already follows a refresh). Absent means false. See [Refresh ordering, self-healing, and refresh-before-run](#refresh-ordering-self-healing-and-refresh-before-run). |
 | `dummy_epg_profile_id` | no (absent = off) | Phase 2 (bead ti939.3.3): id of a [dummy EPG profile](template_engine.md) auto-assigned to the master group's channels on every run. Must reference an **existing** profile (teaching error otherwise); the key is never default-filled — omit it to disable. See [Automatic guide data for master channels](#automatic-guide-data-for-master-channels-dummy-epg). |
 | `include_master_group_streams` | no (default **false**) | bead 6xxmp: when true, the **master group's own streams** (from *any* provider) are also matched to the master channels; streams already attached are skipped. A whole-group catch-all for a same-named cross-provider group — now usually superseded by adding the same group under the other provider as a `secondary` scope (which targets exactly one provider). Still useful when a same-named group spans **three or more** providers and you want them all. See [Two providers, one group name](#two-providers-one-group-name) below. |
 | `assume_current_date` | no (default **false**) | When true, a listing that carries a **time but no date** is placed on the **current date** so it becomes matchable — deliberately relaxing the never-guess-the-date rail. Accepts the cross-day match risk. See [Dateless live listings](#dateless-live-listings). |
@@ -916,6 +917,78 @@ engineered around: the stream counts as `unmatched` that run (zero writes,
 never a guess) and attaches on the **next** run — convergence, not
 immediacy. Covered by the lifecycle race tests
 (`backend/tests/unit/test_event_sync_lifecycle.py`).
+
+## Refresh ordering, self-healing, and refresh-before-run
+
+Event Sync's matching and Dispatcharr's M3U refresh are **decoupled**. ECM's
+watermark task advances `last_m3u_refresh_completed_at` after a refresh
+completes, and the pipeline recomputes matches statelessly on each tick. Two
+consequences fall out of that design, and one new per-rule option lets you
+tighten it when you need to.
+
+### Why misordered refreshes self-heal
+
+Refreshes for different providers are independent, so they can land in any
+order — a **secondary** provider can refresh before its **master**. That
+"misordering" is not an error state and needs no coordination:
+
+* Matching is a **stateless, idempotent recompute** — Event Sync stores no
+  durable cluster state; the master channels are the identity anchor and every
+  run re-derives the full match set from live data. A run never depends on the
+  result of a prior run.
+* When a secondary stream's master channel does not exist yet (the master
+  provider hasn't refreshed, or Dispatcharr's post-refresh Celery sync hasn't
+  materialized the channel), that stream is simply counted `unmatched` for that
+  run — **zero writes, never a guess**. It attaches on the **next** pipeline
+  tick after the master exists.
+* Because the recompute is idempotent, repeated runs **converge**: once every
+  provider has refreshed and the master channels exist, the same rule against
+  the same names produces the complete match set. A stream already on its
+  master is a no-op. So a misordered refresh only ever *delays* an attach to a
+  later tick — it never produces a wrong or duplicated attach.
+
+This is convergence, not immediacy: the system heals itself on the next run
+rather than trying to order the refreshes. It is the same property that makes
+[opt-in auto-runs](#automatic-runs-after-refresh-phase-2-opt-in) safe to run
+unattended after every refresh.
+
+### The "refresh providers before run" option (per rule)
+
+The self-healing above resolves *within a few ticks*. If you would rather a
+**single manual run** work against freshly-refreshed provider data — closing
+the staleness window in one shot instead of waiting for the next tick — turn on
+**"Refresh this rule's M3U providers before running"** in the rule editor's
+**Behavior → Automation** area (config key `refresh_providers_before_run`,
+default off).
+
+With it on, a manual run of the rule first refreshes exactly the M3U accounts
+backing that rule's **master + secondary** groups (resolved from the rule's
+scopes: a provider-scoped scope refreshes that one account; a whole-group scope
+refreshes every provider account carrying the group), waits for the refresh,
+then runs the match/attach. Key properties:
+
+* **Applies to the live Run AND the dry-run Test.** Both are manual triggers,
+  so both pre-refresh.
+* **Test is no longer zero-write.** A refresh is a real write to Dispatcharr's
+  stream list, so with this flag on the **Test** action triggers that write
+  before previewing. The editor toggle, the per-rule **Test** button, and its
+  confirm dialog all say so — Test with this flag on is not a dry preview of
+  current data. If you want a genuinely read-only preview, leave the flag off
+  and use the editor's **Preview** (which never refreshes).
+* **Auto-runs are excluded.** The unattended watermark auto-run path is *already*
+  triggered by a completed refresh, so pre-refreshing there would be circular.
+  This flag only ever affects manual Run/Test; the auto-run path is untouched.
+* **Best-effort.** A single failed provider refresh **warns** (a run warning on
+  the execution record + a log line) but the run **still proceeds** against
+  current data — the same partial-success posture as the M3U refresh watermark
+  (one failed account never aborts the batch).
+* **Still converges, not instant.** Dispatcharr materializes brand-new master
+  channels from a Celery task *after* the refresh, so a run landing immediately
+  after the pre-refresh can still precede a new event's master channel — that
+  stream attaches on a later run, exactly as in the [timing
+  note](#timing-note--refresh-ordering) above. The flag freshens the provider
+  *streams* the run sees; it does not force Dispatcharr's channel sync to finish
+  first.
 
 ## Automatic guide data for master channels (dummy EPG)
 

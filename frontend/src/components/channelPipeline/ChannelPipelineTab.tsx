@@ -267,12 +267,15 @@ export function ChannelPipelineTab() {
   const [createRuleKind, setCreateRuleKind] = useState<'standard' | 'event_sync' | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<ChannelPipelineRule | null>(null);
   const [showRollbackConfirm, setShowRollbackConfirm] = useState<ChannelPipelineExecution | null>(null);
-  // Live-run confirm for event_sync rules (utswf). The per-rule Run on an
-  // event_sync row WRITES (attaches streams), unlike the in-editor Preview
-  // which is dry-run only — so the live run gets a one-step "this will attach"
-  // confirm. The Test (dry-run) icon stays confirm-free; standard rules keep
-  // their no-confirm parity.
-  const [showEventSyncRunConfirm, setShowEventSyncRunConfirm] = useState<ChannelPipelineRule | null>(null);
+  // Run/Test confirm for event_sync rules (utswf + bead y8yby). The per-rule
+  // Run on an event_sync row WRITES (attaches streams), unlike the in-editor
+  // Preview which is dry-run only — so the live run gets a one-step "this will
+  // attach" confirm. The Test (dry-run) icon stays confirm-free EXCEPT when the
+  // rule has refresh_providers_before_run on: then Test triggers a real
+  // Dispatcharr provider refresh before the dry preview (no longer zero-write),
+  // so it also routes through a confirm. Standard rules keep no-confirm parity.
+  const [showEventSyncRunConfirm, setShowEventSyncRunConfirm] =
+    useState<{ rule: ChannelPipelineRule; dryRun: boolean } | null>(null);
   // Snapshot-restore state (ADR-010 §D5 / uc51o.7)
   const [showRevertConfirm, setShowRevertConfirm] = useState<ChannelPipelineExecution | null>(null);
   const [revertLoading, setRevertLoading] = useState(false);
@@ -653,10 +656,10 @@ export function ChannelPipelineTab() {
   // row Run icon routes through a confirm. Reuses handleRunSingleRule — the
   // run/attach semantics are unchanged.
   const handleConfirmEventSyncRun = useCallback(async () => {
-    const rule = showEventSyncRunConfirm;
-    if (!rule) return;
+    const pending = showEventSyncRunConfirm;
+    if (!pending) return;
     setShowEventSyncRunConfirm(null);
-    await handleRunSingleRule(rule.id, false);
+    await handleRunSingleRule(pending.rule.id, pending.dryRun);
   }, [showEventSyncRunConfirm, handleRunSingleRule]);
 
   const handleRollbackClick = useCallback((execution: ChannelPipelineExecution) => {
@@ -1117,7 +1120,7 @@ export function ChannelPipelineTab() {
                             className="action-btn"
                             onClick={() =>
                               rule.event_sync_config
-                                ? setShowEventSyncRunConfirm(rule)
+                                ? setShowEventSyncRunConfirm({ rule, dryRun: false })
                                 : handleRunSingleRule(rule.id, false)
                             }
                             disabled={runningSingleRule === rule.id || runningPipeline}
@@ -1130,10 +1133,22 @@ export function ChannelPipelineTab() {
                           </button>
                           <button
                             className="action-btn"
-                            onClick={() => handleRunSingleRule(rule.id, true)}
+                            onClick={() =>
+                              // bead y8yby: a Test on an event_sync rule with
+                              // refresh_providers_before_run on is NOT zero-write
+                              // (it refreshes providers first) — route it through
+                              // a confirm. Otherwise Test runs immediately.
+                              rule.event_sync_config?.refresh_providers_before_run
+                                ? setShowEventSyncRunConfirm({ rule, dryRun: true })
+                                : handleRunSingleRule(rule.id, true)
+                            }
                             disabled={runningSingleRule === rule.id || runningPipeline}
                             aria-label={`Test ${rule.name}`}
-                            title="Test (dry run)"
+                            title={
+                              rule.event_sync_config?.refresh_providers_before_run
+                                ? 'Test (dry run — refreshes this rule’s M3U providers first, not a preview of current data)'
+                                : 'Test (dry run)'
+                            }
                           >
                             <span className="material-icons">visibility</span>
                           </button>
@@ -1448,18 +1463,52 @@ export function ChannelPipelineTab() {
         >
           <div className="modal-container modal-sm" data-testid="event-sync-run-confirm">
             <div className="modal-header">
-              <h2 id="event-sync-run-confirm-title">Run Event Sync rule</h2>
+              <h2 id="event-sync-run-confirm-title">
+                {showEventSyncRunConfirm.dryRun
+                  ? 'Test Event Sync rule (refreshes providers)'
+                  : 'Run Event Sync rule'}
+              </h2>
             </div>
             <div className="modal-body">
-              <p>
-                Running &quot;{showEventSyncRunConfirm.name}&quot; will{' '}
-                <strong>attach streams</strong> to their master channels where
-                they match. Attaches are journaled and reversible via rollback.
-              </p>
-              <p>
-                To see what would attach without writing, use the Test (dry run)
-                action instead.
-              </p>
+              {showEventSyncRunConfirm.dryRun ? (
+                <>
+                  <p data-testid="event-sync-test-refresh-warning">
+                    Testing &quot;{showEventSyncRunConfirm.rule.name}&quot; will
+                    first <strong>refresh this rule&apos;s M3U providers</strong>{' '}
+                    — a real write to Dispatcharr&apos;s stream list — and then
+                    run a dry-run match. This is <strong>not</strong> a
+                    zero-write preview of current data.
+                  </p>
+                  <p>
+                    No streams are attached by the Test itself. To preview
+                    against current data without any refresh, turn off
+                    &quot;Refresh this rule&apos;s M3U providers before
+                    running&quot; in the rule editor, or use the editor&apos;s
+                    Preview.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Running &quot;{showEventSyncRunConfirm.rule.name}&quot; will{' '}
+                    <strong>attach streams</strong> to their master channels
+                    where they match. Attaches are journaled and reversible via
+                    rollback.
+                  </p>
+                  {showEventSyncRunConfirm.rule.event_sync_config
+                    ?.refresh_providers_before_run && (
+                    <p data-testid="event-sync-run-refresh-note">
+                      This rule will first <strong>refresh its M3U
+                      providers</strong> (a write to Dispatcharr&apos;s stream
+                      list), then run.
+                    </p>
+                  )}
+                  <p>
+                    To see what would attach without writing, use the Test (dry
+                    run) action instead.
+                  </p>
+                </>
+              )}
             </div>
             <div className="modal-footer">
               <button
@@ -1471,10 +1520,10 @@ export function ChannelPipelineTab() {
               <button
                 className="btn-primary"
                 onClick={handleConfirmEventSyncRun}
-                aria-label="Confirm run"
+                aria-label={showEventSyncRunConfirm.dryRun ? 'Confirm test' : 'Confirm run'}
                 data-testid="event-sync-run-confirm-btn"
               >
-                Run &amp; attach
+                {showEventSyncRunConfirm.dryRun ? 'Refresh & test' : 'Run & attach'}
               </button>
             </div>
           </div>
