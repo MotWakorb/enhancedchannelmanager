@@ -434,6 +434,180 @@ describe('ChannelPipelineTab', () => {
     // The run pipeline executes all enabled rules.
   });
 
+  describe('event_sync per-rule run (utswf)', () => {
+    // Capture the bodies POSTed to the run endpoint so we can assert on
+    // dry_run / rule_ids without depending on the poll internals.
+    const installRunCapture = (): Array<{ dry_run?: boolean; rule_ids?: number[] }> => {
+      const bodies: Array<{ dry_run?: boolean; rule_ids?: number[] }> = [];
+      server.use(
+        http.post('/api/channel-pipeline/run', async ({ request }) => {
+          const body = (await request.json()) as { dry_run?: boolean; rule_ids?: number[] };
+          bodies.push(body);
+          const execution = createMockChannelPipelineExecution({
+            mode: body.dry_run ? 'dry_run' : 'execute',
+            status: 'completed',
+            channels_created: 0,
+            streams_matched: 2,
+          });
+          mockDataStore.channelPipelineExecutions.unshift(execution);
+          return HttpResponse.json(
+            { execution_id: execution.id, status: 'running', message: 'started' },
+            { status: 202 }
+          );
+        })
+      );
+      return bodies;
+    };
+
+    const pushEventSyncRule = (name: string) => {
+      const rule = createMockChannelPipelineRule({
+        name,
+        enabled: true,
+        event_sync_config: { master_group_id: 1, secondary_group_ids: [2], auto_run: false },
+      });
+      mockDataStore.channelPipelineRules.push(rule);
+      return rule;
+    };
+
+    it('renders per-rule Run and Test affordances on an event_sync row', async () => {
+      const rule = pushEventSyncRule('ES Rule');
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('ES Rule')).toBeInTheDocument());
+      const row = screen.getByText('ES Rule').closest('tr')!;
+
+      expect(within(row).getByRole('button', { name: `Run ${rule.name}` })).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: `Test ${rule.name}` })).toBeInTheDocument();
+    });
+
+    it('Test (dry run) on an event_sync row runs immediately with dry_run=true and no confirm', async () => {
+      const user = userEvent.setup();
+      const bodies = installRunCapture();
+      const rule = pushEventSyncRule('ES Rule');
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('ES Rule')).toBeInTheDocument());
+      const row = screen.getByText('ES Rule').closest('tr')!;
+
+      await user.click(within(row).getByRole('button', { name: `Test ${rule.name}` }));
+
+      await waitFor(() => expect(bodies).toHaveLength(1));
+      expect(bodies[0]).toEqual({ dry_run: true, rule_ids: [rule.id] });
+      // Dry run never surfaces the live-run confirm.
+      expect(screen.queryByTestId('event-sync-run-confirm')).not.toBeInTheDocument();
+    });
+
+    it('Run on an event_sync row opens a confirm and does not run until confirmed', async () => {
+      const user = userEvent.setup();
+      const bodies = installRunCapture();
+      const rule = pushEventSyncRule('ES Rule');
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('ES Rule')).toBeInTheDocument());
+      const row = screen.getByText('ES Rule').closest('tr')!;
+
+      await user.click(within(row).getByRole('button', { name: `Run ${rule.name}` }));
+
+      // Confirm appears; nothing has run yet.
+      expect(await screen.findByTestId('event-sync-run-confirm')).toBeInTheDocument();
+      expect(bodies).toHaveLength(0);
+
+      await user.click(screen.getByTestId('event-sync-run-confirm-btn'));
+
+      await waitFor(() => expect(bodies).toHaveLength(1));
+      expect(bodies[0]).toEqual({ dry_run: false, rule_ids: [rule.id] });
+    });
+
+    it('cancelling the event_sync run confirm does not run', async () => {
+      const user = userEvent.setup();
+      const bodies = installRunCapture();
+      const rule = pushEventSyncRule('ES Rule');
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('ES Rule')).toBeInTheDocument());
+      const row = screen.getByText('ES Rule').closest('tr')!;
+
+      await user.click(within(row).getByRole('button', { name: `Run ${rule.name}` }));
+      await user.click(await screen.findByRole('button', { name: /cancel/i }));
+
+      await waitFor(() =>
+        expect(screen.queryByTestId('event-sync-run-confirm')).not.toBeInTheDocument()
+      );
+      expect(bodies).toHaveLength(0);
+    });
+
+    it('a standard rule Run runs directly with no confirm (parity)', async () => {
+      const user = userEvent.setup();
+      const bodies = installRunCapture();
+      const rule = createMockChannelPipelineRule({ name: 'Std Rule', enabled: true });
+      mockDataStore.channelPipelineRules.push(rule);
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('Std Rule')).toBeInTheDocument());
+      const row = screen.getByText('Std Rule').closest('tr')!;
+
+      await user.click(within(row).getByRole('button', { name: `Run ${rule.name}` }));
+
+      await waitFor(() => expect(bodies).toHaveLength(1));
+      expect(bodies[0]).toEqual({ dry_run: false, rule_ids: [rule.id] });
+      expect(screen.queryByTestId('event-sync-run-confirm')).not.toBeInTheDocument();
+    });
+
+    it('disables the per-rule Run/Test buttons while a run is in flight', async () => {
+      const user = userEvent.setup();
+      // Delay the run so the in-flight (running) state is observable.
+      server.use(
+        http.post('/api/channel-pipeline/run', async () => {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const execution = createMockChannelPipelineExecution({
+            mode: 'dry_run', status: 'completed', channels_created: 0,
+          });
+          mockDataStore.channelPipelineExecutions.unshift(execution);
+          return HttpResponse.json(
+            { execution_id: execution.id, status: 'running', message: 'started' },
+            { status: 202 }
+          );
+        })
+      );
+      const rule = pushEventSyncRule('ES Rule');
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('ES Rule')).toBeInTheDocument());
+      const row = screen.getByText('ES Rule').closest('tr')!;
+
+      // Fire the confirm-free dry run, then assert both icons go disabled.
+      await user.click(within(row).getByRole('button', { name: `Test ${rule.name}` }));
+
+      await waitFor(() => {
+        expect(within(row).getByRole('button', { name: `Run ${rule.name}` })).toBeDisabled();
+        expect(within(row).getByRole('button', { name: `Test ${rule.name}` })).toBeDisabled();
+      });
+    });
+
+    it('event_sync run completion points the operator to Execution History', async () => {
+      const user = userEvent.setup();
+      installRunCapture();
+      const rule = pushEventSyncRule('ES Rule');
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => expect(screen.getByText('ES Rule')).toBeInTheDocument());
+      const row = screen.getByText('ES Rule').closest('tr')!;
+
+      await user.click(within(row).getByRole('button', { name: `Run ${rule.name}` }));
+      await user.click(screen.getByTestId('event-sync-run-confirm-btn'));
+
+      // Not "Created 0 channels" — event_sync feedback points to the details.
+      // (Match the toast phrase specifically; the "Execution History" section
+      // header is always present and would otherwise collide.)
+      await waitFor(() => {
+        expect(
+          screen.getByText(/event sync run complete.*execution history for attach details/i)
+        ).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/created 0 channels/i)).not.toBeInTheDocument();
+    });
+  });
+
   describe('execution history', () => {
     it('displays execution history', async () => {
       mockDataStore.channelPipelineExecutions.push(
