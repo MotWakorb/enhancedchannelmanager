@@ -792,6 +792,7 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "max_attach_per_run",
     "enabled",
     "auto_run",
+    "refresh_providers_before_run",
     "dummy_epg_profile_id",
     "include_master_group_streams",
     "assume_current_date",
@@ -1205,6 +1206,27 @@ def validate_event_sync_config(config: Any) -> list[str]:
             "auto_run", auto_run,
             "a boolean (default false) — true opts this rule into "
             "unattended runs on the M3U refresh watermark task",
+        ))
+
+    # Pre-refresh-on-run flag (bead y8yby). DEFAULT OFF. When true, a MANUAL
+    # run of this rule (live Run AND dry-run Test) first refreshes the M3U
+    # provider accounts backing the rule's master + secondary groups, then
+    # runs the match/attach — so the run works against fresh provider data,
+    # closing the refresh-ordering staleness window. It deliberately does NOT
+    # apply to the unattended auto-run path (that already follows a refresh —
+    # pre-refreshing there would be circular). Absent == false, so stored
+    # configs that predate the key keep exactly their prior behavior. NOTE
+    # (surfaced in the UI): with this ON the dry-run Test triggers a real
+    # Dispatcharr provider refresh, so Test is no longer zero-write.
+    refresh_before_run = config.get("refresh_providers_before_run")
+    if refresh_before_run is None:
+        config["refresh_providers_before_run"] = False
+    elif not isinstance(refresh_before_run, bool):
+        errors.append(_event_sync_error(
+            "refresh_providers_before_run", refresh_before_run,
+            "a boolean (default false) — true refreshes the rule's M3U "
+            "providers before a manual Run or Test (making Test no longer "
+            "zero-write); it never applies to unattended auto-runs",
         ))
 
     # Master-group self-attach flag (bead 6xxmp). DEFAULT OFF. When true the
