@@ -38,7 +38,7 @@
  * (`m3u_account_id: null`); saving emits the nested `master` / `secondary`
  * and lets the backend derive the flat keys.
  */
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import type { ChannelPipelineRule, CreateRuleData } from '../../types/channelPipeline';
 import type {
@@ -60,6 +60,8 @@ import { EventSyncTestPatternsPanel } from './EventSyncTestPatternsPanel';
 import type { LabeledEventSyncPattern } from './EventSyncTestPatternsPanel';
 import { EventSyncPreviewPanel } from './EventSyncPreviewPanel';
 import { EventSyncAutoSyncFixDialog } from './EventSyncAutoSyncFixDialog';
+import { ModalOverlay } from '../ModalOverlay';
+import '../ModalBase.css';
 import type { AutoSyncFixTarget } from './EventSyncAutoSyncFixDialog';
 import { ProviderScopedGroupPicker } from './ProviderScopedGroupPicker';
 import { joinProviderRows, type GroupProviderRow } from './providerScopedGroups';
@@ -80,6 +82,13 @@ export interface EventSyncRuleEditorProps {
   onSave: (data: CreateRuleData) => Promise<void> | void;
   onCancel: () => void;
   isLoading?: boolean;
+  /**
+   * S4a dirty-guard: the editor owns the discard confirm and registers its
+   * guarded-close here so parent-owned dismissors (the modal overlay's Escape
+   * handler and the header × button) route through the same guard instead of
+   * discarding a half-configured rule. Called with null on unmount.
+   */
+  onRegisterClose?: (attemptClose: (() => void) | null) => void;
 }
 
 interface GroupPatternDraft {
@@ -181,6 +190,62 @@ function sameDraft(a: GroupPatternDraft, b: GroupPatternDraft): boolean {
   );
 }
 
+/** Initial master scope from a config (bead 38dzi migration): nested `master`
+ * if present, else the flat legacy key as a whole-group scope. */
+function initialMasterScope(
+  config: EventSyncConfig | null | undefined
+): EventSyncGroupScope | null {
+  if (config?.master) return config.master;
+  if (config?.master_group_id != null) {
+    return { group_id: config.master_group_id, m3u_account_id: null };
+  }
+  return null;
+}
+
+/** Initial secondary scopes from a config (same migration). */
+function initialSecondaryScopes(
+  config: EventSyncConfig | null | undefined
+): EventSyncGroupScope[] {
+  if (config?.secondary) return config.secondary;
+  return (config?.secondary_group_ids ?? []).map(gid => ({
+    group_id: gid,
+    m3u_account_id: null,
+  }));
+}
+
+/** Order-insensitive equality of two group scopes. */
+function sameScope(
+  a: EventSyncGroupScope | null,
+  b: EventSyncGroupScope | null
+): boolean {
+  if (a == null || b == null) return a === b;
+  return a.group_id === b.group_id && (a.m3u_account_id ?? null) === (b.m3u_account_id ?? null);
+}
+
+/** Set-like equality of two scope lists (S4a dirty check — reordering in the
+ * picker is not an edit). */
+function sameScopes(a: EventSyncGroupScope[], b: EventSyncGroupScope[]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (s: EventSyncGroupScope) => `${s.group_id}:${s.m3u_account_id ?? 'any'}`;
+  const bKeys = b.map(key).sort();
+  return a.map(key).sort().every((k, i) => k === bKeys[i]);
+}
+
+/** Canonical string for a group-overrides map, ignoring empty drafts (an
+ * override typed then cleared is not an edit). */
+function normalizeOverrides(o: Record<number, GroupPatternDraft>): string {
+  const entries = Object.entries(o)
+    .map(([k, d]) => [
+      k,
+      d.title_pattern.trim(),
+      d.time_pattern.trim(),
+      d.date_pattern.trim(),
+    ])
+    .filter(([, t, tm, dt]) => t || tm || dt)
+    .sort((x, y) => (x[0] < y[0] ? -1 : 1));
+  return JSON.stringify(entries);
+}
+
 /** Selection equality is set-like: toggling a box off and back on again is
  * not an edit. */
 function sameIds(a: string[], b: string[]): boolean {
@@ -192,6 +257,7 @@ export function EventSyncRuleEditor({
   onSave,
   onCancel,
   isLoading = false,
+  onRegisterClose,
 }: EventSyncRuleEditorProps) {
   const id = useId();
   const config = rule?.event_sync_config ?? null;
@@ -204,20 +270,12 @@ export function EventSyncRuleEditor({
   // Scoping (bead 38dzi): provider-scoped master + secondary. Initialize from
   // the nested `master` / `secondary` when present; otherwise migrate the flat
   // legacy keys to WHOLE-GROUP scopes (m3u_account_id null).
-  const [masterScope, setMasterScope] = useState<EventSyncGroupScope | null>(() => {
-    if (config?.master) return config.master;
-    if (config?.master_group_id != null) {
-      return { group_id: config.master_group_id, m3u_account_id: null };
-    }
-    return null;
-  });
-  const [secondaryScopes, setSecondaryScopes] = useState<EventSyncGroupScope[]>(() => {
-    if (config?.secondary) return config.secondary;
-    return (config?.secondary_group_ids ?? []).map(gid => ({
-      group_id: gid,
-      m3u_account_id: null,
-    }));
-  });
+  const [masterScope, setMasterScope] = useState<EventSyncGroupScope | null>(() =>
+    initialMasterScope(config)
+  );
+  const [secondaryScopes, setSecondaryScopes] = useState<EventSyncGroupScope[]>(() =>
+    initialSecondaryScopes(config)
+  );
   // bead x82s3: both group pickers default to enabled-only junctions (hundreds
   // of groups on a real instance is noisy); this reveals the full list for
   // edge cases (temporarily-disabled group). Default OFF.
@@ -318,6 +376,19 @@ export function EventSyncRuleEditor({
   const [activeSection, setActiveSection] = useState<'scope' | 'matching' | 'behavior'>(
     'scope'
   );
+
+  // S4a: dirty-state discard guard. The confirm is shown when a dismiss is
+  // attempted with unsaved changes; a pristine editor closes immediately.
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  // S4b: the Secondary section's inline anchor expands the Behavior ->
+  // Scope-extension subgroup and focuses the master-self-attach checkbox
+  // (recognition over recall). The subgroup's open state is therefore
+  // controlled, and a pending-focus ref defers the focus until after it opens.
+  const [scopeExtOpen, setScopeExtOpen] = useState(false);
+  const scopeExtRef = useRef<HTMLDetailsElement>(null);
+  const includeMasterRef = useRef<HTMLInputElement>(null);
+  const pendingMasterFocus = useRef(false);
 
   useEffect(() => {
     // The junction rows carry no group name; join them against the channel
@@ -704,6 +775,68 @@ export function EventSyncRuleEditor({
     ref.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   };
 
+  // S4a: does the form diverge from the rule as loaded? (showAllGroups is a
+  // view toggle, not config — deliberately excluded.)
+  const dirty = useMemo(() => {
+    return (
+      name !== (rule?.name || '') ||
+      description !== (rule?.description || '') ||
+      enabled !== (rule?.enabled ?? true) ||
+      !sameScope(masterScope, initialMasterScope(config)) ||
+      !sameScopes(secondaryScopes, initialSecondaryScopes(config)) ||
+      !sameIds(selectedPatternIds, initial.patternIds) ||
+      !sameDraft(customShared, customSharedMeta.draft) ||
+      normalizeOverrides(groupOverrides) !== normalizeOverrides(initial.groupOverrides) ||
+      timeWindowText !== String(config?.time_window_minutes ?? DEFAULT_TIME_WINDOW_MINUTES) ||
+      thresholdText !== (config?.attach_threshold ?? EVENT_ATTACH_FLOOR).toFixed(2) ||
+      enforceTimeWindow !== (config?.enforce_time_window ?? true) ||
+      autoRun !== (config?.auto_run ?? false) ||
+      includeMasterGroupStreams !== (config?.include_master_group_streams ?? false) ||
+      assumeCurrentDate !== (config?.assume_current_date ?? false) ||
+      parseMasterFromStream !== (config?.parse_master_from_stream ?? false) ||
+      dummyEpgProfileId !== (config?.dummy_epg_profile_id ?? null)
+    );
+  }, [
+    name, description, enabled, masterScope, secondaryScopes, selectedPatternIds,
+    customShared, groupOverrides, timeWindowText, thresholdText, enforceTimeWindow,
+    autoRun, includeMasterGroupStreams, assumeCurrentDate, parseMasterFromStream,
+    dummyEpgProfileId, config, rule, initial, customSharedMeta,
+  ]);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+
+  // S4a: the guarded close. Confirm only when dirty; otherwise close at once so
+  // a modal opened by mistake is not held hostage by a prompt.
+  const attemptClose = useCallback(() => {
+    if (dirtyRef.current) setShowDiscardConfirm(true);
+    else onCancel();
+  }, [onCancel]);
+
+  // Register the guard so the parent's Escape/× dismissors route through it.
+  useEffect(() => {
+    onRegisterClose?.(attemptClose);
+    return () => onRegisterClose?.(null);
+  }, [onRegisterClose, attemptClose]);
+
+  // S4b: focus the master-self-attach checkbox once its subgroup has opened.
+  useEffect(() => {
+    if (scopeExtOpen && pendingMasterFocus.current) {
+      pendingMasterFocus.current = false;
+      scopeExtRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      includeMasterRef.current?.focus();
+    }
+  }, [scopeExtOpen]);
+
+  const handleUseMasterStreams = () => {
+    if (scopeExtOpen) {
+      scopeExtRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      includeMasterRef.current?.focus();
+    } else {
+      pendingMasterFocus.current = true;
+      setScopeExtOpen(true);
+    }
+  };
+
   // S3: plain-language rule-intent sentence. Bold clauses are the non-default
   // or risk-carrying choices (time ignored, auto-run, assume-current-date) so
   // the operator can see at a glance what the rule will actually do.
@@ -943,6 +1076,14 @@ export function EventSyncRuleEditor({
                   channels from them). The same group under a different provider
                   than the master IS selectable here.
                 </span>
+                <button
+                  type="button"
+                  className="event-sync-inline-link"
+                  onClick={handleUseMasterStreams}
+                  data-testid="event-sync-use-master-streams"
+                >
+                  No separate secondary? Use the master group&apos;s own streams →
+                </button>
                 <ProviderScopedGroupPicker
                   role="secondary"
                   rows={junctions}
@@ -1363,8 +1504,14 @@ export function EventSyncRuleEditor({
                 </div>
               </details>
 
-              {/* Scope-extension subgroup (S2). */}
-              <details className="event-sync-details event-sync-subgroup">
+              {/* Scope-extension subgroup (S2); controlled open for the S4b
+                  secondary anchor. */}
+              <details
+                className="event-sync-details event-sync-subgroup"
+                ref={scopeExtRef}
+                open={scopeExtOpen}
+                onToggle={e => setScopeExtOpen(e.currentTarget.open)}
+              >
                 <summary>
                   Scope extension {changedBadge(scopeExtChanged)}
                 </summary>
@@ -1373,6 +1520,7 @@ export function EventSyncRuleEditor({
                     <label className="checkbox-option">
                       <input
                         type="checkbox"
+                        ref={includeMasterRef}
                         checked={includeMasterGroupStreams}
                         onChange={e => setIncludeMasterGroupStreams(e.target.checked)}
                         disabled={isLoading}
@@ -1520,7 +1668,7 @@ export function EventSyncRuleEditor({
         <button
           type="button"
           className="btn-secondary"
-          onClick={onCancel}
+          onClick={attemptClose}
           disabled={saving}
         >
           Cancel
@@ -1545,6 +1693,44 @@ export function EventSyncRuleEditor({
           onCancel={() => setPendingFix(null)}
           onConfirm={handleConfirmFix}
         />
+      )}
+
+      {/* S4a: dirty-state discard confirm — reuses the modal-sm confirm pattern.
+          Rendered inside the editor (topmost overlay) so Escape dismisses this
+          prompt rather than the whole rule builder. */}
+      {showDiscardConfirm && (
+        <ModalOverlay
+          onClose={() => setShowDiscardConfirm(false)}
+          data-testid="event-sync-discard-dialog"
+        >
+          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true">
+            <div className="modal-header">
+              <h3 className="modal-title">Discard this rule?</h3>
+            </div>
+            <div className="modal-body">
+              <p>Your patterns and scope selections will be lost.</p>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="modal-btn-secondary"
+                onClick={() => setShowDiscardConfirm(false)}
+                data-testid="event-sync-discard-keep"
+              >
+                Keep editing
+              </button>
+              <button
+                className="modal-btn-danger"
+                onClick={() => {
+                  setShowDiscardConfirm(false);
+                  onCancel();
+                }}
+                data-testid="event-sync-discard-confirm"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
       )}
     </div>
   );

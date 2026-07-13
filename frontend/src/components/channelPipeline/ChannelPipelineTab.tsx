@@ -258,6 +258,14 @@ export function ChannelPipelineTab() {
     setCreateRuleKind(null);
   }, []);
 
+  // S4a: the Event Sync editor owns the dirty-state discard guard and registers
+  // its guarded-close here, so Escape (overlay onClose) and the header × route
+  // through the same confirm instead of dropping a half-configured rule.
+  const eventSyncCloseRef = useRef<(() => void) | null>(null);
+  const registerEventSyncClose = useCallback((fn: (() => void) | null) => {
+    eventSyncCloseRef.current = fn;
+  }, []);
+
   const handleDeleteClick = useCallback((rule: ChannelPipelineRule) => {
     setShowDeleteConfirm(rule);
   }, []);
@@ -1109,8 +1117,17 @@ export function ChannelPipelineTab() {
         const title = showKindChooser
           ? 'Create Rule'
           : `${editingRule ? 'Edit' : 'Create'}${isEventSync ? ' Event Sync' : ''} Rule`;
+        // S4a: for the Event Sync editor, dismissors route through its
+        // registered dirty guard; everything else closes directly.
+        const requestClose = () => {
+          if (isEventSync && !showKindChooser && eventSyncCloseRef.current) {
+            eventSyncCloseRef.current();
+          } else {
+            handleCancelRuleBuilder();
+          }
+        };
         return (
-          <ModalOverlay onClose={handleCancelRuleBuilder} role="dialog" aria-modal="true" aria-labelledby="rule-builder-title">
+          <ModalOverlay onClose={requestClose} role="dialog" aria-modal="true" aria-labelledby="rule-builder-title">
             {/* Event Sync carries the app's densest form — give it modal-xxl
                 (1000px). The kind chooser and the standard rule builder keep
                 modal-lg. */}
@@ -1119,7 +1136,7 @@ export function ChannelPipelineTab() {
                 <h2 id="rule-builder-title">{title}</h2>
                 <button
                   className="modal-close-btn"
-                  onClick={handleCancelRuleBuilder}
+                  onClick={requestClose}
                   aria-label="Close"
                 >
                   <span className="material-icons">close</span>
@@ -1159,6 +1176,7 @@ export function ChannelPipelineTab() {
                   rule={editingRule || undefined}
                   onSave={handleSaveRule}
                   onCancel={handleCancelRuleBuilder}
+                  onRegisterClose={registerEventSyncClose}
                 />
               ) : (
                 <RuleBuilder

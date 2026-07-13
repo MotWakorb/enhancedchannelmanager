@@ -8,7 +8,7 @@
  * apply/attach control.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import {
@@ -1285,6 +1285,106 @@ describe('EventSyncRuleEditor', () => {
       await user.click(screen.getByRole('button', { name: /test patterns/i }));
 
       await waitFor(() => expect(details).toHaveAttribute('open'));
+    });
+  });
+
+  describe('dirty-state discard guard (bead dvzrf / S4a)', () => {
+    it('closes immediately via Cancel when nothing changed (no confirm)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onCancel = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={onCancel} />);
+      await screen.findByTestId('psg-master');
+
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('event-sync-discard-dialog')).toBeNull();
+    });
+
+    it('confirms before discarding via Cancel when the form is dirty', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onCancel = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={onCancel} />);
+      await screen.findByTestId('psg-master');
+
+      // Any divergence from the loaded rule marks it dirty.
+      await user.type(screen.getByLabelText(/rule name/i), '!');
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.getByTestId('event-sync-discard-dialog')).toBeInTheDocument();
+      expect(onCancel).not.toHaveBeenCalled();
+
+      // "Keep editing" dismisses the prompt without discarding.
+      await user.click(screen.getByTestId('event-sync-discard-keep'));
+      expect(screen.queryByTestId('event-sync-discard-dialog')).toBeNull();
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    it('discards only after the confirm button is pressed', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onCancel = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={onCancel} />);
+      await screen.findByTestId('psg-master');
+
+      await user.type(screen.getByLabelText(/rule name/i), '!');
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      await user.click(screen.getByTestId('event-sync-discard-confirm'));
+
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('routes the parent Escape/× dismissors through the same guard (onRegisterClose)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onCancel = vi.fn();
+      let registeredClose: (() => void) | undefined;
+      render(
+        <EventSyncRuleEditor
+          rule={EXISTING_RULE}
+          onSave={vi.fn()}
+          onCancel={onCancel}
+          onRegisterClose={fn => {
+            if (fn) registeredClose = fn;
+          }}
+        />
+      );
+      await screen.findByTestId('psg-master');
+      expect(typeof registeredClose).toBe('function');
+
+      // Clean → the registered close (what Escape/× invoke) closes at once.
+      await act(async () => registeredClose!());
+      expect(onCancel).toHaveBeenCalledTimes(1);
+
+      // Dirty → the registered close shows the confirm instead of discarding.
+      await user.type(screen.getByLabelText(/rule name/i), '!');
+      await act(async () => registeredClose!());
+      expect(screen.getByTestId('event-sync-discard-dialog')).toBeInTheDocument();
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('secondary-empty inline anchor (bead dvzrf / S4b)', () => {
+    it('expands the Scope-extension subgroup and focuses the master-self-attach checkbox', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+      await screen.findByTestId('psg-secondary');
+
+      const checkbox = screen.getByTestId('event-sync-include-master-group-streams');
+      expect(checkbox).not.toHaveFocus();
+
+      await user.click(screen.getByTestId('event-sync-use-master-streams'));
+
+      await waitFor(() => expect(checkbox).toHaveFocus());
+      expect(checkbox.closest('details')).toHaveAttribute('open');
     });
   });
 });
