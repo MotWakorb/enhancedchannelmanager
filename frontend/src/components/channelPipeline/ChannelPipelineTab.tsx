@@ -11,6 +11,7 @@ import type {
   BulkUpdateRulesPatch,
   RestoreSnapshotResponse,
   FailedChannel,
+  EventSyncExecutionSummary,
 } from '../../types/channelPipeline';
 import type { CircuitBreakerState } from '../../services/channelPipelineApi';
 import { useAuth } from '../../hooks/useAuth';
@@ -47,6 +48,153 @@ const EXECUTION_STATUS_LABEL: Partial<Record<string, string>> = {
   capped: 'Capped',
   abandoned: 'Abandoned',
 };
+
+/**
+ * Aggregated event_sync run counters across an execution's per-rule summaries
+ * (enhancedchannelmanager-7wuhd). One execution can span several event_sync
+ * rules; the executions UI shows the run-level totals.
+ */
+interface EventSyncTotals {
+  secondary_streams: number;
+  attached: number;
+  already_attached: number;
+  ambiguous_skipped: number;
+  unmatched: number;
+  parse_failed: number;
+  attach_errors: number;
+  review_enqueued: number;
+  cap_overage: number;
+  capped: boolean;
+}
+
+/** Sum the per-rule event_sync summaries; null when there is no event_sync activity. */
+function aggregateEventSyncSummary(
+  summaries: EventSyncExecutionSummary[] | undefined | null,
+): EventSyncTotals | null {
+  if (!summaries || summaries.length === 0) return null;
+  const totals: EventSyncTotals = {
+    secondary_streams: 0, attached: 0, already_attached: 0,
+    ambiguous_skipped: 0, unmatched: 0, parse_failed: 0,
+    attach_errors: 0, review_enqueued: 0, cap_overage: 0, capped: false,
+  };
+  for (const s of summaries) {
+    totals.secondary_streams += s.secondary_streams ?? 0;
+    totals.attached += s.attached ?? 0;
+    totals.already_attached += s.already_attached ?? 0;
+    totals.ambiguous_skipped += s.ambiguous_skipped ?? 0;
+    totals.unmatched += s.unmatched ?? 0;
+    totals.parse_failed += s.parse_failed ?? 0;
+    totals.attach_errors += s.attach_errors ?? 0;
+    totals.review_enqueued += s.review_enqueued ?? 0;
+    totals.cap_overage += s.cap_overage ?? 0;
+    totals.capped = totals.capped || Boolean(s.capped);
+  }
+  return totals;
+}
+
+/**
+ * The PO's key case: an idempotent run where everything the rule targets is
+ * already attached — nothing new, nothing wrong. Surfaced as an explicit
+ * success line so it never reads as "nothing evaluated / nothing matched".
+ */
+function isFullyInSync(t: EventSyncTotals): boolean {
+  return t.attached === 0 && t.already_attached > 0 &&
+    t.ambiguous_skipped === 0 && t.unmatched === 0 && t.parse_failed === 0;
+}
+
+/**
+ * Event-sync-aware execution summary rows (enhancedchannelmanager-7wuhd).
+ * Replaces the standard evaluated/matched/created block for event_sync runs;
+ * vocabulary matches the Event Sync preview panel taxonomy. Dry-run swaps
+ * "Attached" for "Would Attach".
+ */
+function EventSyncSummaryDetails(
+  { totals, isDryRun }: { totals: EventSyncTotals; isDryRun: boolean },
+) {
+  const attachLabel = isDryRun ? 'Would Attach' : 'Attached';
+  return (
+    <>
+      {isFullyInSync(totals) && (
+        <div
+          className="event-sync-sync-banner"
+          role="status"
+          data-testid="event-sync-fully-in-sync"
+        >
+          <span className="material-icons event-sync-sync-icon" aria-hidden="true">
+            check_circle
+          </span>
+          <span>
+            Fully in sync — {totals.already_attached} stream
+            {totals.already_attached === 1 ? '' : 's'} already attached, nothing
+            new to do this run.
+          </span>
+        </div>
+      )}
+      <div className="detail-row">
+        <span className="detail-label">Secondary Streams Evaluated:</span>
+        <span>{totals.secondary_streams}</span>
+      </div>
+      <div className="detail-row">
+        <span className="detail-label">{attachLabel}:</span>
+        <span>{totals.attached}</span>
+      </div>
+      <div className="detail-row">
+        <span className="detail-label">Already Attached:</span>
+        <span>{totals.already_attached}</span>
+      </div>
+      <div className="detail-row">
+        <span className="detail-label">Ambiguous &rarr; Review:</span>
+        <span>{totals.ambiguous_skipped}</span>
+      </div>
+      <div className="detail-row">
+        <span className="detail-label">Unmatched:</span>
+        <span>{totals.unmatched}</span>
+      </div>
+      <div className={`detail-row${totals.parse_failed > 0 ? ' warning' : ''}`}>
+        <span className="detail-label">Parse Failures:</span>
+        <span>{totals.parse_failed}</span>
+      </div>
+      {totals.review_enqueued > 0 && (
+        <div className="detail-row">
+          <span className="detail-label">Queued for Review:</span>
+          <span>{totals.review_enqueued}</span>
+        </div>
+      )}
+      {totals.attach_errors > 0 && (
+        <div className="detail-row error">
+          <span className="detail-label">Attach Errors:</span>
+          <span>{totals.attach_errors}</span>
+        </div>
+      )}
+      {totals.cap_overage > 0 && (
+        <div className="detail-row warning">
+          <span className="detail-label">Capped (deferred to next run):</span>
+          <span>{totals.cap_overage}</span>
+        </div>
+      )}
+      {/* Parse failures are the operator's broken-pattern drift detector —
+          surface them prominently with the same visual as the norm-warning
+          banner, not just a counter row. */}
+      {totals.parse_failed > 0 && (
+        <div className="norm-warning-banner" role="alert" data-testid="event-sync-parse-failure-banner">
+          <span className="material-icons norm-warning-icon">warning</span>
+          <div className="norm-warning-content">
+            <p className="norm-warning-title">
+              {totals.parse_failed} secondary stream
+              {totals.parse_failed === 1 ? '' : 's'} could not be parsed
+            </p>
+            <p className="norm-warning-detail">
+              Their names did not match the rule&apos;s parse pattern, so no
+              title or start time could be read and they were skipped. A parse
+              failure count this size usually means a broken pattern — check the
+              Event Sync preview&apos;s test panel.
+            </p>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 /** Categorize a log action into a filter bucket. */
 function getActionCategory(action: ActionLogEntry): string | null {
@@ -1083,11 +1231,30 @@ export function ChannelPipelineTab() {
                       {new Date(execution.started_at).toLocaleString(getDateLocale())}
                     </span>
                     <span className="execution-stats">
-                      {execution.streams_matched} matched
-                      {execution.channels_updated > 0 && `, ${execution.channels_updated} merged`}
-                      {execution.channels_created > 0 && `, ${execution.channels_created} created`}
-                      {execution.streams_skipped > 0 && `, ${execution.streams_skipped} skipped`}
-                      {execution.streams_excluded > 0 && `, ${execution.streams_excluded} excluded`}
+                      {(() => {
+                        // enhancedchannelmanager-7wuhd: a PURE event_sync run's
+                        // standard counters are structurally 0 ("0 matched" is
+                        // the bug); show event_sync counts instead.
+                        const esTotals = aggregateEventSyncSummary(execution.event_sync_summary);
+                        if (execution.is_event_sync && esTotals) {
+                          const attachWord = execution.mode === 'dry_run' ? 'would attach' : 'attached';
+                          const parts = [`${esTotals.attached} ${attachWord}`];
+                          if (esTotals.already_attached > 0) parts.push(`${esTotals.already_attached} already attached`);
+                          if (esTotals.ambiguous_skipped > 0) parts.push(`${esTotals.ambiguous_skipped} ambiguous`);
+                          if (esTotals.unmatched > 0) parts.push(`${esTotals.unmatched} unmatched`);
+                          if (esTotals.parse_failed > 0) parts.push(`${esTotals.parse_failed} parse failed`);
+                          return parts.join(', ');
+                        }
+                        return (
+                          <>
+                            {execution.streams_matched} matched
+                            {execution.channels_updated > 0 && `, ${execution.channels_updated} merged`}
+                            {execution.channels_created > 0 && `, ${execution.channels_created} created`}
+                            {execution.streams_skipped > 0 && `, ${execution.streams_skipped} skipped`}
+                            {execution.streams_excluded > 0 && `, ${execution.streams_excluded} excluded`}
+                          </>
+                        );
+                      })()}
                     </span>
                   </div>
                   <div className="execution-actions">
@@ -1474,6 +1641,9 @@ export function ChannelPipelineTab() {
       {showExecutionDetails && (() => {
         const details = executionDetails || showExecutionDetails;
         const log = details.execution_log || [];
+        // enhancedchannelmanager-7wuhd: run-level event_sync totals drive the
+        // event_sync-aware summary block (null for a standard-only run).
+        const eventSyncTotals = aggregateEventSyncSummary(details.event_sync_summary);
 
         // Categorize each entry by its action types for filtering
         const getEntryCategories = (entry: ExecutionLogEntry): Set<string> => {
@@ -1580,35 +1750,50 @@ export function ChannelPipelineTab() {
                   <span>{details.duration_seconds.toFixed(1)}s</span>
                 </div>
               )}
-              <div className="detail-row">
-                <span className="detail-label">Streams Evaluated:</span>
-                <span>{details.streams_evaluated}</span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">Streams Matched:</span>
-                <span>{details.streams_matched}</span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">Channels Created:</span>
-                <span>{details.channels_created}</span>
-              </div>
-              {details.channels_updated > 0 && (
-                <div className="detail-row">
-                  <span className="detail-label">Channels Updated:</span>
-                  <span>{details.channels_updated}</span>
-                </div>
+              {/* Mode-aware summary (enhancedchannelmanager-7wuhd). The
+                  standard evaluated/matched/created counters are structurally 0
+                  for event_sync runs, so a PURE event_sync run hides them and
+                  shows the event_sync block instead. A MIXED run (is_event_sync
+                  false but event_sync activity present) stacks both. */}
+              {!details.is_event_sync && (
+                <>
+                  <div className="detail-row">
+                    <span className="detail-label">Streams Evaluated:</span>
+                    <span>{details.streams_evaluated}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">Streams Matched:</span>
+                    <span>{details.streams_matched}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">Channels Created:</span>
+                    <span>{details.channels_created}</span>
+                  </div>
+                  {details.channels_updated > 0 && (
+                    <div className="detail-row">
+                      <span className="detail-label">Channels Updated:</span>
+                      <span>{details.channels_updated}</span>
+                    </div>
+                  )}
+                  {details.groups_created > 0 && (
+                    <div className="detail-row">
+                      <span className="detail-label">Groups Created:</span>
+                      <span>{details.groups_created}</span>
+                    </div>
+                  )}
+                  {details.streams_excluded > 0 && (
+                    <div className="detail-row">
+                      <span className="detail-label">Streams Excluded:</span>
+                      <span>{details.streams_excluded}</span>
+                    </div>
+                  )}
+                </>
               )}
-              {details.groups_created > 0 && (
-                <div className="detail-row">
-                  <span className="detail-label">Groups Created:</span>
-                  <span>{details.groups_created}</span>
-                </div>
-              )}
-              {details.streams_excluded > 0 && (
-                <div className="detail-row">
-                  <span className="detail-label">Streams Excluded:</span>
-                  <span>{details.streams_excluded}</span>
-                </div>
+              {eventSyncTotals && (
+                <EventSyncSummaryDetails
+                  totals={eventSyncTotals}
+                  isDryRun={details.mode === 'dry_run'}
+                />
               )}
               {details.error_message && (
                 <div className="detail-row error">

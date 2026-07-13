@@ -442,6 +442,54 @@ export interface ChannelPipelineExecution {
    * the run still completes. Always present (empty array when none).
    */
   warnings?: NormalizationWarning[];
+  /**
+   * True only for a PURE event_sync run — event_sync rule(s) ran and NO
+   * standard rules were in scope (enhancedchannelmanager-7wuhd). The
+   * executions UI swaps the standard evaluated/matched/created block for the
+   * event_sync summary block when this is true. A MIXED run (both kinds) is
+   * false, so both blocks stack. Survives source-rule deletion (rule_id is
+   * ON DELETE SET NULL). Absent/false for legacy rows and standard runs.
+   */
+  is_event_sync?: boolean;
+  /**
+   * Structured per-rule event_sync run summaries (enhancedchannelmanager-7wuhd).
+   * One entry per event_sync rule that ran; empty/absent for standard runs.
+   * Persisted so the executions UI can render an event_sync-aware summary
+   * instead of the standard counters, which are structurally 0 for event_sync
+   * runs.
+   */
+  event_sync_summary?: EventSyncExecutionSummary[];
+}
+
+/**
+ * One event_sync rule's persisted run counters (enhancedchannelmanager-7wuhd).
+ * Mirrors the backend attach-phase summary dict (minus the heavy
+ * review_candidates payload, which is stripped before persistence). Vocabulary
+ * matches the Event Sync preview panel + debug-bundle taxonomy.
+ */
+export interface EventSyncExecutionSummary {
+  rule_id: number | null;
+  rule_name?: string | null;
+  /** Secondary-provider streams evaluated against the master channels. */
+  secondary_streams: number;
+  /** Newly attached this run (live) / would-attach (dry-run). */
+  attached: number;
+  /** Already attached before this run — the idempotent no-op count. */
+  already_attached: number;
+  /** Matched >1 master in-band; skipped and (live) enqueued for review. */
+  ambiguous_skipped: number;
+  /** Matched no master above threshold. */
+  unmatched: number;
+  /** Secondary stream name could not be parsed into a title/start. */
+  parse_failed: number;
+  /** Attach attempts that errored against Dispatcharr. */
+  attach_errors: number;
+  /** Pairings enqueued to the review queue this run (live). */
+  review_enqueued?: number;
+  /** True when the per-run attach cap was reached. */
+  capped?: boolean;
+  /** Would-attach streams deferred because the cap tripped. */
+  cap_overage?: number;
 }
 
 /**
