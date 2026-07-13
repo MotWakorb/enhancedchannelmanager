@@ -23,7 +23,11 @@
 import type { EventSyncBand, EventSyncDisposition, EventSyncPattern, EventSyncTeamVerdict } from '../../types/eventSync';
 import shippedPatternsFixture from './eventSyncShippedPatterns.json';
 
-/** Mirror of EVENT_ATTACH_FLOOR in backend/services/event_sync_matcher.py. */
+/**
+ * Mirror of EVENT_ATTACH_FLOOR in backend/services/event_sync_matcher.py.
+ * This is the DEFAULT attach threshold, not a hard minimum — a rule may set
+ * any value in [0, 1] (bead krkm4-sibling). Kept for the default and the hint.
+ */
 export const EVENT_ATTACH_FLOOR = 0.80;
 
 /** Mirror of DEFAULT_TIME_WINDOW_MINUTES (backend default). */
@@ -33,14 +37,16 @@ export const DEFAULT_TIME_WINDOW_MINUTES = 30;
 export const MAX_TIME_WINDOW_MINUTES = 1440;
 
 /**
- * Clamp an operator-entered attach threshold into the schema-legal range.
- * The 0.80 floor is a hard rail (precision over recall; 1,341-incident trust
- * benchmark) — the backend rejects anything below it, so the input never
- * offers an illegal value. Non-finite input falls back to the floor.
+ * Clamp an operator-entered attach threshold into the schema-legal range
+ * [0, 1]. The 0.80 floor is the DEFAULT, not a hard minimum (bead
+ * krkm4-sibling): an operator may lower the auto-attach bar when their
+ * provider data needs it — precision-over-recall becomes a per-rule choice.
+ * The backend honors any value in [0, 1]; only the [0, 1] bounds are enforced
+ * here. Non-finite input falls back to the default.
  */
 export function clampAttachThreshold(value: number): number {
   if (!Number.isFinite(value)) return EVENT_ATTACH_FLOOR;
-  return Math.min(1.0, Math.max(EVENT_ATTACH_FLOOR, value));
+  return Math.min(1.0, Math.max(0, value));
 }
 
 /** One shipped pattern choice in the editor. */

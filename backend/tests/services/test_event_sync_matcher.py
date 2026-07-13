@@ -7,7 +7,7 @@ Table-driven coverage of the layered event matcher:
       -> time-window blocking
       -> parsed-title fuzzy scoring (LOCALS cleaning)
       -> team-token check (order-insensitive; conflict = HARD reject)
-      -> event admission policy (EVENT_ATTACH_FLOOR, clamped >= 0.80)
+      -> event admission policy (EVENT_ATTACH_FLOOR = 0.80 default, operator-lowerable)
 
 Required edges per the bead: DST transitions, year inference around
 Dec 31 / Jan 1, 12h/24h times, both observed date shapes ("11 Jul 06:00 PM ET"
@@ -405,6 +405,34 @@ class TestTimeWindowBlocking:
         assert REJECT_OUTSIDE_TIME_WINDOW in result.reject_reasons
         assert result.score == 0.0
 
+    def test_window_none_disables_gate(self):
+        # bead krkm4: window_minutes=None removes the time-window gate. The
+        # same far-apart, team-agreeing pair that is rejected above now
+        # scores on title/team alone and reaches the attach band. The time
+        # delta is still reported; it just no longer rejects.
+        result = score_pair(
+            "Fubo Sports Network 01 : Man United vs. Man City @ Jan 17 07:30 AM ET",
+            "Sky 01: Manchester United vs. Manchester City @ Jan 24 07:30 AM ET",
+            window_minutes=None,
+            now=_NOW,
+        )
+        assert REJECT_OUTSIDE_TIME_WINDOW not in result.reject_reasons
+        assert result.band == BAND_ATTACH
+        assert result.time_delta_minutes is not None
+        assert result.time_delta_minutes > 0.0
+
+    def test_window_none_still_hard_rejects_team_conflict(self):
+        # The disabled gate is candidacy only — the team-conflict rail is
+        # independent and must still force a 0.0 hard reject.
+        result = score_pair(
+            "P 01: Sparks vs. Liberty @ 11 Jul 06:00 PM ET",
+            "Q 01: Mercury vs. Aces @ 11 Jul 11:00 PM ET",
+            window_minutes=None,
+            now=_NOW,
+        )
+        assert result.band == BAND_REJECT
+        assert result.score == 0.0
+
     def test_delta_exactly_at_window_edge_is_in_window(self):
         result = score_pair(
             "P 01: Alpha vs Beta @ 11 Jul 06:00 PM ET",
@@ -584,11 +612,18 @@ class TestEventAdmissionPolicy:
     def test_floor_constant_is_080(self):
         assert EVENT_ATTACH_FLOOR == 0.80
 
-    def test_threshold_below_floor_is_clamped_up(self):
-        # An operator asking for 0.50 gets 0.80 behavior — never lower.
-        assert not is_event_attachable(0.79, TEAM_VERDICT_AGREE, threshold=0.5)
-        assert not is_event_attachable(0.79, TEAM_VERDICT_ABSENT, threshold=0.0)
-        assert is_event_attachable(0.85, TEAM_VERDICT_AGREE, threshold=0.5)
+    def test_threshold_below_floor_is_operator_authoritative(self):
+        # bead krkm4-sibling: 0.80 is the DEFAULT, not a hard clamp. An
+        # operator who lowers the threshold gets exactly that lower bar.
+        assert is_event_attachable(0.79, TEAM_VERDICT_AGREE, threshold=0.5)
+        # ...and the lowered bar applies to teamless pairs too, so the
+        # no-teams 0.90 raise cannot silently veto the lowering.
+        assert is_event_attachable(0.70, TEAM_VERDICT_ABSENT, threshold=0.65)
+        assert not is_event_attachable(0.60, TEAM_VERDICT_ABSENT, threshold=0.65)
+        # A default-floor config is byte-identical to prior behavior: the
+        # 0.90 teamless raise still applies at threshold 0.80.
+        assert not is_event_attachable(0.85, TEAM_VERDICT_ABSENT, threshold=0.80)
+        assert is_event_attachable(0.85, TEAM_VERDICT_AGREE, threshold=0.80)
 
     def test_threshold_above_floor_is_respected(self):
         assert not is_event_attachable(0.85, TEAM_VERDICT_AGREE, threshold=0.9)
@@ -717,17 +752,27 @@ class TestEventAdmissionPolicy:
         # ...while a class mismatch (women's vs men's) still hard-rejects
         # (pinned by test_team_token_conflict_is_hard_reject_score_zero).
 
-    def test_score_pair_clamps_low_threshold(self):
-        # A mid-band pair must land ambiguous even when the caller passes a
-        # threshold below the floor.
-        result = score_pair(
+    def test_score_pair_honors_low_threshold(self):
+        # bead krkm4-sibling: the caller's threshold is authoritative. The
+        # same mid-band pair that lands AMBIGUOUS at the default floor
+        # ATTACHES when the operator deliberately lowers the threshold below
+        # 0.80 — the sub-floor value also bypasses the teamless 0.90 raise.
+        default = score_pair(
+            "IMSA TV 03 : IMSA VPRC at CTMP R2 @ 11 Jul 03:55 PM ET",
+            "Peacock 11: IMSA CTMP Qualifying @ 11 Jul 03:55 PM ET",
+            now=_NOW,
+        )
+        assert EVENT_AMBIGUOUS_FLOOR <= default.score < EVENT_ATTACH_FLOOR
+        assert default.band == BAND_AMBIGUOUS
+
+        lowered = score_pair(
             "IMSA TV 03 : IMSA VPRC at CTMP R2 @ 11 Jul 03:55 PM ET",
             "Peacock 11: IMSA CTMP Qualifying @ 11 Jul 03:55 PM ET",
             threshold=0.3,
             now=_NOW,
         )
-        assert EVENT_AMBIGUOUS_FLOOR <= result.score < EVENT_ATTACH_FLOOR
-        assert result.band == BAND_AMBIGUOUS
+        assert lowered.score == default.score  # same score, different bar
+        assert lowered.band == BAND_ATTACH
 
     def test_event_floor_is_independent_of_dedup_no_callsign_floor(self):
         # Drift protection: the event admission policy must not share the
@@ -738,6 +783,92 @@ class TestEventAdmissionPolicy:
         source = inspect.getsource(event_sync_matcher)
         assert "NO_CALLSIGN_FLOOR" not in source
         assert "allow_no_callsign" not in source
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 addendum — title-level initialism bridge (teamless acronyms).
+# ---------------------------------------------------------------------------
+
+
+class TestTitleInitialismBridge:
+    """bead — RoC <-> Race of Champions: acronyms in TEAMLESS titles (no
+    vs/@ split, so the team-token layer never runs) match their expansion."""
+
+    def test_acronym_title_scores_above_plain_fuzzy(self):
+        from services.event_sync_matcher import _fuzzy_title_score
+
+        acro = "RoC Modifieds at Shangri La II"
+        expanded = "Race of Champions Modifieds at Shangri La II"
+        # Same strings with the acronym pre-expanded on both sides would score
+        # ~1.0; the bridge lifts the acronym/expansion pair well above the
+        # plain token_set_ratio, which counts r/o/c as three missing tokens.
+        assert _fuzzy_title_score(acro, expanded) >= 0.90
+
+    def test_bridge_only_adds_agreement_never_lowers(self):
+        # A pair with no acronym relationship is unchanged (the bridge is a
+        # no-op when no standalone token spells a consecutive run).
+        from services.event_sync_matcher import (
+            _collapse_title_initialisms,
+        )
+        tokens = ["mercury", "vs", "aces"]
+        assert _collapse_title_initialisms(tokens, ["liberty", "sparks"]) == tokens
+
+    def test_collapse_reuses_team_initialism_helper_with_fc_suffix(self):
+        from services.event_sync_matcher import _collapse_title_initialisms
+
+        # 'mufc' collapses 'manchester united' (FC-suffix aware), same rule
+        # the team layer uses.
+        out = _collapse_title_initialisms(
+            ["manchester", "united", "friendly"], ["mufc"]
+        )
+        assert out == ["mufc", "friendly"]
+
+    def test_teamless_acronym_pair_reaches_attach_with_clean_titles(self):
+        # End-to-end through score_pair: clean titles + the bridge clear the
+        # 0.90 teamless floor and ATTACH.
+        result = score_pair(
+            "RoC Modifieds at Shangri La II @ 11 Jul 03:00 PM ET",
+            "Race of Champions Modifieds at Shangri La II @ 11 Jul 03:00 PM ET",
+            now=_NOW,
+        )
+        assert result.band == BAND_ATTACH
+
+
+class TestHyphenVariantBridge:
+    """bead — 'Shangri-La' (hyphen) vs 'Shangri La' (space): provider spelling
+    variance that clean_name keeps distinct. Split is corroboration-gated."""
+
+    def test_hyphen_vs_space_scores_full_when_corroborated(self):
+        from services.event_sync_matcher import _fuzzy_title_score
+
+        # The other side carries the split form, so 'off-road'/'shangri-la'
+        # collapse to a full match.
+        assert _fuzzy_title_score(
+            "AMSOIL Championship Off Road at Shangri La",
+            "AMSOIL Championship Off-Road at Shangri-La",
+        ) == 1.0
+
+    def test_hyphenated_compound_not_split_without_corroboration(self):
+        # 'pre-race' must NOT split into 'pre'/'race' when the other title has
+        # no 'pre race' run — otherwise the spurious 'race' token lifts an
+        # unrelated same-venue/same-slot show (frozen-corpus regression class).
+        from services.event_sync_matcher import _bridge_hyphen_variants
+
+        out = _bridge_hyphen_variants(
+            ["motocross", "southwick", "pre-race", "show"],
+            ["race", "day", "live", "southwick"],
+        )
+        assert "pre-race" in out
+        assert "race" not in out  # the compound stayed intact
+
+    def test_different_shows_sharing_venue_stay_rejected(self):
+        # End-to-end guard mirroring corpus line 41.
+        result = score_pair(
+            "Peacock 04: Race Day Live: Southwick @ 11 Jul 10:00 AM ET",
+            "MAVTV 01: Motocross Southwick Pre-Race Show @ 11 Jul 10:00 AM ET",
+            now=_NOW,
+        )
+        assert result.band == BAND_REJECT
 
 
 # ---------------------------------------------------------------------------
