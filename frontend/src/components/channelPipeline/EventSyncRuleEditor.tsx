@@ -39,7 +39,7 @@
  * and lets the backend derive the flat keys.
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { ReactNode, RefObject } from 'react';
+import type { ReactNode } from 'react';
 import type { ChannelPipelineRule, CreateRuleData } from '../../types/channelPipeline';
 import type {
   EventSyncConfig,
@@ -74,7 +74,17 @@ import {
   clampAttachThreshold,
   selectionIsBuiltinDefaults,
 } from './eventSyncDefaults';
+import { stableStringify } from '../../utils/configDirty';
 import './EventSyncRuleEditor.css';
+
+/** The four wizard steps. */
+type WizardStep = 1 | 2 | 3 | 4;
+const WIZARD_STEPS: { n: WizardStep; label: string }[] = [
+  { n: 1, label: 'Scope' },
+  { n: 2, label: 'Matching' },
+  { n: 3, label: 'Behavior' },
+  { n: 4, label: 'Review' },
+];
 
 export interface EventSyncRuleEditorProps {
   /** Existing event_sync rule to edit; omit to create a new one. */
@@ -357,6 +367,13 @@ export function EventSyncRuleEditor({
   const [preview, setPreview] = useState<EventSyncPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Stale-marking (bead m1s38.1): the built-config signature captured when the
+  // last preview ran. Results are marked stale (not cleared) when the current
+  // built config diverges from it, via the shared dirty-comparator.
+  const [previewSignature, setPreviewSignature] = useState<string | null>(null);
+  // Last Test-patterns run verdict, surfaced in the Matching impact block
+  // (null = not run yet). Fed by the panel's onParseFailuresChange callback.
+  const [lastTestFailures, setLastTestFailures] = useState<boolean | null>(null);
 
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -366,16 +383,22 @@ export function EventSyncRuleEditor({
   // auto-expands it so the failing rows are never hidden below the fold.
   const [testPatternsOpen, setTestPatternsOpen] = useState(false);
 
-  // S3: in-modal scroll-spy over the 3-phase spine. `activeSection` drives the
-  // sticky nav highlight; the section elements are observed inside the scroll
-  // container.
-  const contentRef = useRef<HTMLDivElement>(null);
-  const scopeRef = useRef<HTMLElement>(null);
-  const matchingRef = useRef<HTMLElement>(null);
-  const behaviorRef = useRef<HTMLElement>(null);
-  const [activeSection, setActiveSection] = useState<'scope' | 'matching' | 'behavior'>(
-    'scope'
-  );
+  // Wizard (bead m1s38.1): full-width step pills drive the LEFT column only.
+  // All four step sections stay MOUNTED and are toggled with `hidden`, so
+  // picker state, the Test Patterns panel, and every ref survive step changes.
+  // Editing an existing rule (rule prop present) exposes Save on every step;
+  // a brand-new rule can Save only from the Review step.
+  const isEditing = rule != null;
+  const [currentStep, setCurrentStep] = useState<WizardStep>(1);
+  // Step headings are focus targets (tabIndex=-1) so a screen reader announces
+  // the new step when nav happens. A field-focus request (Save-from-Review)
+  // overrides the heading focus for one transition.
+  const scopeHeadingRef = useRef<HTMLHeadingElement>(null);
+  const matchingHeadingRef = useRef<HTMLHeadingElement>(null);
+  const behaviorHeadingRef = useRef<HTMLHeadingElement>(null);
+  const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
+  const pendingFieldFocus = useRef<string | null>(null);
+  const didInitStep = useRef(false);
 
   // S4a: dirty-state discard guard. The confirm is shown when a dismiss is
   // attempted with unsaved changes; a pristine editor closes immediately.
@@ -688,6 +711,8 @@ export function EventSyncRuleEditor({
   const handleRunPreview = async () => {
     const builtConfig = buildConfig();
     if (!builtConfig) return;
+    // Snapshot the config this run reflects; later edits mark the results stale.
+    setPreviewSignature(stableStringify(builtConfig));
     setPreviewLoading(true);
     setPreviewError(null);
     try {
@@ -704,11 +729,20 @@ export function EventSyncRuleEditor({
   const handleSave = async () => {
     if (!name.trim()) {
       setSaveError('Name is required');
-      document.getElementById(`${id}-name`)?.focus();
+      navigateToField(1, `${id}-name`);
       return;
     }
     if (validationError) {
       setSaveError(validationError);
+      // Save-from-Review (and edit-mode Save on any step): jump to the step
+      // that owns the offending field and focus its heading.
+      const targetsScope =
+        masterScope == null ||
+        (secondaryScopes.length === 0 && !includeMasterGroupStreams);
+      const [step, fieldId] = targetsScope
+        ? ([1, `${id}-scope-title`] as const)
+        : ([2, `${id}-matching-title`] as const);
+      navigateToField(step, fieldId);
       return;
     }
     const builtConfig = buildConfig();
@@ -739,40 +773,53 @@ export function EventSyncRuleEditor({
     }));
   };
 
-  // S3: scroll-spy. Highlight the phase whose heading is nearest the top of
-  // the scroll container. Guarded so it is a no-op where IntersectionObserver
-  // is unavailable (jsdom mocks it as a stub, so this stays inert in tests).
+  // Wizard nav + focus management (bead m1s38.1). On each step change focus the
+  // step heading so a screen reader announces it — unless a specific field
+  // focus was requested (Save-from-Review jumps to the offending field). The
+  // very first mount does not steal focus. The S4b master-self-attach anchor
+  // sets pendingMasterFocus, which suppresses the heading focus so the checkbox
+  // focus effect below wins.
   useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined') return;
-    const root = contentRef.current;
-    const sections: { id: 'scope' | 'matching' | 'behavior'; el: HTMLElement | null }[] = [
-      { id: 'scope', el: scopeRef.current },
-      { id: 'matching', el: matchingRef.current },
-      { id: 'behavior', el: behaviorRef.current },
-    ];
-    const visible = new Map<Element, number>();
-    const observer = new IntersectionObserver(
-      entries => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) visible.set(entry.target, entry.intersectionRatio);
-          else visible.delete(entry.target);
-        }
-        let best: { id: 'scope' | 'matching' | 'behavior'; ratio: number } | null = null;
-        for (const { id, el } of sections) {
-          if (!el || !visible.has(el)) continue;
-          const ratio = visible.get(el) ?? 0;
-          if (!best || ratio > best.ratio) best = { id, ratio };
-        }
-        if (best) setActiveSection(best.id);
-      },
-      { root, rootMargin: '0px 0px -55% 0px', threshold: [0, 0.25, 0.5, 1] }
-    );
-    for (const { el } of sections) if (el) observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+    if (!didInitStep.current) {
+      didInitStep.current = true;
+      return;
+    }
+    const fieldId = pendingFieldFocus.current;
+    pendingFieldFocus.current = null;
+    if (fieldId) {
+      document.getElementById(fieldId)?.focus();
+      return;
+    }
+    // S4b anchor jumped us to Behavior to focus the master-self-attach box.
+    if (pendingMasterFocus.current) {
+      pendingMasterFocus.current = false;
+      scopeExtRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      includeMasterRef.current?.focus();
+      return;
+    }
+    const headingRef =
+      currentStep === 1
+        ? scopeHeadingRef
+        : currentStep === 2
+          ? matchingHeadingRef
+          : currentStep === 3
+            ? behaviorHeadingRef
+            : reviewHeadingRef;
+    headingRef.current?.focus();
+  }, [currentStep]);
 
-  const scrollToSection = (ref: RefObject<HTMLElement | null>) => {
-    ref.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  /** Plain step change (Back / Next / step pill / Review jump-back). Never
+   * routes through the dirty guard — only Cancel / Escape / × do. */
+  const goToStep = (step: WizardStep) => setCurrentStep(step);
+
+  /** Navigate to a step and focus a specific field once it is visible. */
+  const navigateToField = (step: WizardStep, fieldId: string) => {
+    if (step === currentStep) {
+      document.getElementById(fieldId)?.focus();
+    } else {
+      pendingFieldFocus.current = fieldId;
+      setCurrentStep(step);
+    }
   };
 
   // S4a: does the form diverge from the rule as loaded? (showAllGroups is a
@@ -828,13 +875,16 @@ export function EventSyncRuleEditor({
   }, [scopeExtOpen]);
 
   const handleUseMasterStreams = () => {
-    if (scopeExtOpen) {
+    // The master-self-attach checkbox lives in the Behavior step's Scope-
+    // extension subgroup — jump there, open the subgroup, and focus it.
+    if (currentStep === 3 && scopeExtOpen) {
       scopeExtRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
       includeMasterRef.current?.focus();
-    } else {
-      pendingMasterFocus.current = true;
-      setScopeExtOpen(true);
+      return;
     }
+    pendingMasterFocus.current = true;
+    setScopeExtOpen(true);
+    setCurrentStep(3);
   };
 
   // S3: plain-language rule-intent sentence. Bold clauses are the non-default
@@ -852,7 +902,7 @@ export function EventSyncRuleEditor({
   const intent: ReactNode = useMemo(() => {
     if (masterScope == null) {
       return (
-        <span className="event-sync-intent-placeholder">
+        <span className="modal-intent-placeholder">
           Pick a master group to see what this rule will do.
         </span>
       );
@@ -929,45 +979,175 @@ export function EventSyncRuleEditor({
   /** Collapsed-subgroup "N changed" badge (S2). */
   const changedBadge = (count: number) =>
     count > 0 ? (
-      <span className="badge badge-sm badge-info event-sync-subgroup-badge">
+      <span className="badge badge-sm badge-info modal-subgroup-badge">
         {count} changed
       </span>
     ) : null;
 
+  // Stale-marking (bead m1s38.1): the results reflect a config that has since
+  // diverged from the one captured when the preview ran (shared comparator).
+  const previewStale =
+    preview != null &&
+    previewSignature != null &&
+    stableStringify(buildConfig()) !== previewSignature;
+
+  /** Auto-sync verdict for a scope, rolled up across its provider junctions. */
+  const autoSyncForScope = (
+    scope: EventSyncGroupScope
+  ): 'on' | 'off' | 'mixed' | 'unknown' => {
+    const rows = junctions.filter(
+      j =>
+        j.groupId === scope.group_id &&
+        (scope.m3u_account_id == null || j.m3uAccountId === scope.m3u_account_id)
+    );
+    if (rows.length === 0) return 'unknown';
+    const on = rows.filter(r => r.autoChannelSync).length;
+    if (on === 0) return 'off';
+    if (on === rows.length) return 'on';
+    return 'mixed';
+  };
+
+  const syncChip = (verdict: ReturnType<typeof autoSyncForScope>): ReactNode => {
+    if (verdict === 'on') return <span className="badge badge-sm badge-info">Auto-sync ON</span>;
+    if (verdict === 'off') return <span className="badge badge-sm">Auto-sync OFF</span>;
+    if (verdict === 'mixed')
+      return <span className="badge badge-sm badge-warning">Auto-sync mixed</span>;
+    return <span className="badge badge-sm">Auto-sync ?</span>;
+  };
+
+  const masterProviderLabel: string | null = (() => {
+    if (masterScope == null) return null;
+    if (masterScope.m3u_account_id == null) return 'Any provider';
+    const row = junctions.find(
+      j => j.groupId === masterScope.group_id && j.m3uAccountId === masterScope.m3u_account_id
+    );
+    return row?.m3uAccountName ?? `Provider ${masterScope.m3u_account_id}`;
+  })();
+
+  const secondaryAutoSyncOnCount = secondaryScopes.filter(s => {
+    const v = autoSyncForScope(s);
+    return v === 'on' || v === 'mixed';
+  }).length;
+
+  // Persistent, step-reactive impact block (bead m1s38.1). All client-side and
+  // instant — no server round-trips (the Preview panel below is the only
+  // server dry-run).
+  const impactBlock: ReactNode = (() => {
+    if (currentStep === 1) {
+      if (masterScope == null) {
+        return (
+          <p className="form-hint">
+            Pick a master group to see its sync status and scope impact.
+          </p>
+        );
+      }
+      return (
+        <>
+          <h4 className="event-sync-impact-title">Scope impact</h4>
+          <p className="event-sync-impact-line">
+            Master <strong>{groupName(masterScope.group_id)}</strong>
+            {masterProviderLabel ? <> · {masterProviderLabel}</> : null}{' '}
+            {syncChip(autoSyncForScope(masterScope))}
+          </p>
+          <p className="event-sync-impact-line">
+            {secondaryScopes.length} secondary group
+            {secondaryScopes.length === 1 ? '' : 's'}
+            {includeMasterGroupStreams && secondaryScopes.length === 0
+              ? ' (master group’s own streams)'
+              : ''}
+          </p>
+          {secondaryAutoSyncOnCount > 0 && (
+            <p className="event-sync-impact-line">
+              <span className="badge badge-sm badge-warning">
+                {secondaryAutoSyncOnCount} secondary with auto-sync ON
+              </span>
+            </p>
+          )}
+        </>
+      );
+    }
+    if (currentStep === 2) {
+      return (
+        <>
+          <h4 className="event-sync-impact-title">Matching impact</h4>
+          <p className="event-sync-impact-line">
+            {effectivePatterns.length} parse pattern
+            {effectivePatterns.length === 1 ? '' : 's'} active
+          </p>
+          <p className="event-sync-impact-line">
+            {enforceTimeWindow
+              ? `Time window ±${currentTimeWindow} min`
+              : 'Time window ignored'}{' '}
+            · score ≥ {currentThreshold.toFixed(2)}
+          </p>
+          <p className="event-sync-impact-line">
+            {lastTestFailures == null ? (
+              <span className="form-hint">Test patterns not run yet.</span>
+            ) : lastTestFailures ? (
+              <span className="badge badge-sm badge-warning">Last test: parse failures</span>
+            ) : (
+              <span className="badge badge-sm badge-info">Last test: all parsed</span>
+            )}
+          </p>
+        </>
+      );
+    }
+    if (currentStep === 3) {
+      const chips: ReactNode[] = [];
+      if (autoRun)
+        chips.push(<span key="ar" className="badge badge-sm badge-warning">Auto-run</span>);
+      if (!enforceTimeWindow)
+        chips.push(<span key="to" className="badge badge-sm badge-warning">Title-only</span>);
+      if (assumeCurrentDate)
+        chips.push(<span key="ad" className="badge badge-sm badge-warning">Assumes date</span>);
+      if (dummyEpgProfileId != null)
+        chips.push(<span key="gd" className="badge badge-sm badge-info">Guide data</span>);
+      return (
+        <>
+          <h4 className="event-sync-impact-title">Behavior impact</h4>
+          {chips.length > 0 ? (
+            <p className="event-sync-impact-chips">{chips}</p>
+          ) : (
+            <p className="form-hint">
+              No risk flags set — manual, time-gated, no assumptions.
+            </p>
+          )}
+        </>
+      );
+    }
+    return (
+      <>
+        <h4 className="event-sync-impact-title">Ready to save</h4>
+        <p className="form-hint">
+          Run a preview below, then Save. Use the jump-back links to revisit any
+          section.
+        </p>
+      </>
+    );
+  })();
+
   return (
     <div className="event-sync-editor" data-testid="event-sync-editor">
-      <div className="event-sync-editor-content" ref={contentRef}>
-        <div className="event-sync-editor-grid">
-          <div className="event-sync-main">
-            {/* S3: sticky scroll-spy over the 3-phase spine. Degrades to a
-                plain sticky mini-header on narrow viewports (see CSS). */}
-            <nav className="event-sync-scrollspy" aria-label="Editor sections">
-              <button
-                type="button"
-                className={`event-sync-scrollspy-item${activeSection === 'scope' ? ' active' : ''}`}
-                aria-current={activeSection === 'scope' ? 'true' : undefined}
-                onClick={() => scrollToSection(scopeRef)}
-              >
-                <span className="event-sync-scrollspy-num">1</span> Scope
-              </button>
-              <button
-                type="button"
-                className={`event-sync-scrollspy-item${activeSection === 'matching' ? ' active' : ''}`}
-                aria-current={activeSection === 'matching' ? 'true' : undefined}
-                onClick={() => scrollToSection(matchingRef)}
-              >
-                <span className="event-sync-scrollspy-num">2</span> Matching
-              </button>
-              <button
-                type="button"
-                className={`event-sync-scrollspy-item${activeSection === 'behavior' ? ' active' : ''}`}
-                aria-current={activeSection === 'behavior' ? 'true' : undefined}
-                onClick={() => scrollToSection(behaviorRef)}
-              >
-                <span className="event-sync-scrollspy-num">3</span> Behavior
-              </button>
-            </nav>
+      <div className="event-sync-editor-content">
+        {/* Full-width step wizard strip — pills drive the LEFT column only.
+            Free non-linear nav: any pill is clickable at any time. */}
+        <nav className="modal-stepper" aria-label="Editor steps">
+          {WIZARD_STEPS.map(({ n, label }) => (
+            <button
+              key={n}
+              type="button"
+              className="modal-stepper-item"
+              aria-current={currentStep === n ? 'step' : undefined}
+              onClick={() => goToStep(n)}
+              data-testid={`event-sync-step-${n}`}
+            >
+              <span className="modal-stepper-num">{n}</span> {label}
+            </button>
+          ))}
+        </nav>
 
+        <div className="modal-twopane">
+          <div className="modal-main">
             <p className="form-hint event-sync-quick-path">
               Quick path: pick the master group, pick the secondary groups, keep
               the default patterns, then Preview. Preview never writes; a manual
@@ -977,14 +1157,18 @@ export function EventSyncRuleEditor({
               Behavior (off by default).
             </p>
 
-            {/* ── Phase 1: Scope ─────────────────────────────────────────── */}
+            {/* ── Step 1: Scope ──────────────────────────────────────────── */}
             <section
+              hidden={currentStep !== 1}
               className="event-sync-phase"
-              ref={scopeRef}
-              id={`${id}-scope`}
               aria-labelledby={`${id}-scope-title`}
             >
-              <h2 className="event-sync-phase-title" id={`${id}-scope-title`}>
+              <h2
+                className="event-sync-phase-title"
+                id={`${id}-scope-title`}
+                ref={scopeHeadingRef}
+                tabIndex={-1}
+              >
                 <span className="event-sync-phase-num">1</span> Scope
               </h2>
 
@@ -1097,14 +1281,18 @@ export function EventSyncRuleEditor({
               </div>
             </section>
 
-            {/* ── Phase 2: Matching ──────────────────────────────────────── */}
+            {/* ── Step 2: Matching ───────────────────────────────────────── */}
             <section
+              hidden={currentStep !== 2}
               className="event-sync-phase"
-              ref={matchingRef}
-              id={`${id}-matching`}
               aria-labelledby={`${id}-matching-title`}
             >
-              <h2 className="event-sync-phase-title" id={`${id}-matching-title`}>
+              <h2
+                className="event-sync-phase-title"
+                id={`${id}-matching-title`}
+                ref={matchingHeadingRef}
+                tabIndex={-1}
+              >
                 <span className="event-sync-phase-num">2</span> Matching
               </h2>
 
@@ -1218,6 +1406,7 @@ export function EventSyncRuleEditor({
                       patterns={effectivePatterns}
                       groupOptions={scopedGroups}
                       onParseFailuresChange={has => {
+                        setLastTestFailures(has);
                         if (has) setTestPatternsOpen(true);
                       }}
                     />
@@ -1226,7 +1415,7 @@ export function EventSyncRuleEditor({
               </div>
 
               {/* Matching-tuning subgroups (S2). */}
-              <details className="event-sync-details event-sync-subgroup">
+              <details className="modal-subgroup">
                 <summary>
                   Time tuning {changedBadge(timeTuningChanged)}
                 </summary>
@@ -1265,7 +1454,7 @@ export function EventSyncRuleEditor({
                       master event is a candidate, ranked by title/team score
                       alone.
                     </span>
-                    <details className="event-sync-details event-sync-why">
+                    <details className="modal-why">
                       <summary>Why / when to use</summary>
                       <div className="event-sync-details-body">
                         <span className="form-hint">
@@ -1286,7 +1475,7 @@ export function EventSyncRuleEditor({
                 </div>
               </details>
 
-              <details className="event-sync-details event-sync-subgroup">
+              <details className="modal-subgroup">
                 <summary>
                   Score threshold {changedBadge(scoreChanged)}
                 </summary>
@@ -1310,7 +1499,7 @@ export function EventSyncRuleEditor({
                       Auto-attach score floor on the parsed-title score. Default{' '}
                       {EVENT_ATTACH_FLOOR.toFixed(2)} (precision over recall).
                     </span>
-                    <details className="event-sync-details event-sync-why">
+                    <details className="modal-why">
                       <summary>Why / when to use</summary>
                       <div className="event-sync-details-body">
                         <span className="form-hint">
@@ -1327,7 +1516,7 @@ export function EventSyncRuleEditor({
                 </div>
               </details>
 
-              <details className="event-sync-details event-sync-subgroup">
+              <details className="modal-subgroup">
                 <summary>
                   Date handling {changedBadge(dateHandlingChanged)}
                 </summary>
@@ -1347,7 +1536,7 @@ export function EventSyncRuleEditor({
                       Places time-only listings (no date) on the current date so
                       they match same-day events.
                     </span>
-                    <details className="event-sync-details event-sync-why">
+                    <details className="modal-why">
                       <summary>Why / when to use</summary>
                       <div className="event-sync-details-body">
                         <span className="form-hint">
@@ -1369,7 +1558,7 @@ export function EventSyncRuleEditor({
                 </div>
               </details>
 
-              <details className="event-sync-details event-sync-subgroup">
+              <details className="modal-subgroup">
                 <summary>
                   Per-group pattern overrides {changedBadge(overridesChanged)}
                 </summary>
@@ -1450,19 +1639,23 @@ export function EventSyncRuleEditor({
               </details>
             </section>
 
-            {/* ── Phase 3: Behavior ──────────────────────────────────────── */}
+            {/* ── Step 3: Behavior ───────────────────────────────────────── */}
             <section
+              hidden={currentStep !== 3}
               className="event-sync-phase"
-              ref={behaviorRef}
-              id={`${id}-behavior`}
               aria-labelledby={`${id}-behavior-title`}
             >
-              <h2 className="event-sync-phase-title" id={`${id}-behavior-title`}>
+              <h2
+                className="event-sync-phase-title"
+                id={`${id}-behavior-title`}
+                ref={behaviorHeadingRef}
+                tabIndex={-1}
+              >
                 <span className="event-sync-phase-num">3</span> Behavior
               </h2>
 
               {/* Automation subgroup (S2). */}
-              <details className="event-sync-details event-sync-subgroup">
+              <details className="modal-subgroup">
                 <summary>
                   Automation {changedBadge(automationChanged)}
                 </summary>
@@ -1482,7 +1675,7 @@ export function EventSyncRuleEditor({
                       When on, the rule runs unattended after every M3U refresh —
                       same journaling, attach cap, and summary as a manual run.
                     </span>
-                    <details className="event-sync-details event-sync-why">
+                    <details className="modal-why">
                       <summary>Why / when to use</summary>
                       <div className="event-sync-details-body">
                         <span className="form-hint">
@@ -1507,7 +1700,7 @@ export function EventSyncRuleEditor({
               {/* Scope-extension subgroup (S2); controlled open for the S4b
                   secondary anchor. */}
               <details
-                className="event-sync-details event-sync-subgroup"
+                className="modal-subgroup"
                 ref={scopeExtRef}
                 open={scopeExtOpen}
                 onToggle={e => setScopeExtOpen(e.currentTarget.open)}
@@ -1533,7 +1726,7 @@ export function EventSyncRuleEditor({
                       leave the secondary list empty in the same-named
                       cross-provider case.
                     </span>
-                    <details className="event-sync-details event-sync-why">
+                    <details className="modal-why">
                       <summary>Why / when to use</summary>
                       <div className="event-sync-details-body">
                         <span className="form-hint">
@@ -1569,7 +1762,7 @@ export function EventSyncRuleEditor({
                       Reads the master event time from its first attached stream
                       instead of the channel name.
                     </span>
-                    <details className="event-sync-details event-sync-why">
+                    <details className="modal-why">
                       <summary>Why / when to use</summary>
                       <div className="event-sync-details-body">
                         <span className="form-hint">
@@ -1589,7 +1782,7 @@ export function EventSyncRuleEditor({
               </details>
 
               {/* Guide-data subgroup (S2). */}
-              <details className="event-sync-details event-sync-subgroup">
+              <details className="modal-subgroup">
                 <summary>
                   Guide data {changedBadge(guideChanged)}
                 </summary>
@@ -1616,7 +1809,7 @@ export function EventSyncRuleEditor({
                       event channels on every run, so new events get guide data
                       automatically.
                     </span>
-                    <details className="event-sync-details event-sync-why">
+                    <details className="modal-why">
                       <summary>Why / when to use</summary>
                       <div className="event-sync-details-body">
                         <span className="form-hint">
@@ -1637,14 +1830,114 @@ export function EventSyncRuleEditor({
                 </div>
               </details>
             </section>
+
+            {/* ── Step 4: Review & Preview ───────────────────────────────── */}
+            <section
+              hidden={currentStep !== 4}
+              className="event-sync-phase"
+              aria-labelledby={`${id}-review-title`}
+            >
+              <h2
+                className="event-sync-phase-title"
+                id={`${id}-review-title`}
+                ref={reviewHeadingRef}
+                tabIndex={-1}
+              >
+                <span className="event-sync-phase-num">4</span> Review &amp; Preview
+              </h2>
+              <p className="form-hint">
+                Review each section, then run the preview in the rail before
+                saving. Use a jump-back link to fix anything.
+              </p>
+              <dl className="event-sync-review" data-testid="event-sync-review">
+                <div className="event-sync-review-row">
+                  <dt>
+                    <button
+                      type="button"
+                      className="event-sync-review-jump"
+                      onClick={() => goToStep(1)}
+                      aria-label="Edit Scope"
+                    >
+                      <span className="material-icons" aria-hidden="true">arrow_back</span>
+                    </button>
+                    Scope
+                  </dt>
+                  <dd>
+                    {masterScope == null ? (
+                      <span className="event-sync-review-warn">No master group selected</span>
+                    ) : (
+                      <>
+                        Master <strong>{groupName(masterScope.group_id)}</strong>
+                        {masterProviderLabel ? ` · ${masterProviderLabel}` : ''} ·{' '}
+                        {secondaryScopes.length} secondary group
+                        {secondaryScopes.length === 1 ? '' : 's'}
+                        {includeMasterGroupStreams && secondaryScopes.length === 0
+                          ? ' · master group’s own streams'
+                          : ''}
+                      </>
+                    )}
+                  </dd>
+                </div>
+                <div className="event-sync-review-row">
+                  <dt>
+                    <button
+                      type="button"
+                      className="event-sync-review-jump"
+                      onClick={() => goToStep(2)}
+                      aria-label="Edit Matching"
+                    >
+                      <span className="material-icons" aria-hidden="true">arrow_back</span>
+                    </button>
+                    Matching
+                  </dt>
+                  <dd>
+                    {effectivePatterns.length} pattern
+                    {effectivePatterns.length === 1 ? '' : 's'} ·{' '}
+                    {enforceTimeWindow
+                      ? `time ±${currentTimeWindow} min`
+                      : 'time ignored'}{' '}
+                    · score ≥ {currentThreshold.toFixed(2)}
+                    {assumeCurrentDate ? ' · assumes date' : ''}
+                    {overridesChanged > 0
+                      ? ` · ${overridesChanged} group override${
+                          overridesChanged === 1 ? '' : 's'
+                        }`
+                      : ''}
+                  </dd>
+                </div>
+                <div className="event-sync-review-row">
+                  <dt>
+                    <button
+                      type="button"
+                      className="event-sync-review-jump"
+                      onClick={() => goToStep(3)}
+                      aria-label="Edit Behavior"
+                    >
+                      <span className="material-icons" aria-hidden="true">arrow_back</span>
+                    </button>
+                    Behavior
+                  </dt>
+                  <dd>
+                    {autoRun ? 'Auto-run after each M3U refresh' : 'Manual runs only'}
+                    {parseMasterFromStream ? ' · master time from stream' : ''}
+                    {dummyEpgProfileId != null ? ' · dummy EPG guide data' : ''}
+                  </dd>
+                </div>
+              </dl>
+            </section>
           </div>
 
-          {/* Sticky validation rail (S3): plain-language intent + always-
-              visible Preview. Drops below the main column under ~820px. */}
-          <aside className="event-sync-rail" aria-label="Validation and preview">
-            <div className="event-sync-intent" data-testid="event-sync-intent">
-              <h3 className="event-sync-intent-title">What this rule will do</h3>
-              <p className="event-sync-intent-text">{intent}</p>
+          {/* Persistent rail (bead m1s38.1): intent sentence + step-reactive
+              impacts + a single manual Preview (compact on steps 1-3, expanded
+              on Review, stale-marked when the config changes). Drops below the
+              main column under ~820px. */}
+          <aside className="modal-rail" aria-label="Rule intent, impacts, and preview">
+            <div className="modal-intent" data-testid="event-sync-intent">
+              <h3 className="modal-intent-title">What this rule will do</h3>
+              <p className="modal-intent-text">{intent}</p>
+            </div>
+            <div className="event-sync-impact" data-testid="event-sync-impact" aria-live="polite">
+              {impactBlock}
             </div>
             <div className="event-sync-rail-preview">
               <h3 className="event-sync-section-title">Preview</h3>
@@ -1654,17 +1947,19 @@ export function EventSyncRuleEditor({
                 error={previewError}
                 onRunPreview={handleRunPreview}
                 disabledReason={validationError}
+                compact={currentStep !== 4}
+                stale={previewStale}
               />
             </div>
           </aside>
         </div>
       </div>
 
-      {/* Footer */}
+      {/* Footer: Cancel (far left, dirty-guarded) · Back (hidden on step 1) ·
+          Next (steps 1-3, becomes Save on step 4). Editing an existing rule
+          also exposes Save on every step. Back/Next NEVER route through the
+          dirty guard — only Cancel/Escape/× do. */}
       <div className="event-sync-editor-footer">
-        {saveError && (
-          <span className="event-sync-save-error" role="alert">{saveError}</span>
-        )}
         <button
           type="button"
           className="btn-secondary"
@@ -1673,14 +1968,50 @@ export function EventSyncRuleEditor({
         >
           Cancel
         </button>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={handleSave}
-          disabled={saving || isLoading}
-        >
-          {saving ? 'Saving...' : 'Save'}
-        </button>
+        {saveError && (
+          <span className="event-sync-save-error" role="alert">{saveError}</span>
+        )}
+        <div className="event-sync-footer-nav">
+          {currentStep > 1 && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => goToStep((currentStep - 1) as WizardStep)}
+              disabled={saving}
+            >
+              Back
+            </button>
+          )}
+          {isEditing && currentStep < 4 && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleSave}
+              disabled={saving || isLoading}
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          {currentStep < 4 ? (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => goToStep((currentStep + 1) as WizardStep)}
+              disabled={saving}
+            >
+              Next
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSave}
+              disabled={saving || isLoading}
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Guided setup (ti939.3.4): the toggle API is reachable ONLY through

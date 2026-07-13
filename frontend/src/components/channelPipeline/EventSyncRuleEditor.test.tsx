@@ -20,6 +20,7 @@ import {
 import { EventSyncRuleEditor } from './EventSyncRuleEditor';
 import type { ChannelPipelineRule } from '../../types/channelPipeline';
 import type { ProviderGroupScopeRow } from '../../services/api';
+import type { EventSyncPreviewResponse } from '../../types/eventSync';
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
@@ -71,6 +72,16 @@ function stubGroupSettingsFull(
       stream_count: 10,
     }))
   );
+}
+
+/** Click a wizard step pill (bead m1s38.1). Controls that live on a step
+ * other than the current one are `hidden`, so role/visibility queries only
+ * reach them after navigating to that step. */
+async function goToStep(
+  user: ReturnType<typeof userEvent.setup>,
+  n: 1 | 2 | 3 | 4
+) {
+  await user.click(screen.getByTestId(`event-sync-step-${n}`));
 }
 
 function seedGroups() {
@@ -738,6 +749,8 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
+      // Parse patterns live on the Matching step.
+      await goToStep(user, 2);
       // Deselect one of the built-ins; the remaining built-ins are emitted.
       await user.click(screen.getByRole('checkbox', { name: /month-first date \(built-in\)/i }));
       await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -839,6 +852,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={apiRule} onSave={onSave} onCancel={vi.fn()} />);
 
+      await goToStep(user, 2);
       // The built-in checkboxes reflect the saved selection: none selected.
       expect(screen.getByRole('checkbox', { name: /day-first date \(built-in\)/i }))
         .not.toBeChecked();
@@ -1004,6 +1018,7 @@ describe('EventSyncRuleEditor', () => {
       const onSave = vi.fn();
       render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
 
+      await goToStep(user, 3);
       await user.click(screen.getByText('Guide data'));
       // Open the profile picker (shows the None placeholder) and pick one.
       await user.click(
@@ -1281,6 +1296,8 @@ describe('EventSyncRuleEditor', () => {
       const details = await screen.findByTestId('event-sync-test-patterns-details');
       expect(details).not.toHaveAttribute('open');
 
+      // The Test Patterns panel lives on the Matching step.
+      await goToStep(user, 2);
       await user.type(screen.getByLabelText('Sample stream names'), 'Totally Unparseable Name');
       await user.click(screen.getByRole('button', { name: /test patterns/i }));
 
@@ -1385,6 +1402,247 @@ describe('EventSyncRuleEditor', () => {
 
       await waitFor(() => expect(checkbox).toHaveFocus());
       expect(checkbox.closest('details')).toHaveAttribute('open');
+    });
+  });
+
+  describe('4-step wizard (bead m1s38.1)', () => {
+    const PREVIEW_FIXTURE: EventSyncPreviewResponse = {
+      preflight: { ok: true, failures: [] },
+      summary: {
+        secondary_streams: 5,
+        would_attach: 3,
+        ambiguous_skipped: 1,
+        unmatched: 1,
+        parse_failed: 0,
+        master_channels: 4,
+        master_channels_unparsed: 0,
+        would_attach_via_review: 0,
+        candidates_pending_review: 0,
+      },
+      streams: [
+        {
+          stream_id: 1,
+          stream_name: 'X vs Y @ 11 Jul 06:00 PM ET',
+          group_id: 2,
+          provider: 'Provider B',
+          parsed_title: 'X vs Y',
+          parsed_start: '2026-07-11T18:00:00-04:00',
+          matched_pattern: 'slot-title-day-first-date',
+          disposition: 'would_attach',
+          unmatchable_reason: null,
+          attach_source: 'threshold',
+          would_attach_master: { channel_id: 7, name: 'Master X vs Y' },
+          candidates: [],
+        },
+      ],
+      unmatched_streams: [],
+      parse_failures: [],
+      unparsed_master_channels: [],
+      truncated: false,
+    };
+
+    function stubPreview() {
+      server.use(
+        http.post('/api/channel-pipeline/event-sync-preview', () =>
+          HttpResponse.json(PREVIEW_FIXTURE)
+        )
+      );
+    }
+
+    it('step pills switch the visible left-column section and mark the active pill', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+      await screen.findByTestId('psg-master');
+
+      // Step 1 active: Scope visible, Matching hidden.
+      expect(screen.getByTestId('event-sync-step-1')).toHaveAttribute('aria-current', 'step');
+      expect(screen.getByText('Scope', { selector: 'h2' })).toBeVisible();
+      expect(screen.getByText('Matching', { selector: 'h2' })).not.toBeVisible();
+
+      await goToStep(user, 2);
+
+      expect(screen.getByTestId('event-sync-step-2')).toHaveAttribute('aria-current', 'step');
+      expect(screen.getByTestId('event-sync-step-1')).not.toHaveAttribute('aria-current');
+      expect(screen.getByText('Matching', { selector: 'h2' })).toBeVisible();
+      expect(screen.getByText('Scope', { selector: 'h2' })).not.toBeVisible();
+    });
+
+    it('reactively updates the rail impact block per step', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+      await screen.findByTestId('psg-master');
+
+      const impact = screen.getByTestId('event-sync-impact');
+      expect(within(impact).getByText('Scope impact')).toBeInTheDocument();
+
+      await goToStep(user, 2);
+      expect(within(impact).getByText('Matching impact')).toBeInTheDocument();
+
+      await goToStep(user, 3);
+      expect(within(impact).getByText('Behavior impact')).toBeInTheDocument();
+    });
+
+    it('renders ONE preview: compact on config steps, expanded on Review, stale on config change', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      stubPreview();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+      await screen.findByTestId('psg-master');
+
+      // Run the single preview from the rail while on a config step (compact):
+      // the one-line summary shows, the detailed match-result list does not.
+      await user.click(screen.getByRole('button', { name: /preview matches/i }));
+      await screen.findByTestId('event-sync-summary');
+      expect(screen.queryByRole('list', { name: /match results/i })).toBeNull();
+
+      // The Review step expands the SAME preview instance → detail appears.
+      await goToStep(user, 4);
+      expect(screen.getByRole('list', { name: /match results/i })).toBeInTheDocument();
+      expect(screen.queryByTestId('event-sync-preview-stale')).toBeNull();
+
+      // Changing a config field marks the results stale (not cleared).
+      await goToStep(user, 2);
+      await user.click(screen.getByTestId('event-sync-ignore-time-window'));
+      expect(screen.getByTestId('event-sync-preview-stale')).toBeInTheDocument();
+      expect(screen.getByTestId('event-sync-summary')).toBeInTheDocument();
+    });
+
+    it('Back and Next never trigger the discard confirm when dirty; Cancel does', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+      await screen.findByTestId('psg-master');
+
+      // Make the form dirty.
+      await user.type(screen.getByLabelText(/rule name/i), '!');
+
+      // Next advances without a discard prompt.
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      expect(screen.queryByTestId('event-sync-discard-dialog')).toBeNull();
+      expect(screen.getByTestId('event-sync-step-2')).toHaveAttribute('aria-current', 'step');
+
+      // Back returns to the previous step (N-1), not nav history, no prompt.
+      await user.click(screen.getByRole('button', { name: 'Back' }));
+      expect(screen.queryByTestId('event-sync-discard-dialog')).toBeNull();
+      expect(screen.getByTestId('event-sync-step-1')).toHaveAttribute('aria-current', 'step');
+
+      // Cancel (dirty) still routes through the discard guard.
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.getByTestId('event-sync-discard-dialog')).toBeInTheDocument();
+    });
+
+    it('Save-from-Review routes to the offending field step and focuses it (name)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(
+        <EventSyncRuleEditor
+          rule={{ ...EXISTING_RULE, name: '' }}
+          onSave={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      await screen.findByTestId('psg-master');
+
+      await goToStep(user, 4);
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('event-sync-step-1')).toHaveAttribute('aria-current', 'step')
+      );
+      expect(screen.getByLabelText(/rule name/i)).toHaveFocus();
+      expect(screen.getByRole('alert')).toHaveTextContent('Name is required');
+    });
+
+    it('Save-from-Review routes to the Matching step when the pattern selection is empty', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+      await screen.findByTestId('psg-master');
+
+      // Deselect every built-in pattern on the Matching step (no custom either).
+      await goToStep(user, 2);
+      for (const box of screen.getAllByRole('checkbox').filter(cb => (cb as HTMLInputElement).checked)) {
+        await user.click(box);
+      }
+
+      await goToStep(user, 4);
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('event-sync-step-2')).toHaveAttribute('aria-current', 'step')
+      );
+      expect(screen.getByText('Matching', { selector: 'h2' })).toHaveFocus();
+      expect(screen.getByRole('alert')).toHaveTextContent(/parse pattern/i);
+    });
+
+    it('a NEW rule exposes Save only on the Review step (Next on config steps)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor onSave={vi.fn()} onCancel={vi.fn()} />);
+      await screen.findByTestId('psg-master');
+
+      expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+
+      await goToStep(user, 4);
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
+    });
+
+    it('editing an existing rule exposes Save on every step', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+      await screen.findByTestId('psg-master');
+
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+      await goToStep(user, 2);
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+      await goToStep(user, 4);
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    });
+
+    it('consumes the shared .modal-* two-pane layout classes and drops the old event-sync layout variants', async () => {
+      const { container } = render(
+        <EventSyncRuleEditor rule={EXISTING_RULE} onSave={vi.fn()} onCancel={vi.fn()} />
+      );
+      await screen.findByTestId('psg-master');
+
+      for (const cls of [
+        '.modal-twopane',
+        '.modal-main',
+        '.modal-rail',
+        '.modal-stepper',
+        '.modal-stepper-item',
+        '.modal-intent',
+        '.modal-subgroup',
+        '.modal-why',
+      ]) {
+        expect(container.querySelector(cls)).not.toBeNull();
+      }
+
+      // The migrated-away layout variants must not survive (grep guard).
+      for (const retired of [
+        '.event-sync-editor-grid',
+        '.event-sync-main',
+        '.event-sync-rail',
+        '.event-sync-scrollspy',
+        '.event-sync-scrollspy-item',
+        '.event-sync-intent',
+        '.event-sync-subgroup',
+      ]) {
+        expect(container.querySelector(retired)).toBeNull();
+      }
     });
   });
 });
