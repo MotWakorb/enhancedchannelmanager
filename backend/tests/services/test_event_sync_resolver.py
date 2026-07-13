@@ -30,6 +30,8 @@ from services.event_sync_matcher import (
     BAND_ATTACH,
     BAND_REJECT,
     DEFAULT_EVENT_TIMEZONE,
+    TEAM_VERDICT_ABSENT,
+    TEAM_VERDICT_AGREE,
     MasterCandidate,
     ParsedEvent,
     REJECT_NO_PARSED_TIME,
@@ -43,8 +45,14 @@ from services.event_sync_resolver import (
     DISPOSITION_PARSE_FAILED,
     DISPOSITION_UNMATCHED,
     DISPOSITION_WOULD_ATTACH,
+    MATCHED_VIA_ASSUME_CURRENT_DATE,
+    MATCHED_VIA_LOWERED_THRESHOLD,
+    MATCHED_VIA_MASTER_FROM_STREAM,
+    MATCHED_VIA_TIME_WINDOW_IGNORED,
+    ResolvedStream,
     SecondaryStream,
     _classify,
+    _matched_via,
     effective_patterns,
     resolve_event_sync,
 )
@@ -568,3 +576,128 @@ class TestEnforceTimeWindowToggle:
         (resolved,) = resolution.resolved
         assert resolved.disposition != DISPOSITION_WOULD_ATTACH
         assert resolved.best is None
+
+
+class TestMatchedViaProvenance:
+    """S5 (bead sf8dj): the diagnostic ``matched_via`` provenance list.
+
+    Annotation only — these tests assert WHICH optional relaxation admitted a
+    would-attach row; the frozen matcher corpus and every band/score decision
+    are covered elsewhere and unchanged.
+    """
+
+    def _keys(self, resolved: ResolvedStream) -> list[str]:
+        return [key for key, _label in resolved.matched_via]
+
+    def test_plain_in_window_default_match_has_empty_provenance(self):
+        stream = SecondaryStream(
+            name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            group_id=20, stream_id=201,
+        )
+        (resolved,) = resolve_event_sync(_config(), MASTERS, [stream], now=NOW).resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.matched_via == ()
+
+    def test_assume_current_date_marks_the_row(self):
+        # Time but no date -> a candidate only because the date was assumed.
+        stream = SecondaryStream(
+            name="Fubo 01: Mercury vs. Aces @ 06:00 PM ET",
+            group_id=20, stream_id=201,
+        )
+        config = _config(assume_current_date=True)
+        (resolved,) = resolve_event_sync(config, MASTERS, [stream], now=NOW).resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert self._keys(resolved) == [MATCHED_VIA_ASSUME_CURRENT_DATE[0]]
+
+    def test_time_window_ignored_marks_the_row(self):
+        # 180 min from the master; a candidate only because the gate is off.
+        stream = SecondaryStream(
+            name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 09:00 PM ET",
+            group_id=20, stream_id=201,
+        )
+        config = _config(enforce_time_window=False)
+        (resolved,) = resolve_event_sync(config, MASTERS, [stream], now=NOW).resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert self._keys(resolved) == [MATCHED_VIA_TIME_WINDOW_IGNORED[0]]
+
+    def test_master_from_stream_marks_the_row(self):
+        # parse_master_from_stream on -> the master identity came from a stream.
+        stream = SecondaryStream(
+            name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            group_id=20, stream_id=201,
+        )
+        config = _config(parse_master_from_stream=True)
+        (resolved,) = resolve_event_sync(config, MASTERS, [stream], now=NOW).resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert self._keys(resolved) == [MATCHED_VIA_MASTER_FROM_STREAM[0]]
+
+    # --- lowered_threshold: score below the DEFAULT effective floor. Scores
+    # are exercised directly on _matched_via (constructed candidates) so the
+    # provenance rule is pinned independently of the frozen fuzzy corpus. ---
+
+    def _resolved(self, *, score, team_verdict, time_delta=0.0) -> ResolvedStream:
+        parsed = ParsedEvent(
+            raw_name="stream", title="T", start=NOW, teams=None,
+            matched_pattern="p",
+        )
+        master = MasterCandidate(
+            master_name="Master", parsed=parsed, score=score, band=BAND_ATTACH,
+            team_verdict=team_verdict, time_delta_minutes=time_delta,
+            reject_reasons=(),
+        )
+        result = StreamMatchResult(
+            stream_name="stream", parsed=parsed, candidates=(master,),
+        )
+        return ResolvedStream(
+            stream=SecondaryStream(name="stream", group_id=20),
+            result=result, disposition=DISPOSITION_WOULD_ATTACH, best=master,
+        )
+
+    def _via(self, resolved, **overrides):
+        kwargs = dict(
+            patterns=None, now=NOW, assume_current_date=False,
+            enforce_time_window=True, time_window_minutes=30,
+            parse_master_from_stream=False,
+        )
+        kwargs.update(overrides)
+        return [key for key, _ in _matched_via(resolved, **kwargs)]
+
+    def test_lowered_threshold_when_score_below_teamless_default_floor(self):
+        # Teamless default floor is 0.90; a 0.85 attach only cleared a lowered
+        # attach_threshold.
+        resolved = self._resolved(score=0.85, team_verdict=TEAM_VERDICT_ABSENT)
+        assert self._via(resolved) == [MATCHED_VIA_LOWERED_THRESHOLD[0]]
+
+    def test_lowered_threshold_when_score_below_team_agree_default_floor(self):
+        # Team-agree default floor is 0.80; a 0.75 attach only cleared a
+        # lowered threshold.
+        resolved = self._resolved(score=0.75, team_verdict=TEAM_VERDICT_AGREE)
+        assert self._via(resolved) == [MATCHED_VIA_LOWERED_THRESHOLD[0]]
+
+    def test_no_lowered_flag_at_or_above_default_floor(self):
+        # A 0.95 teamless attach clears the 0.90 default floor on its own.
+        resolved = self._resolved(score=0.95, team_verdict=TEAM_VERDICT_ABSENT)
+        assert self._via(resolved) == []
+        # A 0.85 team-agree attach clears the 0.80 default floor on its own.
+        resolved = self._resolved(score=0.85, team_verdict=TEAM_VERDICT_AGREE)
+        assert self._via(resolved) == []
+
+    def test_non_attach_disposition_never_annotated(self):
+        resolved = self._resolved(score=0.75, team_verdict=TEAM_VERDICT_AGREE)
+        # Same data but a non-attach disposition -> no provenance at all.
+        ambiguous = ResolvedStream(
+            stream=resolved.stream, result=resolved.result,
+            disposition=DISPOSITION_AMBIGUOUS, best=None,
+        )
+        assert self._via(ambiguous) == []
+
+    def test_multiple_relaxations_accumulate(self):
+        # Gate off + teamless below floor -> both flags, keys stable/ordered.
+        resolved = self._resolved(
+            score=0.85, team_verdict=TEAM_VERDICT_ABSENT, time_delta=120.0,
+        )
+        keys = self._via(resolved, enforce_time_window=False)
+        assert keys == [
+            MATCHED_VIA_TIME_WINDOW_IGNORED[0],
+            MATCHED_VIA_LOWERED_THRESHOLD[0],
+        ]
