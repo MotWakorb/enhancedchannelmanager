@@ -1111,7 +1111,10 @@ export function ChannelPipelineTab() {
           : `${editingRule ? 'Edit' : 'Create'}${isEventSync ? ' Event Sync' : ''} Rule`;
         return (
           <ModalOverlay onClose={handleCancelRuleBuilder} role="dialog" aria-modal="true" aria-labelledby="rule-builder-title">
-            <div className="modal-container modal-lg rule-builder-modal">
+            {/* Event Sync carries the app's densest form — give it modal-xxl
+                (1000px). The kind chooser and the standard rule builder keep
+                modal-lg. */}
+            <div className={`modal-container ${isEventSync && !showKindChooser ? 'modal-xxl' : 'modal-lg'} rule-builder-modal`}>
               <div className="modal-header">
                 <h2 id="rule-builder-title">{title}</h2>
                 <button
