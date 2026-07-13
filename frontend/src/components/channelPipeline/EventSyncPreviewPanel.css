@@ -25,6 +25,25 @@
   gap: 16px;
 }
 
+/* Stale marking (bead m1s38.1): the config changed since this preview ran —
+   dim the results but keep them readable, and flag the re-run notice. */
+.event-sync-preview-results--stale {
+  opacity: 0.5;
+}
+
+.event-sync-preview-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning, #f59e0b);
+}
+
+.event-sync-preview-stale .material-icons {
+  font-size: 16px;
+}
+
 .event-sync-preflight {
   display: flex;
   flex-direction: column;
