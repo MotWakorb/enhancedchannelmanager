@@ -208,6 +208,52 @@ def register(mcp: FastMCP):
             return f"Error running EPG auto-match: {e}"
 
     @mcp.tool()
+    async def audit_epg_duplicates() -> str:
+        """Audit for channels silently sharing one EPG link (read-only).
+
+        Lists every set of two or more channels linked to the SAME EPG row
+        (same ``epg_data_id``). This is the fingerprint of the West-shares-East
+        mis-link bug: a West feed pointed at its East counterpart's EPG row, so
+        it shows the wrong schedule. Channels with no EPG link are excluded
+        (they are unlinked, not mis-linked). This audit changes nothing — to
+        fix a flagged channel, re-link it with ``link_channel_epg``.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["epg_audit_duplicates"])
+            groups = result.get("shared_links", []) if isinstance(result, dict) else []
+            summary = result.get("summary", {}) if isinstance(result, dict) else {}
+            total = summary.get("total_channels", "?")
+
+            if not groups:
+                return (
+                    f"No shared EPG links found across {total} channels — "
+                    "every linked channel points at a distinct EPG row."
+                )
+
+            lines = [
+                f"Found {len(groups)} set(s) of channels sharing one EPG link "
+                f"({summary.get('affected_channels', '?')} channels affected, "
+                f"{total} total):"
+            ]
+            for g in groups:
+                epg_name = g.get("epg_name") or "(EPG row name unavailable)"
+                tvg_id = g.get("tvg_id")
+                tvg_str = f", tvg_id={tvg_id}" if tvg_id else ""
+                lines.append(
+                    f"\n  EPG row id={g.get('epg_data_id')} — {epg_name}{tvg_str} "
+                    f"→ {g.get('count')} channels share it:"
+                )
+                for c in g.get("channels", []):
+                    lines.append(
+                        f"    • channel {c.get('channel_id')}: {c.get('channel_name')}"
+                    )
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] audit_epg_duplicates failed: %s", e)
+            return f"Error auditing EPG duplicates: {e}"
+
+    @mcp.tool()
     async def link_channel_epg(
         channel_id: int,
         tvg_id: str | None = None,
