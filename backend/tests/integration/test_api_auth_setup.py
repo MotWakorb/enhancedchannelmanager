@@ -48,18 +48,27 @@ class TestSetupDetection:
         assert response.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_protected_endpoints_indicate_setup_needed(self, async_client):
-        """All protected endpoints redirect/indicate setup when no users exist."""
-        # With no users, protected endpoints should indicate setup is needed
+    async def test_protected_endpoints_reachable_before_setup(self, async_client):
+        """Before first-run setup, protected endpoints are reachable (200), NOT gated.
+
+        By design (docs/auth_middleware.md, RequireAuthIfEnabled semantics) the
+        global auth middleware SKIPS enforcement while ``setup_complete`` is
+        False — i.e. when no users exist — so a first-run operator can reach the
+        app to complete setup. Setup-needed is signalled to the client via the
+        dedicated public endpoint GET /api/auth/setup-required (see
+        test_setup_required_returns_true_when_no_users), NOT via a 401/403 on
+        protected routes.
+
+        The old assertion accepted (200, 401, 403, 503) — almost any outcome —
+        so it could never catch a regression. Assert the exact 200 the design
+        guarantees: this fails if the middleware ever started gating routes
+        before setup (which would lock a first-run operator out) or if the
+        endpoint began 500/503-ing on a clean install.
+        """
         response = await async_client.get("/api/settings")
-        # Could be 401 with setup_required flag, or redirect, or special status
-        assert response.status_code in (200, 401, 403, 503)
-        # If 401/403, should indicate setup is required
-        if response.status_code in (401, 403):
-            data = response.json()
-            assert data.get("setup_required") is True or "setup" in data.get(
-                "detail", ""
-            ).lower()
+        assert response.status_code == 200
+        # Reachable and serving the real settings payload, not an error body.
+        assert "configured" in response.json()
 
 
 class TestAdminCreation:
