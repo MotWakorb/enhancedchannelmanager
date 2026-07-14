@@ -2607,6 +2607,22 @@ async def _fetch_and_resolve_event_sync(
         raise HTTPException(status_code=500, detail=str(e))
     master_names = sorted(name_to_id)
 
+    # Master-group reality echo (bead at41p) — when master_group_id and the
+    # effective (Channel-Group-Override-resolved) id diverge, "I set the master
+    # to X" and "the matcher read group Y" are different facts; log the remap
+    # plus how many channels/identities that group actually yielded, so an empty
+    # or generic master group is visible at the fetch boundary rather than only
+    # inferable from a downstream usable=0. Observability only.
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "[EVENT-SYNC] fetch master_group=%s effective_master_group=%s "
+            "master_channels=%d master_identities=%d "
+            "parse_master_from_stream=%s truncated=%s",
+            master_group_id, effective_master_group_id,
+            len(master_channels), len(master_names),
+            bool(config.get("parse_master_from_stream")), truncated,
+        )
+
     # --- Fetch the secondary groups' streams (capped, paginated) ---------
     group_names: dict[int, str | None] = {}
     secondary_streams: list[SecondaryStream] = []
