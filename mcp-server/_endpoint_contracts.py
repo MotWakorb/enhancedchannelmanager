@@ -524,6 +524,11 @@ ENDPOINTS: dict[str, Endpoint] = {
         # field in v0.19.0.
         request_fields=frozenset({"channel_ids", "epg_source_ids", "source_order"}),  # EPGMatchRequest
     ),
+    "epg_audit_duplicates": Endpoint(
+        name="epg_audit_duplicates",
+        method="GET",
+        path="/api/epg/audit-duplicates",
+    ),
     "epg_link_channel": Endpoint(
         name="epg_link_channel",
         method="POST",
