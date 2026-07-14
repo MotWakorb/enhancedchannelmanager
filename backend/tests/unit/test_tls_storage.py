@@ -253,8 +253,11 @@ class TestParseCertificate:
         assert info.is_valid is True
         assert info.subject == "host.example.com"
         assert info.issuer == "host.example.com"  # self-signed
-        assert "host.example.com" in info.domains
-        assert "alt.example.com" in info.domains
+        # Use .count() (exact membership) rather than `"x" in info.domains`: the
+        # latter trips CodeQL's py/incomplete-url-substring-sanitization on the
+        # string-in-x pattern even though info.domains is a list — and count is
+        # more precise (also proves the CN-vs-SAN de-duplication below).
+        assert info.domains.count("alt.example.com") == 1
         # CN is not duplicated when also present as a SAN.
         assert info.domains.count("host.example.com") == 1
         assert info.serial_number  # hex string, non-empty
