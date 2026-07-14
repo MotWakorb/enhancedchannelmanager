@@ -13,7 +13,6 @@ below), so a regression in the production code path fails here rather than
 hiding behind a reimplemented helper.
 """
 import logging
-import re
 import time
 
 import pytest
@@ -23,66 +22,19 @@ from models import M3UChangeLog
 
 
 # ---------------------------------------------------------------------------
-# Inline replay of the digest-task filter block — calls the SAME safe_regex
-# functions the task calls, so this suite verifies the production code path
-# rather than a reimplementation. Keeping the body in sync with m3u_digest.py
-# is enforced by the test_production_filter_shape regression below.
+# These adversarial tests drive the REAL production exclude filter
+# (tasks.m3u_digest.apply_exclude_filters — the same code path
+# M3UDigestTask.execute() runs), so a regression in the production timeout /
+# oversize / invalid-pattern handling fails here directly rather than hiding
+# behind a reimplemented helper.
 # ---------------------------------------------------------------------------
 
 
 def _apply_exclude_filters(changes, group_patterns_raw, stream_patterns_raw):
-    """
-    Mirror of the exclude-filter block in tasks/m3u_digest.py::execute().
+    """Call the real production exclude filter from tasks.m3u_digest."""
+    from tasks.m3u_digest import apply_exclude_filters
 
-    This replicates the production logic using the same safe_regex helpers
-    so tests can exercise timeout / oversize / invalid-pattern behavior
-    without driving the full async execute() entrypoint.
-    """
-    from tasks.m3u_digest import _FilteredChange
-
-    if not group_patterns_raw and not stream_patterns_raw:
-        return changes
-
-    group_regexes = []
-    for p in group_patterns_raw:
-        try:
-            group_regexes.append(safe_regex.compile(p, flags=re.IGNORECASE))
-        except safe_regex.SafeRegexError:
-            continue
-
-    stream_regexes = []
-    for p in stream_patterns_raw:
-        try:
-            stream_regexes.append(safe_regex.compile(p, flags=re.IGNORECASE))
-        except safe_regex.SafeRegexError:
-            continue
-
-    filtered = []
-    for change in changes:
-        if group_regexes and change.group_name:
-            if any(
-                safe_regex.search(rx, change.group_name) is not None
-                for rx in group_regexes
-            ):
-                continue
-
-        if stream_regexes and change.change_type in ("streams_added", "streams_removed"):
-            original_names = change.get_stream_names()
-            if original_names:
-                kept = [
-                    n for n in original_names
-                    if not any(
-                        safe_regex.search(rx, n) is not None
-                        for rx in stream_regexes
-                    )
-                ]
-                if not kept:
-                    continue
-                if len(kept) < len(original_names):
-                    change = _FilteredChange(change, kept)
-
-        filtered.append(change)
-    return filtered
+    return apply_exclude_filters(changes, group_patterns_raw, stream_patterns_raw)
 
 
 def _make_change(session, change_type, group_name, stream_names=None, count=None):
@@ -208,21 +160,23 @@ class TestProductionUsesSafeRegex:
             "tasks.m3u_digest must import safe_regex (bd-eio04.17)"
         )
 
-    def test_production_filter_shape(self):
+    def test_production_filter_uses_safe_regex(self):
         """
-        Sanity check that the live digest code still contains the
-        safe_regex call sites this suite mirrors. Source-level check,
-        cheaper than driving the full async task.
+        Sanity check that the real exclude filter still calls the safe_regex
+        API (per-invocation ReDoS timeout / oversize-pattern rejection).
+        The adversarial tests above drive apply_exclude_filters directly, so a
+        revert to bare ``re`` would already fail them; this source-level check
+        pins the intent with a clear message.
         """
         import inspect
-        from tasks.m3u_digest import M3UDigestTask
+        from tasks.m3u_digest import apply_exclude_filters
 
-        src = inspect.getsource(M3UDigestTask)
+        src = inspect.getsource(apply_exclude_filters)
         assert "safe_regex.compile" in src, (
-            "M3UDigestTask no longer calls safe_regex.compile — "
+            "apply_exclude_filters no longer calls safe_regex.compile — "
             "the bd-eio04.17 migration has been reverted"
         )
         assert "safe_regex.search" in src, (
-            "M3UDigestTask no longer calls safe_regex.search — "
+            "apply_exclude_filters no longer calls safe_regex.search — "
             "the bd-eio04.17 migration has been reverted"
         )
