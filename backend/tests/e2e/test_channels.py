@@ -19,14 +19,54 @@ class TestListChannels:
         response = e2e_client.get("/api/channels", params={"page": 1, "page_size": 5})
         assert response.status_code == 200
 
+    def test_list_channels_page_size_respected(self, e2e_client):
+        """GET /api/channels honours page_size — at most that many results per page."""
+        response = e2e_client.get("/api/channels", params={"page": 1, "page_size": 1})
+        assert response.status_code == 200
+        data = response.json()
+        # DRF-style envelope: results is capped at page_size, count is the total.
+        assert len(data["results"]) <= 1
+
+    def test_list_channels_filter_nonexistent_group_is_empty(self, e2e_client):
+        """GET /api/channels?channel_group=<unknown> returns an empty page, not an error.
+
+        Filtering on a channel_group id that does not exist is a valid query
+        that simply matches nothing — the endpoint must return 200 with an empty
+        result set, not 404/500. The prior smoke test never exercised any filter
+        or error/edge path for this route.
+        """
+        response = e2e_client.get("/api/channels", params={"channel_group": 99999999})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["results"] == []
+
+    def test_list_channels_search_no_match_is_empty(self, e2e_client):
+        """GET /api/channels?search=<no match> returns an empty page, not an error."""
+        response = e2e_client.get(
+            "/api/channels", params={"search": "zzzz-no-such-channel-xyz"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["results"] == []
+
 
 class TestChannelCSV:
     """Tests for CSV endpoints."""
 
     def test_csv_template(self, e2e_client):
-        """GET /api/channels/csv-template returns CSV template."""
+        """GET /api/channels/csv-template returns a populated CSV template body.
+
+        The prior test only checked the status code. Inspect the body: it must be
+        served as CSV and contain the documented header/guidance so the import UI
+        has a real template to hand the operator, not an empty 200.
+        """
         response = e2e_client.get("/api/channels/csv-template")
         assert response.status_code == 200
+        assert "text/csv" in response.headers.get("content-type", "")
+        body = response.text
+        assert body.strip(), "CSV template body must not be empty"
+        # The template documents the required 'name' field in its comment header.
+        assert "name" in body.lower()
 
 
 class TestChannelGroups:

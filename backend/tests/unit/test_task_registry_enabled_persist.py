@@ -37,3 +37,42 @@ def test_sync_to_database_persists_enabled_for_existing_task(test_session, monke
     assert row is not None
     assert row.enabled is True
     assert inst._enabled is True
+
+
+def test_sync_to_database_persists_disabled_for_existing_task(test_session, monkeypatch):
+    """
+    Companion to the enable-direction test above (u8qr6.7 — missing direction).
+
+    Disabling a previously-ENABLED task in memory and calling sync_to_database
+    must persist enabled=False to the existing DB row. The original regression
+    (_save_task_to_db resetting instance._enabled from the old row instead of
+    writing the in-memory value) could manifest in EITHER direction: an
+    enabled=True row must be able to flip to False just as a False row can flip
+    to True. Starting the row at True and asserting it lands at False proves the
+    write actually happened rather than the value merely defaulting.
+    """
+    monkeypatch.setattr("task_registry.get_session", lambda: test_session)
+
+    from tests.fixtures.factories import create_scheduled_task
+
+    create_scheduled_task(
+        test_session,
+        task_id="yaml_backup",
+        task_name="YAML Backup",
+        description="x",
+        enabled=True,
+        schedule_type="manual",
+    )
+
+    reg = TaskRegistry()
+    reg.register(YamlBackupTask)
+    inst = YamlBackupTask()
+    inst.disable()
+    reg._instances["yaml_backup"] = inst
+
+    reg.sync_to_database("yaml_backup")
+
+    row = test_session.query(ScheduledTask).filter_by(task_id="yaml_backup").first()
+    assert row is not None
+    assert row.enabled is False
+    assert inst._enabled is False
