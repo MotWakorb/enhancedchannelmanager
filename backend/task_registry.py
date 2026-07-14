@@ -17,6 +17,40 @@ from task_scheduler import TaskScheduler, ScheduleConfig, ScheduleType
 logger = logging.getLogger(__name__)
 
 
+def auto_creation_parent_enabled() -> Optional[bool]:
+    """Whether the ``auto_creation`` PARENT ``scheduled_tasks.enabled`` gate is on.
+
+    Firing auto-creation after an M3U refresh requires this parent gate AND an
+    enabled child schedule AND an enabled ``run_on_refresh`` rule (see epic
+    ``vkktd``). The M3U-refresh watermark log uses this to avoid cheerfully
+    claiming "auto-creation picks it up on its next tick" when the task is
+    actually gated OFF and will never pick it up.
+
+    Lives here (a neutral, task-system module) rather than in
+    ``tasks.channel_pipeline`` so the ADR-011 decoupling invariant — that
+    ``tasks.m3u_refresh`` never imports the auto-creation pipeline module —
+    still holds.
+
+    Returns ``True``/``False`` for the parent gate, or ``None`` when the state
+    can't be read — the annotation is advisory and must never raise into the
+    best-effort watermark-write path (vkktd.1).
+    """
+    try:
+        session = get_session()
+        try:
+            row = (
+                session.query(ScheduledTask.enabled)
+                .filter(ScheduledTask.task_id == "auto_creation")
+                .first()
+            )
+            return bool(row[0]) if row is not None else None
+        finally:
+            session.close()
+    except Exception as e:  # pragma: no cover — advisory annotation only
+        logger.debug("[TASK-REGISTRY] Failed to read auto_creation parent gate: %s", e)
+        return None
+
+
 class TaskRegistry:
     """
     Central registry for all scheduled task types.
@@ -461,6 +495,14 @@ class TaskRegistry:
             else:
                 instance.disable()
 
+        # vkktd.3: enabling a task flips ONLY the parent scheduled_tasks.enabled
+        # gate. Firing also needs >=1 enabled CHILD task_schedules row (the
+        # engine requires BOTH), so a task whose only child schedule is disabled
+        # reads "Enabled" yet never fires (next_run=null). Reconcile that here so
+        # the operator's single "Enabled" action actually makes the task run.
+        if enabled is True:
+            self._reconcile_child_schedule_on_enable(task_id, instance)
+
         # Update schedule config
         if schedule_type is not None:
             instance.schedule_config.schedule_type = ScheduleType(schedule_type)
@@ -521,6 +563,80 @@ class TaskRegistry:
         self.sync_to_database(task_id)
 
         return instance.get_status_dict()
+
+    def _reconcile_child_schedule_on_enable(self, task_id: str, instance: TaskScheduler) -> None:
+        """When a task is enabled, ensure it has a firing-capable child schedule.
+
+        Enabling a task flips only the PARENT ``scheduled_tasks.enabled`` gate;
+        firing also requires >=1 enabled CHILD ``task_schedules`` row (the engine
+        needs BOTH). Without this, a task whose only child schedule is disabled
+        reads "Enabled" yet never fires with ``next_run=null`` — the exact vkktd
+        trap. This makes the single "Enabled" action actually make the task run
+        (epic vkktd, .3).
+
+        Guardrails (per resolved UX decision):
+          * MANUAL tasks are never reconciled — they are not meant to auto-fire.
+          * If any child schedule is already enabled, do nothing — never
+            override an operator's intentional per-schedule config.
+          * Exactly one child → enable it.
+          * Multiple children, none enabled → enable the most-recently-created
+            one (deterministic: newest == latest operator intent).
+          * No child schedules at all → nothing to enable (the not-registered /
+            no-schedule observability paths flag that separately).
+
+        Disabling a task deliberately does NOT touch children (inert, no data
+        loss) — this runs only on the enable path.
+        """
+        from schedule_calculator import calculate_next_run
+
+        # MANUAL tasks don't auto-fire on a cadence; nothing to reconcile.
+        if instance.schedule_config.schedule_type == ScheduleType.MANUAL:
+            return
+
+        try:
+            session = get_session()
+            try:
+                children = (
+                    session.query(TaskSchedule)
+                    .filter(TaskSchedule.task_id == task_id)
+                    .all()
+                )
+                if not children:
+                    return  # nothing to enable
+                if any(c.enabled for c in children):
+                    return  # already firing-capable; respect operator config
+
+                # None enabled → pick a deterministic child to enable.
+                if len(children) == 1:
+                    target = children[0]
+                else:
+                    target = max(
+                        children,
+                        key=lambda c: (c.created_at or datetime.min, c.id or 0),
+                    )
+
+                target.enabled = True
+                target.next_run_at = calculate_next_run(
+                    schedule_type=target.schedule_type,
+                    interval_seconds=target.interval_seconds,
+                    schedule_time=target.schedule_time,
+                    timezone=target.timezone,
+                    days_of_week=target.get_days_of_week_list(),
+                    day_of_month=target.day_of_month,
+                )
+                session.commit()
+                logger.info(
+                    "[TASK-REGISTRY] Task %s enabled — also enabled child schedule %s "
+                    "(had no enabled schedule) so it will fire; next_run=%s",
+                    task_id, target.id, target.next_run_at,
+                )
+            finally:
+                session.close()
+        except Exception as e:  # pragma: no cover — reconcile must never break enable
+            logger.exception(
+                "[TASK-REGISTRY] Failed to reconcile child schedule on enable for %s: %s",
+                task_id, e,
+            )
 
     def get_task_status(self, task_id: str) -> Optional[dict]:
         """Get status for a specific task."""

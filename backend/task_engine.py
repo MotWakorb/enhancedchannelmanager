@@ -16,6 +16,7 @@ from typing import Optional
 
 import journal
 from database import get_session
+from log_throttle import should_log
 from models import TaskExecution
 from task_registry import get_registry
 from task_scheduler import TaskResult
@@ -629,6 +630,21 @@ class TaskEngine:
 
                     instance = registry.get_task_instance(task_id)
                     if not instance:
+                        # A child schedule is due but NO task instance is
+                        # registered in the engine — this schedule can NEVER
+                        # run. It is a real misconfiguration (an orphaned
+                        # ``task_schedules`` row, or a task removed from the
+                        # registry while its schedule survived), not a transient
+                        # skip, so surface it at WARNING. Throttled per task_id
+                        # so a permanently-orphaned schedule cannot spam every
+                        # ~60s tick (vkktd.1).
+                        if should_log("task_not_registered:%s" % task_id):
+                            logger.warning(
+                                "[TASK-ENGINE] Schedule for %s is due but no task "
+                                "instance is registered — it can NEVER run "
+                                "(orphaned task_schedules row / unregistered task)",
+                                task_id,
+                            )
                         continue
 
                     # Check if the parent task is enabled
@@ -636,6 +652,19 @@ class TaskEngine:
                         ScheduledTask.task_id == task_id
                     ).first()
                     if parent_task and not parent_task.enabled:
+                        # The child schedule is enabled and due, but the PARENT
+                        # ``scheduled_tasks.enabled`` gate is off — firing needs
+                        # BOTH (see epic vkktd). This was otherwise a silent
+                        # ``continue`` every tick: the exact trap that made a
+                        # gated-off auto_creation task invisible in the logs.
+                        # Throttled DEBUG (once per task per window) names the
+                        # cause without per-tick spam (vkktd.1).
+                        if should_log("parent_disabled:%s" % task_id):
+                            logger.debug(
+                                "[TASK-ENGINE] Child schedule for %s is due but the "
+                                "parent task is disabled — not firing (enable the "
+                                "task to run)", task_id,
+                            )
                         continue
 
                     # Found a due schedule - run the task
