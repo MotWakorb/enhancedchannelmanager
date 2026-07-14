@@ -681,11 +681,16 @@ def detect_region(
     if name:
         words = re.findall(r"[A-Za-z0-9]+", name)
         # Skip trailing quality/format tokens ("AMC West HD" -> region from
-        # "West", not "HD"): the region tag is the last MEANINGFUL word, and a
-        # quality suffix after it is noise. Only the effective trailing word is
+        # "West", not "HD") AND bare trailing digits ("AMC West 2" -> "West"):
+        # the region tag is the last MEANINGFUL word, and a quality suffix or a
+        # stray number after it is noise. Only the effective trailing word is
         # considered, so a leading descriptor is never mistaken for a timezone.
+        # The digit skip only looks PAST the number for a real region word; it
+        # never invents one ("ESPN 2" -> skip "2" -> "ESPN" -> None).
         idx = len(words) - 1
-        while idx >= 0 and words[idx].lower() in _QUALITY_TOKENS:
+        while idx >= 0 and (
+            words[idx].lower() in _QUALITY_TOKENS or words[idx].isdigit()
+        ):
             idx -= 1
         if idx >= 0:
             code = _REGION_CODE.get(words[idx].lower())

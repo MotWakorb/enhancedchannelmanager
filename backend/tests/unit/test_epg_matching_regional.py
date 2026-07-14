@@ -331,7 +331,14 @@ class TestDetectRegion:
         ("", "AMC West 1080p", "W"),
         ("", "AMC West HD FHD", "W"),
         ("", "USA Network East HD", "E"),
-        # ...but a quality token alone is still not a region.
+        # Re-review: a bare trailing digit after the region word is also noise
+        # ("AMC West 2" -> region from "West"), matching the old [A-Za-z]+
+        # regex's implicit digit-drop without the 4K-in-quality-token bug.
+        ("", "AMC West 2", "W"),
+        # ...but the digit skip only looks PAST the number for a real region;
+        # it never manufactures one ("ESPN 2" -> skip "2" -> "ESPN" -> None).
+        ("", "ESPN 2", None),
+        # ...and a quality token alone is still not a region.
         ("", "AMC HD", None),
         ("", "Comedy Central", "C"),
         ("", "Something Mountain", "M"),
