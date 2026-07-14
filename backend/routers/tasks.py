@@ -439,6 +439,19 @@ async def list_tasks():
                     # in-memory fallback.
                     if schedules:
                         task['next_run'] = _earliest_enabled_next_run(schedules)
+
+                    # vkktd.3: ``enabled`` here is the PARENT scheduled_tasks
+                    # gate (registry ``_enabled``). Firing also needs >=1 enabled
+                    # CHILD schedule (task_engine requires BOTH), so a task can
+                    # read enabled=True yet never fire (next_run=null). Surface an
+                    # explicit ``effective_enabled`` so a client can present the
+                    # true firing state and never show a bare "Enabled". Tasks
+                    # with no child schedules mirror ``enabled`` (they don't fire
+                    # via the multi-schedule path).
+                    effective = bool(task.get('enabled'))
+                    if schedules:
+                        effective = effective and any(s.enabled for s in schedules)
+                    task['effective_enabled'] = effective
         finally:
             session.close()
 
@@ -505,6 +518,13 @@ async def get_task(task_id: str):
             # (issue #468 / bd-a80u2).
             if schedules:
                 status['next_run'] = _earliest_enabled_next_run(schedules)
+
+            # vkktd.3: expose the true firing gate alongside the parent-only
+            # ``enabled`` (see /api/tasks for rationale).
+            effective = bool(status.get('enabled'))
+            if schedules:
+                effective = effective and any(s.enabled for s in schedules)
+            status['effective_enabled'] = effective
         finally:
             session.close()
 
