@@ -86,18 +86,44 @@ class TestCreateAlertMethod:
 
     @pytest.mark.asyncio
     async def test_create_discord_method(self, async_client):
-        """POST /api/alert-methods creates Discord method."""
-        response = await async_client.post(
-            "/api/alert-methods",
-            json={
-                "name": "New Discord",
-                "method_type": "discord",
-                "config": {"webhook_url": "https://discord.com/api/webhooks/test"},
-                "enabled": True,
-            },
-        )
-        # May fail if discord isn't registered, that's OK
-        assert response.status_code in (200, 201, 400)
+        """POST /api/alert-methods creates a Discord method and returns its fields.
+
+        The old assertion accepted (200, 201, 400) with no mocking, so it could
+        not tell a working create flow from a broken one (a 400 for an
+        unregistered type passed just as readily as a real 200). Here we make
+        the create path deterministic — register the ``discord`` type, force
+        ``validate_config`` to pass, and stub the alert manager — then assert the
+        happy-path 200 AND the created method's returned fields, plus that the
+        manager reload side effect fired so the new method takes effect live.
+        """
+        with patch(
+            "routers.alert_methods.get_method_types",
+            return_value=[{"type": "discord", "display_name": "Discord", "required_fields": ["webhook_url"]}],
+        ), patch("routers.alert_methods.create_method") as mock_create, \
+             patch("routers.alert_methods.get_alert_manager") as mock_manager:
+            mock_method = MagicMock()
+            mock_method.validate_config.return_value = (True, None)
+            mock_create.return_value = mock_method
+
+            response = await async_client.post(
+                "/api/alert-methods",
+                json={
+                    "name": "New Discord",
+                    "method_type": "discord",
+                    "config": {"webhook_url": "https://discord.com/api/webhooks/test"},
+                    "enabled": True,
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "New Discord"
+        assert data["method_type"] == "discord"
+        assert data["enabled"] is True
+        assert isinstance(data["id"], int)
+        # The manager must be told to reload the new method or config changes
+        # never take effect live.
+        mock_manager.return_value.reload_method.assert_called_once_with(data["id"])
 
     @pytest.mark.asyncio
     async def test_create_validates_method_type(self, async_client):
@@ -264,7 +290,14 @@ class TestTestAlertMethod:
             mock_create.return_value = mock_instance
 
             response = await async_client.post(f"/api/alert-methods/{method.id}/test")
-            assert response.status_code in (200, 500)
+            # The mocked test_connection deterministically returns (True, "OK"),
+            # so the router's happy path is exercised end to end: assert the 200
+            # AND the body it produces. The old (200, 500) set let a regression
+            # that turned the success path into a 500 pass silently.
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["message"] == "OK"
 
     @pytest.mark.asyncio
     async def test_test_method_not_found(self, async_client):
@@ -286,6 +319,12 @@ class TestTestAlertMethod:
 
             response = await async_client.post(f"/api/alert-methods/{method.id}/test")
 
-            if response.status_code == 200:
-                data = response.json()
-                assert "success" in data or "message" in data
+            # Under the mocked (True, "Connection successful") test_connection the
+            # 200 branch is always taken; the old ``if status == 200`` guard meant
+            # a future regression that made the status non-200 would assert nothing
+            # at all. Assert the intended 200 unconditionally and check the result
+            # body shape the endpoint documents ({success, message}).
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["message"] == "Connection successful"
