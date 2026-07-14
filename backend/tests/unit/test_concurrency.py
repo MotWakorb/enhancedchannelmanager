@@ -118,12 +118,21 @@ class TestRunCpuBound:
         slow_task = asyncio.create_task(run_cpu_bound(slow_cpu_work))
         fast_task = asyncio.create_task(fast_sleep())
 
-        sleep_elapsed = await fast_task
-        slow_result = await slow_task
-
-        assert slow_result == "done"
-        # asyncio.sleep(0.05) should finish well before the 300ms blocker — give
-        # CI headroom but verify we're not serialized behind the blocker.
-        assert sleep_elapsed < 0.25, (
-            f"Event loop was blocked: asyncio.sleep(0.05) took {sleep_elapsed:.3f}s"
+        # The 50ms asyncio.sleep must COMPLETE before the 300ms blocking call.
+        # If run_cpu_bound serialized the blocker on the event loop, the fast
+        # await could not finish first. Checking completion ORDER — rather than
+        # a fixed wall-clock budget on the fast await — preserves the
+        # non-blocking reliability property while being robust to CI scheduling
+        # jitter (the 50ms-vs-300ms gap dwarfs any realistic contention).
+        done, pending = await asyncio.wait(
+            {slow_task, fast_task}, return_when=asyncio.FIRST_COMPLETED
         )
+        assert fast_task in done, (
+            "event loop was blocked: the 50ms await did not finish before the "
+            "300ms sync call — run_cpu_bound did not offload to a thread"
+        )
+        assert slow_task in pending
+
+        await fast_task
+        slow_result = await slow_task
+        assert slow_result == "done"
