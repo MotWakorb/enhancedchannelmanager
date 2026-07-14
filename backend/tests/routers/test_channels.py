@@ -56,6 +56,53 @@ class TestGetChannels:
 
         assert response.status_code == 500
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422_not_500(self, async_client, page):
+        """page < 1 is rejected by validation (422), never passed upstream to
+        become a 500 (bead 1a5mf)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channels", params={"page": page})
+
+        assert response.status_code == 422
+        # The upstream client must never be invoked with invalid pagination.
+        mock_client.get_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 10001])
+    async def test_invalid_page_size_returns_422_not_500(self, async_client, page_size):
+        """page_size out of [1, 10000] is rejected by validation (422)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels", params={"page_size": page_size}
+            )
+
+        assert response.status_code == 422
+        mock_client.get_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_pagination_still_works(self, async_client):
+        """A valid page/page_size (including the frontend's large page_size=5000)
+        passes through unchanged."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels", params={"page": 1, "page_size": 5000}
+            )
+
+        assert response.status_code == 200
+        mock_client.get_channels.assert_called_once_with(
+            page=1, page_size=5000, search=None, channel_group=None,
+        )
+
 
 class TestCreateChannel:
     """Tests for POST /api/channels."""
