@@ -4,8 +4,6 @@ Tests for M3U digest exclude pattern filtering.
 Verifies that group and stream exclude regex patterns correctly filter
 changes out of the digest before rendering/sending.
 """
-import re
-
 from models import M3UChangeLog, M3UDigestSettings
 
 
@@ -120,54 +118,20 @@ class TestDigestSettingsExcludePatterns:
 # ---------------------------------------------------------------------------
 
 class TestExcludeFilterLogic:
-    """Test the exclude filtering logic extracted from the digest task.
+    """Test the exclude filtering logic used by the digest task.
 
-    Rather than running the full async execute(), we replicate the filtering
-    block from m3u_digest.py to test it in isolation.
+    These tests drive the REAL production function
+    ``tasks.m3u_digest.apply_exclude_filters`` (the same code path
+    ``M3UDigestTask.execute()`` runs), not a hand-copied reimplementation,
+    so any divergence in the production filter is caught here directly.
     """
 
     @staticmethod
     def _apply_exclude_filters(changes, group_patterns_raw, stream_patterns_raw):
-        """
-        Replicate the filtering block from M3UDigestTask.execute() for testing.
-        """
-        from tasks.m3u_digest import _FilteredChange
+        """Call the real production exclude filter from tasks.m3u_digest."""
+        from tasks.m3u_digest import apply_exclude_filters
 
-        if not group_patterns_raw and not stream_patterns_raw:
-            return changes
-
-        group_regexes = []
-        for p in group_patterns_raw:
-            try:
-                group_regexes.append(re.compile(p, re.IGNORECASE))
-            except re.error:
-                continue  # Skip invalid regex patterns
-
-        stream_regexes = []
-        for p in stream_patterns_raw:
-            try:
-                stream_regexes.append(re.compile(p, re.IGNORECASE))
-            except re.error:
-                continue  # Skip invalid regex patterns
-
-        filtered = []
-        for change in changes:
-            if group_regexes and change.group_name:
-                if any(rx.search(change.group_name) for rx in group_regexes):
-                    continue
-
-            if stream_regexes and change.change_type in ("streams_added", "streams_removed"):
-                original_names = change.get_stream_names()
-                if original_names:
-                    kept = [n for n in original_names
-                            if not any(rx.search(n) for rx in stream_regexes)]
-                    if not kept:
-                        continue
-                    if len(kept) < len(original_names):
-                        change = _FilteredChange(change, kept)
-
-            filtered.append(change)
-        return filtered
+        return apply_exclude_filters(changes, group_patterns_raw, stream_patterns_raw)
 
     def _make_change(self, session, change_type, group_name, stream_names=None, count=None):
         c = M3UChangeLog(
@@ -288,37 +252,3 @@ class TestExcludeFilterLogic:
 
         result = self._apply_exclude_filters([c1], [], ["PPV"])
         assert len(result) == 1  # group_added is not filtered by stream patterns
-
-
-class TestProductionFilterShape:
-    """Guard that the production filter block in M3UDigestTask still uses safe_regex.
-
-    The _apply_exclude_filters helper in TestExcludeFilterLogic reimplements the
-    filter loop with bare re.compile/re.search. This suite covers the happy-path
-    branching logic. However, if the production code were reverted to bare re (e.g.
-    someone removes the safe_regex migration), the sibling test_m3u_digest_safe_regex.py
-    adversarial tests would pass but the safety contract would be broken.
-
-    This guard class makes the divergence visible by asserting that the live source
-    still calls safe_regex — matching the shape enforced by test_m3u_digest_safe_regex.py.
-    """
-
-    def test_production_filter_uses_safe_regex(self):
-        """M3UDigestTask.execute() must call safe_regex.compile and safe_regex.search.
-
-        Mutation guard: if the safe_regex migration were reverted (e.g. switching back
-        to bare re.compile), this assertion fails, alerting that the exclude filter
-        no longer has adversarial-pattern protection.
-        """
-        import inspect
-        from tasks.m3u_digest import M3UDigestTask
-
-        src = inspect.getsource(M3UDigestTask)
-        assert "safe_regex.compile" in src, (
-            "M3UDigestTask no longer calls safe_regex.compile — "
-            "update _apply_exclude_filters in TestExcludeFilterLogic to match"
-        )
-        assert "safe_regex.search" in src, (
-            "M3UDigestTask no longer calls safe_regex.search — "
-            "update _apply_exclude_filters in TestExcludeFilterLogic to match"
-        )
