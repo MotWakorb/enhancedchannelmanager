@@ -1324,18 +1324,37 @@ def match_streams(
     # WHICH ones did not (an unparsable master group is the usual "nothing
     # attaches" root cause). Observability only.
     if logger.isEnabledFor(logging.DEBUG):
-        unusable_masters = [
-            p.raw_name for p in parsed_masters
-            if p.title is None or p.start is None
+        unusable_parsed = [
+            p for p in parsed_masters if p.title is None or p.start is None
         ]
         logger.debug(
             "[EVENT-SYNC] match streams=%d masters=%d usable=%d unusable=%d "
             "window=%s threshold=%s",
             len(stream_names), len(parsed_masters), len(usable_masters),
-            len(unusable_masters), window_minutes, threshold,
+            len(unusable_parsed), window_minutes, threshold,
         )
-        for name in unusable_masters:
-            logger.debug("[EVENT-SYNC]   unusable_master=%r", name)
+        # Per-master parse evidence (bead at41p) — mirror the resolver's
+        # per-stream line (_log_resolved_debug) so a "usable=0 / nothing
+        # attaches" run is self-explaining: the exact identity STRING that was
+        # parsed (channel name, or the master's stream name under
+        # parse_master_from_stream — the caller decides which and passes it in
+        # as master_names) and WHY it was rejected. Without this, the only
+        # signal was a bare name, which reads as "the group is empty" when the
+        # real cause is "these names carry no event title/time". Observability
+        # only — never affects candidacy.
+        for p in unusable_parsed:
+            if p.title is None and p.start is None:
+                reason = "missing-title+start"
+            elif p.title is None:
+                reason = "missing-title"
+            else:
+                reason = "missing-start"
+            logger.debug(
+                "[EVENT-SYNC]   unusable_master identity=%r parsed_title=%r "
+                "parsed_start=%s reason=%s",
+                p.raw_name, p.title,
+                p.start.isoformat() if p.start else None, reason,
+            )
 
     results: list[StreamMatchResult] = []
     for stream_name in stream_names:

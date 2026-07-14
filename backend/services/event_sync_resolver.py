@@ -627,6 +627,26 @@ def resolve_event_sync(
         or parsed.start is None
     )
 
+    # Config-level identity-source echo (bead at41p) — the per-master lines in
+    # match_streams show WHICH string was parsed, but not WHY that string was
+    # chosen. parse_master_from_stream flips the master identity between the
+    # channel name and the master channel's first stream name; when it is off
+    # and the channel names are generic ("FloRacing"), every master is unusable
+    # with no hint that the event data is sitting in the ignored stream names.
+    # Surface the flags once per resolve so that gap is traceable. Observability
+    # only.
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "[EVENT-SYNC] resolve config master_group=%s masters=%d "
+            "unparsed_masters=%d parse_master_from_stream=%s "
+            "include_master_group_streams=%s enforce_time_window=%s window=%s "
+            "threshold=%s",
+            config.get("master_group_id"), len(master_names),
+            len(unparsed_masters), parse_master_from_stream,
+            bool(config.get("include_master_group_streams", False)),
+            enforce_time_window, configured_window, threshold,
+        )
+
     # bead 6xxmp: drop the master group's already-attached streams (the
     # auto-synced provider's own streams). Scoped to the master group so
     # normal secondary groups resolve exactly as before.
