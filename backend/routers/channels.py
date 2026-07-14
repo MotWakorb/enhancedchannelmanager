@@ -1035,11 +1035,16 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     start = time.time()
     original_count = len(operations)
 
-    # First pass: find channels to be deleted
+    # First pass: find channels to be deleted and temp channels to be created.
+    # Both sets are computed up front so that create+delete cancellation is
+    # order-independent (a deleteChannel may precede its matching createChannel).
     channels_to_delete: set[int] = set()
+    channels_to_create: set[int] = set()
     for op in operations:
         if op.type == "deleteChannel":
             channels_to_delete.add(op.channelId)
+        elif op.type == "createChannel":
+            channels_to_create.add(op.tempId)
 
     # Track final state for each operation type
     channel_final_updates: dict[int, dict] = {}  # channelId -> merged data
@@ -1047,7 +1052,6 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     channel_final_stream_order: dict[int, list[int]] = {}  # channelId -> final stream IDs
     stream_ops: dict[str, dict] = {}  # "channelId:streamId" -> {added: op, removed: op}
     ordered_ops: list[BulkOperation] = []  # create/delete ops in order
-    temp_ids_created: set[int] = set()
 
     for op in operations:
         if op.type == "bulkAssignChannelNumbers":
@@ -1079,14 +1083,13 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 entry["removed"] = op
 
         elif op.type == "createChannel":
-            if op.tempId in channels_to_delete:
-                temp_ids_created.add(op.tempId)
-            else:
+            # Create + delete of the same temp channel cancel out.
+            if op.tempId not in channels_to_delete:
                 ordered_ops.append(op)
 
         elif op.type == "deleteChannel":
-            if op.channelId < 0 and op.channelId in temp_ids_created:
-                pass  # Create + delete cancel out
+            if op.channelId < 0 and op.channelId in channels_to_create:
+                pass  # Create + delete cancel out (order-independent)
             else:
                 ordered_ops.append(op)
 

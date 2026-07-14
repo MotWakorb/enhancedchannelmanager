@@ -1,7 +1,5 @@
 """Tests for _consolidate_operations in routers.channels."""
 
-import pytest
-
 from routers.channels import (
     _consolidate_operations,
     BulkUpdateChannelOp,
@@ -171,27 +169,13 @@ def test_create_then_delete_temp_channel_cancels():
     assert len(deletes) == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "u8qr6.7: ASYMMETRY BUG in _consolidate_operations. When deleteChannel "
-        "precedes createChannel for the same temp id, the delete is appended to "
-        "ordered_ops before temp_ids_created is populated (createChannel is "
-        "processed later in the same pass), so only the create is dropped and a "
-        "dangling deleteChannel(<negative temp id>) survives — one that references "
-        "a channel never created and would error at execution. The forward order "
-        "(create-before-delete, test_create_then_delete_temp_channel_cancels) "
-        "cancels both. Cancellation should be order-independent. Remove this "
-        "xfail once the consolidator computes the created-temp-id set in a first "
-        "pass (symmetric to channels_to_delete)."
-    ),
-)
 def test_delete_then_create_temp_channel_cancels():
     """Reverse-order create+delete of the same temp channel should also cancel.
 
     Companion to test_create_then_delete_temp_channel_cancels (forward order).
-    Encodes the intended order-independent contract; currently xfails on the
-    dangling-delete asymmetry described in the marker.
+    Encodes the order-independent contract: the consolidator computes the
+    created-temp-id set in a first pass (symmetric to channels_to_delete), so
+    the delete is cancelled even when it precedes its matching create.
     """
     ops = [
         BulkDeleteChannelOp(channelId=-1),
