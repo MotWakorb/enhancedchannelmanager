@@ -24,9 +24,12 @@ changes anything.
 
 - **In the EPG match preview:** when you run an EPG auto-match, the result now
   includes a **"shared EPG links"** summary listing any channels in the matched
-  set that already point at the same EPG row.
-- **On demand (whole fleet):** ask the assistant to *"audit EPG duplicates"*
-  (MCP tool `audit_epg_duplicates`), or call
+  set that already point at the same EPG row. **Note:** this summary only covers
+  the channels in the *current* match set — if you match only your "West"
+  channels, an East counterpart that isn't in that set won't appear. An empty
+  preview summary therefore is **not** a whole-fleet all-clear.
+- **On demand (whole fleet):** for a complete check across every channel, ask the
+  assistant to *"audit EPG duplicates"* (MCP tool `audit_epg_duplicates`), or call
   `GET /api/epg/audit-duplicates` directly.
 
 Each reported group tells you:
