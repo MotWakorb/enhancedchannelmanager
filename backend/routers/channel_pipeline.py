@@ -3870,13 +3870,41 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     settings_json_str = json.dumps(settings_dict, indent=2)
 
     # -- 6. task_schedules.json — scheduled task configuration --------
-    from models import TaskSchedule
+    # vkktd.2: the child ``task_schedules`` rows carry an ``enabled`` that is
+    # ALWAYS seeded True; FIRING is gated by BOTH that child flag AND the PARENT
+    # ``scheduled_tasks.enabled`` (task_engine requires both). Exporting only the
+    # child made a gated-OFF task read "enabled: true" in the bundle and cost a
+    # multi-hour diagnosis. Annotate every schedule with the parent gate and an
+    # explicit ``effective_enabled = parent.enabled AND child.enabled`` so the
+    # real firing gate is unambiguous, and keep the frozen next_run_at / null
+    # last_run_at (already in to_dict) as the corroborating "never fired" signal.
+    from models import TaskSchedule, ScheduledTask
     sched_session = get_session()
     try:
+        parent_enabled_by_task = {
+            row.task_id: row.enabled
+            for row in sched_session.query(
+                ScheduledTask.task_id, ScheduledTask.enabled
+            ).all()
+        }
         schedules = sched_session.query(TaskSchedule).order_by(
             TaskSchedule.task_id, TaskSchedule.id
         ).all()
-        schedules_data = [s.to_dict() for s in schedules]
+        schedules_data = []
+        for s in schedules:
+            d = s.to_dict()
+            parent_enabled = parent_enabled_by_task.get(s.task_id)
+            # ``enabled`` from to_dict() is the CHILD schedule flag. Expose it
+            # under an unambiguous alias plus the parent gate and the effective
+            # (firing) gate. ``effective_enabled`` is None only when the parent
+            # scheduled_tasks row is missing (state can't be determined).
+            d["child_schedule_enabled"] = s.enabled
+            d["parent_task_enabled"] = parent_enabled
+            d["effective_enabled"] = (
+                bool(parent_enabled) and bool(s.enabled)
+                if parent_enabled is not None else None
+            )
+            schedules_data.append(d)
     finally:
         sched_session.close()
     task_schedules_str = json.dumps(schedules_data, indent=2)
