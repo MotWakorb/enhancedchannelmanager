@@ -28,7 +28,24 @@ def register(mcp: FastMCP):
                 tid = t.get("task_id", t.get("id", "?"))
                 raw_name = t.get("task_name") or t.get("name")
                 name = raw_name if raw_name else tid.replace("_", " ").title() if tid != "?" else "Unknown"
-                enabled = "enabled" if t.get("enabled") else "disabled"
+                # vkktd.5: ``enabled`` is only the PARENT scheduled_tasks gate.
+                # Firing ALSO requires >=1 enabled child schedule; the backend
+                # exposes the combined firing state as ``effective_enabled``
+                # (vkktd.3). Surface the TRUE firing state so an AI agent never
+                # treats a gated-off task (enabled parent, no active schedule)
+                # as live — the exact "reads Enabled but won't run" trap this
+                # epic exists to eliminate. When the field is absent (older
+                # backend), fall back to the parent gate.
+                enabled_gate = bool(t.get("enabled"))
+                effective = t.get("effective_enabled")
+                if effective is None:
+                    effective = enabled_gate
+                if effective:
+                    enabled = "enabled"
+                elif enabled_gate:
+                    enabled = "enabled but WON'T RUN (no active schedule)"
+                else:
+                    enabled = "disabled"
                 last_run = t.get("last_run", "never")
                 status = t.get("status", "idle")
                 lines.append(f"  {name} (id={tid}) — {enabled}, status: {status}, last run: {last_run}")
