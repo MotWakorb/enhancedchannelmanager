@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +22,18 @@ logger = logging.getLogger(__name__)
 
 # Default TLS directory
 TLS_DIR = Path(os.environ.get("CONFIG_DIR", "/config")) / "tls"
+
+
+def _utcnow_naive() -> datetime:
+    """Current UTC time as a naive datetime.
+
+    Certificate not_before/not_after are stored as naive UTC (see
+    parse_certificate, which drops the tzinfo from cryptography's aware
+    not_valid_*_utc). Comparisons must therefore use naive *UTC* now, not
+    ``datetime.now()`` (naive *local*) — mixing the two skews expiry/validity
+    math by the host's UTC offset (bead n5zw2).
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -39,16 +51,16 @@ class CertificateInfo:
 
     def days_until_expiry(self) -> int:
         """Get days until certificate expires."""
-        delta = self.not_after - datetime.now()
+        delta = self.not_after - _utcnow_naive()
         return max(0, delta.days)
 
     def is_expired(self) -> bool:
         """Check if certificate is expired."""
-        return datetime.now() > self.not_after
+        return _utcnow_naive() > self.not_after
 
     def is_not_yet_valid(self) -> bool:
         """Check if certificate is not yet valid."""
-        return datetime.now() < self.not_before
+        return _utcnow_naive() < self.not_before
 
 
 class CertificateStorage:
