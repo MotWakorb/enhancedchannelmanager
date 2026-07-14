@@ -131,6 +131,10 @@ class TestCreateAlertMethod:
         assert data["name"] == "My Discord"
         assert data["method_type"] == "discord"
         assert "id" in data
+        # u8qr6.5: the manager MUST be told to reload the new method (id) or the
+        # new alert config never takes effect live. Assert the side effect, not
+        # just that get_alert_manager was patched.
+        mock_manager.reload_method.assert_called_once_with(data["id"])
 
     @pytest.mark.asyncio
     async def test_rejects_unknown_type(self, async_client):
@@ -204,6 +208,8 @@ class TestUpdateAlertMethod:
 
         assert response.status_code == 200
         assert response.json()["success"] is True
+        # u8qr6.5: update must notify the manager to reload this method.
+        mock_manager.reload_method.assert_called_once_with(method.id)
 
     @pytest.mark.asyncio
     async def test_updates_enabled(self, async_client, test_session):
@@ -222,6 +228,8 @@ class TestUpdateAlertMethod:
         # Verify in DB
         test_session.refresh(method)
         assert method.enabled is False
+        # u8qr6.5: enabling/disabling must notify the manager to reload.
+        mock_manager.reload_method.assert_called_once_with(method.id)
 
     @pytest.mark.asyncio
     async def test_returns_404_for_nonexistent(self, async_client):
@@ -267,6 +275,8 @@ class TestDeleteAlertMethod:
         # Verify deleted from DB
         result = test_session.query(AlertMethod).filter(AlertMethod.id == method_id).first()
         assert result is None
+        # u8qr6.5: deletion must notify the manager to drop the method live.
+        mock_manager.reload_method.assert_called_once_with(method_id)
 
     @pytest.mark.asyncio
     async def test_returns_404_for_nonexistent(self, async_client):
