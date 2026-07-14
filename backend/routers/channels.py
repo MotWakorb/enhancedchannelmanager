@@ -14,7 +14,7 @@ from datetime import date
 from typing import Optional, Literal, Union
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -312,8 +312,12 @@ class BulkCommitResponse(BaseModel):
 
 @router.get("")
 async def get_channels(
-    page: int = 1,
-    page_size: int = 100,
+    # Bounds enforced here (bead 1a5mf): page<1 / page_size<1 were passed
+    # straight to the upstream Dispatcharr client, which raised and surfaced as
+    # a 500. FastAPI Query validation now returns 422 for out-of-range values.
+    # Upper bound is generous — App.tsx legitimately requests page_size=5000.
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(100, ge=1, le=10000, description="Results per page"),
     search: Optional[str] = None,
     channel_group: Optional[int] = None,
 ):
