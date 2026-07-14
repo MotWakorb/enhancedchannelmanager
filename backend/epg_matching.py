@@ -815,6 +815,129 @@ def build_source_priority_order(epg_sources: list[dict]) -> dict[int, int]:
     return {s["id"]: rank for rank, s in enumerate(ranked)}
 
 
+def find_shared_epg_links(
+    channels: list[dict],
+    epg_data: Optional[list[dict]] = None,
+) -> dict:
+    """Read-only audit: find every set of channels that share one ``epg_data_id``.
+
+    This is the fingerprint of the West-shares-East linkage bug (bead vznut):
+    two or more channels silently linked to the *same* Dispatcharr EPG row, so a
+    West feed shows its East counterpart's schedule. There is no local ECM table
+    for this — ``epg_data_id`` lives on the live Dispatcharr channel record — so
+    the audit is a pure aggregation over the channel list the caller already
+    fetched.
+
+    Grouping key is the channel's ``epg_data_id`` alone. A Dispatcharr
+    ``epg_data_id`` is the primary key of a single ``/api/epg/epgdata/{id}/``
+    row, so it is **globally unique** and already implies exactly one source —
+    grouping by ``(epg_source_id, epg_data_id)`` would be redundant. (``tvg_id``
+    is NOT unique across sources; ``epg_data_id`` is, which is why we group on
+    it.) The shared row's ``epg_source`` is surfaced per group for diagnostics.
+
+    Channels with a NULL / missing ``epg_data_id`` are **excluded** — they are
+    unlinked, not mis-linked. Only groups of size >= 2 are reported (no
+    threshold beyond "shared").
+
+    Args:
+        channels: Dispatcharr channel dicts (each may carry ``id``, ``name``,
+            ``epg_data_id``).
+        epg_data: Optional Dispatcharr EPG-data rows used to enrich each group
+            with the shared row's ``name`` / ``tvg_id`` / source. When omitted or
+            when a row is absent, those enrichment fields are ``None``.
+
+    Returns:
+        A deterministic dict::
+
+            {
+              "shared_links": [
+                {
+                  "epg_data_id": int,
+                  "epg_name": str | None,
+                  "tvg_id": str | None,
+                  "epg_source_id": int | None,
+                  "count": int,
+                  "channels": [{"channel_id": int, "channel_name": str}, ...],
+                },
+                ...
+              ],
+              "summary": {
+                "shared_link_groups": int,
+                "affected_channels": int,
+                "total_channels": int,
+              },
+            }
+
+        ``shared_links`` is sorted by each group's smallest channel id (then by
+        ``epg_data_id``); channels within a group are sorted by channel id. The
+        output is fully deterministic so it can serve as a repeatable test
+        oracle.
+    """
+    # Index EPG rows by their id for O(1) enrichment lookups.
+    epg_by_id: dict = {}
+    for entry in epg_data or []:
+        entry_id = entry.get("id")
+        if entry_id is not None:
+            epg_by_id[entry_id] = entry
+
+    # Group channels by epg_data_id, excluding NULL / unlinked.
+    groups: dict = {}
+    for ch in channels:
+        epg_data_id = ch.get("epg_data_id")
+        if epg_data_id is None:
+            continue
+        groups.setdefault(epg_data_id, []).append(
+            {
+                "channel_id": ch.get("id"),
+                "channel_name": ch.get("name") or "",
+            }
+        )
+
+    shared_links = []
+    affected_channels = 0
+    for epg_data_id, members in groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda m: (m["channel_id"] is None, m["channel_id"]))
+        affected_channels += len(members)
+
+        entry = epg_by_id.get(epg_data_id)
+        if entry is not None:
+            epg_name = entry.get("name")
+            tvg_id = entry.get("tvg_id")
+            epg_source_id = _epg_source_id(entry.get("epg_source"))
+        else:
+            epg_name = tvg_id = epg_source_id = None
+
+        shared_links.append(
+            {
+                "epg_data_id": epg_data_id,
+                "epg_name": epg_name,
+                "tvg_id": tvg_id,
+                "epg_source_id": epg_source_id,
+                "count": len(members),
+                "channels": members,
+            }
+        )
+
+    # Deterministic order: by the group's smallest channel id, then epg_data_id.
+    def _group_key(group: dict) -> tuple:
+        ch_ids = [c["channel_id"] for c in group["channels"] if c["channel_id"] is not None]
+        min_id = min(ch_ids) if ch_ids else float("inf")
+        return (min_id, group["epg_data_id"])
+
+    shared_links.sort(key=_group_key)
+
+    return {
+        "shared_links": shared_links,
+        "summary": {
+            "shared_link_groups": len(shared_links),
+            "affected_channels": affected_channels,
+            "total_channels": len(channels),
+        },
+    }
+
+
 def _sort_matches(
     matches: list[EPGMatchWithScore],
     channel_league: Optional[str],

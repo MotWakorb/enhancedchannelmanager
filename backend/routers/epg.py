@@ -25,6 +25,7 @@ from epg_matching import (
     _epg_source_id,
     batch_find_epg_matches,
     build_source_priority_order,
+    find_shared_epg_links,
 )
 import journal
 
@@ -1165,16 +1166,25 @@ async def match_channels_to_epg(request: EPGMatchRequest):
             else:
                 none_matches.append(entry)
 
+        # Embed a read-only "shared EPG links" audit over the matched scope
+        # (bead vznut.1). Surfaces channels already linked to the SAME
+        # epg_data_id — the West-shares-East fingerprint — right where the
+        # operator is re-matching. The full-fleet audit lives at
+        # GET /api/epg/audit-duplicates.
+        shared_links = find_shared_epg_links(channels, epg_data)
+
         response = {
             "exact": exact,
             "multiple": multiple,
             "none": none_matches,
+            "shared_epg_links": shared_links,
             "summary": {
                 "total_channels": len(channels),
                 "exact_count": len(exact),
                 "multiple_count": len(multiple),
                 "none_count": len(none_matches),
                 "match_time_ms": round(match_elapsed, 1),
+                "shared_link_groups": shared_links["summary"]["shared_link_groups"],
             },
         }
 
@@ -1192,6 +1202,54 @@ async def match_channels_to_epg(request: EPGMatchRequest):
     except Exception as e:
         logger.exception("[EPG-MATCH] Failed: %s", e)
         raise HTTPException(status_code=500, detail="EPG matching failed")
+
+
+@router.get("/audit-duplicates")
+async def audit_epg_duplicates():
+    """Read-only audit: list every set of channels sharing one ``epg_data_id``.
+
+    This is the detector for the West-shares-East linkage bug (bead vznut):
+    two or more channels silently linked to the *same* Dispatcharr EPG row, so a
+    West feed shows its East counterpart's schedule. ``epg_data_id`` lives on the
+    live Dispatcharr channel record (NOT ECM's journal.db), so this is a pure,
+    non-mutating aggregation over the channel list — it changes nothing.
+
+    Channels with a NULL / unlinked ``epg_data_id`` are excluded (they are
+    unlinked, not mis-linked). Any group of size >= 2 is reported. Output is
+    deterministic (sorted by channel id) so it doubles as a repeatable oracle.
+    """
+    start = time.time()
+    logger.info("[EPG-AUDIT] GET /audit-duplicates")
+    client = get_client()
+    try:
+        channels_result = await client.get_channels(page=1, page_size=10000)
+        channels = channels_result.get("results", [])
+
+        # EPG rows are fetched only to enrich each group with the shared row's
+        # name / tvg_id / source. A failure here degrades to linkage-only output
+        # rather than failing the whole audit.
+        try:
+            epg_data = await client.get_epg_data()
+        except Exception as e:
+            logger.warning(
+                "[EPG-AUDIT] Could not fetch EPG data for enrichment: %s", e
+            )
+            epg_data = []
+
+        result = find_shared_epg_links(channels, epg_data)
+        elapsed = (time.time() - start) * 1000
+        logger.info(
+            "[EPG-AUDIT] Completed: %d shared-link group(s) over %d channel(s) "
+            "in %.1fms",
+            result["summary"]["shared_link_groups"],
+            result["summary"]["total_channels"],
+            elapsed,
+        )
+        return result
+
+    except Exception as e:
+        logger.exception("[EPG-AUDIT] Failed: %s", e)
+        raise HTTPException(status_code=500, detail="EPG duplicate audit failed")
 
 
 @router.post("/channels/{channel_id}/link")
