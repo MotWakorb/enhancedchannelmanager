@@ -346,6 +346,83 @@ class TestCertificateInfoDataclass:
         assert info.is_not_yet_valid() is True
 
 
+class TestCertificateInfoTimezoneSkew:
+    """Regression for bead n5zw2: expiry/validity math must compare cert times
+    (naive UTC) against naive *UTC* now, not naive *local* now.
+
+    These tests simulate a host at a nonzero UTC offset by patching
+    ``tls.storage.datetime`` so that ``datetime.now()`` (naive local) runs
+    +10h ahead of ``datetime.now(timezone.utc)`` (true UTC). Under the old
+    ``datetime.now()``-based helpers the offset flips the result; the fixed
+    helpers (naive-UTC now) are offset-independent.
+    """
+
+    OFFSET_HOURS = 10  # simulate a host at UTC+10
+    TRUE_UTC = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    @pytest.fixture
+    def offset_clock(self, monkeypatch):
+        offset = self.OFFSET_HOURS
+        true_utc = self.TRUE_UTC
+
+        class _OffsetDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    # Naive local time on a UTC+offset host.
+                    return (true_utc + timedelta(hours=offset)).replace(tzinfo=None)
+                return true_utc.astimezone(tz)
+
+        monkeypatch.setattr("tls.storage.datetime", _OffsetDatetime)
+        # Cert times as stored by parse_certificate: naive UTC.
+        return true_utc.replace(tzinfo=None)
+
+    def _info(self, not_before, not_after):
+        return CertificateInfo(
+            subject="tz.example.com",
+            issuer="tz.example.com",
+            serial_number="1",
+            not_before=not_before,
+            not_after=not_after,
+            domains=["tz.example.com"],
+            is_valid=True,
+        )
+
+    def test_not_expired_when_within_offset_window(self, offset_clock):
+        """Cert expiring 5h after true UTC now: valid. Under old naive-local
+        logic (+10h) it would read expired 5h early."""
+        utc_now = offset_clock
+        info = self._info(
+            not_before=utc_now - timedelta(days=1),
+            not_after=utc_now + timedelta(hours=5),
+        )
+        assert info.is_expired() is False
+        assert info.days_until_expiry() == 0  # <1 day, but not negative/expired
+
+    def test_valid_cert_not_flipped_by_offset(self, offset_clock):
+        """A comfortably-valid cert must not be marked expired by the offset."""
+        utc_now = offset_clock
+        info = self._info(
+            not_before=utc_now - timedelta(days=2),
+            not_after=utc_now + timedelta(days=10),
+        )
+        assert info.is_expired() is False
+        assert info.is_not_yet_valid() is False
+        # 10 days minus a fraction; old +10h logic would still say ~9-10 but the
+        # boundary tests above are the load-bearing skew assertions.
+        assert 9 <= info.days_until_expiry() <= 10
+
+    def test_not_yet_valid_when_within_offset_window(self, offset_clock):
+        """Cert becoming valid 5h after true UTC now: not yet valid. Under old
+        naive-local logic (+10h) it would read as already valid."""
+        utc_now = offset_clock
+        info = self._info(
+            not_before=utc_now + timedelta(hours=5),
+            not_after=utc_now + timedelta(days=30),
+        )
+        assert info.is_not_yet_valid() is True
+
+
 # ---------------------------------------------------------------------------
 # delete_certificate
 # ---------------------------------------------------------------------------
