@@ -544,6 +544,30 @@ def _infer_year(
     return best_year
 
 
+def _log_parsed_event(parsed: ParsedEvent) -> None:
+    """Emit one DEBUG line describing a parse outcome (bead bbhpy).
+
+    OBSERVABILITY ONLY — never influences the parse. Callers MUST guard this
+    with ``logger.isEnabledFor(logging.DEBUG)`` so the ``isoformat()``/repr
+    work below costs nothing when DEBUG is off (log args are evaluated eagerly
+    regardless of level). ``outcome`` is the machine-readable step verdict a
+    user report keys on: ``unparsed`` (no title pattern matched — a silently
+    broken pattern shows up here), ``title_only_no_time`` (title parsed but no
+    COMPLETE date+time, the ``no_parsed_time`` root cause), or ``parsed``.
+    """
+    if parsed.title is None:
+        outcome = "unparsed"
+    elif parsed.start is None:
+        outcome = "title_only_no_time"
+    else:
+        outcome = "parsed"
+    logger.debug(
+        "[EVENT-SYNC] parse name=%r -> %s pattern=%r title=%r start=%s teams=%s",
+        parsed.raw_name, outcome, parsed.matched_pattern, parsed.title,
+        parsed.start.isoformat() if parsed.start else None, parsed.teams,
+    )
+
+
 def parse_event_name(
     name: str,
     patterns: Sequence[dict] | None = None,
@@ -622,23 +646,29 @@ def parse_event_name(
 
     if complete_groups is None:
         title = _cap_title(fallback_title)
-        return ParsedEvent(
+        parsed = ParsedEvent(
             raw_name=name,
             title=title,
             start=None,
             teams=_split_teams(title),
             matched_pattern=fallback_variant if title else None,
         )
+        if logger.isEnabledFor(logging.DEBUG):
+            _log_parsed_event(parsed)
+        return parsed
 
     start = _build_start(complete_groups, tz, event_timezone, now)
     title = _cap_title(complete_groups.get("title"))
-    return ParsedEvent(
+    parsed = ParsedEvent(
         raw_name=name,
         title=title,
         start=start,
         teams=_split_teams(title),
         matched_pattern=complete_variant,
     )
+    if logger.isEnabledFor(logging.DEBUG):
+        _log_parsed_event(parsed)
+    return parsed
 
 
 def _build_start(groups: dict, tz, event_timezone: str, now: datetime) -> datetime | None:
@@ -1103,6 +1133,19 @@ def _score_parsed_pair(
         delta: float | None,
         reasons: tuple[str, ...],
     ) -> PairScore:
+        # Per-pair scoring evidence (bead bbhpy) — EVERY branch funnels through
+        # here, so this one guarded line traces parse-fail, no-time, window
+        # block, team/numeric conflict, and attach/ambiguous/below-floor alike.
+        # Observability only; the returned score/band is unchanged.
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[EVENT-SYNC] score a=%r b=%r -> band=%s score=%.4f fuzzy=%.4f "
+                "team_verdict=%s team_score=%s dt=%s reject=%s",
+                parsed_a.raw_name, parsed_b.raw_name, band, score, fuzzy,
+                verdict, None if team_score is None else round(team_score, 4),
+                None if delta is None else round(delta, 1),
+                reasons[0] if reasons else None,
+            )
         return PairScore(
             score=score,
             band=band,
@@ -1276,6 +1319,24 @@ def match_streams(
         p for p in parsed_masters if p.title is not None and p.start is not None
     ]
 
+    # Master-side summary (bead bbhpy) — the "master-as-ceiling" view a user
+    # report needs first: how many masters actually parsed into candidates, and
+    # WHICH ones did not (an unparsable master group is the usual "nothing
+    # attaches" root cause). Observability only.
+    if logger.isEnabledFor(logging.DEBUG):
+        unusable_masters = [
+            p.raw_name for p in parsed_masters
+            if p.title is None or p.start is None
+        ]
+        logger.debug(
+            "[EVENT-SYNC] match streams=%d masters=%d usable=%d unusable=%d "
+            "window=%s threshold=%s",
+            len(stream_names), len(parsed_masters), len(usable_masters),
+            len(unusable_masters), window_minutes, threshold,
+        )
+        for name in unusable_masters:
+            logger.debug("[EVENT-SYNC]   unusable_master=%r", name)
+
     results: list[StreamMatchResult] = []
     for stream_name in stream_names:
         parsed = parse_event_name(
@@ -1303,6 +1364,20 @@ def match_streams(
         for master in usable_masters:
             delta = abs((parsed.start - master.start).total_seconds()) / 60.0
             if window_minutes is not None and delta > window_minutes:
+                # Window-blocked pairs are pre-filtered here BEFORE _score_
+                # parsed_pair, so they never reach that function's score line.
+                # Log them (bead bbhpy) so "right event, wrong time" exclusions
+                # — the dvgri different-dates/times case — are visible instead
+                # of silently vanishing into a 0-candidate unmatched stream.
+                # Same `score` shape as the scored branch for greppability.
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "[EVENT-SYNC] score a=%r b=%r -> band=%s score=0.0000 "
+                        "dt=%s reject=%s window=%s",
+                        parsed.raw_name, master.raw_name, BAND_REJECT,
+                        round(delta, 1), REJECT_OUTSIDE_TIME_WINDOW,
+                        window_minutes,
+                    )
                 continue  # blocked — not a candidate (gate disabled when None)
             pair = _score_parsed_pair(
                 parsed, master, window_minutes=window_minutes, threshold=threshold
