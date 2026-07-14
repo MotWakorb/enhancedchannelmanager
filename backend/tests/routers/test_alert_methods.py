@@ -505,6 +505,162 @@ class TestSMTPValidateConfig:
         assert response.status_code == 400
 
 
+class TestValidateAlertSources:
+    """Direct-function tests for validate_alert_sources (u8qr6.4c — was uncovered).
+
+    The alert_sources granular-filtering validator (epg_refresh / m3u_refresh /
+    probe_failures — filter_mode allowlist + shape/type checks) had zero
+    coverage anywhere in the suite. These exercise every validation branch it
+    guards; the endpoint-wiring tests below prove the router actually calls it.
+    """
+
+    def test_none_is_valid(self):
+        from routers.alert_methods import validate_alert_sources
+        assert validate_alert_sources(None) is None
+
+    def test_empty_dict_is_valid(self):
+        from routers.alert_methods import validate_alert_sources
+        assert validate_alert_sources({}) is None
+
+    def test_valid_full_structure(self):
+        from routers.alert_methods import validate_alert_sources
+        alert_sources = {
+            "epg_refresh": {"filter_mode": "only_selected", "source_ids": [1, 2]},
+            "m3u_refresh": {"filter_mode": "all_except", "account_ids": [3]},
+            "probe_failures": {"min_failures": 5},
+        }
+        assert validate_alert_sources(alert_sources) is None
+
+    def test_all_valid_filter_modes_accepted(self):
+        from routers.alert_methods import validate_alert_sources
+        for mode in ("all", "only_selected", "all_except"):
+            assert validate_alert_sources({"epg_refresh": {"filter_mode": mode}}) is None
+
+    # --- epg_refresh branch ---
+    def test_epg_refresh_not_object(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"epg_refresh": "nope"})
+        assert err == "epg_refresh must be an object"
+
+    def test_epg_refresh_bad_filter_mode(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"epg_refresh": {"filter_mode": "bogus"}})
+        assert err is not None and "filter_mode" in err
+
+    def test_epg_refresh_source_ids_not_array(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"epg_refresh": {"source_ids": "1,2"}})
+        assert err == "epg_refresh.source_ids must be an array"
+
+    # --- m3u_refresh branch ---
+    def test_m3u_refresh_not_object(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"m3u_refresh": [1, 2]})
+        assert err == "m3u_refresh must be an object"
+
+    def test_m3u_refresh_bad_filter_mode(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"m3u_refresh": {"filter_mode": "sometimes"}})
+        assert err is not None and "filter_mode" in err
+
+    def test_m3u_refresh_account_ids_not_array(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"m3u_refresh": {"account_ids": {"a": 1}}})
+        assert err == "m3u_refresh.account_ids must be an array"
+
+    # --- probe_failures branch ---
+    def test_probe_failures_not_object(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"probe_failures": "5"})
+        assert err == "probe_failures must be an object"
+
+    def test_probe_failures_negative_min(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"probe_failures": {"min_failures": -1}})
+        assert err == "probe_failures.min_failures must be a non-negative integer"
+
+    def test_probe_failures_non_int_min(self):
+        from routers.alert_methods import validate_alert_sources
+        err = validate_alert_sources({"probe_failures": {"min_failures": "many"}})
+        assert err == "probe_failures.min_failures must be a non-negative integer"
+
+    def test_probe_failures_valid_min(self):
+        from routers.alert_methods import validate_alert_sources
+        assert validate_alert_sources({"probe_failures": {"min_failures": 0}}) is None
+
+
+class TestAlertSourcesEndpointWiring:
+    """Endpoint tests proving create/update actually enforce validate_alert_sources."""
+
+    def _discord_patches(self):
+        """Register discord + a passing config validator + stub manager."""
+        mock_method = MagicMock()
+        mock_method.validate_config.return_value = (True, None)
+        return [
+            patch("routers.alert_methods.get_method_types", return_value=[
+                {"type": "discord", "display_name": "Discord", "required_fields": []},
+            ]),
+            patch("routers.alert_methods.create_method", return_value=mock_method),
+            patch("routers.alert_methods.get_alert_manager", return_value=MagicMock()),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_create_accepts_valid_alert_sources(self, async_client, test_session):
+        """POST with a well-formed alert_sources persists it and round-trips on GET."""
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            for p in self._discord_patches():
+                stack.enter_context(p)
+            response = await async_client.post("/api/alert-methods", json={
+                "name": "Filtered Discord",
+                "method_type": "discord",
+                "config": {"webhook_url": "https://discord.com/api/webhooks/1"},
+                "alert_sources": {
+                    "epg_refresh": {"filter_mode": "only_selected", "source_ids": [7]},
+                    "probe_failures": {"min_failures": 3},
+                },
+            })
+
+        assert response.status_code == 200
+        method_id = response.json()["id"]
+
+        get_response = await async_client.get(f"/api/alert-methods/{method_id}")
+        stored = get_response.json()["alert_sources"]
+        assert stored["epg_refresh"] == {"filter_mode": "only_selected", "source_ids": [7]}
+        assert stored["probe_failures"] == {"min_failures": 3}
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_invalid_alert_sources(self, async_client):
+        """POST with a bad epg_refresh.filter_mode is rejected 400 by the router."""
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            for p in self._discord_patches():
+                stack.enter_context(p)
+            response = await async_client.post("/api/alert-methods", json={
+                "name": "Bad Sources",
+                "method_type": "discord",
+                "config": {"webhook_url": "https://discord.com/api/webhooks/1"},
+                "alert_sources": {"epg_refresh": {"filter_mode": "whenever"}},
+            })
+
+        assert response.status_code == 400
+        assert "filter_mode" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_invalid_alert_sources(self, async_client, test_session):
+        """PATCH with a bad m3u_refresh.account_ids type is rejected 400."""
+        method = _create_alert_method(test_session, name="Filter Me")
+
+        with patch("routers.alert_methods.get_alert_manager", return_value=MagicMock()):
+            response = await async_client.patch(
+                f"/api/alert-methods/{method.id}",
+                json={"alert_sources": {"m3u_refresh": {"account_ids": "not-a-list"}}},
+            )
+
+        assert response.status_code == 400
+        assert "account_ids" in response.json()["detail"]
+
+
 class TestTestAlertMethod:
     """Tests for POST /api/alert-methods/{method_id}/test."""
 

@@ -444,6 +444,179 @@ class TestConditionEvaluatorChannel:
         assert result.matched is True
 
 
+class TestConditionEvaluatorLogoExists:
+    """Tests for the logo_exists condition (u8qr6.4 — was uncovered).
+
+    Evaluated inline against ``context.logo_url``: value=True matches when a
+    logo URL is present, value=False matches when it is absent, and value
+    defaults to True when omitted.
+    """
+
+    def test_logo_exists_true_when_logo_present(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", logo_url="http://x/logo.png")
+
+        result = evaluator.evaluate({"type": "logo_exists", "value": True}, ctx)
+        assert result.matched is True
+
+    def test_logo_exists_true_no_match_when_logo_absent(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", logo_url=None)
+
+        result = evaluator.evaluate({"type": "logo_exists", "value": True}, ctx)
+        assert result.matched is False
+
+    def test_logo_exists_false_matches_when_logo_absent(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", logo_url=None)
+
+        result = evaluator.evaluate({"type": "logo_exists", "value": False}, ctx)
+        assert result.matched is True
+
+    def test_logo_exists_defaults_to_true(self):
+        """Omitting value defaults the expectation to 'has a logo'."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", logo_url="http://x/logo.png")
+
+        result = evaluator.evaluate({"type": "logo_exists"}, ctx)
+        assert result.matched is True
+
+
+class TestConditionEvaluatorCodecIs:
+    """Tests for the codec_is condition (u8qr6.4 — was uncovered).
+
+    Matches ``context.video_codec`` case-insensitively against a single codec
+    or a list; no codec info never matches.
+    """
+
+    def test_codec_is_single_match_case_insensitive(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", video_codec="h264")
+
+        result = evaluator.evaluate({"type": "codec_is", "value": "H264"}, ctx)
+        assert result.matched is True
+
+    def test_codec_is_single_no_match(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", video_codec="h264")
+
+        result = evaluator.evaluate({"type": "codec_is", "value": "hevc"}, ctx)
+        assert result.matched is False
+
+    def test_codec_is_list_match(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", video_codec="hevc")
+
+        result = evaluator.evaluate({"type": "codec_is", "value": ["h264", "hevc"]}, ctx)
+        assert result.matched is True
+
+    def test_codec_is_no_codec_info_no_match(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", video_codec=None)
+
+        result = evaluator.evaluate({"type": "codec_is", "value": "h264"}, ctx)
+        assert result.matched is False
+
+
+class TestConditionEvaluatorHasAudioTracks:
+    """Tests for the has_audio_tracks condition (u8qr6.4 — was uncovered).
+
+    Matches when ``context.audio_tracks`` is at least the requested minimum
+    (value defaults to 1 when omitted/falsy).
+    """
+
+    def test_has_audio_tracks_meets_minimum(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", audio_tracks=2)
+
+        result = evaluator.evaluate({"type": "has_audio_tracks", "value": 2}, ctx)
+        assert result.matched is True
+
+    def test_has_audio_tracks_below_minimum(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", audio_tracks=1)
+
+        result = evaluator.evaluate({"type": "has_audio_tracks", "value": 3}, ctx)
+        assert result.matched is False
+
+    def test_has_audio_tracks_defaults_minimum_to_one(self):
+        """A falsy/omitted value falls back to a minimum of 1 track."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", audio_tracks=1)
+
+        result = evaluator.evaluate({"type": "has_audio_tracks"}, ctx)
+        assert result.matched is True
+
+
+class TestConditionEvaluatorChannelInGroup:
+    """Tests for the channel_in_group condition (u8qr6.4 — was uncovered).
+
+    Looks up the stream's existing channel by id and compares its group id to
+    the requested group.
+    """
+
+    def test_channel_in_group_match(self):
+        channels = [{"id": 100, "name": "ESPN", "channel_group_id": 5}]
+        evaluator = ConditionEvaluator(existing_channels=channels)
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", channel_id=100)
+
+        result = evaluator.evaluate({"type": "channel_in_group", "value": 5}, ctx)
+        assert result.matched is True
+
+    def test_channel_in_group_wrong_group(self):
+        channels = [{"id": 100, "name": "ESPN", "channel_group_id": 5}]
+        evaluator = ConditionEvaluator(existing_channels=channels)
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", channel_id=100)
+
+        result = evaluator.evaluate({"type": "channel_in_group", "value": 6}, ctx)
+        assert result.matched is False
+
+    def test_channel_in_group_no_channel(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", channel_id=None)
+
+        result = evaluator.evaluate({"type": "channel_in_group", "value": 5}, ctx)
+        assert result.matched is False
+
+    def test_channel_in_group_channel_not_found(self):
+        """channel_id set but not in the existing-channels map → no match."""
+        evaluator = ConditionEvaluator(existing_channels=[])
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", channel_id=999)
+
+        result = evaluator.evaluate({"type": "channel_in_group", "value": 5}, ctx)
+        assert result.matched is False
+
+
+class TestConditionEvaluatorChannelHasStreams:
+    """Tests for the channel_has_streams condition (u8qr6.4 — was uncovered).
+
+    Matches when the stream's existing channel already has at least N streams.
+    """
+
+    def test_channel_has_streams_meets_minimum(self):
+        channels = [{"id": 100, "name": "ESPN", "streams": [1, 2, 3]}]
+        evaluator = ConditionEvaluator(existing_channels=channels)
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", channel_id=100)
+
+        result = evaluator.evaluate({"type": "channel_has_streams", "value": 2}, ctx)
+        assert result.matched is True
+
+    def test_channel_has_streams_below_minimum(self):
+        channels = [{"id": 100, "name": "ESPN", "streams": [1]}]
+        evaluator = ConditionEvaluator(existing_channels=channels)
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", channel_id=100)
+
+        result = evaluator.evaluate({"type": "channel_has_streams", "value": 3}, ctx)
+        assert result.matched is False
+
+    def test_channel_has_streams_no_channel(self):
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="ESPN", channel_id=None)
+
+        result = evaluator.evaluate({"type": "channel_has_streams", "value": 1}, ctx)
+        assert result.matched is False
+
+
 class TestConditionEvaluatorLogical:
     """Tests for logical operator conditions."""
 
