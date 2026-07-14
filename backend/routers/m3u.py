@@ -172,10 +172,32 @@ def _advance_refresh_watermark() -> None:
         settings = get_settings()
         settings.last_m3u_refresh_completed_at = _dt.utcnow().isoformat()
         save_settings(settings)
-        logger.info(
-            "[M3U-REFRESH] Advanced refresh watermark to %s (auto-creation picks it up on its next tick)",
-            settings.last_m3u_refresh_completed_at,
-        )
+        # Don't claim auto-creation "picks it up" when the task is gated OFF —
+        # the parent scheduled_tasks.enabled gate must be on for the interval
+        # tick to ever consume this watermark (epic vkktd). Annotate the log so
+        # operators aren't misled into thinking matching will run (vkktd.1).
+        from task_registry import auto_creation_parent_enabled
+        parent_enabled = auto_creation_parent_enabled()
+        if parent_enabled is False:
+            logger.info(
+                "[M3U-REFRESH] Advanced refresh watermark to %s (auto_creation task "
+                "is currently DISABLED — it will NOT pick this up; enable the task to "
+                "run matching on refresh)",
+                settings.last_m3u_refresh_completed_at,
+            )
+        elif parent_enabled is True:
+            logger.info(
+                "[M3U-REFRESH] Advanced refresh watermark to %s (auto-creation picks it up on its next tick)",
+                settings.last_m3u_refresh_completed_at,
+            )
+        else:
+            # Unknown gate state (DB unreadable / no scheduled_tasks row) — stay
+            # neutral rather than make the optimistic claim we're trying to kill
+            # (review Minor 3).
+            logger.info(
+                "[M3U-REFRESH] Advanced refresh watermark to %s",
+                settings.last_m3u_refresh_completed_at,
+            )
     except Exception as e:  # pragma: no cover — watermark write is best-effort
         logger.warning("[M3U-REFRESH] Failed to advance refresh watermark: %s", e)
 
