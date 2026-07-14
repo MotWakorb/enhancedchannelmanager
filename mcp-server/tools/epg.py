@@ -209,6 +209,14 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def audit_epg_duplicates() -> str:
+        # vznut.7: this tool (``audit_epg_duplicates``) and its contract key
+        # (``epg_audit_duplicates``) intentionally differ. It is NOT a naming
+        # bug: every one of the ~190 MCP tools is verb-first (``audit_``,
+        # ``list_``, ``match_channels_epg``, ``link_channel_epg`` …) while every
+        # endpoint contract key is domain-prefixed (``epg_*``). Each name already
+        # follows its own namespace's universal convention; renaming either would
+        # make it the sole outlier. Both strings are colocated here so a grep for
+        # this feature finds the pair.
         """Audit for channels silently sharing one EPG link (read-only).
 
         Lists every set of two or more channels linked to the SAME EPG row
