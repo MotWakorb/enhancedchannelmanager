@@ -76,6 +76,14 @@ _REGION_CODE = {
     "mountain": "M",
 }
 
+# Quality/format tokens ("HD", "FHD", "4K", "1080P", ...) that commonly TRAIL a
+# region word in a channel name ("AMC West HD"). detect_region skips them so the
+# real region tag ("West") is still the effective trailing word — channels being
+# matched usually carry no tvg_id, so the name is the only region signal and
+# "...West HD"/"...West 4K" is a common IPTV naming pattern. Reuses the shared
+# QUALITY_SUFFIXES list rather than hand-rolling a second copy.
+_QUALITY_TOKENS = frozenset(s.lower() for s in QUALITY_SUFFIXES)
+
 # ---------------------------------------------------------------------------
 # Pre-compiled regex patterns (module level for performance)
 # ---------------------------------------------------------------------------
@@ -612,10 +620,15 @@ def extract_paren_acronym(text: str) -> Optional[str]:
     so it is normalized with the plain ``_NON_ALNUM_RE`` + lowercase fold —
     NOT routed through ``epg_match_key``'s full engine pipeline.
 
-    Returns the normalized acronym, or ``None`` if no parenthetical is
-    present or it normalizes to fewer than ``_MIN_ACRONYM_LENGTH`` characters.
+    Returns the normalized acronym, or ``None`` if: no parenthetical is
+    present; the FIRST parenthetical normalizes to fewer than
+    ``_MIN_ACRONYM_LENGTH`` characters; or ANY parenthetical is a region word
+    (vznut.2 — a regional-variant entry yields no acronym; see below).
     """
     if not text:
+        return None
+    groups = _PAREN_ACRONYM_RE.findall(text)
+    if not groups:
         return None
     # vznut.2 change 2/3: a PARENTHETICAL region marker ("(Pacific)") means this
     # is a regional-variant entry. Its trailing station-id acronym is just the
@@ -627,14 +640,16 @@ def extract_paren_acronym(text: str) -> Optional[str]:
     # tie-break. So a region parenthetical yields NO acronym at all: the entry
     # is already an exact candidate via its region-collapsed key and stays
     # token-symmetric with its base sibling, letting the region tie-break fire.
-    found = None
-    for group in _PAREN_ACRONYM_RE.findall(text):
-        norm = _NON_ALNUM_RE.sub("", group.lower())
-        if norm in _REGION_WORDS:
+    for group in groups:
+        if _NON_ALNUM_RE.sub("", group.lower()) in _REGION_WORDS:
             return None
-        if found is None and len(norm) >= _MIN_ACRONYM_LENGTH:
-            found = norm
-    return found
+    # Otherwise keep the ORIGINAL bd-6rz70 semantics exactly: the FIRST
+    # parenthetical only, dropped if it is under the length floor (the
+    # region scan above is the sole intended behavior change).
+    acronym = _NON_ALNUM_RE.sub("", groups[0].lower())
+    if len(acronym) < _MIN_ACRONYM_LENGTH:
+        return None
+    return acronym
 
 
 def detect_region(
@@ -664,9 +679,16 @@ def detect_region(
             if code:
                 return code
     if name:
-        words = re.findall(r"[A-Za-z]+", name)
-        if words:
-            code = _REGION_CODE.get(words[-1].lower())
+        words = re.findall(r"[A-Za-z0-9]+", name)
+        # Skip trailing quality/format tokens ("AMC West HD" -> region from
+        # "West", not "HD"): the region tag is the last MEANINGFUL word, and a
+        # quality suffix after it is noise. Only the effective trailing word is
+        # considered, so a leading descriptor is never mistaken for a timezone.
+        idx = len(words) - 1
+        while idx >= 0 and words[idx].lower() in _QUALITY_TOKENS:
+            idx -= 1
+        if idx >= 0:
+            code = _REGION_CODE.get(words[idx].lower())
             if code:
                 return code
     return None

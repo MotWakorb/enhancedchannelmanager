@@ -211,6 +211,14 @@ class TestPacificParenNotAnAcronym:
         # INVARIANT: a non-region parenthetical still yields its acronym.
         assert extract_paren_acronym("OprahWinfreyNetwork(OWN).us") == "own"
 
+    def test_original_first_paren_semantics_preserved(self):
+        # Review #3: region-suppression is the ONLY intended behavior change to
+        # this load-bearing fn (bd-6rz70). The original semantics stand: the
+        # FIRST parenthetical is used, and a too-short first paren yields None
+        # (it does NOT scan on to a later, longer paren).
+        assert extract_paren_acronym("(A)(BCD)") is None
+        assert extract_paren_acronym("Net(HGTV)(extra).us") == "hgtv"
+
     def test_pacific_row_not_indexed_under_pacific_acronym(self, engine):
         lookup = build_epg_lookup(
             [_epg(2, "USA Network (Pacific)", "USANetwork(Pacific)(USAP).us")],
@@ -298,9 +306,9 @@ class TestKnmWestPacificIntegration:
         total = len(KNM_WEST_PACIFIC)
         # PRE-FIX (characterization) locked ``hits == 0`` — every West channel
         # linked its East feed (the reported bug). POST-FIX all 24 pick Pacific
-        # (spike proved 24/24; AC bar is >=90%).
-        assert hits >= 0.9 * total, f"{hits}/{total} Pacific; misses={misses}"
-        assert hits == total, f"expected all {total}; misses={misses}"
+        # (spike proved 24/24; the AC bar is >=90%, so the stricter 24/24
+        # assertion below subsumes it).
+        assert hits == total, f"expected all {total} Pacific; misses={misses}"
 
 
 # ===========================================================================
@@ -315,6 +323,16 @@ class TestDetectRegion:
         # Trailing name word when the tvg_id has no region paren.
         ("", "USA Network West", "W"),
         ("", "USA Network East", "E"),
+        # Review #1: a trailing quality/format token must not mask the region.
+        ("", "AMC West HD", "W"),
+        ("", "AMC West FHD", "W"),
+        ("", "AMC West UHD", "W"),
+        ("", "AMC West 4K", "W"),
+        ("", "AMC West 1080p", "W"),
+        ("", "AMC West HD FHD", "W"),
+        ("", "USA Network East HD", "E"),
+        # ...but a quality token alone is still not a region.
+        ("", "AMC HD", None),
         ("", "Comedy Central", "C"),
         ("", "Something Mountain", "M"),
         # West == Pacific (both "W"); Mountain and Central are their OWN regions.
@@ -401,3 +419,41 @@ class TestRegionTieBreakIsBandPreserving:
         result = find_epg_matches_with_lookup(channel, [], lookup, engine=engine)
         assert result.best_match.match_type == "prefix"
         assert result.best_match.epg_id == 2
+
+
+# ===========================================================================
+# End-to-end regressions from code review (folded in before merge, vznut.2)
+# ===========================================================================
+
+class TestRegionalEndToEndGuards:
+    def test_west_channel_with_trailing_quality_tag_prefers_pacific(self, engine):
+        # Review #1: a "...West HD" channel with NO tvg_id relies entirely on
+        # the name for its region; the trailing "HD" must not mask "West".
+        lookup = build_epg_lookup(
+            [
+                _epg(1, "AMC", "AMC.us"),
+                _epg(2, "AMC (Pacific)", "AMC(Pacific)(AMCP).us"),
+            ],
+            engine=engine,
+        )
+        channel = {"id": 1, "name": "AMC West HD", "streams": []}
+        assert "tvg_id" not in channel  # region must come from the name alone
+        result = find_epg_matches_with_lookup(channel, [], lookup, engine=engine)
+        assert result.best_match.epg_id == 2
+
+    def test_comedy_central_still_links_after_region_collapse(self, engine):
+        # Review #2: the region collapse strips the noun "Central" and
+        # detect_region reads "Comedy Central" as region C. The channel must
+        # still link its own "Comedy Central" guide row (and not misfire onto
+        # an unrelated network).
+        lookup = build_epg_lookup(
+            [
+                _epg(1, "Comedy Central", "ComedyCentral(CC).us"),
+                _epg(2, "MTV", "MTV.us"),
+            ],
+            engine=engine,
+        )
+        channel = {"id": 1, "name": "Comedy Central", "streams": []}
+        result = find_epg_matches_with_lookup(channel, [], lookup, engine=engine)
+        assert result.best_match is not None
+        assert result.best_match.epg_name == "Comedy Central"
