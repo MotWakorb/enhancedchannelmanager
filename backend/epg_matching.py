@@ -55,6 +55,27 @@ LEAGUE_SUFFIXES = [
 
 REGIONAL_VARIANTS = ["east", "west", "pacific", "central", "mountain"]
 
+# Timezone/region words treated as identity-free for EPG matching (vznut.2,
+# spike vznut.3). A regional guide feed ("USA Network (Pacific)") is the SAME
+# network as its base entry — the region word is a schedule-offset tag, not part
+# of the network's identity — so it must not create a distinct match key, a
+# spurious extra identity token, or a bogus parenthetical "acronym".
+_REGION_WORDS = frozenset(REGIONAL_VARIANTS)
+
+# Region code for the region-consistency tie-break. Only an EXACT whole-word
+# region token maps to a code, so adjective forms ("Eastern"/"Western") and
+# network names that merely contain a region substring never register.
+# West == Pacific: US West-coast feeds run on Pacific time and the JESmann guide
+# publishes the West feed as its "(Pacific)" row. Central and Mountain are their
+# OWN regions — no in-data evidence to alias MT/CT -> PT (spike vznut.3).
+_REGION_CODE = {
+    "east": "E",
+    "west": "W",
+    "pacific": "W",
+    "central": "C",
+    "mountain": "M",
+}
+
 # ---------------------------------------------------------------------------
 # Pre-compiled regex patterns (module level for performance)
 # ---------------------------------------------------------------------------
@@ -248,6 +269,14 @@ def _extract_match_tokens(name: str, engine=None) -> frozenset:
             continue
         if tok in _TOKEN_STOPWORDS or _SUBCHANNEL_TOKEN_RE.match(tok):
             continue
+        # vznut.2 change 2/3: a region word ("Pacific") is a schedule-offset
+        # tag, not network identity. Excluding it stops the regional entry
+        # ("USA Network (Pacific)") from carrying an EXTRA token its base
+        # sibling lacks (m4hp1 -4 penalty), which otherwise pushes the East
+        # default a full confidence band ahead of the correct Pacific feed and
+        # so prevents the band-preserving region tie-break from ever firing.
+        if tok in _REGION_WORDS:
+            continue
         tokens.add(tok)
     return frozenset(tokens)
 
@@ -275,6 +304,10 @@ class EPGMatchWithScore:
     # primary feed wins when two candidates are otherwise indistinguishable.
     # Defaults to 1 (neutral) for objects built outside the lookup path.
     subchannel: int = 1
+    # Timezone region ("E"/"W"/"C"/"M") of the EPG entry (vznut.2), carried from
+    # the lookup entry and used by _sort_matches for the region-consistency
+    # tie-break. None (neutral) for objects built outside the lookup path.
+    epg_region: Optional[str] = None
 
 
 @dataclass
@@ -417,6 +450,20 @@ def epg_match_key(engine, name: str) -> str:
         return ""
 
     core = engine.extract_core_name(name, for_matching=True)
+
+    # Region collapse (vznut.2 change 1/3): drop timezone/region words so a
+    # regional guide feed shares its base network's key and becomes an EXACT
+    # candidate — "AMC (Pacific)" -> "amc", matching "AMC West" -> "amc" (WEST
+    # was already stripped by the "Timezone Tags" group in extract_core_name).
+    # REQUIRED for short-name nets (AMC/FX/TBS/E!/FXX): their Pacific row is
+    # otherwise never a candidate (the prefix scan is gated at len>=4) and no
+    # tie-break can reorder a candidate that isn't in the set. Done here as a
+    # match-only artifact (like the residual-digit sweep below), NOT in the tag
+    # group, which ALSO renames displayed channel names. Whole-word only, so
+    # adjective forms ("Eastern"/"Westerns") and network names that merely
+    # contain a region substring are untouched. Collapsing "Comedy Central" ->
+    # "comedy" is safe: the region-consistency tie-break re-disambiguates.
+    core = _REGIONAL_RE.sub(" ", core)
 
     # Fold semantic punctuation BEFORE flattening so "AMC+" -> "amcplus",
     # "A&E" -> "aande" (channel and EPG fold identically, so they still match).
@@ -570,13 +617,59 @@ def extract_paren_acronym(text: str) -> Optional[str]:
     """
     if not text:
         return None
-    match = _PAREN_ACRONYM_RE.search(text)
-    if not match:
-        return None
-    acronym = _NON_ALNUM_RE.sub("", match.group(1).lower())
-    if len(acronym) < _MIN_ACRONYM_LENGTH:
-        return None
-    return acronym
+    # vznut.2 change 2/3: a PARENTHETICAL region marker ("(Pacific)") means this
+    # is a regional-variant entry. Its trailing station-id acronym is just the
+    # base acronym plus a region suffix (USANetwork(Pacific)(USAP) -> "USAP",
+    # AMC(Pacific)(AMCP) -> "AMCP") — the SAME network as the base feed, not an
+    # independent identity. Folding it into match_tokens would make it an EXTRA
+    # token the base entry lacks (m4hp1 -4 penalty), pushing the East default
+    # ahead of the correct Pacific feed and defeating the band-preserving region
+    # tie-break. So a region parenthetical yields NO acronym at all: the entry
+    # is already an exact candidate via its region-collapsed key and stays
+    # token-symmetric with its base sibling, letting the region tie-break fire.
+    found = None
+    for group in _PAREN_ACRONYM_RE.findall(text):
+        norm = _NON_ALNUM_RE.sub("", group.lower())
+        if norm in _REGION_WORDS:
+            return None
+        if found is None and len(norm) >= _MIN_ACRONYM_LENGTH:
+            found = norm
+    return found
+
+
+def detect_region(
+    tvg_id: Optional[str], name: Optional[str] = None
+) -> Optional[str]:
+    """Detect the timezone region of a channel or EPG entry (vznut.2).
+
+    Returns a region code ("E"/"W"/"C"/"M"), or ``None`` when no region is
+    present. West and Pacific both map to "W" (US West-coast feeds run on
+    Pacific time); Central and Mountain are their own regions.
+
+    Detection order (spike vznut.3):
+    1. Any parenthetical in the tvg_id — authoritative for JESmann, e.g.
+       Dispatcharr's ``USANetwork(Pacific)(USAP).us`` -> "W". Parens are scanned
+       in order so the region wins even when it precedes the station-id paren.
+    2. Else the LAST word of the display name, e.g. "USA Network West" -> "W".
+       Only the trailing word is considered so a leading descriptor
+       ("West Coast News") is never mistaken for a timezone tag.
+
+    Only an EXACT whole-word region token registers, so adjective forms
+    ("PBS Eastern", "Western Channel", "Starz Encore Westerns") resolve to
+    ``None`` — the edge guard called out in the bead.
+    """
+    if tvg_id:
+        for group in _PAREN_ACRONYM_RE.findall(tvg_id):
+            code = _REGION_CODE.get(_NON_ALNUM_RE.sub("", group.lower()))
+            if code:
+                return code
+    if name:
+        words = re.findall(r"[A-Za-z]+", name)
+        if words:
+            code = _REGION_CODE.get(words[-1].lower())
+            if code:
+                return code
+    return None
 
 
 def build_epg_lookup(
@@ -661,6 +754,11 @@ def build_epg_lookup(
             # Primary feed (no marker / -DT / -DT1) = 1; diginets -DT2.. >= 2.
             # Pure tie-break: prefer the primary feed when tokens tie.
             "subchannel": _parse_subchannel(epg_name),
+            # Timezone region (vznut.2): "E"/"W"/"C"/"M" or None, from the tvg_id
+            # parenthetical first, then the trailing name word. Used ONLY by
+            # _sort_matches as a band-preserving tie-break so a "...West" channel
+            # prefers the "(Pacific)" feed over the East default.
+            "region": detect_region(tvg_id, epg_name),
         }
 
         all_entries.append(entry)
@@ -943,6 +1041,7 @@ def _sort_matches(
     channel_league: Optional[str],
     channel_normalized: str,
     source_order: Optional[dict[int, int]] = None,
+    channel_region: Optional[str] = None,
 ) -> list[EPGMatchWithScore]:
     """Sort matches by priority rules.
 
@@ -959,7 +1058,9 @@ def _sort_matches(
     6. Exact over prefix (for names > 2 chars)
     7. Special punctuation match
     8. Channel-is-prefix-of-EPG preferred
-    9. Regional variant matching
+    9. Region consistency (vznut.2): channel region == EPG region preferred;
+       band-preserving, replaces the latently-backwards ``has_regional``
+       tie-break. Inert when the channel has no detected region.
     10. Alphabetical, then EPG id (fully deterministic)
 
     The former name-length-similarity tie-break (``len_diff``) was REMOVED
@@ -1013,8 +1114,25 @@ def _sort_matches(
         # 8. Channel is prefix of EPG
         is_prefix = 0 if epg_norm.startswith(channel_normalized) else 1
 
-        # 9. Regional variant
-        has_regional = 1 if _REGIONAL_RE.search(m.epg_name) else 0
+        # 9. Region consistency (vznut.2): among candidates otherwise tied
+        #    (same band, source, confidence, subchannel, ...), prefer the EPG
+        #    entry whose timezone region matches the channel's. This REPLACES
+        #    the latently-backwards ``has_regional`` tie-break, which preferred
+        #    the NON-regional entry and so ranked the East default above the
+        #    correct "(Pacific)" feed for a "...West" channel. Band-preserving:
+        #    it only reorders genuine ties, never outranking country(+40) or
+        #    exact(+25). Inert (rank 0 for every candidate) when the channel has
+        #    no detected region, so non-regional channels (ESPN/CNN) are
+        #    unaffected. 0 = region match, 1 = EPG has no region (neutral),
+        #    2 = conflict (channel and EPG in different regions).
+        if channel_region is None:
+            region_consistency = 0
+        elif m.epg_region == channel_region:
+            region_consistency = 0
+        elif m.epg_region is None:
+            region_consistency = 1
+        else:
+            region_consistency = 2
 
         # 10. Alphabetical, then EPG id as a final deterministic tiebreaker
         return (
@@ -1026,7 +1144,7 @@ def _sort_matches(
             exact_bonus,
             has_special,
             is_prefix,
-            has_regional,
+            region_consistency,
             m.epg_name.lower(),
             m.epg_id,
         )
@@ -1071,6 +1189,10 @@ def find_epg_matches_with_lookup(
     channel_call_sign = extract_broadcast_call_sign(channel_name)
     # Meaningful tokens for the overlap signal (a6445).
     channel_tokens = _extract_match_tokens(channel_name, engine=engine)
+    # Timezone region of the channel (vznut.2): from the channel's tvg_id
+    # parenthetical first, then the trailing name word ("USA Network West" ->
+    # "W"). Drives the region-consistency tie-break in _sort_matches.
+    channel_region = detect_region(channel.get("tvg_id", ""), channel_name)
 
     # Detect country from streams
     channel_country = detect_country_from_streams(streams)
@@ -1112,6 +1234,7 @@ def find_epg_matches_with_lookup(
                 epg_source=entry["epg_source"],
                 epg_normalized=entry["normalized_name"],
                 subchannel=entry["subchannel"],
+                epg_region=entry["region"],
                 confidence=confidence,
                 match_type="exact",
             ))
@@ -1135,6 +1258,7 @@ def find_epg_matches_with_lookup(
                 epg_source=entry["epg_source"],
                 epg_normalized=entry["normalized_name"],
                 subchannel=entry["subchannel"],
+                epg_region=entry["region"],
                 confidence=confidence,
                 match_type="exact",
             ))
@@ -1165,6 +1289,7 @@ def find_epg_matches_with_lookup(
                         epg_source=entry["epg_source"],
                         epg_normalized=entry["normalized_name"],
                         subchannel=entry["subchannel"],
+                        epg_region=entry["region"],
                         confidence=confidence,
                         match_type="prefix",
                     ))
@@ -1194,6 +1319,7 @@ def find_epg_matches_with_lookup(
                         epg_source=entry["epg_source"],
                         epg_normalized=entry["normalized_name"],
                         subchannel=entry["subchannel"],
+                        epg_region=entry["region"],
                         confidence=confidence,
                         match_type="prefix",
                     ))
@@ -1217,6 +1343,7 @@ def find_epg_matches_with_lookup(
                 epg_source=entry["epg_source"],
                 epg_normalized=entry["normalized_name"],
                 subchannel=entry["subchannel"],
+                epg_region=entry["region"],
                 confidence=confidence,
                 match_type="callsign",
             ))
@@ -1245,6 +1372,7 @@ def find_epg_matches_with_lookup(
                 epg_source=entry["epg_source"],
                 epg_normalized=entry["normalized_name"],
                 subchannel=entry["subchannel"],
+                epg_region=entry["region"],
                 confidence=confidence,
                 match_type="acronym",
             ))
@@ -1277,6 +1405,7 @@ def find_epg_matches_with_lookup(
                         epg_source=entry["epg_source"],
                         epg_normalized=entry["normalized_name"],
                         subchannel=entry["subchannel"],
+                        epg_region=entry["region"],
                         confidence=confidence,
                         match_type="league",
                     ))
@@ -1286,6 +1415,7 @@ def find_epg_matches_with_lookup(
     # reported score stays an honest measure of match quality.
     matches = _sort_matches(
         matches, channel_league, channel_normalized, source_order,
+        channel_region=channel_region,
     )
 
     result.matches = matches
