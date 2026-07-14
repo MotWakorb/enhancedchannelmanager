@@ -162,5 +162,13 @@ class TestRestartServices:
 
                     response = await async_client.post("/api/settings/restart-services")
 
-                    # Should attempt restart
-                    assert response.status_code in (200, 500)
+        # _restart_background_services catches all internal failures and always
+        # returns a structured {"success": bool, "message": str} dict — it never
+        # raises, so the endpoint deterministically returns 200. The old
+        # (200, 500) set admitted a nonexistent 500 branch and would have masked a
+        # regression that made the endpoint actually 500. Assert the 200 and the
+        # documented result shape.
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data["success"], bool)
+        assert "message" in data

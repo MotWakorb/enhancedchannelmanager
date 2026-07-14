@@ -195,7 +195,16 @@ class TestGetM3UChangesSummary:
             response = await async_client.get("/api/m3u/changes/summary", params={"hours": 48})
 
         assert response.status_code == 200
+        # u8qr6.5: assert the hours=48 param actually reaches the `since` arg the
+        # detector receives (since = utcnow - timedelta(hours=hours)). The old
+        # assert_called_once() would still pass if hours were silently ignored
+        # and the 24h default used. get_change_summary(since, m3u_account_id) is
+        # positional.
         mock_detector.get_change_summary.assert_called_once()
+        since_arg, account_arg = mock_detector.get_change_summary.call_args.args
+        delta_hours = (datetime.utcnow() - since_arg).total_seconds() / 3600
+        assert 47.9 < delta_hours < 48.1, f"since is {delta_hours:.2f}h ago, expected ~48h"
+        assert account_arg is None
 
     @pytest.mark.asyncio
     async def test_passes_account_filter(self, async_client):
@@ -209,6 +218,13 @@ class TestGetM3UChangesSummary:
             })
 
         assert response.status_code == 200
+        # u8qr6.5: assert the account filter actually reaches the detector call.
+        # The old test inspected nothing about the mock, so a router that dropped
+        # the m3u_account_id argument would still pass. get_change_summary is
+        # called positionally as (since, m3u_account_id).
+        mock_detector.get_change_summary.assert_called_once()
+        _since, account_arg = mock_detector.get_change_summary.call_args.args
+        assert account_arg == 1
 
 
 class TestGetM3UAccountChanges:
