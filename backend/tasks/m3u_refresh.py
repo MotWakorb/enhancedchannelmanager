@@ -263,16 +263,24 @@ def _advance_refresh_watermark() -> None:
         # tick to ever consume this watermark (epic vkktd). Annotate so the log
         # doesn't mislead when matching is silently unable to run (vkktd.1).
         from task_registry import auto_creation_parent_enabled
-        if auto_creation_parent_enabled() is False:
+        parent_enabled = auto_creation_parent_enabled()
+        if parent_enabled is False:
             logger.info(
                 "[M3U] Advanced refresh watermark to %s (auto_creation task is "
                 "currently DISABLED — it will NOT pick this up; enable the task to "
                 "run matching on refresh)",
                 settings.last_m3u_refresh_completed_at,
             )
-        else:
+        elif parent_enabled is True:
             logger.info(
                 "[M3U] Advanced refresh watermark to %s (auto-creation will pick it up on its next tick)",
+                settings.last_m3u_refresh_completed_at,
+            )
+        else:
+            # Unknown gate state — stay neutral rather than claim it will be
+            # picked up (review Minor 3).
+            logger.info(
+                "[M3U] Advanced refresh watermark to %s",
                 settings.last_m3u_refresh_completed_at,
             )
     except Exception as e:  # pragma: no cover — watermark write is best-effort

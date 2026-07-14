@@ -495,14 +495,6 @@ class TaskRegistry:
             else:
                 instance.disable()
 
-        # vkktd.3: enabling a task flips ONLY the parent scheduled_tasks.enabled
-        # gate. Firing also needs >=1 enabled CHILD task_schedules row (the
-        # engine requires BOTH), so a task whose only child schedule is disabled
-        # reads "Enabled" yet never fires (next_run=null). Reconcile that here so
-        # the operator's single "Enabled" action actually makes the task run.
-        if enabled is True:
-            self._reconcile_child_schedule_on_enable(task_id, instance)
-
         # Update schedule config
         if schedule_type is not None:
             instance.schedule_config.schedule_type = ScheduleType(schedule_type)
@@ -518,6 +510,18 @@ class TaskRegistry:
         # Update task-specific configuration
         if task_config is not None:
             instance.update_config(task_config)
+
+        # vkktd.3: enabling a task flips ONLY the parent scheduled_tasks.enabled
+        # gate. Firing also needs >=1 enabled CHILD task_schedules row (the
+        # engine requires BOTH), so a task whose only child schedule is disabled
+        # reads "Enabled" yet never fires (next_run=null). Reconcile that here so
+        # the operator's single "Enabled" action actually makes the task run.
+        # This MUST run AFTER the schedule-config updates above: PATCH accepts
+        # ``enabled`` + ``schedule_type`` together, and the reconcile's MANUAL
+        # guard reads ``instance.schedule_config.schedule_type`` — it has to see
+        # the FINAL intended type, not the pre-PATCH one (review Warn 1).
+        if enabled is True:
+            self._reconcile_child_schedule_on_enable(task_id, instance)
 
         # Recalculate next run if needed
         if instance._enabled and instance.schedule_config.schedule_type != ScheduleType.MANUAL:
@@ -625,17 +629,31 @@ class TaskRegistry:
                     day_of_month=target.day_of_month,
                 )
                 session.commit()
-                logger.info(
-                    "[TASK-REGISTRY] Task %s enabled — also enabled child schedule %s "
-                    "(had no enabled schedule) so it will fire; next_run=%s",
-                    task_id, target.id, target.next_run_at,
-                )
+                if target.next_run_at is None:
+                    # calculate_next_run returned None (e.g. interval_seconds<=0
+                    # or an unparseable schedule). task_engine filters
+                    # ``next_run_at IS NOT NULL``, so the child is enabled yet
+                    # still won't fire — the very "enabled but silent" state we
+                    # are killing. Surface it loudly (review Minor 2).
+                    logger.warning(
+                        "[TASK-REGISTRY] Task %s enabled and child schedule %s "
+                        "(type=%s) was reconciled ON, but its next_run computed to "
+                        "None — the task will still NOT fire; fix the schedule "
+                        "(e.g. interval_seconds must be > 0)",
+                        task_id, target.id, target.schedule_type,
+                    )
+                else:
+                    logger.info(
+                        "[TASK-REGISTRY] Task %s enabled — also enabled child schedule %s "
+                        "(had no enabled schedule) so it will fire; next_run=%s",
+                        task_id, target.id, target.next_run_at,
+                    )
             finally:
                 session.close()
-        except Exception as e:  # pragma: no cover — reconcile must never break enable
+        except Exception:  # pragma: no cover — reconcile must never break enable
             logger.exception(
-                "[TASK-REGISTRY] Failed to reconcile child schedule on enable for %s: %s",
-                task_id, e,
+                "[TASK-REGISTRY] Failed to reconcile child schedule on enable for %s",
+                task_id,
             )
 
     def get_task_status(self, task_id: str) -> Optional[dict]:
