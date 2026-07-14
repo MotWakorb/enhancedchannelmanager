@@ -1085,3 +1085,138 @@ class TestMatchCacheInvalidatedOnSourceChange:
             await _poll_epg_refresh_completion(1, "XMLTV", "2026-06-30T11:00:00Z")
 
         assert cache.get("epg_match:123:456:789") is None
+
+
+class TestAuditEpgDuplicates:
+    """Tests for GET /api/epg/audit-duplicates (bead vznut.1)."""
+
+    @pytest.mark.asyncio
+    async def test_reports_shared_link_group(self, async_client):
+        """Two channels on one epg_data_id surface as a shared-link group,
+        enriched with the EPG row's name/tvg_id."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 10, "name": "USA Network", "epg_data_id": 500},
+                {"id": 55, "name": "USA Network West", "epg_data_id": 500},
+                {"id": 60, "name": "CNN", "epg_data_id": 501},
+                {"id": 61, "name": "Unlinked", "epg_data_id": None},
+            ],
+        }
+        mock_client.get_epg_data.return_value = [
+            {"id": 500, "name": "USA Network East", "tvg_id": "USANetwork.us",
+             "epg_source": {"id": 3, "name": "JESmann"}},
+        ]
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/audit-duplicates")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["shared_links"]) == 1
+        group = data["shared_links"][0]
+        assert group["epg_data_id"] == 500
+        assert group["count"] == 2
+        assert group["epg_name"] == "USA Network East"
+        assert group["tvg_id"] == "USANetwork.us"
+        assert [c["channel_id"] for c in group["channels"]] == [10, 55]
+        assert data["summary"] == {
+            "shared_link_groups": 1,
+            "affected_channels": 2,
+            "total_channels": 4,
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_duplicates_returns_empty(self, async_client):
+        """All-singleton fleet reports no shared links."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 1, "name": "ESPN", "epg_data_id": 100},
+                {"id": 2, "name": "CNN", "epg_data_id": 101},
+            ],
+        }
+        mock_client.get_epg_data.return_value = []
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/audit-duplicates")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["shared_links"] == []
+        assert data["summary"]["shared_link_groups"] == 0
+
+    @pytest.mark.asyncio
+    async def test_epg_enrichment_failure_degrades_gracefully(self, async_client):
+        """If EPG-data fetch fails, the audit still reports linkage (name None)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 1, "name": "A", "epg_data_id": 42},
+                {"id": 2, "name": "B", "epg_data_id": 42},
+            ],
+        }
+        mock_client.get_epg_data.side_effect = Exception("EPG source down")
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/audit-duplicates")
+        assert response.status_code == 200
+        group = response.json()["shared_links"][0]
+        assert group["epg_data_id"] == 42
+        assert group["epg_name"] is None
+
+    @pytest.mark.asyncio
+    async def test_channel_fetch_failure_returns_500(self, async_client):
+        """A hard failure fetching channels surfaces as 500."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.side_effect = Exception("Dispatcharr down")
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/audit-duplicates")
+        assert response.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_read_only_no_mutation(self, async_client):
+        """The audit must not call any mutating client method."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 1, "name": "A", "epg_data_id": 42},
+                {"id": 2, "name": "B", "epg_data_id": 42},
+            ],
+        }
+        mock_client.get_epg_data.return_value = []
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/audit-duplicates")
+        assert response.status_code == 200
+        mock_client.update_channel.assert_not_called()
+        mock_client.create_channel.assert_not_called()
+        mock_client.delete_channel.assert_not_called()
+
+
+class TestMatchEmbedsSharedLinks:
+    """The /match preview embeds the shared-EPG-link audit (bead vznut.1 PO decision)."""
+
+    @pytest.mark.asyncio
+    async def test_match_response_includes_shared_epg_links(self, async_client):
+        """Two matched channels sharing one epg_data_id surface in the preview."""
+        from cache import get_cache
+        get_cache().clear()
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {"id": 1, "name": "Primary", "priority": 10},
+        ]
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 1, "name": "USA Network", "streams": [], "epg_data_id": 500},
+                {"id": 2, "name": "USA Network West", "streams": [], "epg_data_id": 500},
+            ],
+        }
+        mock_client.get_streams.return_value = {"results": [], "next": None}
+        mock_client.get_epg_data.return_value = [
+            {"id": 500, "name": "USA Network East", "tvg_id": "USANetwork.us",
+             "epg_source": {"id": 1, "name": "Primary"}},
+        ]
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post("/api/epg/match", json={"channel_ids": [1, 2]})
+        assert response.status_code == 200
+        data = response.json()
+        assert "shared_epg_links" in data
+        assert data["summary"]["shared_link_groups"] == 1
+        group = data["shared_epg_links"]["shared_links"][0]
+        assert group["epg_data_id"] == 500
+        assert [c["channel_id"] for c in group["channels"]] == [1, 2]
