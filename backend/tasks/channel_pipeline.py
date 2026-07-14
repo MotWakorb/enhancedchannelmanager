@@ -12,6 +12,7 @@ from typing import Optional
 import journal
 from config import get_settings, save_settings
 from dispatcharr_client import get_client
+from log_throttle import should_log
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType
 from task_registry import register_task
 
@@ -237,10 +238,25 @@ class ChannelPipelineTask(TaskScheduler):
             session.close()
 
         if not rule_ids:
-            logger.debug(
-                "[%s] No enabled run_on_refresh or auto_run event_sync rules "
-                "— skipping auto-fire", self.task_id,
-            )
+            # A refresh watermark IS pending (we passed the ``refresh_at >
+            # consumed_at`` gate above) but no rule is eligible for the
+            # unattended path, so matching will NOT run for this refresh.
+            # Surface at INFO (throttled per task) so "why didn't matching run
+            # after the refresh?" is answerable from the logs instead of being
+            # DEBUG-only (vkktd.1). The throttled-off ticks keep the original
+            # DEBUG so debug-level readers still see every tick.
+            if should_log("no_run_on_refresh_rule:%s" % self.task_id):
+                logger.info(
+                    "[%s] Refresh watermark %s is pending but NO enabled "
+                    "run_on_refresh rule (or auto_run event_sync rule) exists — "
+                    "matching will not run for this refresh (enable run_on_refresh "
+                    "on a rule to have it fire)", self.task_id, refresh_at,
+                )
+            else:
+                logger.debug(
+                    "[%s] No enabled run_on_refresh or auto_run event_sync rules "
+                    "— skipping auto-fire", self.task_id,
+                )
             return TaskResult(
                 success=True, message="No auto-creation rules with run_on_refresh enabled",
                 started_at=started_at, completed_at=datetime.utcnow(), total_items=0,
