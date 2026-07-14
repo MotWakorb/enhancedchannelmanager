@@ -6,7 +6,6 @@ They will FAIL initially - implementation makes them pass.
 
 Test Spec: Password Security (v6dxf.8.2)
 """
-import time
 
 
 class TestPasswordHashing:
@@ -49,15 +48,27 @@ class TestPasswordHashing:
         hashed = hash_password("validpassword123")
         assert verify_password("", hashed) is False
 
-    def test_hashing_takes_minimum_time(self):
-        """Hashing takes >100ms (cost factor protection against brute force)."""
-        from auth.password import hash_password
+    def test_hashing_uses_strong_cost_factor(self):
+        """bcrypt hashes embed a cost factor high enough to resist brute force.
 
-        start = time.time()
-        hash_password("testpassword")
-        elapsed = time.time() - start
-        # bcrypt should take at least 100ms with proper cost factor
-        assert elapsed > 0.1, f"Hashing took only {elapsed*1000:.0f}ms, should be >100ms"
+        The security property is "the work factor is high enough," and bcrypt
+        records that factor directly in the hash ($2b$<cost>$<salt+digest>).
+        Parsing it is deterministic — unlike the previous wall-clock assertion
+        (elapsed > 100ms), which flaked on fast hardware / under CI contention
+        and only checked the work factor indirectly.
+        """
+        from auth.password import BCRYPT_ROUNDS, hash_password
+
+        hashed = hash_password("testpassword")
+        # bcrypt format: $2b$<two-digit-cost>$<22-char-salt><31-char-digest>
+        cost = int(hashed.split("$")[2])
+        assert cost == BCRYPT_ROUNDS, (
+            f"bcrypt hash cost {cost} does not match configured "
+            f"BCRYPT_ROUNDS={BCRYPT_ROUNDS}"
+        )
+        assert cost >= 12, (
+            f"bcrypt cost factor {cost} is below the safe minimum of 12"
+        )
 
 
 class TestPasswordValidation:
