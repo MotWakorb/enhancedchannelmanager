@@ -71,6 +71,19 @@ export function GuideTab({
   const [loading, setLoading] = useState(true);
   const notifications = useNotifications();
 
+  // Held in a ref so the mount-only data-load effect doesn't list it as a
+  // dependency (which would re-run the effect on every notification change).
+  const notificationsRef = useRef(notifications);
+  notificationsRef.current = notifications;
+
+  // Whether the parent supplied channels/logos as props. Captured once so the
+  // mount effect's self-fetch fallback is stable and doesn't depend on the
+  // (progressively-loaded) prop values. Note: App always passes these arrays
+  // (often empty at first), so in practice channels/logos come from props via
+  // the sync effects below, not from a self-fetch.
+  const hasChannelProp = useRef(propChannels !== undefined);
+  const hasLogoProp = useRef(propLogos !== undefined);
+
   // Time selection state
   const [selectedDate, setSelectedDate] = useState(() => getLocalDateString(new Date()));
   const [startHour, setStartHour] = useState(() => {
@@ -197,35 +210,62 @@ export function GuideTab({
     };
   }, [sortedChannels, scrollTop, viewportHeight]);
 
-  // Load data on mount
+  // Mirror channels/logos from the parent whenever it supplies or updates them.
+  // App owns channel/logo loading and streams them in progressively (paginated),
+  // so we sync into local state here — cheaply, with no network — rather than
+  // refetching. Local copies let edits made in this tab update rows in place.
   useEffect(() => {
+    if (propChannels) setChannels(propChannels);
+  }, [propChannels]);
+
+  useEffect(() => {
+    if (propLogos) setLogos(propLogos);
+  }, [propLogos]);
+
+  // Load guide-specific data (programs, profiles, groups) once on mount. These
+  // are never passed as props. We deliberately do NOT depend on
+  // propChannels/propLogos here: doing so re-ran this whole effect — including
+  // the expensive getEPGGrid() — every time App's progressive loads updated
+  // those props, resetting `loading` to true on each pass. Landing directly on
+  // the Guide tab (before App's channel/logo loads settle) left it stuck on
+  // "Loading guide data..." forever. Channels/logos come from the sync effects
+  // above; we self-fetch them only when the parent didn't supply them at all.
+  useEffect(() => {
+    let cancelled = false;
     const loadData = async () => {
       setLoading(true);
-
       try {
-        // Fetch all needed data in parallel
-        const [channelsData, logosData, programsData, profilesData, groupsData] = await Promise.all([
-          propChannels ? Promise.resolve({ results: propChannels }) : api.getChannels({ pageSize: 5000 }),
-          propLogos ? Promise.resolve({ results: propLogos }) : api.getLogos({ pageSize: 10000 }),
+        const [programsData, profilesData, groupsData] = await Promise.all([
           api.getEPGGrid(),
           api.getChannelProfiles(),
           api.getChannelGroups(),
         ]);
-
-        setChannels((channelsData as { results: Channel[] }).results);
-        setLogos((logosData as { results: Logo[] }).results);
+        if (cancelled) return;
         setPrograms(programsData);
         setChannelProfiles(profilesData);
         setChannelGroups(groupsData);
+
+        // Fallback for standalone use (no parent-provided data).
+        if (!hasChannelProp.current) {
+          const channelsData = await api.getChannels({ pageSize: 5000 });
+          if (!cancelled) setChannels(channelsData.results);
+        }
+        if (!hasLogoProp.current) {
+          const logosData = await api.getLogos({ pageSize: 10000 });
+          if (!cancelled) setLogos(logosData.results);
+        }
       } catch (err) {
-        notifications.error(err instanceof Error ? err.message : 'Failed to load guide data', 'Guide');
+        if (!cancelled) {
+          notificationsRef.current.error(err instanceof Error ? err.message : 'Failed to load guide data', 'Guide');
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadData();
-  }, [propChannels, propLogos, notifications]);
+    return () => { cancelled = true; };
+  }, []);
 
   // Refresh programs only
   const handleRefresh = useCallback(async () => {
