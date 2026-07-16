@@ -2452,3 +2452,157 @@ class TestEngineFoldMatchKeyPassThrough:
         assert mock_executor.execute.await_count == 1
         assert mock_executor.execute.await_args.kwargs.get("fold_match_key") is True
 
+
+class TestAutoChannelNumberSkipsRenumberPass:
+    """Bead enhancedchannelmanager-bn0wa: pin the CURRENT intentional behavior
+    that a create_channel action with channel_number "auto" yields
+    ``_get_rule_starting_number(rule) is None`` and therefore SKIPS the
+    rule-level renumber pass (the ``continue`` in Pass 3). This footgun was
+    previously unguarded — if a refactor changes it in either direction,
+    these tests fail.
+    """
+
+    def test_auto_spec_returns_none(self):
+        from channel_pipeline_engine import _get_rule_starting_number
+
+        rule = MagicMock()
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "channel_number": "auto"}
+        ]
+        assert _get_rule_starting_number(rule) is None
+
+    def test_missing_spec_defaults_to_auto_and_returns_none(self):
+        from channel_pipeline_engine import _get_rule_starting_number
+
+        rule = MagicMock()
+        rule.get_actions.return_value = [{"type": "create_channel"}]
+        assert _get_rule_starting_number(rule) is None
+
+    def test_int_spec_returns_int(self):
+        from channel_pipeline_engine import _get_rule_starting_number
+
+        rule = MagicMock()
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "channel_number": 500}
+        ]
+        assert _get_rule_starting_number(rule) == 500
+
+    def test_range_spec_returns_range_start(self):
+        from channel_pipeline_engine import _get_rule_starting_number
+
+        rule = MagicMock()
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "channel_number": "500-999"}
+        ]
+        assert _get_rule_starting_number(rule) == 500
+
+    def test_numeric_string_spec_returns_int(self):
+        from channel_pipeline_engine import _get_rule_starting_number
+
+        rule = MagicMock()
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "channel_number": "500"}
+        ]
+        assert _get_rule_starting_number(rule) == 500
+
+    def test_garbage_spec_returns_none(self):
+        from channel_pipeline_engine import _get_rule_starting_number
+
+        rule = MagicMock()
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "channel_number": "not-a-number"}
+        ]
+        assert _get_rule_starting_number(rule) is None
+
+    def test_no_create_channel_action_returns_none(self):
+        from channel_pipeline_engine import _get_rule_starting_number
+
+        rule = MagicMock()
+        rule.get_actions.return_value = [{"type": "merge_streams", "target": "auto"}]
+        assert _get_rule_starting_number(rule) is None
+
+    @patch("channel_pipeline_engine.get_session")
+    def test_pass3_renumber_skipped_for_auto_numbered_rule(self, mock_get_session):
+        """Behavioral pin of the Pass 3 ``continue``: a rule WITH sort_field
+        that creates channels but numbers them "auto" must never call
+        assign_channel_numbers (rule-level renumbering is skipped entirely)."""
+        from channel_pipeline_executor import ActionResult
+
+        mock_get_session.return_value = MagicMock()
+
+        client = MagicMock()
+        client.assign_channel_numbers = AsyncMock()
+        client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = []
+        engine._existing_groups = []
+
+        rule = MagicMock()
+        rule.id = 1
+        rule.name = "Auto Numbered Rule"
+        rule.priority = 0
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.enabled = True
+        rule.stop_on_first_match = True
+        rule.skip_struck_streams = False
+        rule.sort_field = "name"  # renumber pass is otherwise eligible
+        rule.sort_order = "asc"
+        rule.sort_regex = None
+        rule.orphan_action = "none"
+        rule.managed_channel_ids = None
+        rule.get_managed_channel_ids.return_value = []
+        rule.get_conditions.return_value = [{"type": "always"}]
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "name_template": "{stream_name}",
+             "channel_number": "auto"}
+        ]
+        rule.get_normalization_group_ids.return_value = []
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.allow_manual_channel_merge = False
+        rule.fold_match_key = False
+
+        streams = [
+            StreamContext(stream_id=101, stream_name="ESPN A", m3u_account_id=1, m3u_account_name="P"),
+            StreamContext(stream_id=102, stream_name="ESPN B", m3u_account_id=1, m3u_account_name="P"),
+        ]
+
+        created_ids = iter([201, 202])
+
+        async def _fake_execute(action, stream_ctx, exec_ctx, *args, **kwargs):
+            cid = next(created_ids)
+            exec_ctx.current_channel_id = cid
+            exec_ctx.created_channel_ids.add(cid)
+            exec_ctx.channels_created += 1
+            return ActionResult(
+                success=True, action_type="create_channel", description="created",
+                entity_type="channel", entity_id=cid, entity_name=f"ch-{cid}",
+                created=True,
+            )
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(side_effect=_fake_execute)
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor.reorder_streams_on_channels = AsyncMock(return_value=0)
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            engine._refresh_dummy_epg_and_retry = AsyncMock()
+            engine._reconcile_orphans = AsyncMock()
+            engine._update_rule_stats = AsyncMock()
+
+            asyncio.get_event_loop().run_until_complete(
+                engine._process_streams(streams, [rule], mock_execution, dry_run=False)
+            )
+
+        assert client.assign_channel_numbers.await_count == 0, (
+            "channel_number 'auto' must skip the rule-level renumber pass "
+            "(bead bn0wa pins this intentional behavior)"
+        )
