@@ -18,6 +18,36 @@ from .storage import CertificateStorage
 
 logger = logging.getLogger(__name__)
 
+# Event-loop selection (bead wadu3, follow-up to GH #546 / bead xzdx9).
+# uvloop 0.22.1 has open upstream issues on exactly our stack: #706
+# (segfault in FastAPI-in-container) and #645 (responses leaking to the
+# WRONG request under load — data exposure). The #645 fix is unreleased
+# and #706 remains open, so ECM pins the stdlib asyncio loop everywhere
+# uvicorn is launched. ECM_UVICORN_LOOP is the ops escape hatch.
+_ALLOWED_LOOPS = frozenset({"auto", "asyncio", "uvloop"})
+_DEFAULT_LOOP = "asyncio"
+
+
+def resolve_loop_choice() -> str:
+    """Return the uvicorn ``--loop`` value ECM should use.
+
+    Reads ``ECM_UVICORN_LOOP`` and whitelists it against uvicorn's valid
+    choices — the value ends up in a subprocess argv, so arbitrary env
+    content must never pass through. Invalid values fall back to the safe
+    default (stdlib asyncio) with a warning.
+    """
+    choice = os.environ.get("ECM_UVICORN_LOOP", _DEFAULT_LOOP)
+    if choice not in _ALLOWED_LOOPS:
+        logger.warning(
+            "[TLS-SERVER] Invalid ECM_UVICORN_LOOP=%r (allowed: %s) — "
+            "falling back to %r",
+            choice,
+            ", ".join(sorted(_ALLOWED_LOOPS)),
+            _DEFAULT_LOOP,
+        )
+        return _DEFAULT_LOOP
+    return choice
+
 
 class HTTPSServerManager:
     """
@@ -72,6 +102,10 @@ class HTTPSServerManager:
             "main:app",
             "--host", "0.0.0.0",
             "--port", safe_port,
+            # Pin the event loop (bead wadu3): uvicorn's "auto" policy
+            # would pick uvloop 0.22.1, which has open upstream data-
+            # exposure (#645) and segfault (#706) issues on this stack.
+            "--loop", resolve_loop_choice(),
             "--ssl-keyfile", str(key_resolved),
             "--ssl-certfile", str(cert_resolved),
         ]

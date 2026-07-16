@@ -140,7 +140,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0100",
+    version="0.17.6-0101",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -862,7 +862,18 @@ async def startup_event():
     # Exit-path diagnostics (bd-0gt2i / GH #546): the loop exception handler
     # can only be installed once the event loop is running. Logs loudly on
     # any unhandled loop exception, then delegates to the default handler.
-    exit_diagnostics.install_loop_handler(asyncio.get_running_loop())
+    _running_loop = asyncio.get_running_loop()
+    exit_diagnostics.install_loop_handler(_running_loop)
+
+    # Runtime proof of the active event-loop implementation (bead wadu3):
+    # ECM pins --loop asyncio because uvloop 0.22.1 has open upstream
+    # data-exposure (#645) and segfault (#706) issues. This line makes the
+    # actual loop in use auditable from docker logs.
+    logger.info(
+        "[MAIN] Event loop implementation: %s.%s",
+        type(_running_loop).__module__,
+        type(_running_loop).__qualname__,
+    )
 
     # Initialize journal database
     init_db()
@@ -1451,8 +1462,17 @@ if os.path.exists(static_dir):
 
 if __name__ == "__main__":
     import uvicorn
+    from tls.https_server import resolve_loop_choice
     # Support ECM_PORT for direct invocation consistency with entrypoint.sh
     # This is an app-level runtime configuration and is not persisted to settings.json.
     port = get_http_port()
     logger.info("[MAIN] Starting uvicorn on port %s (from ECM_PORT environment variable)", port)
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    # loop= mirrors entrypoint.sh --loop (bead wadu3): pin stdlib asyncio,
+    # ECM_UVICORN_LOOP is the escape hatch.
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=True,
+        loop=resolve_loop_choice(),
+    )
