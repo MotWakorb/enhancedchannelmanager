@@ -164,6 +164,24 @@ class TestGetM3UChanges:
         data = response.json()
         assert data["results"][0]["count"] == 5  # Earlier date first
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce an invalid SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get("/api/m3u/changes", params={"page": page})
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 201])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size out of [1, 200] is rejected by validation (422)."""
+        response = await async_client.get(
+            "/api/m3u/changes", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
+
 
 class TestGetM3UChangesSummary:
     """Tests for GET /api/m3u/changes/summary."""
@@ -265,6 +283,26 @@ class TestGetM3UAccountChanges:
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce an invalid SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get(
+            "/api/m3u/accounts/1/changes", params={"page": page}
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 201])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size out of [1, 200] is rejected by validation (422)."""
+        response = await async_client.get(
+            "/api/m3u/accounts/1/changes", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
 
 
 class TestGetM3USnapshots:

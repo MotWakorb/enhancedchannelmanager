@@ -453,8 +453,13 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
 
 @router.get("/logos")
 async def get_logos(
-    page: int = 1,
-    page_size: int = 100,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 / page_size<1 were passed straight to the upstream
+    # Dispatcharr client, which raised and surfaced as a 500. Upper bound
+    # matches sibling get_channels (channels.py) — App.tsx's getAllLogos()
+    # direct calls legitimately request page_size=10000 (services/api.ts).
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(100, ge=1, le=10000, description="Results per page"),
     search: Optional[str] = None,
 ):
     """List logos with pagination and search.

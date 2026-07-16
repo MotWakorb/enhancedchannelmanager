@@ -105,6 +105,58 @@ class TestGetStreams:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422_not_500(self, async_client, page):
+        """page < 1 is rejected by validation (422), never passed upstream to
+        become a 500 (bead enhancedchannelmanager-g4z2h, systemic sibling of
+        1a5mf)."""
+        mock_client = AsyncMock()
+        mock_client.get_streams.return_value = {"count": 0, "results": []}
+
+        with patch("routers.streams.get_client", return_value=mock_client):
+            response = await async_client.get("/api/streams", params={"page": page})
+
+        assert response.status_code == 422
+        mock_client.get_streams.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 1001])
+    async def test_invalid_page_size_returns_422_not_500(self, async_client, page_size):
+        """page_size out of [1, 1000] is rejected by validation (422)."""
+        mock_client = AsyncMock()
+        mock_client.get_streams.return_value = {"count": 0, "results": []}
+
+        with patch("routers.streams.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/streams", params={"page_size": page_size}
+            )
+
+        assert response.status_code == 422
+        mock_client.get_streams.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_max_page_size_still_works(self, async_client):
+        """page_size=500 (App.tsx's searchStreams/loadStreamGroup) passes
+        through unchanged."""
+        mock_client = AsyncMock()
+        mock_client.get_streams.return_value = {"count": 0, "results": []}
+        mock_client.get_channel_groups.return_value = []
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None
+
+        with patch("routers.streams.get_client", return_value=mock_client), \
+             patch("routers.streams.get_cache", return_value=mock_cache):
+            response = await async_client.get(
+                "/api/streams", params={"page_size": 500, "bypass_cache": True}
+            )
+
+        assert response.status_code == 200
+        mock_client.get_streams.assert_called_once_with(
+            page=1, page_size=500, search=None,
+            channel_group_name=None, m3u_account=None,
+        )
+
+    @pytest.mark.asyncio
     async def test_client_error_returns_500(self, async_client):
         """Returns 500 when Dispatcharr client raises."""
         mock_client = AsyncMock()

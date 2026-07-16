@@ -17,8 +17,14 @@ router = APIRouter(prefix="/api/journal", tags=["Journal"])
 
 @router.get("")
 async def get_journal_entries(
-    page: int = 1,
-    page_size: int = 50,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 previously produced a negative SQL OFFSET instead of a
+    # clean 422. Upper bound matches the largest page-size option the Journal
+    # tab's UI offers (JournalTab.tsx CustomSelect: 25/50/100/250) — replaces
+    # the old silent `min(page_size, 200)` clamp, which would have quietly
+    # truncated that 250 option to 200 results.
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=250, description="Results per page"),
     category: Optional[str] = None,
     action_type: Optional[str] = None,
     date_from: Optional[str] = None,
@@ -54,9 +60,6 @@ async def get_journal_entries(
             date_to_dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
         except ValueError:
             pass  # Invalid date format from client; ignore filter
-
-    # Validate page_size
-    page_size = min(max(page_size, 1), 200)
 
     return journal.get_entries(
         page=page,

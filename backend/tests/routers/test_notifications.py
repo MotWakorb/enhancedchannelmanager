@@ -70,6 +70,24 @@ class TestGetNotifications:
         assert len(data["notifications"]) == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce an invalid SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get("/api/notifications", params={"page": page})
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 101])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size out of [1, 100] is rejected by validation (422)."""
+        response = await async_client.get(
+            "/api/notifications", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_filter_unread_only(self, async_client, test_session):
         """Filters to only unread notifications."""
         _create_notification(test_session, title="Unread", read=False)

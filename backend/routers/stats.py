@@ -1243,8 +1243,13 @@ async def get_unique_viewers_by_channel(days: int = 7, limit: int = 20, group_by
 
 @router.get("/watch-history")
 async def get_watch_history(
-    page: int = 1,
-    page_size: int = 50,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 previously produced a negative SQL OFFSET instead of a
+    # clean 422. Upper bound matches the existing internal `min(page_size,
+    # 100)` clamp this replaces — the only real caller (WatchHistoryPanel.tsx)
+    # fixes page_size=25.
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=100, description="Results per page (max 100)"),
     channel_id: Optional[str] = None,
     ip_address: Optional[str] = None,
     days: Optional[int] = None,
@@ -1281,9 +1286,6 @@ async def get_watch_history(
 
             # Get total count
             total = query.count()
-
-            # Limit page_size
-            page_size = min(page_size, 100)
 
             # Apply pagination and ordering (most recent first)
             offset = (page - 1) * page_size

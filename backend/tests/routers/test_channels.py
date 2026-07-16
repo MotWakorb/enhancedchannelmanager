@@ -766,6 +766,55 @@ class TestGetLogos:
         assert response.status_code == 200
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422_not_500(self, async_client, page):
+        """page < 1 is rejected by validation (422), never passed upstream to
+        become a 500 (bead enhancedchannelmanager-g4z2h, systemic sibling of
+        1a5mf)."""
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"page": page}
+            )
+
+        assert response.status_code == 422
+        mock_client.get_logos.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 10001])
+    async def test_invalid_page_size_returns_422_not_500(self, async_client, page_size):
+        """page_size out of [1, 10000] is rejected by validation (422)."""
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"page_size": page_size}
+            )
+
+        assert response.status_code == 422
+        mock_client.get_logos.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_pagination_still_works(self, async_client):
+        """A valid page/page_size (including the frontend's large
+        page_size=10000, getAllLogos()) passes through unchanged."""
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"page": 1, "page_size": 10000}
+            )
+
+        assert response.status_code == 200
+        mock_client.get_logos.assert_called_once_with(
+            page=1, page_size=10000, search=None,
+        )
+
+    @pytest.mark.asyncio
     async def test_emits_per_request_info_diagnostic(self, async_client, caplog):
         """Emits the bd-nh50y operator-grepable INFO line per request.
 
