@@ -786,6 +786,127 @@ class TestEventAdmissionPolicy:
 
 
 # ---------------------------------------------------------------------------
+# Venue-conflict rail (bead yjchp) — mutual unmatched identity tokens demote
+# an attach-band pair WITHOUT positive team agreement to the review queue.
+# ---------------------------------------------------------------------------
+
+
+class TestVenueConflictRail:
+    """bead yjchp: token_set_ratio is blind to MUTUAL conflicting leftover
+    tokens — 'Lucas Oil Late Models Adams County' vs 'Lucas Oil Late Models
+    at Shelby County' scores 0.9032 (clears the 0.90 teamless floor) while
+    denoting different venues, hence different events. Such pairs DEMOTE to
+    the ambiguous band (operator review) — never auto-attach, never hard
+    reject (a true match stays operator-rescuable; PO decision)."""
+
+    _TIME = " @ Jul 16 7:15 PM ET"
+    _NOW_JUL16 = _ET.localize(datetime(2026, 7, 16, 12, 0, 0))
+
+    def _score(self, title_a, title_b, **kwargs):
+        return score_pair(
+            title_a + self._TIME, title_b + self._TIME,
+            now=self._NOW_JUL16, **kwargs,
+        )
+
+    def test_mutual_venue_conflict_demotes_to_ambiguous(self):
+        # THE confirmed live false positive (user debug bundle): fuzzy
+        # 0.9032 cleared EVENT_NO_TEAMS_FLOOR and auto-attached across two
+        # different venues. Must land in review, not attach.
+        result = self._score(
+            "Lucas Oil Late Models Adams County",
+            "Lucas Oil Late Models at Shelby County",
+        )
+        assert result.band == BAND_AMBIGUOUS
+        assert result.team_verdict == TEAM_VERDICT_ABSENT
+        assert result.score >= EVENT_NO_TEAMS_FLOOR  # attach-band score...
+        assert result.reject_reasons == (
+            event_sync_matcher.AMBIGUOUS_VENUE_TOKEN_CONFLICT,
+        )
+
+    @pytest.mark.parametrize("title_a,title_b", [
+        # Subset title: every stream identity token matches the master.
+        ("Lucas Oil Late Models Shelby",
+         "Lucas Oil Late Models at Shelby County"),
+        # Connective 'at' is a stop token, never an identity leftover.
+        ("Short Track Super Series Fonda",
+         "Short Track Super Series at Fonda"),
+        # One-sided leftover only (master carries series/sponsor dressing).
+        ("Eldora Speedway", "HLR Joker`s Jackpot at Eldora Speedway"),
+        ("CARS Tour North Wilkesboro",
+         "CARS Tour at North Wilkesboro Speedway"),
+        # 'vs' inside an unsplit teamless title and a one-sided year token
+        # are both non-identity — one-sided leftover, still attaches.
+        ("Lucas Oil Silver Dollar Nationals vs Shelby County Speedway",
+         "2026 Lucas Oil Silver Dollar Nationals at Shelby County Speedway"),
+        # Master-side abbreviation tolerance: 'co' ↔ 'coles' via the bounded
+        # abbreviation test, so 'Co.' is not an unmatched leftover.
+        ("KKM Challenge Series Coles",
+         "KKM Challenge Series at Coles Co."),
+    ])
+    def test_one_sided_or_covered_leftovers_still_attach(self, title_a, title_b):
+        result = self._score(title_a, title_b)
+        assert result.band == BAND_ATTACH, (
+            f"{title_a!r} vs {title_b!r} banded {result.band}"
+        )
+        assert result.reject_reasons == ()
+
+    def test_truncated_master_token_is_covered_not_leftover(self):
+        # Live shape: EVENT_TITLE_MAX_LEN truncation leaves 'Shelb' on the
+        # master side — fuzz ratio 0.909 >= the agree bar covers it, so the
+        # rail sees only ONE-SIDED leftovers ('county'/'at'), no mutual
+        # conflict. (The pair's fuzzy score 0.8923 keeps it below the
+        # teamless floor regardless — this pins the rail's coverage logic,
+        # not the band.)
+        from services.event_sync_matcher import (
+            _mutual_unmatched_identity_tokens,
+        )
+
+        assert not _mutual_unmatched_identity_tokens(
+            "Lucas Oil Late Models Shelby County",
+            "Lucas Oil Late Models at Shelb",
+        )
+
+    def test_team_agree_bypasses_the_rail(self):
+        # Positive team agreement IS the event identity — mutual leftover
+        # title dressing ('Blue Devils' / 'Chapel Hill') must not demote.
+        from services.event_sync_matcher import (
+            _mutual_unmatched_identity_tokens,
+        )
+
+        title_a = "Duke Blue Devils vs North Carolina"
+        title_b = "Duke vs North Carolina Chapel Hill"
+        # Precondition: the titles DO carry mutual leftovers — the attach
+        # below is the AGREE bypass, not a vacuous pass.
+        assert _mutual_unmatched_identity_tokens(title_a, title_b)
+        result = self._score(title_a, title_b)
+        assert result.team_verdict == TEAM_VERDICT_AGREE
+        assert result.band == BAND_ATTACH
+
+    def test_operator_lowered_threshold_bypasses_the_rail(self):
+        # bead krkm4-sibling carve-out: below the default floor the operator
+        # is in full manual-control territory — the rail must not silently
+        # veto the lowering they asked for (mirrors is_event_attachable's
+        # teamless-raise carve-out).
+        result = self._score(
+            "Lucas Oil Late Models Adams County",
+            "Lucas Oil Late Models at Shelby County",
+            threshold=0.5,
+        )
+        assert result.band == BAND_ATTACH
+
+    def test_demotion_is_ambiguous_band_not_reject(self):
+        # PO decision: rescuable by an operator — the demoted pair must sit
+        # in the review band, never hard-reject.
+        result = self._score(
+            "Lucas Oil Late Models Adams County",
+            "Lucas Oil Late Models at Shelby County",
+        )
+        assert result.band == BAND_AMBIGUOUS
+        assert result.band != BAND_REJECT
+        assert result.score > 0.0
+
+
+# ---------------------------------------------------------------------------
 # Layer 3 addendum — title-level initialism bridge (teamless acronyms).
 # ---------------------------------------------------------------------------
 

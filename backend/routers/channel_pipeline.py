@@ -2786,6 +2786,7 @@ async def preview_event_sync(
     channel id, deterministically).
     """
     from services.event_sync_preflight import (
+        build_event_sync_master_rule_lookup,
         check_event_sync_group_settings,
         resolve_effective_master_group_id,
     )
@@ -2839,12 +2840,38 @@ async def preview_event_sync(
             session.close()
 
     # --- Pre-flight (READ-ONLY; failures surface, never block) -----------
+    # bead yjchp: cross-rule context — when a failing secondary group is
+    # ANOTHER enabled event_sync rule's MASTER, the failure message must
+    # not advise disabling auto_channel_sync (masters require it ON).
+    # Best-effort: a lookup failure falls back to the generic messages.
+    other_master_rules: dict = {}
+    try:
+        from models import ChannelPipelineRule
+
+        session = get_session()
+        try:
+            enabled_rules = session.query(ChannelPipelineRule).filter(
+                ChannelPipelineRule.enabled == True  # noqa: E712
+            ).all()
+            other_master_rules = build_event_sync_master_rule_lookup(
+                enabled_rules, exclude_rule_id=request.rule_id
+            )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(
+            "[EVENT-SYNC] preview: failed to build cross-rule pre-flight "
+            "context (%s) — pre-flight messages fall back to the generic "
+            "advice", e,
+        )
+
     # Fetch group settings ONCE and reuse for both the pre-flight and the
     # Channel Group Override resolution below (bead override).
     try:
         all_settings = await client.get_all_m3u_group_settings()
         preflight = await check_event_sync_group_settings(
-            client, config, all_settings=all_settings
+            client, config, all_settings=all_settings,
+            other_master_rules=other_master_rules,
         )
     except Exception as e:
         logger.warning("[EVENT-SYNC] preview pre-flight failed: %s", e)
@@ -3549,7 +3576,11 @@ async def _build_event_sync_matching_section(client) -> dict:
     """
     from channel_pipeline_schema import validate_event_sync_config
     from models import ChannelPipelineRule
-    from services.event_sync_preflight import resolve_effective_master_group_id
+    from services.event_sync_preflight import (
+        build_event_sync_master_rule_lookup,
+        check_event_sync_group_settings,
+        resolve_effective_master_group_id,
+    )
     from services.event_sync_resolver import (
         DISPOSITION_AMBIGUOUS,
         DISPOSITION_PARSE_FAILED,
@@ -3612,6 +3643,30 @@ async def _build_event_sync_matching_section(client) -> dict:
             effective_master_group_id = resolve_effective_master_group_id(
                 all_settings, master_group_id
             )
+
+            # Pre-flight status (bead yjchp): "why didn't this rule fire on
+            # refresh" is not diagnosable from a bundle without it — the
+            # unattended run gates on exactly this check. Reuses the
+            # already-fetched all_settings and the cross-rule master lookup
+            # (fix for the 'disable auto-sync would break the other rule'
+            # advice). Recorded BEFORE the fetch/resolve so it survives a
+            # later per-rule failure; its own failure must not sink the
+            # bundle (error string, existing pattern).
+            try:
+                rule_entry["preflight"] = await check_event_sync_group_settings(
+                    client, config, all_settings=all_settings,
+                    other_master_rules=build_event_sync_master_rule_lookup(
+                        event_sync_rules, exclude_rule_id=rule.id
+                    ),
+                )
+            except Exception as e:  # noqa: BLE001 — never sink the bundle
+                logger.warning(
+                    "[EVENT-SYNC] debug bundle: pre-flight failed for rule "
+                    "%s (%s): %s", rule.id, rule.name, e)
+                rule_entry["preflight"] = {
+                    "error": f"{type(e).__name__}: {e}",
+                }
+
             # Review-queue decisions feed the resolver so the bundle predicts
             # exactly what a live run would do (mirrors the preview endpoint).
             decisions = None
@@ -3660,6 +3715,10 @@ async def _build_event_sync_matching_section(client) -> dict:
                         "parse_master_from_stream", False),
                     "include_master_group_streams": config.get(
                         "include_master_group_streams", False),
+                    # bead yjchp: the refresh-trigger opt-in — without it an
+                    # unattended M3U refresh never runs this rule, the #1
+                    # "why didn't it fire" root cause.
+                    "auto_run": config.get("auto_run", False),
                 },
                 "summary": {
                     "secondary_streams": len(resolution.resolved),

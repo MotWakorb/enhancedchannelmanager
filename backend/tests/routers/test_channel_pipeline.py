@@ -2444,6 +2444,13 @@ class TestDebugBundleEventSyncMatching:
         controls = entry["matching_controls"]
         assert controls["attach_threshold"] == 0.80
         assert controls["enforce_time_window"] is True
+        # bead yjchp: the refresh-trigger opt-in is exported — "why didn't
+        # this rule fire on refresh" is diagnosable from the bundle alone.
+        assert controls["auto_run"] is False
+
+        # bead yjchp: per-rule pre-flight status (the unattended run gates
+        # on exactly this check). The fixture settings are all correct.
+        assert entry["preflight"] == {"ok": True, "failures": []}
 
         summary = entry["summary"]
         for key in (
@@ -2506,6 +2513,60 @@ class TestDebugBundleEventSyncMatching:
 
         manifest = json.loads(members["manifest.json"])
         assert manifest["event_sync_rule_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_bundle_preflight_reports_cross_rule_master_conflict(
+        self, async_client, test_session
+    ):
+        """bead yjchp: a rule whose SECONDARY group is another enabled
+        event_sync rule's MASTER gets the tailored pre-flight failure in the
+        bundle — naming the conflicting rule instead of advising the
+        auto-sync toggle that would break it."""
+        from tests.event_sync_fixtures import (
+            MASTER_GROUP_ID,
+            SECONDARY_A,
+            SECONDARY_B,
+            event_sync_config,
+        )
+
+        client, _ = self._es_mock_client()
+        # SECONDARY_A carries auto_channel_sync ON because it is the master
+        # of the second rule below.
+        client.get_all_m3u_group_settings = AsyncMock(return_value={
+            MASTER_GROUP_ID: {"auto_channel_sync": True},
+            SECONDARY_A: {"auto_channel_sync": True},
+            SECONDARY_B: {"auto_channel_sync": False},
+        })
+        _create_rule(
+            test_session,
+            name="Dirtvision",
+            event_sync_config=json.dumps(event_sync_config(
+                secondary_group_ids=[SECONDARY_A],
+            )),
+        )
+        _create_rule(
+            test_session,
+            name="PPV",
+            event_sync_config=json.dumps(event_sync_config(
+                master_group_id=SECONDARY_A,
+                secondary_group_ids=[SECONDARY_B],
+            )),
+        )
+
+        members, _ = await self._run_bundle(async_client, client)
+        section = json.loads(members["event_sync_matching.json"])
+        by_name = {e["rule_name"]: e for e in section["rules"]}
+
+        dirt = by_name["Dirtvision"]["preflight"]
+        assert dirt["ok"] is False
+        (failure,) = dirt["failures"]
+        assert failure["check"] == "secondary_auto_sync_off"
+        assert failure["conflicting_rule"] == "PPV"
+        assert "'PPV'" in failure["message"]
+        assert "Do NOT disable auto_channel_sync" in failure["message"]
+
+        # The PPV rule itself pre-flights clean (its master IS auto-synced).
+        assert by_name["PPV"]["preflight"]["ok"] is True
 
     @pytest.mark.asyncio
     async def test_bundle_matching_skips_disabled_event_sync_rule(

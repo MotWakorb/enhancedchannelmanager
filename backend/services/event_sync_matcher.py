@@ -71,6 +71,7 @@ from services.dedup_matcher import NameCleanMode, clean_name
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "AMBIGUOUS_VENUE_TOKEN_CONFLICT",
     "BAND_ATTACH",
     "BAND_AMBIGUOUS",
     "BAND_REJECT",
@@ -159,6 +160,18 @@ REJECT_OUTSIDE_TIME_WINDOW = "outside_time_window"
 REJECT_TEAM_TOKEN_CONFLICT = "team_token_conflict"
 REJECT_NUMERIC_IDENTITY_CONFLICT = "numeric_identity_conflict"
 REJECT_BELOW_AMBIGUOUS_FLOOR = "below_ambiguous_floor"
+
+# Machine-readable AMBIGUOUS-demotion marker (bead yjchp — venue-conflict
+# rail). NOT a reject: a pair that scored into the attach band WITHOUT
+# positive team agreement but where BOTH titles carry unmatched identity
+# tokens ("... Adams County" vs "... at Shelby County") is demoted to the
+# AMBIGUOUS band (operator review) instead of auto-attaching — a true match
+# stays rescuable by an operator (PO decision), while a different-venue
+# false positive never auto-attaches. Rides in ``PairScore.reject_reasons``
+# (the existing machine-readable reasons channel that already flows to
+# MasterCandidate → preview/journal), and the resolver surfaces it as the
+# stream-level ``ambiguous_reason``.
+AMBIGUOUS_VENUE_TOKEN_CONFLICT = "venue_token_conflict"
 
 # Team-token comparison floors (internal). A pair of aligned teams whose
 # worst per-team similarity is below the conflict ceiling "clearly differs"
@@ -1047,6 +1060,32 @@ def _collapse_title_initialisms(
     return result
 
 
+def _bridged_title_tokens(
+    title_a: str, title_b: str
+) -> tuple[list[str], list[str]] | None:
+    """LOCALS-cleaned, hyphen-bridged, initialism-collapsed token lists.
+
+    The SHARED cleaning/bridging pipeline: :func:`_fuzzy_title_score` scores
+    exactly these tokens, and the venue-conflict rail
+    (:func:`_mutual_unmatched_identity_tokens`, bead yjchp) inspects exactly
+    these tokens — one pipeline, so the rail can never see a different title
+    normalization than the score it guards. ``None`` when either title
+    cleans to empty.
+    """
+    norm_a = clean_name(title_a, mode=NameCleanMode.LOCALS)
+    norm_b = clean_name(title_b, mode=NameCleanMode.LOCALS)
+    if not norm_a or not norm_b:
+        return None
+    tokens_a, tokens_b = norm_a.split(), norm_b.split()
+    # Corroborated hyphen split first (so the initialism bridge below sees
+    # clean words), then the acronym bridge. Both only ADD token agreement.
+    tokens_a = _bridge_hyphen_variants(tokens_a, tokens_b)
+    tokens_b = _bridge_hyphen_variants(tokens_b, tokens_a)
+    bridged_a = _collapse_title_initialisms(tokens_a, tokens_b)
+    bridged_b = _collapse_title_initialisms(tokens_b, tokens_a)
+    return bridged_a, bridged_b
+
+
 def _fuzzy_title_score(title_a: str, title_b: str) -> float:
     """RapidFuzz token_set_ratio on LOCALS-cleaned parsed titles.
 
@@ -1056,22 +1095,85 @@ def _fuzzy_title_score(title_a: str, title_b: str) -> float:
     …'. The team-token layer already resolves acronyms on the vs/@ split; this
     extends the same idea to titles that never split into teams.
     """
-    norm_a = clean_name(title_a, mode=NameCleanMode.LOCALS)
-    norm_b = clean_name(title_b, mode=NameCleanMode.LOCALS)
-    if not norm_a or not norm_b:
+    bridged = _bridged_title_tokens(title_a, title_b)
+    if bridged is None:
         return 0.0
-    if norm_a == norm_b:
+    bridged_a, bridged_b = bridged
+    if bridged_a == bridged_b:
         return 1.0
-    tokens_a, tokens_b = norm_a.split(), norm_b.split()
-    # Corroborated hyphen split first (so the initialism bridge below sees
-    # clean words), then the acronym bridge. Both only ADD token agreement.
-    tokens_a = _bridge_hyphen_variants(tokens_a, tokens_b)
-    tokens_b = _bridge_hyphen_variants(tokens_b, tokens_a)
-    bridged_a = _collapse_title_initialisms(tokens_a, tokens_b)
-    bridged_b = _collapse_title_initialisms(tokens_b, tokens_a)
     return fuzz.token_set_ratio(
         " ".join(bridged_a), " ".join(bridged_b)
     ) / 100.0
+
+
+# ---------------------------------------------------------------------------
+# Venue-conflict rail (bead yjchp) — mutual unmatched identity tokens.
+# ---------------------------------------------------------------------------
+
+# Non-identity STOP tokens for the venue-conflict rail: connective words a
+# provider adds or drops freely ("Lucas Oil Late Models Shelby" vs "Lucas
+# Oil Late Models at Shelby County"). Deliberately SMALL — every token
+# filtered here weakens the rail (an unfiltered leftover can only DEMOTE to
+# review, never reject, so the conservative direction is to filter little).
+# 'vs' appears inside unsplit teamless titles ("... Nationals vs Shelby
+# County Speedway") where the other provider spells the same pairing with
+# 'at'; both are connective, not identity.
+_VENUE_STOP_TOKENS = frozenset({
+    "a", "an", "and", "at", "de", "in", "la", "of", "on", "the", "to", "vs",
+})
+
+
+def _unmatched_identity_tokens(tokens: list[str], other: list[str]) -> bool:
+    """True when ``tokens`` carries at least one identity token with no
+    counterpart in ``other``.
+
+    A token is NON-identity (never a leftover) when it is a stop token, a
+    team qualifier/generic token (existing team-layer tables), pure-numeric
+    (the numeric-identity rail owns number conflicts — a one-sided year
+    like '2026' must not trip this rail), or a single character (stray
+    separators like '@' survive LOCALS cleaning as lone tokens).
+
+    A token HAS a counterpart when any other-side token matches it at the
+    team layer's agree bar — exact, bounded abbreviation ('co' ↔ 'coles'
+    via :func:`_is_abbrev_of`), or fuzz ratio >= ``_TEAM_AGREE_FLOOR``
+    (truncation like 'shelb' ↔ 'shelby' scores 0.909). Initialisms are
+    already collapsed by :func:`_bridged_title_tokens` before this runs.
+    """
+    for token in tokens:
+        if len(token) < 2 or token.isdigit():
+            continue
+        if (
+            token in _VENUE_STOP_TOKENS
+            or token in _TEAM_QUALIFIER_TOKENS
+            or token in _TEAM_GENERIC_TOKENS
+        ):
+            continue
+        if not any(
+            _token_similarity(token, o) >= _TEAM_AGREE_FLOOR for o in other
+        ):
+            return True
+    return False
+
+
+def _mutual_unmatched_identity_tokens(title_a: str, title_b: str) -> bool:
+    """True when BOTH titles carry unmatched identity tokens (bead yjchp).
+
+    The venue-conflict signal: ``token_set_ratio`` is blind to MUTUAL
+    conflicting leftovers — 'Lucas Oil Late Models Adams County' vs 'Lucas
+    Oil Late Models at Shelby County' scores 0.9032 because the shared run
+    dominates, yet 'adams' and 'shelby' are different venues, hence
+    different events. One-sided leftovers are fine (a longer master title
+    with sponsor/series dressing must keep attaching: 'Eldora Speedway' vs
+    'HLR Joker`s Jackpot at Eldora Speedway').
+    """
+    bridged = _bridged_title_tokens(title_a, title_b)
+    if bridged is None:
+        return False
+    bridged_a, bridged_b = bridged
+    return (
+        _unmatched_identity_tokens(bridged_a, bridged_b)
+        and _unmatched_identity_tokens(bridged_b, bridged_a)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1240,6 +1342,28 @@ def _score_parsed_pair(
         score = fuzzy
 
     if is_event_attachable(score, verdict, threshold=threshold):
+        # VENUE-CONFLICT RAIL (bead yjchp): a pair admitted WITHOUT positive
+        # team agreement whose titles BOTH carry unmatched identity tokens
+        # ('adams' vs 'shelby') is a different-venue/different-event shape
+        # token_set_ratio cannot see. DEMOTE to the review queue — never
+        # auto-attach, never hard-reject (an operator can still rescue a
+        # true match; PO decision). Team-verdict AGREE bypasses entirely:
+        # aligned teams at the same kickoff ARE the event identity. The
+        # ``threshold >= EVENT_ATTACH_FLOOR`` guard mirrors the teamless-
+        # raise carve-out in :func:`is_event_attachable` (bead krkm4-
+        # sibling): an operator who deliberately dropped the threshold below
+        # the default floor is in full manual-control territory, and this
+        # rail demoting their sub-floor attaches would silently veto the
+        # very lowering they asked for.
+        if (
+            verdict != TEAM_VERDICT_AGREE
+            and threshold >= EVENT_ATTACH_FLOOR
+            and _mutual_unmatched_identity_tokens(parsed_a.title, parsed_b.title)
+        ):
+            return _result(
+                score, BAND_AMBIGUOUS, verdict, fuzzy, team_score, delta,
+                (AMBIGUOUS_VENUE_TOKEN_CONFLICT,),
+            )
         return _result(score, BAND_ATTACH, verdict, fuzzy, team_score, delta, ())
     if score >= EVENT_AMBIGUOUS_FLOOR:
         return _result(score, BAND_AMBIGUOUS, verdict, fuzzy, team_score, delta, ())

@@ -41,6 +41,7 @@ from services.event_sync_matcher import (
 from services.event_sync_resolver import (
     AMBIGUOUS_REASON_BAND,
     AMBIGUOUS_REASON_CONTESTED,
+    AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT,
     DISPOSITION_AMBIGUOUS,
     DISPOSITION_PARSE_FAILED,
     DISPOSITION_UNMATCHED,
@@ -265,6 +266,42 @@ class TestThresholdFloor:
         (resolved,) = resolution.resolved
         assert resolved.disposition == DISPOSITION_WOULD_ATTACH
         assert resolved.best is not None
+
+
+class TestVenueConflictReason:
+    """bead yjchp: a matcher venue-conflict demotion surfaces its OWN
+    machine-readable ambiguous_reason so the preview/journal can say WHY the
+    attach-scored pair landed in review instead of the generic band reason."""
+
+    def test_venue_demoted_pair_surfaces_venue_reason(self):
+        masters = [
+            "FLO 01: Lucas Oil Late Models at Shelby County "
+            "@ 11 Jul 07:15 PM ET",
+        ]
+        streams = [SecondaryStream(
+            name="DIRT 05: Lucas Oil Late Models Adams County "
+                 "@ 11 Jul 07:15 PM ET",
+            group_id=20, stream_id=201, provider="DirtProvider",
+        )]
+        resolution = resolve_event_sync(_config(), masters, streams, now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_AMBIGUOUS
+        assert resolved.ambiguous_reason == AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT
+        assert resolved.best is None
+        # The demoted pair is still enqueue-eligible for operator rescue.
+        assert resolved.review_candidates
+        assert resolved.review_candidates[0].band == BAND_AMBIGUOUS
+
+    def test_plain_ambiguous_band_keeps_the_generic_reason(self):
+        # The pre-existing ambiguous case (score in [0.60, floor)) must keep
+        # AMBIGUOUS_REASON_BAND — the venue reason is only for demotions.
+        streams = [SecondaryStream(
+            name=AMBIGUOUS_STREAM_NAME, group_id=20, stream_id=201,
+        )]
+        resolution = resolve_event_sync(_config(), MASTERS, streams, now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_AMBIGUOUS
+        assert resolved.ambiguous_reason == AMBIGUOUS_REASON_BAND
 
 
 class TestContestedRail:

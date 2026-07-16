@@ -55,6 +55,7 @@ from datetime import datetime
 import pytz
 
 from services.event_sync_matcher import (
+    AMBIGUOUS_VENUE_TOKEN_CONFLICT,
     BAND_AMBIGUOUS,
     BAND_ATTACH,
     DEFAULT_EVENT_TIMEZONE,
@@ -82,6 +83,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "AMBIGUOUS_REASON_BAND",
     "AMBIGUOUS_REASON_CONTESTED",
+    "AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT",
     "CONTESTED_SCORE_EPSILON",
     "DEFAULT_MAX_ATTACH_PER_RUN",
     "DISPOSITION_AMBIGUOUS",
@@ -118,6 +120,12 @@ AMBIGUOUS_REASON_CONTESTED = "contested_top_candidates"
 # The pre-existing ambiguous case: the single best candidate itself scored
 # into the matcher's AMBIGUOUS band.
 AMBIGUOUS_REASON_BAND = "top_candidate_ambiguous_band"
+# Venue-conflict demotion (bead yjchp): the best candidate scored into the
+# attach band but the matcher demoted it because BOTH titles carry unmatched
+# identity tokens (different venue = different event). The resolver passes
+# the matcher's marker through verbatim so the preview/journal can say WHY
+# this pair needs review instead of the generic band reason.
+AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT = AMBIGUOUS_VENUE_TOKEN_CONFLICT
 
 # S5 (bead sf8dj) — provenance: which optional relaxation admitted a
 # would-attach row. Each entry is a (machine_key, human_label) pair. The list
@@ -348,6 +356,14 @@ def _classify_candidates(
             return DISPOSITION_AMBIGUOUS, None, AMBIGUOUS_REASON_CONTESTED
         return DISPOSITION_WOULD_ATTACH, top, None
     if top.band == BAND_AMBIGUOUS:
+        # Venue-conflict demotion (bead yjchp): pass the matcher's marker
+        # through as the stream-level reason so the operator sees WHY this
+        # attach-scored pair landed in review.
+        if AMBIGUOUS_VENUE_TOKEN_CONFLICT in top.reject_reasons:
+            return (
+                DISPOSITION_AMBIGUOUS, None,
+                AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT,
+            )
         return DISPOSITION_AMBIGUOUS, None, AMBIGUOUS_REASON_BAND
     return DISPOSITION_UNMATCHED, None, None
 

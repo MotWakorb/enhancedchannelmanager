@@ -92,10 +92,17 @@ def resolve_effective_master_group_id(
 
 def _failure(
     *, group_id: int, role: str, check: str, expected: str, got: str,
-    message: str,
+    message: str, conflicting_rule: str | None = None,
 ) -> dict:
-    """One pre-flight failure entry (teaching shape: expected/got/message)."""
-    return {
+    """One pre-flight failure entry (teaching shape: expected/got/message).
+
+    ``conflicting_rule`` (bead yjchp): the name of ANOTHER enabled
+    event_sync rule whose MASTER group is the failing group — present only
+    on cross-rule ``secondary_auto_sync_off`` failures, so the UI can link
+    the two rules. Omitted (not null-valued) otherwise to keep the
+    long-standing failure shape byte-identical for every other failure.
+    """
+    failure = {
         "group_id": group_id,
         "role": role,
         "check": check,
@@ -103,10 +110,51 @@ def _failure(
         "got": got,
         "message": message,
     }
+    if conflicting_rule is not None:
+        failure["conflicting_rule"] = conflicting_rule
+    return failure
+
+
+def build_event_sync_master_rule_lookup(
+    rules, *, exclude_rule_id: int | None = None
+) -> dict[int, str]:
+    """Map master_group_id -> rule name for ENABLED event_sync rules.
+
+    Cross-rule context for :func:`check_event_sync_group_settings` (bead
+    yjchp): when rule A lists a group as a SECONDARY while that same group
+    is rule B's MASTER, the ``secondary_auto_sync_off`` failure's stock
+    advice ("disable auto_channel_sync") would break rule B — masters
+    REQUIRE auto-sync ON. Callers build this lookup from their rule source
+    (engine: DB-loaded rules; preview: a session query) and pass it in;
+    this module stays free of DB imports.
+
+    ``rules`` is any iterable of ChannelPipelineRule-shaped objects
+    (``.id`` / ``.name`` / ``.is_event_sync()`` / ``.get_event_sync_config()``).
+    ``exclude_rule_id`` drops the rule under check itself — a rule is never
+    its own conflict. Rules whose config is missing or explicitly disabled
+    (``enabled: false``) are skipped: a disabled rule's master imposes no
+    live constraint.
+    """
+    lookup: dict[int, str] = {}
+    for rule in rules:
+        if exclude_rule_id is not None and rule.id == exclude_rule_id:
+            continue
+        if not rule.is_event_sync():
+            continue
+        config = rule.get_event_sync_config()
+        if not config or not config.get("enabled", True):
+            continue
+        master_group_id = config.get("master_group_id")
+        if master_group_id is None:
+            master_group_id = (config.get("master") or {}).get("group_id")
+        if master_group_id is not None:
+            lookup[master_group_id] = rule.name
+    return lookup
 
 
 async def check_event_sync_group_settings(
-    client, config: dict, all_settings: dict | None = None
+    client, config: dict, all_settings: dict | None = None,
+    other_master_rules: dict[int, str] | None = None,
 ) -> dict:
     """Pre-flight an event_sync config against live Dispatcharr group settings.
 
@@ -120,6 +168,16 @@ async def check_event_sync_group_settings(
             ``get_all_m3u_group_settings()`` result — passed by callers that
             also resolve the override relationship (preview/run) to avoid a
             second fetch. Fetched here when omitted.
+        other_master_rules: Optional master_group_id -> rule-name map for
+            OTHER enabled event_sync rules (see
+            :func:`build_event_sync_master_rule_lookup`, bead yjchp). When a
+            failing secondary group is another rule's MASTER, the
+            ``secondary_auto_sync_off`` message is tailored — advising the
+            stock "disable auto_channel_sync" there would break that other
+            rule (masters require auto-sync ON). The machine-readable
+            ``check`` id is unchanged; the failure gains a
+            ``conflicting_rule`` field. ``None`` (the default) keeps every
+            message byte-identical to prior behavior.
 
     Returns:
         ``{"ok": bool, "failures": [ ... ]}`` where each failure carries
@@ -226,19 +284,40 @@ async def check_event_sync_group_settings(
                 ),
             ))
         elif settings.get("auto_channel_sync"):
+            conflicting_rule = (other_master_rules or {}).get(
+                scope.get("group_id")
+            )
+            if conflicting_rule is not None:
+                # Cross-rule conflict (bead yjchp): this group is another
+                # enabled event_sync rule's MASTER — masters REQUIRE
+                # auto_channel_sync ON, so the stock "disable it" advice
+                # would break that rule. Advise restructuring instead.
+                message = (
+                    f"Secondary {_scope_label(scope)} has auto_channel_sync "
+                    f"ON in Dispatcharr because it is the MASTER group of "
+                    f"event_sync rule '{conflicting_rule}' (masters require "
+                    f"auto_channel_sync ON). Do NOT disable auto_channel_sync "
+                    f"— that would break '{conflicting_rule}'. Instead, "
+                    f"remove this group from this rule's secondary groups, "
+                    f"or point rule '{conflicting_rule}' at a different "
+                    f"master group."
+                )
+            else:
+                message = (
+                    f"Secondary {_scope_label(scope)} has auto_channel_sync "
+                    f"ON in Dispatcharr — Dispatcharr is creating its own "
+                    f"channels from it, which duplicates the master channels "
+                    f"event_sync attaches to. Disable auto_channel_sync for "
+                    f"it in Dispatcharr (ECM never toggles it for you)."
+                )
             failures.append(_failure(
                 group_id=scope.get("group_id"),
                 role="secondary",
                 check=CHECK_SECONDARY_AUTO_SYNC_OFF,
                 expected="auto_channel_sync OFF",
                 got="auto_channel_sync ON",
-                message=(
-                    f"Secondary {_scope_label(scope)} has auto_channel_sync "
-                    f"ON in Dispatcharr — Dispatcharr is creating its own "
-                    f"channels from it, which duplicates the master channels "
-                    f"event_sync attaches to. Disable auto_channel_sync for it "
-                    f"in Dispatcharr (ECM never toggles it for you)."
-                ),
+                message=message,
+                conflicting_rule=conflicting_rule,
             ))
 
     if failures:
