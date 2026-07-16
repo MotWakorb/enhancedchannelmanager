@@ -490,7 +490,7 @@ the rollback target SHA you used.
 - `backend/main.py` — the five-middleware stack (`security_headers` → `observability` → `request_timeout` → `auth` → `request_timing`) verified by the starlette-1.0 regression-mode table.
 - [`docs/discord_release_notes.md`](../discord_release_notes.md) — notification convention used by the post-rollback Notify step.
 - Beads `enhancedchannelmanager-vjlzf` (9 known-red container-baseline tests) + `enhancedchannelmanager-pvq6s` (12 known-red, partial overlap with vjlzf) — the stable red set used by the "test count regresses" rollback trigger.
-- `backend/entrypoint.sh` — exact uvicorn invocation (`uvicorn main:app --host 0.0.0.0 --port ${ECM_PORT} --limit-concurrency ${ECM_LIMIT_CONCURRENCY} --timeout-keep-alive ${ECM_TIMEOUT_KEEP_ALIVE}`); one worker, no `--workers` flag.
+- `backend/entrypoint.sh` — exact uvicorn invocation (`uvicorn main:app --host 0.0.0.0 --port ${ECM_PORT} --loop "${ECM_UVICORN_LOOP}" --limit-concurrency ${ECM_LIMIT_CONCURRENCY} --timeout-keep-alive ${ECM_TIMEOUT_KEEP_ALIVE}`); one worker, no `--workers` flag. `ECM_UVICORN_LOOP` is whitelisted (`auto`/`asyncio`/`uvloop`) and defaults to `asyncio` (bead wadu3 — uvloop 0.22.1 upstream issues #645/#706).
 - `backend/requirements.txt` — the pins rolled back by this runbook.
 - `docker-compose.yml` — container config (`ecm-config` volume, port mapping).
 - `.github/workflows/build.yml` — GHCR tag scheme (`dev`, `dev-<short-sha>`, semver tags on `main`).
