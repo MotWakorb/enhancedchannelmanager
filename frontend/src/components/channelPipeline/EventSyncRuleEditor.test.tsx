@@ -424,6 +424,99 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
+  describe('stale-dateless demote guard (bead jqwfq)', () => {
+    it('defaults ON, is disabled without the date assumption, and omits the key', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Date handling'));
+      const guard = screen.getByTestId('event-sync-demote-stale-dateless');
+      expect(guard).toBeChecked();
+      // Inert without assume_current_date — the control says so.
+      expect(guard).toBeDisabled();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      // Guard untouched → key omitted (absent means true on the backend).
+      expect(onSave.mock.calls[0][0].event_sync_config).not.toHaveProperty(
+        'demote_stale_dateless'
+      );
+    });
+
+    it('emits demote_stale_dateless: false when unchecked under assume-current-date', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Date handling'));
+      await user.click(screen.getByTestId('event-sync-assume-current-date'));
+      await user.click(screen.getByTestId('event-sync-demote-stale-dateless'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0].event_sync_config;
+      expect(saved.assume_current_date).toBe(true);
+      expect(saved.demote_stale_dateless).toBe(false);
+    });
+
+    it('initializes from a stored demote_stale_dateless: false and round-trips it', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          assume_current_date: true,
+          demote_stale_dateless: false,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Date handling'));
+      expect(
+        screen.getByTestId('event-sync-demote-stale-dateless')
+      ).not.toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.demote_stale_dateless
+      ).toBe(false);
+    });
+
+    it('re-checking a stored false preserves the explicit key as true', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          assume_current_date: true,
+          demote_stale_dateless: false,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByText('Date handling'));
+      await user.click(screen.getByTestId('event-sync-demote-stale-dateless'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(
+        onSave.mock.calls[0][0].event_sync_config.demote_stale_dateless
+      ).toBe(true);
+    });
+  });
+
   describe('auto-run opt-in (ti939.3.1)', () => {
     it('defaults OFF and omits auto_run for a rule that never had the key', async () => {
       const user = userEvent.setup();

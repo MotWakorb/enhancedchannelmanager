@@ -115,6 +115,17 @@ export interface EventSyncConfig {
    */
   assume_current_date?: boolean;
   /**
+   * bead jqwfq: stale-dateless demote rail. When true (the BACKEND DEFAULT
+   * — absent reads as true, unlike the other flags here) an
+   * assume_current_date match whose dateless stream name already appeared
+   * in the provider's previous-day M3U snapshot is routed to the review
+   * queue (`ambiguous_reason: "stale_dateless_stream_name"`) instead of
+   * auto-attached — guarding against providers that leave yesterday's slot
+   * names in the playlist. Set false only for recurring daily events whose
+   * names legitimately repeat. Inert unless assume_current_date is on.
+   */
+  demote_stale_dateless?: boolean;
+  /**
    * bead parse-from-stream: when true, each master channel's event identity
    * (title + time) is read from its FIRST attached stream's name instead of
    * the channel name — so master channels can be named freely. Backend
@@ -169,6 +180,13 @@ export interface EventSyncPreviewSummary {
   would_attach_via_review: number;
   /** ti939.3.2: rendered candidate pairings currently pending review. */
   candidates_pending_review: number;
+  /** bead jqwfq Stage 1: stream names positively present in the provider's
+   * previous-day M3U snapshot (stale suspects). Absent on older payloads. */
+  stale_suspect_streams?: number;
+  /** bead jqwfq Stage 1: streams whose name freshness could not be
+   * determined (no qualifying snapshot / unknown provider / uncaptured or
+   * capped group — the signal fails open). Absent on older payloads. */
+  freshness_unknown_streams?: number;
 }
 
 /**
@@ -218,7 +236,26 @@ export interface EventSyncStreamRow {
   matched_pattern: string | null;
   disposition: EventSyncDisposition;
   unmatchable_reason: string | null;
+  /**
+   * Machine-readable reason when `disposition` is `'ambiguous'`, else null.
+   * Opaque string — render verbatim, never enumerate exhaustively. Known
+   * backend values: `contested_top_candidates`,
+   * `top_candidate_ambiguous_band`, `venue_token_conflict` (bead yjchp),
+   * and `stale_dateless_stream_name` (bead jqwfq — an assume_current_date
+   * match demoted because its dateless stream name predates today per the
+   * previous-day M3U snapshot).
+   */
+  ambiguous_reason?: string | null;
   attach_source: EventSyncAttachSource;
+  /**
+   * bead jqwfq Stage 1: tri-state staleness signal. `true` = this exact
+   * name was already in the provider's previous-day M3U snapshot (stale
+   * suspect under assume_current_date); `false` = captured uncapped and
+   * absent (first seen today, advisory); `null`/absent = unknown
+   * (no qualifying snapshot / unknown provider / uncaptured or capped
+   * group — the signal fails open).
+   */
+  name_seen_before_today?: boolean | null;
   would_attach_master: { channel_id: number | null; name: string } | null;
   candidates: EventSyncCandidate[];
   /** S5 (bead sf8dj): provenance chips for a would-attach row (may be absent

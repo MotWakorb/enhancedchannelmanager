@@ -83,6 +83,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "AMBIGUOUS_REASON_BAND",
     "AMBIGUOUS_REASON_CONTESTED",
+    "AMBIGUOUS_REASON_STALE_DATELESS_NAME",
     "AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT",
     "CONTESTED_SCORE_EPSILON",
     "DEFAULT_MAX_ATTACH_PER_RUN",
@@ -126,6 +127,17 @@ AMBIGUOUS_REASON_BAND = "top_candidate_ambiguous_band"
 # the matcher's marker through verbatim so the preview/journal can say WHY
 # this pair needs review instead of the generic band reason.
 AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT = AMBIGUOUS_VENUE_TOKEN_CONFLICT
+# Stale-dateless demotion (bead jqwfq): the best candidate scored into the
+# attach band, but (a) the attach only exists because assume_current_date
+# synthesized TODAY's date onto a DATELESS stream name (counterfactual
+# re-parse with the flag off yields no start), AND (b) that exact stream
+# name was already present in its M3U account's latest pre-midnight
+# snapshot — i.e. the name predates today, so "today at that clock time" is
+# a guess against a possibly-stale slot label (the field-reported
+# yesterday's-event-attaches-to-today's-master failure). Demoted to the
+# review queue instead of auto-attached; a prior operator ACCEPT of the
+# pairing outranks this heuristic via the standard accept-upgrade path.
+AMBIGUOUS_REASON_STALE_DATELESS_NAME = "stale_dateless_stream_name"
 
 # S5 (bead sf8dj) — provenance: which optional relaxation admitted a
 # would-attach row. Each entry is a (machine_key, human_label) pair. The list
@@ -161,6 +173,16 @@ class SecondaryStream:
     (the M3U account id) is the fingerprint component review-queue
     decisions key on (bead ti939.3.2) — ``None`` maps to the documented
     unknown-provider sentinel in ``services.event_sync_review``.
+
+    ``name_seen_before_today`` (bead jqwfq) is the caller-computed staleness
+    signal from ``services.event_sync_staleness``: ``True`` when this exact
+    name was already present in the account's latest pre-midnight
+    M3USnapshot (definitive — the name predates today), ``False`` when the
+    group was captured uncapped and the name is absent (advisory
+    freshness), ``None`` when unknown (no snapshot / unknown provider /
+    group not captured / capped list). Fail-open: only ``True`` can ever
+    demote, and only via the stale-dateless rail in :func:`_resolve_stream`
+    when ``assume_current_date`` was load-bearing for the match.
     """
 
     name: str
@@ -168,6 +190,7 @@ class SecondaryStream:
     stream_id: int | None = None
     provider: str | None = None
     provider_id: int | None = None
+    name_seen_before_today: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -179,7 +202,8 @@ class ResolvedStream:
 
     ``ambiguous_reason`` is the machine-readable reason when the disposition
     is ``ambiguous`` (``AMBIGUOUS_REASON_CONTESTED`` /
-    ``AMBIGUOUS_REASON_BAND``), else ``None``.
+    ``AMBIGUOUS_REASON_BAND`` / ``AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT`` /
+    ``AMBIGUOUS_REASON_STALE_DATELESS_NAME``), else ``None``.
 
     Review-queue fields (bead ti939.3.2):
 
@@ -372,6 +396,10 @@ def _resolve_stream(
     stream: SecondaryStream,
     result: StreamMatchResult,
     decisions: ReviewDecisions | None,
+    *,
+    demote_stale_dateless: bool = False,
+    patterns: list[dict] | None = None,
+    now: datetime | None = None,
 ) -> ResolvedStream:
     """Classify one stream, applying review-queue decisions (ti939.3.2).
 
@@ -384,6 +412,17 @@ def _resolve_stream(
        threshold attach of A (the same answer the operator gave).
     2. The filtered candidates classify through the ONE band/contested
        path (:func:`_classify_candidates`).
+    2b. STALE-DATELESS DEMOTE RAIL (bead jqwfq, gated on
+       ``demote_stale_dateless`` — the caller passes it True only when the
+       rule has both ``assume_current_date`` and the ``demote_stale_dateless``
+       knob on): a threshold would-attach is demoted to ``ambiguous``
+       (``AMBIGUOUS_REASON_STALE_DATELESS_NAME``) when the stream name is
+       positively stale (``name_seen_before_today is True`` — snapshot
+       membership, never absence) AND assume_current_date was LOAD-BEARING
+       (counterfactual re-parse with the flag off yields no start time —
+       dated stream names are never touched). Sits BEFORE step 3 so a prior
+       operator ACCEPT of the pairing upgrades the demoted row right back
+       to ``would_attach`` — the human answer outranks the heuristic.
     3. An ``ambiguous`` outcome is upgraded to ``would_attach``
        (``attach_source="review_queue"``) when an ACCEPTED pairing's master
        is still an attach- or ambiguous-band candidate — never a reject-band
@@ -423,6 +462,33 @@ def _resolve_stream(
     disposition, best, ambiguous_reason = _classify_candidates(
         result.unmatchable_reason, candidates
     )
+
+    # Step 2b — stale-dateless demote rail (bead jqwfq). Order matters:
+    # BEFORE the accept-upgrade block below, so a prior operator ACCEPT
+    # outranks the heuristic, and a prior REJECT (already filtered above)
+    # stays suppressed. FAIL OPEN: only positive snapshot membership
+    # (``is True``) demotes — unknown freshness (None) never does. The
+    # counterfactual re-parse (flag off → no start) restricts the rail to
+    # rows where assume_current_date was load-bearing; dated names re-parse
+    # with a start and are untouched.
+    if (
+        demote_stale_dateless
+        and disposition == DISPOSITION_WOULD_ATTACH
+        and stream.name_seen_before_today is True
+        and parse_event_name(
+            stream.name, patterns, now=now, assume_current_date=False,
+        ).start is None
+    ):
+        logger.info(
+            "[EVENT-SYNC] stream %r: would-attach DEMOTED to ambiguous — "
+            "dateless name already present in the account's previous-day "
+            "M3U snapshot (stale-suspect under assume_current_date); "
+            "routed to the review queue instead of auto-attached",
+            stream.name,
+        )
+        disposition = DISPOSITION_AMBIGUOUS
+        best = None
+        ambiguous_reason = AMBIGUOUS_REASON_STALE_DATELESS_NAME
 
     attach_source: str | None = None
     review_candidates: tuple[MasterCandidate, ...] = ()
@@ -625,6 +691,13 @@ def resolve_event_sync(
     # bead assume-current-date: opt-in dateless matching (both master and
     # secondary sides share the same "today" so their times compare on one day).
     assume_current_date = bool(config.get("assume_current_date", False))
+    # bead jqwfq: the stale-dateless demote rail is only meaningful when
+    # assume_current_date is doing date synthesis at all; the per-rule
+    # demote_stale_dateless knob (validated default TRUE — turning it OFF is
+    # the recurring-daily-event escape hatch) can disable it independently.
+    demote_stale_dateless = assume_current_date and bool(
+        config.get("demote_stale_dateless", True)
+    )
     # S5 provenance inputs (bead sf8dj) — read straight from the config; used
     # only to annotate would-attach rows, never to change the match.
     enforce_time_window = config.get("enforce_time_window", True)
@@ -695,7 +768,11 @@ def resolve_event_sync(
             assume_current_date=assume_current_date,
         )
         for stream, result in zip(streams, results):
-            rs = _resolve_stream(stream, result, decisions)
+            rs = _resolve_stream(
+                stream, result, decisions,
+                demote_stale_dateless=demote_stale_dateless,
+                patterns=patterns, now=now,
+            )
             via = _matched_via(
                 rs,
                 patterns=patterns,

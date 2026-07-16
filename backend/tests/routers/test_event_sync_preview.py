@@ -505,3 +505,150 @@ class TestReviewQueueMarkers:
         row = self._ambig_row(data)
         assert row["disposition"] == "ambiguous"
         assert all(c["review_status"] is None for c in row["candidates"])
+
+
+class TestStaleDatelessSignal:
+    """bead jqwfq: the preview surfaces the staleness signal (Stage 1) and
+    the demote rail's disposition (Stage 2) from seeded M3USnapshot rows.
+
+    Uses the REAL current time: assume_current_date places both dateless
+    sides on "today" whichever day the suite runs, and the snapshot is
+    seeded 25h in the past — always before today's local midnight."""
+
+    DATELESS_MASTER = "Boxing 01 : Fury vs. Usyk 6PM"
+    DATELESS_STREAM = "PPV 07 : Tyson Fury vs. Oleksandr Usyk 6PM"
+
+    def _fixtures(self):
+        master_channels = [{
+            "id": 61, "name": self.DATELESS_MASTER,
+            "channel_group_id": MASTER_GROUP_ID,
+        }]
+        secondary_streams = {
+            "Fubo Events": [
+                {"id": 401, "name": self.DATELESS_STREAM, "m3u_account": 1},
+            ],
+        }
+        return master_channels, secondary_streams
+
+    def _seed_snapshot(self, test_session, names: list[str]):
+        from datetime import timedelta
+
+        from models import M3USnapshot
+
+        snap = M3USnapshot(
+            m3u_account_id=1,  # FuboProvider in the shared corpus
+            snapshot_time=datetime.utcnow() - timedelta(hours=25),
+            total_streams=len(names),
+        )
+        snap.set_groups_data({"groups": [{
+            "name": "Fubo Events", "stream_count": len(names),
+            "is_stale": False, "stream_names": names,
+        }]})
+        test_session.add(snap)
+        test_session.commit()
+
+    @pytest.mark.asyncio
+    async def test_stale_dateless_row_demoted_with_reason(
+        self, async_client, test_session
+    ):
+        self._seed_snapshot(test_session, [self.DATELESS_STREAM])
+        master_channels, secondary_streams = self._fixtures()
+        client = _mock_client(
+            master_channels=master_channels,
+            secondary_streams=secondary_streams,
+        )
+
+        resp = await _preview(async_client, client, {
+            "event_sync_config": _config(
+                secondary_group_ids=[SECONDARY_A],
+                assume_current_date=True,
+            ),
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        (row,) = data["streams"]
+        assert row["name_seen_before_today"] is True
+        assert row["disposition"] == "ambiguous"
+        assert row["ambiguous_reason"] == "stale_dateless_stream_name"
+        assert data["summary"]["stale_suspect_streams"] == 1
+        assert data["summary"]["freshness_unknown_streams"] == 0
+        assert data["summary"]["ambiguous_skipped"] == 1
+        assert data["summary"]["would_attach"] == 0
+        _assert_zero_writes(client)
+
+    @pytest.mark.asyncio
+    async def test_no_snapshot_means_unknown_and_no_demote(
+        self, async_client, test_session
+    ):
+        # FAIL OPEN: no qualifying snapshot -> freshness unknown -> the
+        # dateless pair still attaches (Stage 1 signal only, no verdict).
+        master_channels, secondary_streams = self._fixtures()
+        client = _mock_client(
+            master_channels=master_channels,
+            secondary_streams=secondary_streams,
+        )
+
+        resp = await _preview(async_client, client, {
+            "event_sync_config": _config(
+                secondary_group_ids=[SECONDARY_A],
+                assume_current_date=True,
+            ),
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        (row,) = data["streams"]
+        assert row["name_seen_before_today"] is None
+        assert row["disposition"] == "would_attach"
+        assert data["summary"]["stale_suspect_streams"] == 0
+        assert data["summary"]["freshness_unknown_streams"] == 1
+
+    @pytest.mark.asyncio
+    async def test_fresh_name_attaches_and_reads_false(
+        self, async_client, test_session
+    ):
+        self._seed_snapshot(test_session, ["Some Other Slot 9PM"])
+        master_channels, secondary_streams = self._fixtures()
+        client = _mock_client(
+            master_channels=master_channels,
+            secondary_streams=secondary_streams,
+        )
+
+        resp = await _preview(async_client, client, {
+            "event_sync_config": _config(
+                secondary_group_ids=[SECONDARY_A],
+                assume_current_date=True,
+            ),
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        (row,) = data["streams"]
+        assert row["name_seen_before_today"] is False
+        assert row["disposition"] == "would_attach"
+        assert data["summary"]["stale_suspect_streams"] == 0
+        assert data["summary"]["freshness_unknown_streams"] == 0
+
+    @pytest.mark.asyncio
+    async def test_dated_corpus_rows_carry_the_signal_untouched(
+        self, async_client, test_session
+    ):
+        # Stage 1 on the shared DATED corpus: seed the attach stream's name
+        # as previously seen — the signal surfaces but dated parses are
+        # never demoted (counterfactual gate).
+        self._seed_snapshot(
+            test_session,
+            ["WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET"],
+        )
+        client = _mock_client()
+        resp = await _preview(async_client, client, {
+            "event_sync_config": _config(assume_current_date=True),
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        row = next(
+            s for s in data["streams"]
+            if s["stream_name"]
+            == "WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET"
+        )
+        assert row["name_seen_before_today"] is True
+        assert row["disposition"] == "would_attach"
+        assert data["summary"]["stale_suspect_streams"] == 1

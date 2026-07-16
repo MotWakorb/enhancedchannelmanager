@@ -51,6 +51,9 @@ def _event_sync_config(**overrides) -> dict:
         "include_master_group_streams": False,
         # bead assume-current-date: dateless opt-in, same default-fill.
         "assume_current_date": False,
+        # bead jqwfq: stale-dateless demote rail, same default-fill —
+        # DEFAULT TRUE (the guard is on unless explicitly opted out).
+        "demote_stale_dateless": True,
         # bead parse-from-stream: master-identity-from-stream, same default-fill.
         "parse_master_from_stream": False,
     }

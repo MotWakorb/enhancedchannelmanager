@@ -796,6 +796,7 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "dummy_epg_profile_id",
     "include_master_group_streams",
     "assume_current_date",
+    "demote_stale_dateless",
     "parse_master_from_stream",
 })
 
@@ -1263,6 +1264,28 @@ def validate_event_sync_config(config: Any) -> list[str]:
             "a boolean (default false) — true fills the CURRENT date for "
             "listings that carry a time but no date (dateless live "
             "schedules), accepting the cross-day match risk",
+        ))
+
+    # Stale-dateless demote rail (bead jqwfq). DEFAULT ON — when
+    # assume_current_date is also on, a would-attach whose DATELESS stream
+    # name already appeared in the account's previous-day M3U snapshot is
+    # demoted to the review queue (reason "stale_dateless_stream_name")
+    # instead of auto-attached: the field-reported failure is a provider
+    # leaving yesterday's slot name in the M3U, which then scores 1.0
+    # against today's master. Turning this OFF is the escape hatch for
+    # genuinely recurring daily events whose names legitimately repeat.
+    # Inert without assume_current_date (dated parses are never touched).
+    demote_stale_dateless = config.get("demote_stale_dateless")
+    if demote_stale_dateless is None:
+        config["demote_stale_dateless"] = True
+    elif not isinstance(demote_stale_dateless, bool):
+        errors.append(_event_sync_error(
+            "demote_stale_dateless", demote_stale_dateless,
+            "a boolean (default true) — true routes assume_current_date "
+            "matches whose dateless stream name predates today (per the "
+            "previous-day M3U snapshot) to the review queue instead of "
+            "auto-attaching; set false only for recurring daily events "
+            "whose names legitimately repeat",
         ))
 
     # Parse master identity from the attached stream (bead parse-from-stream).

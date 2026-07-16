@@ -305,6 +305,27 @@ of the master, so a group whose listed times are unreliable (hours off the
 real start) still won't pair. Leave the flag **off** unless the group is a
 genuine same-day live schedule.
 
+**The stale-name guard (bead jqwfq).** The worst cross-day failure is a
+provider that leaves *yesterday's* dateless slot name sitting in the
+playlist: with `assume_current_date` on, that stale name is placed on
+today, scores a perfect match against today's master, and attaches to the
+wrong channel. By default (`demote_stale_dateless: true`, editor: **"Send
+stale dateless names to review instead of attaching"**) Event Sync checks
+each dateless would-attach against the provider's **previous-day M3U
+snapshot** (captured by the M3U change monitor): a name that was already
+there yesterday is routed to the review queue with reason
+`stale_dateless_stream_name` instead of auto-attached. Approving it in the
+queue attaches it and remembers the answer. The check **fails open** —
+only positive snapshot membership demotes; a missing snapshot, a group
+whose names weren't captured (disabled), or a group at the 500-name
+capture cap yields "unknown" and never blocks an attach. Dated listings
+are never touched. If the group carries a genuinely recurring daily event
+(the same name every day, on purpose), turn the guard off — that is the
+escape hatch it ships with. The preview surfaces the raw signal per stream
+(`name_seen_before_today`) plus `stale_suspect_streams` /
+`freshness_unknown_streams` summary counts so you can judge the signal's
+coverage before trusting it.
+
 ## Rule configuration (`event_sync_config`)
 
 An auto-creation rule becomes an event_sync rule by carrying an
@@ -381,6 +402,7 @@ backward compatibility; the rule editor now reads and writes the nested shape.
 | `dummy_epg_profile_id` | no (absent = off) | Phase 2 (bead ti939.3.3): id of a [dummy EPG profile](template_engine.md) auto-assigned to the master group's channels on every run. Must reference an **existing** profile (teaching error otherwise); the key is never default-filled — omit it to disable. See [Automatic guide data for master channels](#automatic-guide-data-for-master-channels-dummy-epg). |
 | `include_master_group_streams` | no (default **false**) | bead 6xxmp: when true, the **master group's own streams** (from *any* provider) are also matched to the master channels; streams already attached are skipped. A whole-group catch-all for a same-named cross-provider group — now usually superseded by adding the same group under the other provider as a `secondary` scope (which targets exactly one provider). Still useful when a same-named group spans **three or more** providers and you want them all. See [Two providers, one group name](#two-providers-one-group-name) below. |
 | `assume_current_date` | no (default **false**) | When true, a listing that carries a **time but no date** is placed on the **current date** so it becomes matchable — deliberately relaxing the never-guess-the-date rail. Accepts the cross-day match risk. See [Dateless live listings](#dateless-live-listings). |
+| `demote_stale_dateless` | no (default **true**) | bead jqwfq: guard for `assume_current_date`. When true (the default), a would-attach whose **dateless** stream name was **already present in the provider's previous-day M3U snapshot** is routed to the [review queue](#the-review-queue-ambiguous-matches-become-questions) (reason `stale_dateless_stream_name`) instead of auto-attached — a name left over from yesterday must not attach to today's master. Positive snapshot membership is the only demoting signal (missing/capped snapshots **fail open** and never demote); dated names are never touched; a prior review-queue **accept** of the pairing outranks the guard. Set **false** only for recurring daily events whose names legitimately repeat every day. Inert unless `assume_current_date` is on. See [Reviewing ambiguous matches](#reviewing-ambiguous-matches-phase-2-review-queue). |
 | `parse_master_from_stream` | no (default **false**) | When true, each master channel's event identity (title + time) is read from its **first attached stream's name** instead of the channel name — so master channels can be named freely. A master with no attached stream is skipped. See [The master channels' date+time must be in their NAMES](#the-master-channels-datetime-must-be-in-their-names). |
 
 ### Why validation is strict

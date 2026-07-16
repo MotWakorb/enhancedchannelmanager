@@ -2709,8 +2709,29 @@ class ChannelPipelineEngine:
         is bounded by ``EVENT_SYNC_MAX_SECONDARY_STREAMS`` as a guard; the
         run is idempotent, so a truncated run picks up the rest next run.
         """
+        from fastapi.concurrency import run_in_threadpool
+
+        from services import event_sync_staleness
         from services.event_sync_resolver import SecondaryStream
         from stream_prober import extract_m3u_account_id
+
+        # bead jqwfq Stage 1: previous-day stream-name membership per account
+        # (latest pre-midnight M3USnapshot) — the same staleness signal the
+        # preview computes, so run/preview parity holds on the flag. Sync DB
+        # read → threadpool. Best-effort: a failed lookup means freshness
+        # unknown (None flags), never a failed run — fail-open by design.
+        stale_lookup: dict = {}
+        try:
+            stale_lookup = await run_in_threadpool(
+                event_sync_staleness.previous_day_names,
+                [aid for aid in account_names if aid is not None],
+                event_sync_staleness.local_midnight_utc(),
+            )
+        except Exception as e:
+            logger.warning(
+                "[EVENT-SYNC] staleness lookup failed (%s) — stream-name "
+                "freshness unknown for this run", e,
+            )
 
         secondary_streams: list = []
         truncated = False
@@ -2762,6 +2783,13 @@ class ChannelPipelineEngine:
                         # ti939.3.2: the review-queue fingerprint component
                         # (account ids are refresh-stable; stream ids are not).
                         provider_id=account_id,
+                        # bead jqwfq: tri-state staleness signal — snapshot
+                        # groups are keyed by group NAME.
+                        name_seen_before_today=(
+                            event_sync_staleness.name_seen_before_today(
+                                stale_lookup, account_id, gname, s["name"],
+                            )
+                        ),
                     ))
                 if len(secondary_streams) >= EVENT_SYNC_MAX_SECONDARY_STREAMS:
                     secondary_streams = secondary_streams[
@@ -2815,6 +2843,14 @@ class ChannelPipelineEngine:
                             stream_id=s.get("id"),
                             provider=account_names.get(account_id),
                             provider_id=account_id,
+                            # bead jqwfq: same staleness signal for the
+                            # master-group self-attach source.
+                            name_seen_before_today=(
+                                event_sync_staleness.name_seen_before_today(
+                                    stale_lookup, account_id, mgname,
+                                    s["name"],
+                                )
+                            ),
                         ))
                     if len(secondary_streams) >= EVENT_SYNC_MAX_SECONDARY_STREAMS:
                         secondary_streams = secondary_streams[

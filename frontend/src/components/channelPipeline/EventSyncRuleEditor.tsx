@@ -345,6 +345,12 @@ export function EventSyncRuleEditor({
   const [assumeCurrentDate, setAssumeCurrentDate] = useState(
     config?.assume_current_date ?? false
   );
+  // bead jqwfq: stale-dateless demote rail. DEFAULT ON — the backend treats
+  // an absent key as true; off is the recurring-daily-event escape hatch.
+  // Only meaningful when assumeCurrentDate is also on.
+  const [demoteStaleDateless, setDemoteStaleDateless] = useState(
+    config?.demote_stale_dateless ?? true
+  );
   // bead parse-from-stream: read master identity from the attached stream.
   const [parseMasterFromStream, setParseMasterFromStream] = useState(
     config?.parse_master_from_stream ?? false
@@ -632,6 +638,14 @@ export function EventSyncRuleEditor({
     if (assumeCurrentDate || config?.assume_current_date != null) {
       built.assume_current_date = assumeCurrentDate;
     }
+    // bead jqwfq: emit demote_stale_dateless when DISABLED, and preserve an
+    // explicit stored value (the backend validator fills the key on save).
+    // Absent means TRUE on the backend (mirrors enforce_time_window's
+    // default-true convention), so an untouched legacy config stays absent
+    // while the guard is on.
+    if (!demoteStaleDateless || config?.demote_stale_dateless != null) {
+      built.demote_stale_dateless = demoteStaleDateless;
+    }
     // bead parse-from-stream: emit when checked; preserve an explicit stored
     // value (absent means false on the backend).
     if (parseMasterFromStream || config?.parse_master_from_stream != null) {
@@ -857,6 +871,7 @@ export function EventSyncRuleEditor({
       refreshProvidersBeforeRun !== (config?.refresh_providers_before_run ?? false) ||
       includeMasterGroupStreams !== (config?.include_master_group_streams ?? false) ||
       assumeCurrentDate !== (config?.assume_current_date ?? false) ||
+      demoteStaleDateless !== (config?.demote_stale_dateless ?? true) ||
       parseMasterFromStream !== (config?.parse_master_from_stream ?? false) ||
       dummyEpgProfileId !== (config?.dummy_epg_profile_id ?? null)
     );
@@ -864,7 +879,8 @@ export function EventSyncRuleEditor({
     name, description, enabled, masterScope, secondaryScopes, selectedPatternIds,
     customShared, groupOverrides, timeWindowText, thresholdText, enforceTimeWindow,
     autoRun, refreshProvidersBeforeRun, includeMasterGroupStreams, assumeCurrentDate,
-    parseMasterFromStream, dummyEpgProfileId, config, rule, initial, customSharedMeta,
+    demoteStaleDateless, parseMasterFromStream, dummyEpgProfileId, config, rule,
+    initial, customSharedMeta,
   ]);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -966,6 +982,10 @@ export function EventSyncRuleEditor({
         {assumeCurrentDate && (
           <> <strong>Assumes today&apos;s date for dateless listings.</strong></>
         )}
+        {assumeCurrentDate && !demoteStaleDateless && (
+          <> <strong>Stale-name review guard is off</strong> — names left over
+          from yesterday&apos;s playlist can auto-attach.</>
+        )}
         {dummyEpgProfileId != null && <> Assigns dummy EPG guide data on every run.</>}
       </>
     );
@@ -979,6 +999,7 @@ export function EventSyncRuleEditor({
     autoRun,
     refreshProvidersBeforeRun,
     assumeCurrentDate,
+    demoteStaleDateless,
     dummyEpgProfileId,
     groupName,
   ]);
@@ -989,7 +1010,8 @@ export function EventSyncRuleEditor({
     (!enforceTimeWindow ? 1 : 0) +
     (enforceTimeWindow && currentTimeWindow !== DEFAULT_TIME_WINDOW_MINUTES ? 1 : 0);
   const scoreChanged = Math.abs(currentThreshold - EVENT_ATTACH_FLOOR) < 1e-9 ? 0 : 1;
-  const dateHandlingChanged = assumeCurrentDate ? 1 : 0;
+  const dateHandlingChanged =
+    (assumeCurrentDate ? 1 : 0) + (!demoteStaleDateless ? 1 : 0);
   const overridesChanged = scopedGroups.filter(
     g => (groupOverrides[g.id]?.title_pattern ?? '').trim().length > 0
   ).length;
@@ -1125,6 +1147,8 @@ export function EventSyncRuleEditor({
         chips.push(<span key="to" className="badge badge-sm badge-warning">Title-only</span>);
       if (assumeCurrentDate)
         chips.push(<span key="ad" className="badge badge-sm badge-warning">Assumes date</span>);
+      if (assumeCurrentDate && !demoteStaleDateless)
+        chips.push(<span key="sg" className="badge badge-sm badge-warning">Stale guard off</span>);
       if (dummyEpgProfileId != null)
         chips.push(<span key="gd" className="badge badge-sm badge-info">Guide data</span>);
       return (
@@ -1576,6 +1600,45 @@ export function EventSyncRuleEditor({
                           applies, but same-time-of-day collisions can slip
                           through. Leave off unless the group only ever lists
                           today.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                  <div className="form-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={demoteStaleDateless}
+                        onChange={e => setDemoteStaleDateless(e.target.checked)}
+                        disabled={isLoading || !assumeCurrentDate}
+                        data-testid="event-sync-demote-stale-dateless"
+                      />
+                      <span>
+                        Send stale dateless names to review instead of
+                        attaching
+                      </span>
+                    </label>
+                    <span className="form-hint">
+                      When a dateless name was already in yesterday&apos;s
+                      playlist, ask for review instead of auto-attaching it
+                      to today&apos;s event. On by default; only applies with
+                      the date assumption above.
+                    </span>
+                    <details className="modal-why">
+                      <summary>Why / when to turn off</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Some providers leave <em>yesterday&apos;s</em> event
+                          name sitting in the playlist. With the date
+                          assumption on, that stale name looks like a perfect
+                          match for today and can attach to the wrong channel.
+                          This guard checks the previous day&apos;s playlist
+                          snapshot: a dateless name that was already there
+                          goes to the review queue instead — approving it
+                          there attaches it and remembers your answer. Turn
+                          this off only when the group lists the SAME event
+                          name every day on purpose (a recurring daily show),
+                          where the guard would ask for review each day.
                         </span>
                       </div>
                     </details>

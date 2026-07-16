@@ -2572,6 +2572,9 @@ async def _fetch_and_resolve_event_sync(
     """
     from functools import partial
 
+    from fastapi.concurrency import run_in_threadpool
+
+    from services import event_sync_staleness
     from services.event_sync_resolver import (
         SecondaryStream,
         build_master_name_to_id,
@@ -2643,6 +2646,23 @@ async def _fetch_and_resolve_event_sync(
     try:
         accounts = await client.get_m3u_accounts() or []
         account_names = {a.get("id"): a.get("name") for a in accounts}
+        # bead jqwfq Stage 1: previous-day stream-name membership per account
+        # (latest pre-midnight M3USnapshot), feeding each SecondaryStream's
+        # name_seen_before_today staleness signal. Sync DB read → threadpool.
+        # Best-effort: a failed lookup means freshness unknown (None flags),
+        # never a failed preview — the rail fails open by construction.
+        stale_lookup: dict = {}
+        try:
+            stale_lookup = await run_in_threadpool(
+                event_sync_staleness.previous_day_names,
+                [a.get("id") for a in accounts if a.get("id") is not None],
+                event_sync_staleness.local_midnight_utc(),
+            )
+        except Exception as e:
+            logger.warning(
+                "[EVENT-SYNC] staleness lookup failed (%s) — stream-name "
+                "freshness unknown for this preview", e,
+            )
         # bead jiscc: provider-scoped secondary scopes. m3u_account_id filters
         # the fetch to one provider; None = the whole group.
         secondary_scopes = config.get("secondary") or [
@@ -2682,6 +2702,13 @@ async def _fetch_and_resolve_event_sync(
                         stream_id=s.get("id"),
                         provider=account_names.get(account_id),
                         provider_id=account_id,
+                        # bead jqwfq: True/False/None staleness signal —
+                        # snapshot groups are keyed by group NAME.
+                        name_seen_before_today=(
+                            event_sync_staleness.name_seen_before_today(
+                                stale_lookup, account_id, gname, s["name"],
+                            )
+                        ),
                     ))
                 if len(secondary_streams) >= _PREVIEW_MAX_STREAMS:
                     secondary_streams = secondary_streams[:_PREVIEW_MAX_STREAMS]
@@ -2719,6 +2746,14 @@ async def _fetch_and_resolve_event_sync(
                             stream_id=s.get("id"),
                             provider=account_names.get(account_id),
                             provider_id=account_id,
+                            # bead jqwfq: same staleness signal for the
+                            # master-group self-attach source.
+                            name_seen_before_today=(
+                                event_sync_staleness.name_seen_before_today(
+                                    stale_lookup, account_id, mgname,
+                                    s["name"],
+                                )
+                            ),
                         ))
                     if len(secondary_streams) >= _PREVIEW_MAX_STREAMS:
                         secondary_streams = secondary_streams[:_PREVIEW_MAX_STREAMS]
@@ -2913,6 +2948,11 @@ async def preview_event_sync(
     failure_groups: dict[tuple[int, str], dict] = {}
     would_attach_via_review = 0
     candidates_pending_review = 0
+    # bead jqwfq Stage 1: staleness-signal summary — how many stream names
+    # positively predate today (stale-suspect) and how many have unknown
+    # freshness (no snapshot / capped group / unknown provider).
+    stale_suspect_streams = 0
+    freshness_unknown_streams = 0
 
     # ti939.3.2: per-candidate queue markers ('pending review' /
     # 'previously accepted/rejected'), computed from the SAME fingerprints
@@ -2946,6 +2986,10 @@ async def preview_event_sync(
         if r.disposition == DISPOSITION_WOULD_ATTACH \
                 and r.attach_source == ATTACH_SOURCE_REVIEW_QUEUE:
             would_attach_via_review += 1
+        if r.stream.name_seen_before_today is True:
+            stale_suspect_streams += 1
+        elif r.stream.name_seen_before_today is None:
+            freshness_unknown_streams += 1
         parsed_start = (
             r.result.parsed.start.isoformat() if r.result.parsed.start else None
         )
@@ -2964,6 +3008,11 @@ async def preview_event_sync(
             # rail) or "top_candidate_ambiguous_band". Preview inherits the
             # rail automatically (same resolver as the attach path).
             "ambiguous_reason": r.ambiguous_reason,
+            # bead jqwfq Stage 1: tri-state staleness signal — True (name
+            # present in the account's previous-day M3U snapshot: stale
+            # suspect), False (captured uncapped and absent: seen first
+            # today), None (unknown — fail-open).
+            "name_seen_before_today": r.stream.name_seen_before_today,
             # ti939.3.2: "threshold" | "review_queue" when would_attach —
             # a queue-driven attach prediction is visibly not a score-driven
             # one. None for every other disposition.
@@ -3069,6 +3118,12 @@ async def preview_event_sync(
             # candidate pairings are sitting in the pending review queue.
             "would_attach_via_review": would_attach_via_review,
             "candidates_pending_review": candidates_pending_review,
+            # bead jqwfq Stage 1: staleness-signal counts. stale_suspect =
+            # names positively present in the previous-day snapshot;
+            # freshness_unknown = no verdict possible (no qualifying
+            # snapshot, unknown provider, uncaptured or capped group).
+            "stale_suspect_streams": stale_suspect_streams,
+            "freshness_unknown_streams": freshness_unknown_streams,
         },
         "streams": streams_out,
         "unmatched_streams": unmatched_out,
@@ -3552,6 +3607,10 @@ def _event_sync_matching_stream_row(r, name_to_id: dict) -> dict:
         "unmatchable_reason": r.result.unmatchable_reason,
         "ambiguous_reason": r.ambiguous_reason,
         "attach_source": r.attach_source,
+        # bead jqwfq Stage 1: tri-state staleness signal (True = name present
+        # in the previous-day snapshot, False = captured-uncapped absent,
+        # None = unknown / fail-open).
+        "name_seen_before_today": r.stream.name_seen_before_today,
         "matched_via": [
             {"key": key, "label": label} for key, label in r.matched_via
         ],
@@ -3694,8 +3753,14 @@ async def _build_event_sync_matching_section(client) -> dict:
                 DISPOSITION_PARSE_FAILED: 0,
             }
             streams_out = []
+            stale_suspect = 0
+            freshness_unknown = 0
             for r in resolution.resolved:
                 counts[r.disposition] = counts.get(r.disposition, 0) + 1
+                if r.stream.name_seen_before_today is True:
+                    stale_suspect += 1
+                elif r.stream.name_seen_before_today is None:
+                    freshness_unknown += 1
                 streams_out.append(
                     _event_sync_matching_stream_row(r, name_to_id))
 
@@ -3711,6 +3776,10 @@ async def _build_event_sync_matching_section(client) -> dict:
                     "time_window_minutes": config.get("time_window_minutes"),
                     "assume_current_date": config.get(
                         "assume_current_date", False),
+                    # bead jqwfq: the stale-dateless demote rail knob —
+                    # inert unless assume_current_date is also on.
+                    "demote_stale_dateless": config.get(
+                        "demote_stale_dateless", True),
                     "parse_master_from_stream": config.get(
                         "parse_master_from_stream", False),
                     "include_master_group_streams": config.get(
@@ -3729,6 +3798,10 @@ async def _build_event_sync_matching_section(client) -> dict:
                     "master_channels": len(fetched["master_channels"]),
                     "master_channels_unparsed": len(
                         resolution.unparsed_master_names),
+                    # bead jqwfq Stage 1: staleness-signal counts (same
+                    # semantics as the preview summary fields).
+                    "stale_suspect_streams": stale_suspect,
+                    "freshness_unknown_streams": freshness_unknown,
                 },
                 "streams": streams_out,
                 "unparsed_master_channels": list(
