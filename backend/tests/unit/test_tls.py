@@ -4,8 +4,10 @@ Unit tests for TLS certificate management module.
 These tests are designed to run without the josepy dependency
 by importing submodules directly instead of through __init__.py.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+import pytest
 
 # Test TLS settings without needing josepy - import directly from submodule
 from tls.settings import TLSSettings, save_tls_settings, load_tls_settings, clear_tls_settings_cache
@@ -125,6 +127,70 @@ class TestTLSSettings:
         settings = TLSSettings(
             auto_renew=False,
             cert_expires_at=near_future.isoformat(),
+            renew_days_before_expiry=30,
+        )
+        assert settings.needs_renewal() is False
+
+
+class TestTLSSettingsTimezoneSkew:
+    """Regression for bead wccvo: get_expiry_days/needs_renewal must compare
+    cert_expires_at (naive UTC, populated from CertificateInfo.not_after) against
+    naive *UTC* now, not naive *local* now. Same bug class as n5zw2
+    (tls/storage.py), fixed here in tls/settings.py.
+
+    These tests simulate a host at a nonzero UTC offset by patching
+    ``tls.settings.datetime`` so that ``datetime.now()`` (naive local) runs
+    +10h ahead of ``datetime.now(timezone.utc)`` (true UTC). Under the old
+    ``datetime.now()``-based comparison the offset flips the result; the fixed
+    helper (naive-UTC now) is offset-independent.
+    """
+
+    OFFSET_HOURS = 10  # simulate a host at UTC+10
+    TRUE_UTC = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    @pytest.fixture
+    def offset_clock(self, monkeypatch):
+        offset = self.OFFSET_HOURS
+        true_utc = self.TRUE_UTC
+
+        class _OffsetDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    # Naive local time on a UTC+offset host.
+                    return (true_utc + timedelta(hours=offset)).replace(tzinfo=None)
+                return true_utc.astimezone(tz)
+
+        monkeypatch.setattr("tls.settings.datetime", _OffsetDatetime)
+        # cert_expires_at as populated from CertificateInfo.not_after: naive UTC.
+        return true_utc.replace(tzinfo=None)
+
+    def test_get_expiry_days_not_shortened_by_offset(self, offset_clock):
+        """Cert expiring 2 days 5h after true UTC now must read 2 days left.
+
+        The +10h local-vs-UTC offset straddles a whole-day boundary here:
+        under the old ``datetime.now()`` (naive local, +10h ahead of true
+        UTC) logic, delta = 2d5h - 10h = 1d19h -> 1 day left. The fixed
+        naive-UTC comparison must read 2 days left, not 1."""
+        utc_now = offset_clock
+        settings = TLSSettings(
+            cert_expires_at=(utc_now + timedelta(days=2, hours=5)).isoformat()
+        )
+        assert settings.get_expiry_days() == 2
+
+    def test_needs_renewal_not_falsely_triggered_by_offset(self, offset_clock):
+        """Cert 31 days 2h from true UTC expiry, renew threshold 30 days: must
+        NOT need renewal yet.
+
+        Under the old ``datetime.now()`` (naive local, +10h ahead of true
+        UTC) logic, delta = 31d2h - 10h = 30d16h -> 30 days left, which trips
+        the <=30 threshold and wrongly reports needs_renewal() True a full
+        day early. The fixed naive-UTC comparison reads the true 31 days
+        left and correctly reports False."""
+        utc_now = offset_clock
+        settings = TLSSettings(
+            auto_renew=True,
+            cert_expires_at=(utc_now + timedelta(days=31, hours=2)).isoformat(),
             renew_days_before_expiry=30,
         )
         assert settings.needs_renewal() is False

@@ -7,7 +7,7 @@ manual certificate paths, and renewal status.
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Literal
 
@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 TLS_CONFIG_FILE = CONFIG_DIR / "tls_settings.json"
 TLS_DIR = CONFIG_DIR / "tls"
+
+
+def _utcnow_naive() -> datetime:
+    """Current UTC time as a naive datetime.
+
+    ``cert_expires_at`` is populated from CertificateInfo.not_after, which is
+    stored as naive UTC (see tls/storage.py::parse_certificate, which drops
+    the tzinfo from cryptography's aware not_valid_*_utc). Comparisons must
+    therefore use naive *UTC* now, not ``datetime.now()`` (naive *local*) —
+    mixing the two skews expiry/renewal math by the host's UTC offset
+    (bead n5zw2, same fix applied here for tls/settings.py under wccvo).
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class TLSSettings(BaseModel):
@@ -133,7 +146,7 @@ class TLSSettings(BaseModel):
             return None
         try:
             expires = datetime.fromisoformat(self.cert_expires_at)
-            delta = expires - datetime.now()
+            delta = expires - _utcnow_naive()
             return max(0, delta.days)
         except (ValueError, TypeError):
             return None
