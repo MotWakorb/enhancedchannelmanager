@@ -871,6 +871,66 @@ class TestHyphenVariantBridge:
         assert result.band == BAND_REJECT
 
 
+class TestPunctuationNormalization:
+    """bead enhancedchannelmanager-79k6b — apostrophe-family fusion + underscore split in
+    the LOCALS cleaner. Two teamless Flo Racing masters landed in the ambiguous
+    band because source punctuation broke the token_set_ratio subset match:
+    backtick-as-apostrophe ('Joker`s' 0.837) and underscore ('Utica_Rome'
+    0.703). Both need >= EVENT_NO_TEAMS_FLOOR (0.90) to attach."""
+
+    def test_backtick_apostrophe_master_attaches(self):
+        result = score_pair(
+            "PPV 02: HLR Jokers Jackpot at Eldora @ 11 Jul 06:15 PM ET",
+            "FloRacing 10 : HLR Joker`s Jackpot at Eldora @ 11 Jul 06:15 PM ET",
+            now=_NOW,
+        )
+        assert result.team_verdict == "absent"
+        assert result.fuzzy_score == 1.0
+        assert result.band == BAND_ATTACH
+
+    def test_underscore_master_attaches(self):
+        result = score_pair(
+            "PPV 03: Weekly Racing at Utica Rome @ 11 Jul 06:15 PM ET",
+            "FloRacing 11 : Weekly Racing at Utica_Rome @ 11 Jul 06:15 PM ET",
+            now=_NOW,
+        )
+        assert result.team_verdict == "absent"
+        assert result.fuzzy_score == 1.0
+        assert result.band == BAND_ATTACH
+
+    def test_hyphen_stream_vs_underscore_master_attaches(self):
+        # After the underscore split the master reads 'utica rome', so the
+        # corroborated hyphen bridge splits the stream's 'utica-rome' and both
+        # reach the subset match — the two punct fixes interacting.
+        result = score_pair(
+            "PPV 03: Weekly Racing at Utica-Rome @ 11 Jul 06:15 PM ET",
+            "FloRacing 11 : Weekly Racing at Utica_Rome @ 11 Jul 06:15 PM ET",
+            now=_NOW,
+        )
+        assert result.team_verdict == "absent"
+        assert result.fuzzy_score == 1.0
+        assert result.band == BAND_ATTACH
+
+    def test_fuzzy_title_score_lifts_both_shapes_to_full(self):
+        from services.event_sync_matcher import _fuzzy_title_score
+
+        assert _fuzzy_title_score(
+            "HLR Jokers Jackpot at Eldora", "HLR Joker`s Jackpot at Eldora"
+        ) == 1.0
+        assert _fuzzy_title_score(
+            "Weekly Racing at Utica Rome", "Weekly Racing at Utica_Rome"
+        ) == 1.0
+
+    @pytest.mark.parametrize("apostrophe", ["'", "’", "ʼ", "`", "´"])
+    def test_team_tokens_fuse_apostrophe_family_consistently(self, apostrophe):
+        # Every apostrophe encoding fuses to the SAME single token, so two
+        # providers spelling a possessive team differently still align. Without
+        # the fix backtick/acute (non-\w) would SPLIT into ['joker','s'].
+        from services.event_sync_matcher import _team_tokens
+
+        assert _team_tokens(f"Joker{apostrophe}s FC") == ["jokers", "fc"]
+
+
 # ---------------------------------------------------------------------------
 # Output contract — ordered candidates against master channels.
 # ---------------------------------------------------------------------------
