@@ -184,6 +184,23 @@ _LOCALS_RUN_TOGETHER = {
     "greenbay": "green bay",
 }
 
+# (f) Apostrophe-family fusion (bead enhancedchannelmanager-event-sync-punct).
+# Two source-side punctuation shapes survive the strips above and break the
+# token_set_ratio subset match against a cleaner stream spelling:
+#   * Apostrophe family — a master ``Joker`s`` (the Flo Racing source uses a
+#     BACKTICK as its apostrophe) keeps the backtick, so it tokenizes as
+#     ``joker`s`` != the stream's ``jokers`` (score 0.837, stuck in the
+#     ambiguous band). Fuse the whole family to NOTHING (remove, not a space)
+#     so ``Joker`s`` -> ``jokers`` — matching the stream and consistent with
+#     event_sync_matcher._team_tokens' existing straight-apostrophe strip.
+#     Covers ' U+0027, ’ U+2019, ʼ U+02BC, ` U+0060 (backtick), ´ U+00B4
+#     (acute) — all real-world apostrophe encodings.
+# Character class, single quantifier, no nested groups — ReDoS-safe by
+# construction (docs/style_guide.md#regex). LOCALS-only; CONSERVATIVE output
+# stays byte-for-byte identical (the underscore split below is a plain
+# str.replace, also LOCALS-only).
+_LOCALS_APOSTROPHE_RE = re.compile(r"['’ʼ`´]+")
+
 # Collapse residual delimiters / whitespace produced by the strips above.
 _LOCALS_DELIM_RE = re.compile(r"[|:]+")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -598,6 +615,14 @@ def _normalize(value: str, mode: NameCleanMode = NameCleanMode.CONSERVATIVE) -> 
 
     # (d) Strip quality / event tags as whole words.
     work = _LOCALS_QUALITY_TAG_RE.sub(" ", work)
+
+    # (f) Fuse the apostrophe family (REMOVE, no space — ``Joker`s`` -> ``jokers``)
+    # and split underscore -> space. Underscore is a ``\w`` char, so ``Utica_Rome``
+    # would otherwise stay one token ``utica_rome`` != the stream's two tokens
+    # (score 0.703). Both run before the final whitespace collapse so any space
+    # introduced by the underscore split merges cleanly. LOCALS-only.
+    work = _LOCALS_APOSTROPHE_RE.sub("", work)
+    work = work.replace("_", " ")
 
     # Collapse residual delimiters and whitespace.
     work = _LOCALS_DELIM_RE.sub(" ", work)

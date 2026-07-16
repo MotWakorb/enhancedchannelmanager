@@ -73,11 +73,30 @@ class TestConservativeIsByteForByteUnchanged:
         "ABC: WBAY Green Bay",
         "  Mixed   Case  Name  ",
         "5 | ",  # degenerate prefix-only
+        # Apostrophe-family + underscore: the LOCALS punct fix (event-sync-punct
+        # bead) touches these ONLY in LOCALS mode; CONSERVATIVE must leave them
+        # byte-for-byte so the dedup/exact path is unchanged.
+        "HLR Joker`s Jackpot",
+        "O'Brien Racing",
+        "Joker´s Wild",
+        "Utica_Rome Speedway",
+        "a_b_c",
     ]
 
     @pytest.mark.parametrize("name", INCIDENT_FIXTURES)
     def test_default_equals_explicit_conservative(self, name):
         assert _normalize(name) == _normalize(name, mode=NameCleanMode.CONSERVATIVE)
+
+    @pytest.mark.parametrize("name,preserved", [
+        ("HLR Joker`s Jackpot", "joker`s"),   # backtick apostrophe kept
+        ("O'Brien Racing", "o'brien"),        # straight apostrophe kept
+        ("Joker´s Wild", "joker´s"),          # acute apostrophe kept
+        ("Utica_Rome", "utica_rome"),         # underscore kept (one token)
+    ])
+    def test_conservative_preserves_apostrophe_and_underscore(self, name, preserved):
+        # The LOCALS punct fix (apostrophe fuse + underscore split) is
+        # LOCALS-only; CONSERVATIVE must NOT normalize these characters.
+        assert preserved in _normalize(name, mode=NameCleanMode.CONSERVATIVE)
 
     def test_conservative_strips_number_prefix(self):
         assert _normalize("5 | US : ESPN 2") == "us : espn 2"
@@ -128,6 +147,46 @@ class TestLocalsCleaner:
 
     def test_locals_never_collapses_to_empty_for_real_name(self):
         assert _normalize("WI | Green Bay | ABC 2 WBAY", mode=NameCleanMode.LOCALS)
+
+    # -- Apostrophe-family fusion + underscore split (event-sync-punct bead) --
+    # A master "HLR Joker`s Jackpot" (backtick-as-apostrophe) tokenized
+    # 'joker`s' != the stream's 'jokers' (token_set_ratio 0.837, ambiguous
+    # band); "Utica_Rome" stayed one \w token 'utica_rome' != two stream
+    # tokens (0.703). Both are teamless events needing >= 0.90 to attach.
+
+    @pytest.mark.parametrize("apostrophe", ["'", "’", "ʼ", "`", "´"])
+    def test_fuses_apostrophe_family_to_nothing(self, apostrophe):
+        # Every apostrophe encoding fuses to nothing so the possessive token
+        # matches the un-apostrophed stream spelling.
+        out = _normalize(f"HLR Joker{apostrophe}s Jackpot", mode=NameCleanMode.LOCALS)
+        assert "jokers" in out.split()
+        assert apostrophe not in out
+
+    def test_apostrophe_fusion_reaches_full_subset_match(self):
+        from rapidfuzz import fuzz
+        stream = _normalize("HLR Jokers Jackpot Eldora", mode=NameCleanMode.LOCALS)
+        master = _normalize(
+            "(FLSP 010) | floracing: 2026 HLR Joker`s Jackpot at Eldora "
+            "Speedway (HLR Joker`s Jackpot at Eldora)",
+            mode=NameCleanMode.LOCALS,
+        )
+        assert fuzz.token_set_ratio(stream, master) / 100 == 1.0
+
+    def test_splits_underscore_into_separate_tokens(self):
+        out = _normalize("Weekly Racing Utica_Rome", mode=NameCleanMode.LOCALS)
+        assert "utica" in out.split()
+        assert "rome" in out.split()
+        assert "_" not in out
+
+    def test_underscore_split_reaches_full_subset_match(self):
+        from rapidfuzz import fuzz
+        stream = _normalize("Weekly Racing Utica Rome", mode=NameCleanMode.LOCALS)
+        master = _normalize(
+            "(FLSP 011) | floracing: 2026 Weekly Racing at Utica_Rome "
+            "Speedway (Weekly Racing at Utica_Rome)",
+            mode=NameCleanMode.LOCALS,
+        )
+        assert fuzz.token_set_ratio(stream, master) / 100 == 1.0
 
 
 # ---------------------------------------------------------------------------

@@ -391,6 +391,17 @@ _TEAM_SEPARATOR_RE = re.compile(r"\s+(?:vs\.?|v\.)\s+|\s+@\s+", re.IGNORECASE)
 
 _TEAM_TOKEN_RE = re.compile(r"\w+")
 
+# Apostrophe family fused (removed) before team tokenization so a possessive
+# team side reads the same regardless of which apostrophe encoding the provider
+# used. Straight ' was already fused; but ` (backtick) and ´ (acute) are NOT
+# \w chars, so without this they'd SPLIT a name ('Joker`s' -> ['joker','s'])
+# while 'Joker's' fused to ['jokers'] — two providers spelling the same team
+# with different apostrophes would then mis-tokenize and mismatch. Mirrors the
+# LOCALS cleaner's _LOCALS_APOSTROPHE_RE in services/dedup_matcher.py (keep the
+# two char sets in sync). event-sync-punct bead. Class + single quantifier —
+# ReDoS-safe (docs/style_guide.md#regex).
+_TEAM_APOSTROPHE_RE = re.compile(r"['’ʼ`´]+")
+
 # Gender / age / squad qualifiers, mapped to CANONICAL CLASSES. A
 # qualifier-CLASS mismatch between two otherwise-similar team names is a
 # DIFFERENT team (women's vs men's side, U21 vs senior side, reserves vs
@@ -777,8 +788,8 @@ def _split_teams(title: str | None) -> tuple[str, str] | None:
 
 
 def _team_tokens(team: str) -> list[str]:
-    """Lowercased identity tokens of one team side (apostrophes fused)."""
-    return _TEAM_TOKEN_RE.findall(team.replace("'", "").lower())
+    """Lowercased identity tokens of one team side (apostrophe family fused)."""
+    return _TEAM_TOKEN_RE.findall(_TEAM_APOSTROPHE_RE.sub("", team).lower())
 
 
 def _qualifiers(tokens: list[str]) -> frozenset[str]:
