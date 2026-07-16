@@ -27,6 +27,23 @@
 # Block mechanism (per Claude Code hooks docs): exit code 2 blocks the tool
 # call and feeds stderr back to Claude. Exit 0 lets the command proceed; any
 # stderr (e.g. the soft CHANGELOG warning) is shown but does not block.
+#
+# Worktree-aware root resolution (bead enhancedchannelmanager-yxtuz, follow-up
+# to PR #666): CLAUDE_PROJECT_DIR is always the MAIN checkout, even when the
+# `gh pr create` being validated runs from a git worktree on a different,
+# further-advanced branch (e.g. `cd <worktree> && gh pr create ...`). Checking
+# CLAUDE_PROJECT_DIR's version state in that case validates the WRONG
+# checkout and can false-block a legitimately-advanced worktree branch (this
+# happened in PR #666 — the engineer had to bypass via `gh api`; CI's
+# server-side version-consistency job re-enforces the same rule against the
+# actual PR head, so a false block here is a friction bug, not a safety gap).
+#
+# Fixed below by resolving the checkout root to validate from the command
+# itself (a leading `cd <path> &&` or a `git -C <path>` in the `gh pr create`
+# command), with an `ECM_VERSION_GUARD_ROOT` env override for cases the
+# command text can't express. Falls back to the CLAUDE_PROJECT_DIR/script-
+# location default when neither applies, so the plain main-checkout path
+# (no cd, no -C, no override) is byte-for-byte the pre-fix behavior.
 set -uo pipefail
 
 # Project root: Claude Code exports CLAUDE_PROJECT_DIR; fall back to the repo
@@ -62,6 +79,46 @@ fi
 # exempts no-suffix versions, so this is belt-and-suspenders.)
 if printf '%s' "$COMMAND" | grep -Eq -- '--base[[:space:]=]+main'; then
   exit 0
+fi
+
+# ─── Resolve the checkout the ship command actually runs from ─────────────
+# Two ways to point the guard at a non-default checkout, checked in order:
+#   1. ECM_VERSION_GUARD_ROOT env override — wins unconditionally when set.
+#   2. Parse COMMAND for a leading `cd <path> &&` or a `git -C <path>`.
+# Either way, the candidate is only adopted if it resolves to a real
+# directory that looks like an ECM checkout (has scripts/check_version_advances.py).
+# Otherwise PROJECT_DIR stays at its CLAUDE_PROJECT_DIR/script-location
+# default from above — this keeps the normal main-checkout path unchanged.
+RESOLVED_DIR=""
+if [[ -n "${ECM_VERSION_GUARD_ROOT:-}" ]]; then
+  RESOLVED_DIR="$ECM_VERSION_GUARD_ROOT"
+else
+  RESOLVED_DIR="$(printf '%s' "$COMMAND" | python3 -c '
+import re, sys
+cmd = sys.stdin.read()
+# `cd <path> &&` (or start-of-command / after ;&|({) — quoted or bare.
+m = re.search(r"(?:^|[;&|({])\s*cd\s+([\"\x27]?)([^\"\x27;&|]+?)\1\s*(?:&&|;|$)", cmd)
+if m:
+    print(m.group(2).strip())
+    sys.exit(0)
+# `git -C <path>` anywhere in the command.
+m = re.search(r"\bgit\s+-C\s+([\"\x27]?)([^\"\x27\s]+)\1", cmd)
+if m:
+    print(m.group(2).strip())
+    sys.exit(0)
+' 2>/dev/null)"
+fi
+
+if [[ -n "$RESOLVED_DIR" ]]; then
+  # Relative paths resolve against the default PROJECT_DIR (matches the
+  # shell semantics of a bare `cd <relative>` run from that directory).
+  if [[ "$RESOLVED_DIR" != /* ]]; then
+    RESOLVED_DIR="$PROJECT_DIR/$RESOLVED_DIR"
+  fi
+  RESOLVED_DIR="$(cd "$RESOLVED_DIR" 2>/dev/null && pwd)"
+  if [[ -n "$RESOLVED_DIR" && -f "$RESOLVED_DIR/scripts/check_version_advances.py" ]]; then
+    PROJECT_DIR="$RESOLVED_DIR"
+  fi
 fi
 
 CHECKER="$PROJECT_DIR/scripts/check_version_advances.py"
