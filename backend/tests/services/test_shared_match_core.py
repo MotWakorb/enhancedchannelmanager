@@ -73,7 +73,7 @@ class TestConservativeIsByteForByteUnchanged:
         "ABC: WBAY Green Bay",
         "  Mixed   Case  Name  ",
         "5 | ",  # degenerate prefix-only
-        # Apostrophe-family + underscore: the LOCALS punct fix (event-sync-punct
+        # Apostrophe-family + underscore: the LOCALS punct fix (bead enhancedchannelmanager-79k6b
         # bead) touches these ONLY in LOCALS mode; CONSERVATIVE must leave them
         # byte-for-byte so the dedup/exact path is unchanged.
         "HLR Joker`s Jackpot",
@@ -148,7 +148,7 @@ class TestLocalsCleaner:
     def test_locals_never_collapses_to_empty_for_real_name(self):
         assert _normalize("WI | Green Bay | ABC 2 WBAY", mode=NameCleanMode.LOCALS)
 
-    # -- Apostrophe-family fusion + underscore split (event-sync-punct bead) --
+    # -- Apostrophe-family fusion + underscore split (bead enhancedchannelmanager-79k6b) --
     # A master "HLR Joker`s Jackpot" (backtick-as-apostrophe) tokenized
     # 'joker`s' != the stream's 'jokers' (token_set_ratio 0.837, ambiguous
     # band); "Utica_Rome" stayed one \w token 'utica_rome' != two stream

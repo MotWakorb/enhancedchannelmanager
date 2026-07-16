@@ -184,7 +184,7 @@ _LOCALS_RUN_TOGETHER = {
     "greenbay": "green bay",
 }
 
-# (f) Apostrophe-family fusion (bead enhancedchannelmanager-event-sync-punct).
+# (f) Apostrophe-family fusion (bead enhancedchannelmanager-79k6b).
 # Two source-side punctuation shapes survive the strips above and break the
 # token_set_ratio subset match against a cleaner stream spelling:
 #   * Apostrophe family — a master ``Joker`s`` (the Flo Racing source uses a

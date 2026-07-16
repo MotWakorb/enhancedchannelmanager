@@ -398,7 +398,7 @@ _TEAM_TOKEN_RE = re.compile(r"\w+")
 # while 'Joker's' fused to ['jokers'] — two providers spelling the same team
 # with different apostrophes would then mis-tokenize and mismatch. Mirrors the
 # LOCALS cleaner's _LOCALS_APOSTROPHE_RE in services/dedup_matcher.py (keep the
-# two char sets in sync). event-sync-punct bead. Class + single quantifier —
+# two char sets in sync). bead enhancedchannelmanager-79k6b. Class + single quantifier —
 # ReDoS-safe (docs/style_guide.md#regex).
 _TEAM_APOSTROPHE_RE = re.compile(r"['’ʼ`´]+")
 

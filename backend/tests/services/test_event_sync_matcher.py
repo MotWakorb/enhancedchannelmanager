@@ -872,7 +872,7 @@ class TestHyphenVariantBridge:
 
 
 class TestPunctuationNormalization:
-    """event-sync-punct bead — apostrophe-family fusion + underscore split in
+    """bead enhancedchannelmanager-79k6b — apostrophe-family fusion + underscore split in
     the LOCALS cleaner. Two teamless Flo Racing masters landed in the ambiguous
     band because source punctuation broke the token_set_ratio subset match:
     backtick-as-apostrophe ('Joker`s' 0.837) and underscore ('Utica_Rome'
