@@ -256,6 +256,25 @@ class ActionExecutor:
         self._group_by_id = {g["id"]: g for g in self.existing_groups}
         self._group_by_name = {g["name"].lower(): g for g in self.existing_groups}
 
+        # bead g0uuf: multi-candidate companions to the single-slot lookup
+        # maps. Same channel name in N groups is a SUPPORTED layout (GH-92
+        # group-scoped rules), but each legacy map keeps exactly one channel
+        # per key (last-wins dict comprehension above, first-seen setdefault
+        # below) — so a scoped _find_channel_by_name could only ever test one
+        # arbitrary survivor and reported same-named in-scope channels as
+        # "not found" (merge_only skipped; merge created a duplicate). The
+        # candidate lists preserve EVERY channel per key in load order;
+        # _find_channel_by_name scans them only after the legacy pick fails
+        # its scope/manual gates, so behavior is unchanged whenever the
+        # legacy pick was valid.
+        self._by_name_candidates: dict[str, list[dict]] = {}
+        self._base_name_candidates: dict[str, list[dict]] = {}
+        self._normalized_name_candidates: dict[str, list[dict]] = {}
+        self._core_name_candidates: dict[str, list[dict]] = {}
+        self._fold_key_candidates: dict[str, list[dict]] = {}
+        for c in self.existing_channels:
+            self._add_candidate(self._by_name_candidates, c["name"].lower(), c)
+
         # Track newly created entities during this execution
         self._created_channels = {}  # name.lower() -> channel dict
         self._base_name_to_channel = {}  # base_name.lower() -> channel dict (for number-prefixed lookups)
@@ -286,6 +305,7 @@ class ActionExecutor:
             stripped = _num_prefix.sub('', c["name"])
             if stripped != c["name"]:
                 self._base_name_to_channel.setdefault(stripped.lower(), c)
+                self._add_candidate(self._base_name_candidates, stripped.lower(), c)
 
         # Folded-key mapping (GH #645 / bead 0vao3): canonical comparison key
         # (casefold + strip ALL whitespace, via the shared match_fold helper)
@@ -298,8 +318,10 @@ class ActionExecutor:
         for c in self.existing_channels:
             stripped = _num_prefix.sub('', c["name"])
             self._fold_key_to_channel.setdefault(fold_match_key(c["name"]), c)
+            self._add_candidate(self._fold_key_candidates, fold_match_key(c["name"]), c)
             if stripped != c["name"]:
                 self._fold_key_to_channel.setdefault(fold_match_key(stripped), c)
+                self._add_candidate(self._fold_key_candidates, fold_match_key(stripped), c)
 
         # Pre-populate normalized-name mapping so merge_streams auto-lookup
         # can find channels the same way normalized_name_in_group does
@@ -313,6 +335,9 @@ class ActionExecutor:
                         self._normalized_name_to_channel.setdefault(
                             result.normalized.lower(), c
                         )
+                        self._add_candidate(
+                            self._normalized_name_candidates,
+                            result.normalized.lower(), c)
                 except Exception as e:
                     logger.warning("[AUTO-CREATE-EXEC] Normalization failed for channel '%s': %s", c.get("name", ""), e)
 
@@ -327,6 +352,7 @@ class ActionExecutor:
                     core = self._normalization_engine.extract_core_name(stripped)
                     if core:
                         self._core_name_to_channel.setdefault(core.lower(), c)
+                        self._add_candidate(self._core_name_candidates, core.lower(), c)
                 except Exception as e:
                     logger.warning("[AUTO-CREATE-EXEC] Core name extraction failed for channel '%s': %s", c.get("name", ""), e)
 
@@ -337,6 +363,12 @@ class ActionExecutor:
             deparen = re.sub(r'\s+', ' ', deparen).strip()
             if deparen != core_key:
                 self._core_name_to_channel.setdefault(deparen, ch_val)
+        for core_key, cands in list(self._core_name_candidates.items()):
+            deparen = re.sub(r'\(([^)]+)\)', r'\1', core_key)
+            deparen = re.sub(r'\s+', ' ', deparen).strip()
+            if deparen != core_key:
+                for ch_val in cands:
+                    self._add_candidate(self._core_name_candidates, deparen, ch_val)
 
         # Pre-populate call-sign mapping so merge_streams can match
         # local affiliates by FCC call sign (W/K + 2-3 letters).
@@ -1001,13 +1033,24 @@ class ActionExecutor:
                             # Update caches
                             old_lower = existing_name.lower()
                             self._channel_by_name.pop(old_lower, None)
+                            # bead g0uuf: drop the renamed dict from its old
+                            # candidate list (other same-named channels keep
+                            # theirs) and index it under the new spelling.
+                            old_cands = self._by_name_candidates.get(old_lower)
+                            if old_cands:
+                                self._by_name_candidates[old_lower] = [
+                                    c for c in old_cands if c is not existing]
                             existing["name"] = new_name
                             self._channel_by_name[new_name.lower()] = existing
+                            self._add_candidate(
+                                self._by_name_candidates, new_name.lower(), existing)
                             # GH #645 / bead 0vao3: the renamed spelling must
                             # also be fold-findable (old fold keys still point
                             # at the same mutated dict, so they stay correct).
                             self._fold_key_to_channel.setdefault(
                                 _fold_key(new_name), existing)
+                            self._add_candidate(
+                                self._fold_key_candidates, _fold_key(new_name), existing)
                         except Exception as e:
                             logger.warning("[AUTO-CREATE-EXEC] Failed to rename channel '%s' to '%s': %s", existing_name, new_name, e)
                             action_details.append(f"Failed to rename channel: {e}")
@@ -1141,13 +1184,20 @@ class ActionExecutor:
                 simulated["tvg_id"] = stream_ctx.tvg_id
             self._created_channels[channel_name.lower()] = simulated
             self._channel_by_id[dry_id] = simulated
+            # bead g0uuf: register in the multi-candidate index so a scoped
+            # lookup finds this channel even when a same-named channel in
+            # another group holds the single-slot map entries.
+            self._add_candidate(self._by_name_candidates, channel_name.lower(), simulated)
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
             if base_name.lower() != channel_name.lower():
                 self._base_name_to_channel[base_name.lower()] = simulated
+                self._add_candidate(self._base_name_candidates, base_name.lower(), simulated)
             # GH #645 / bead 0vao3: register the fold keys so later streams in
             # this run can fold-match the simulated channel (first-seen wins).
             self._fold_key_to_channel.setdefault(_fold_key(channel_name), simulated)
             self._fold_key_to_channel.setdefault(_fold_key(base_name), simulated)
+            self._add_candidate(self._fold_key_candidates, _fold_key(channel_name), simulated)
+            self._add_candidate(self._fold_key_candidates, _fold_key(base_name), simulated)
             self._used_channel_numbers.add(channel_number)
             exec_ctx.current_channel_id = dry_id
             exec_ctx.created_channel_ids.add(dry_id)
@@ -1201,13 +1251,20 @@ class ActionExecutor:
             new_channel["auto_created"] = True
             self._created_channels[channel_name.lower()] = new_channel
             self._channel_by_id[new_channel["id"]] = new_channel
+            # bead g0uuf: register in the multi-candidate index so a scoped
+            # lookup finds this channel even when a same-named channel in
+            # another group holds the single-slot map entries.
+            self._add_candidate(self._by_name_candidates, channel_name.lower(), new_channel)
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
             if base_name.lower() != channel_name.lower():
                 self._base_name_to_channel[base_name.lower()] = new_channel
+                self._add_candidate(self._base_name_candidates, base_name.lower(), new_channel)
             # GH #645 / bead 0vao3: register the fold keys so later streams in
             # this run can fold-match the new channel (first-seen wins).
             self._fold_key_to_channel.setdefault(_fold_key(channel_name), new_channel)
             self._fold_key_to_channel.setdefault(_fold_key(base_name), new_channel)
+            self._add_candidate(self._fold_key_candidates, _fold_key(channel_name), new_channel)
+            self._add_candidate(self._fold_key_candidates, _fold_key(base_name), new_channel)
             self._used_channel_numbers.add(channel_number)
             self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
@@ -3947,6 +4004,20 @@ class ActionExecutor:
             return False
         return not channel.get("auto_created", False)
 
+    @staticmethod
+    def _add_candidate(candidates: dict, key: str, channel: dict) -> None:
+        """Append ``channel`` to the multi-candidate list for ``key``.
+
+        bead g0uuf: identity-deduped (same dict object never listed twice
+        under one key) so mutation sites — rename, create, dry-run create —
+        can call this unconditionally.
+        """
+        if not key:
+            return
+        lst = candidates.setdefault(key, [])
+        if not any(existing is channel for existing in lst):
+            lst.append(channel)
+
     def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None,
                               exact_only: bool = False,
                               block_manual: bool = True,
@@ -3999,6 +4070,15 @@ class ActionExecutor:
         it misses — an exact match always wins — and the folded candidate
         still passes the same scope and manual-channel gates. Comparison key
         only: stored channel names are never altered.
+
+        Multi-candidate resolution (bead g0uuf): the same channel name in
+        several groups is a supported layout, but each lookup map holds ONE
+        channel per key. Each stage therefore first tests its legacy
+        single-slot pick (preserving historical winner semantics), and only
+        when that pick fails the scope/manual gates scans every channel
+        indexed under the same key, returning the first that passes. A
+        scoped lookup thus finds the same-named channel IN the scoped group
+        even when a sibling from another group occupies the single-slot map.
         """
         def _in_scope(c: Optional[dict]) -> bool:
             if c is None:
@@ -4016,6 +4096,21 @@ class ActionExecutor:
                 return False
             return True
 
+        # bead g0uuf: per-stage resolver. The legacy single-slot pick keeps
+        # priority (zero behavior change while it passes the scope/manual
+        # gates); when it fails them, scan EVERY channel indexed under the
+        # same key so same-named channels in other single-slot positions —
+        # e.g. one "ESPN" per group across five groups — stay findable by a
+        # scoped lookup instead of reading as "not found" (which made
+        # merge_only skip and merge create a duplicate).
+        def _pick(primary: Optional[dict], candidates: Optional[list]) -> Optional[dict]:
+            if _in_scope(primary):
+                return primary
+            for cand in candidates or ():
+                if cand is not primary and _in_scope(cand):
+                    return cand
+            return None
+
         # Reset the block marker for THIS lookup (stale candidates from a
         # previous stream/action must not leak into this one).
         self._last_manual_block = None
@@ -4027,21 +4122,22 @@ class ActionExecutor:
                 logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels", name)
                 return cand
         # Check base-name mapping (base name -> number-prefixed channel)
-        if name_lower in self._base_name_to_channel:
-            cand = self._base_name_to_channel[name_lower]
-            if _in_scope(cand):
-                logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping", name)
-                return cand
-        result = self._channel_by_name.get(name_lower)
-        if _in_scope(result):
+        cand = _pick(self._base_name_to_channel.get(name_lower),
+                     self._base_name_candidates.get(name_lower))
+        if cand is not None:
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping", name)
+            return cand
+        result = _pick(self._channel_by_name.get(name_lower),
+                       self._by_name_candidates.get(name_lower))
+        if result is not None:
             logger.debug("[AUTO-CREATE-EXEC] '%s' found in existing channels (id=%s)", name, result.get('id'))
             return result
         # Check normalized-name mapping (normalization-engine-processed channel names)
-        if name_lower in self._normalized_name_to_channel:
-            cand = self._normalized_name_to_channel[name_lower]
-            if _in_scope(cand):
-                logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, cand.get('id'), cand.get('name'))
-                return cand
+        cand = _pick(self._normalized_name_to_channel.get(name_lower),
+                     self._normalized_name_candidates.get(name_lower))
+        if cand is not None:
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, cand.get('id'), cand.get('name'))
+            return cand
         # Normalized-name fallback: when the search name isn't an exact match
         # to any stored channel, normalize it through the engine and retry. This
         # catches the case where an existing channel's stored name already
@@ -4060,13 +4156,21 @@ class ActionExecutor:
                 logger.warning("[AUTO-CREATE-EXEC] Normalization of lookup name '%s' failed: %s", name, e)
                 norm_lower = ""
             if norm_lower and norm_lower != name_lower:
-                cand = (
+                legacy = (
                     self._channel_by_name.get(norm_lower)
                     or self._base_name_to_channel.get(norm_lower)
                     or self._normalized_name_to_channel.get(norm_lower)
                     or self._core_name_to_channel.get(norm_lower)
                 )
-                if _in_scope(cand):
+                cand = _pick(legacy, [
+                    c
+                    for cands in (self._by_name_candidates.get(norm_lower),
+                                  self._base_name_candidates.get(norm_lower),
+                                  self._normalized_name_candidates.get(norm_lower),
+                                  self._core_name_candidates.get(norm_lower))
+                    for c in (cands or ())
+                ])
+                if cand is not None:
                     logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-search fallback ('%s' -> '%s', id=%s)",
                                  name, name, norm_lower, cand.get('id'))
                     return cand
@@ -4080,8 +4184,9 @@ class ActionExecutor:
                 logger.warning("[AUTO-CREATE-EXEC] Core-name extraction for lookup '%s' failed: %s", name, e)
                 core_lower = ""
             if core_lower and core_lower != name_lower:
-                cand = self._core_name_to_channel.get(core_lower)
-                if _in_scope(cand):
+                cand = _pick(self._core_name_to_channel.get(core_lower),
+                             self._core_name_candidates.get(core_lower))
+                if cand is not None:
                     logger.debug("[AUTO-CREATE-EXEC] '%s' found via core-name fallback (core='%s', id=%s)",
                                  name, core_lower, cand.get('id'))
                     return cand
@@ -4091,8 +4196,9 @@ class ActionExecutor:
         if fold_key:
             folded = fold_match_key(name)
             if folded:
-                cand = self._fold_key_to_channel.get(folded)
-                if _in_scope(cand):
+                cand = _pick(self._fold_key_to_channel.get(folded),
+                             self._fold_key_candidates.get(folded))
+                if cand is not None:
                     logger.debug(
                         "[AUTO-CREATE-EXEC] '%s' found via fold-match-key fallback "
                         "(key='%s', id=%s, name='%s')",
