@@ -817,7 +817,8 @@ export function RuleBuilder({
                     &quot;eurosport 2&quot;, &quot;Eurosport 2&quot; and &quot;Eurosport2&quot; become one channel
                     instead of several. This only changes how names are COMPARED; the visible channel
                     name keeps its original spelling and is never rewritten. Caveat: genuinely distinct
-                    channels whose names differ only by spacing or case would also be merged — leave
+                    channels whose names differ only by spacing or case would also be merged — including
+                    digits (&quot;Canal 5 2&quot; matches &quot;Canal 52&quot;) — leave
                     this off if your provider uses spacing to distinguish real channels.
                   </p>
                 </details>

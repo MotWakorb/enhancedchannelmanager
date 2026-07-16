@@ -44,6 +44,23 @@ class TestFoldMatchKey:
         assert fold_match_key("Eurosport 2") != fold_match_key("Eurosport 2 HD")
         assert fold_match_key("ESPN") != fold_match_key("ESPN2")
 
+    def test_digit_run_collision_is_expected_contract(self):
+        """Pin the digit-run collision as EXPECTED behavior with the flag on.
+
+        Removing ALL whitespace means spacing inside digit runs is
+        indistinguishable: "Canal 5 2" and "Canal 52" fold to the same key —
+        the likeliest real-world over-merge in IPTV naming. This is the
+        documented contract of the opt-in fold (see docs/normalization.md
+        and the rule editor's caveat copy), NOT a bug: operators whose
+        providers use spacing to distinguish such channels must leave the
+        flag off. If this test ever fails, the fold's semantics changed and
+        every caveat/doc referencing digit collisions must be revisited.
+        """
+        from match_fold import fold_match_key
+
+        assert fold_match_key("Canal 5 2") == fold_match_key("Canal 52")
+        assert fold_match_key("Canal 5 2") == "canal52"
+
     def test_empty_and_whitespace_only(self):
         from match_fold import fold_match_key
 
