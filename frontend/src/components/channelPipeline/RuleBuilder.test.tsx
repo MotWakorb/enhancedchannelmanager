@@ -946,5 +946,107 @@ describe('RuleBuilder', () => {
         expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled();
       });
     });
+
+    describe('sort/numbering hint (GH #644)', () => {
+      it('shows the hint when Channel Sort is set and Channel Number is unset (auto)', () => {
+        const rule: Partial<ChannelPipelineRule> = {
+          name: 'PL Channels',
+          conditions: [{ type: 'always' }],
+          actions: [{ type: 'create_channel', name_template: '{stream_name}', group_id: 1 }],
+          sort_field: 'stream_name',
+        };
+        render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(screen.getByTestId('sort-numbering-hint')).toHaveTextContent(
+          /won't renumber channels/i,
+        );
+      });
+
+      it('shows the hint when Channel Number is the literal "auto" string', () => {
+        const rule: Partial<ChannelPipelineRule> = {
+          name: 'PL Channels',
+          conditions: [{ type: 'always' }],
+          actions: [
+            { type: 'create_channel', name_template: '{stream_name}', group_id: 1, channel_number: 'auto' },
+          ],
+          sort_field: 'stream_name',
+        };
+        render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(screen.getByTestId('sort-numbering-hint')).toBeInTheDocument();
+      });
+
+      it('does not show the hint when Channel Number has a fixed starting range', () => {
+        const rule: Partial<ChannelPipelineRule> = {
+          name: 'US Channels',
+          conditions: [{ type: 'always' }],
+          actions: [
+            { type: 'create_channel', name_template: '{stream_name}', group_id: 2, channel_number: '400-99999' },
+          ],
+          sort_field: 'stream_name',
+        };
+        render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(screen.queryByTestId('sort-numbering-hint')).not.toBeInTheDocument();
+      });
+
+      it('does not show the hint when no Channel Sort is selected', () => {
+        const rule: Partial<ChannelPipelineRule> = {
+          name: 'PL Channels',
+          conditions: [{ type: 'always' }],
+          actions: [{ type: 'create_channel', name_template: '{stream_name}', group_id: 1 }],
+          sort_field: '',
+        };
+        render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(screen.queryByTestId('sort-numbering-hint')).not.toBeInTheDocument();
+      });
+
+      it('does not show the hint when the rule has no create_channel action', () => {
+        const rule: Partial<ChannelPipelineRule> = {
+          name: 'Merge Only',
+          conditions: [{ type: 'always' }],
+          actions: [{ type: 'merge_streams' }],
+          sort_field: 'stream_name',
+        };
+        render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(screen.queryByTestId('sort-numbering-hint')).not.toBeInTheDocument();
+      });
+
+      // Multi-create_channel semantics: the backend's _get_rule_starting_number
+      // returns on the FIRST create_channel action — later ones are never
+      // consulted — so ONLY the first action decides whether the renumber
+      // pass runs, and the hint must agree in both directions.
+      it('does not show the hint when the FIRST create_channel has a fixed range, even if a later one is auto', () => {
+        const rule: Partial<ChannelPipelineRule> = {
+          name: 'Fixed First',
+          conditions: [{ type: 'always' }],
+          actions: [
+            { type: 'create_channel', name_template: '{stream_name}', group_id: 1, channel_number: '100-99999' },
+            { type: 'create_channel', name_template: '{stream_name} B', group_id: 2 },
+          ],
+          sort_field: 'stream_name',
+        };
+        render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(screen.queryByTestId('sort-numbering-hint')).not.toBeInTheDocument();
+      });
+
+      it('shows the hint when the FIRST create_channel is auto, even if a later one has a fixed range', () => {
+        const rule: Partial<ChannelPipelineRule> = {
+          name: 'Auto First',
+          conditions: [{ type: 'always' }],
+          actions: [
+            { type: 'create_channel', name_template: '{stream_name}', group_id: 1 },
+            { type: 'create_channel', name_template: '{stream_name} B', group_id: 2, channel_number: '400-99999' },
+          ],
+          sort_field: 'stream_name',
+        };
+        render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(screen.getByTestId('sort-numbering-hint')).toBeInTheDocument();
+      });
+    });
   });
 });

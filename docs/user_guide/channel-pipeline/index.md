@@ -22,6 +22,7 @@ End users do not read this section.
 | `rules-overview.md` | What a Channel Pipeline rule is, the lifecycle (stream appears → rule evaluates → channel created/updated/skipped), how the engine schedules runs (the task engine context). |
 | `conditions.md` | The condition catalogue — name match, group match, source match, etc. — with worked examples. |
 | `actions.md` | The action catalogue — create channel, update channel, assign to group, attach EPG, etc. — and what state changes each one produces. |
+| [`sort-vs-numbering.md`](sort-vs-numbering.md) | Why "Channel Sort" doesn't renumber channels by itself, the `channel_number: auto` gotcha that silently skips rule-level renumbering, and why `sort_group` is the action built for "keep my channels alphabetically numbered." |
 | `test-a-rule.md` | The dry-run / preview workflow. What's safe to test against production data and what isn't. |
 | `bulk-operations.md` | Running rules across an entire source, the cost of a large run, and the bulk-amplification cautions an operator should know about. |
 | [`runaway-safety-cap.md`](runaway-safety-cap.md) | The per-run channel cap (the GH #473 safety valve): why a run gets "capped", that the Channel Pipeline is idempotent so you can just re-run, and how to view/raise/disable the cap (and its sibling log-entries cap) from **Settings → Channel Pipeline** (admin-only). |
@@ -31,6 +32,7 @@ End users do not read this section.
 
 ## Going deeper (for now)
 
+- [`sort-vs-numbering.md`](sort-vs-numbering.md) — "I set Channel Sort but my channels aren't numbered alphabetically": the `sort_field` vs. `sort_group` distinction and the Auto-numbering gotcha.
 - [`docs/api.md`](../../api.md) — the `/channel-pipeline` router endpoints (the old `/auto-creation` path still works as a deprecated alias).
 - [`docs/normalization.md`](../../normalization.md) — Channel Pipeline rules typically reference a normalization group; understand normalization before authoring complex rules.
 - [`debugging-rules.md`](debugging-rules.md) — the rule analyzer: what it checks, the 7 finding codes, and how to run it.
