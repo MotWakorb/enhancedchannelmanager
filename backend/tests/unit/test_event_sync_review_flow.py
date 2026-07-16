@@ -425,3 +425,148 @@ class TestEnginePhaseQueuePersistence:
             assert db.query(EventSyncReview).count() == 0
         finally:
             db.close()
+
+
+# ---------------------------------------------------------------------------
+# Stale-dateless demote rail (bead jqwfq): executor + live engine run.
+# ---------------------------------------------------------------------------
+
+DATELESS_MASTER = "Boxing 01 : Fury vs. Usyk 6PM"
+DATELESS_STREAM = "PPV 07 : Tyson Fury vs. Oleksandr Usyk 6PM"
+
+
+class TestStaleDatelessDemoteFlow:
+    """A stale dateless would-attach must NOT attach on a live run: it is
+    counted in ``ambiguous_skipped`` (reason ``stale_dateless_stream_name``)
+    and enqueued for operator review — the field-reported
+    yesterday's-name-attaches-to-today's-master failure, closed end-to-end.
+    Uses the REAL current time (assume_current_date places both dateless
+    sides on "today", whatever day the test runs)."""
+
+    def test_executor_demotes_stale_dateless_stream(self):
+        executor, client = _executor([_master_channel(101, DATELESS_MASTER)])
+        streams = [SecondaryStream(
+            name=DATELESS_STREAM, group_id=20, stream_id=7010,
+            provider="ProvB", provider_id=1, name_seen_before_today=True,
+        )]
+        summary = _run(executor.execute_event_sync_rule(
+            1, "Event Rule", _config(assume_current_date=True), streams,
+            ExecutionContext(dry_run=False),
+        ))
+
+        assert summary["attached"] == 0
+        assert summary["ambiguous_skipped"] == 1
+        payloads = summary["review_candidates"]
+        assert len(payloads) == 1
+        assert payloads[0]["evidence"]["ambiguous_reason"] \
+            == "stale_dateless_stream_name"
+        client.update_channel.assert_not_awaited()
+
+    def test_executor_attaches_when_knob_is_off(self):
+        executor, client = _executor([_master_channel(101, DATELESS_MASTER)])
+        streams = [SecondaryStream(
+            name=DATELESS_STREAM, group_id=20, stream_id=7010,
+            provider="ProvB", provider_id=1, name_seen_before_today=True,
+        )]
+        summary = _run(executor.execute_event_sync_rule(
+            1, "Event Rule",
+            _config(assume_current_date=True, demote_stale_dateless=False),
+            streams, ExecutionContext(dry_run=False),
+        ))
+        assert summary["attached"] == 1
+        assert summary["ambiguous_skipped"] == 0
+
+    def test_live_engine_run_demotes_and_enqueues(self, db_session_local):
+        """End-to-end: the engine's own staleness lookup (seeded
+        M3USnapshot) flags the stream, the run skips the attach and the
+        pairing lands as a pending review row."""
+        from datetime import datetime, timedelta
+
+        from models import M3USnapshot
+
+        # Previous-day snapshot: the exact dateless name, captured well
+        # before today's local midnight, in the engine harness's group
+        # name ("EVENTS B") for account 1 — uncapped.
+        db = db_session_local()
+        try:
+            snap = M3USnapshot(
+                m3u_account_id=1,
+                snapshot_time=datetime.utcnow() - timedelta(hours=25),
+                total_streams=1,
+            )
+            snap.set_groups_data({"groups": [{
+                "name": "EVENTS B", "stream_count": 1, "is_stale": False,
+                "stream_names": [DATELESS_STREAM],
+            }]})
+            db.add(snap)
+            db.commit()
+        finally:
+            db.close()
+
+        channels = [_master_channel(101, DATELESS_MASTER)]
+        batch = [{"id": 7010, "name": DATELESS_STREAM, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+
+        results = _results()
+        _run(engine._run_event_sync_rules(
+            [_event_rule(config=_config(assume_current_date=True))],
+            executor, results, dry_run=False, triggered_by="manual",
+            channels_touched_ids=set(),
+        ))
+        summary = results["event_sync"][0]
+
+        assert summary["attached"] == 0
+        assert summary["ambiguous_skipped"] == 1
+        assert summary["review_enqueued"] == 1
+        client.update_channel.assert_not_awaited()
+
+        db = db_session_local()
+        try:
+            row = db.query(EventSyncReview).one()
+            assert row.status == "pending"
+            assert row.stream_name_hash == stream_name_hash(DATELESS_STREAM)
+            import json as _json
+            assert _json.loads(row.evidence)["ambiguous_reason"] \
+                == "stale_dateless_stream_name"
+        finally:
+            db.close()
+
+    def test_live_engine_run_attaches_when_name_is_fresh(
+        self, db_session_local
+    ):
+        """Control: previous-day snapshot exists but does NOT contain the
+        name (uncapped group) — freshness False, the attach proceeds."""
+        from datetime import datetime, timedelta
+
+        from models import M3USnapshot
+
+        db = db_session_local()
+        try:
+            snap = M3USnapshot(
+                m3u_account_id=1,
+                snapshot_time=datetime.utcnow() - timedelta(hours=25),
+                total_streams=1,
+            )
+            snap.set_groups_data({"groups": [{
+                "name": "EVENTS B", "stream_count": 1, "is_stale": False,
+                "stream_names": ["Some Other Slot 9PM"],
+            }]})
+            db.add(snap)
+            db.commit()
+        finally:
+            db.close()
+
+        channels = [_master_channel(101, DATELESS_MASTER)]
+        batch = [{"id": 7010, "name": DATELESS_STREAM, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+
+        results = _results()
+        _run(engine._run_event_sync_rules(
+            [_event_rule(config=_config(assume_current_date=True))],
+            executor, results, dry_run=False, triggered_by="manual",
+            channels_touched_ids=set(),
+        ))
+        summary = results["event_sync"][0]
+        assert summary["attached"] == 1
+        assert summary["ambiguous_skipped"] == 0
+        client.update_channel.assert_awaited()

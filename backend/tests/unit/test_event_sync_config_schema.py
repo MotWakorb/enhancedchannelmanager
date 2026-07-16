@@ -478,6 +478,34 @@ class TestAssumeCurrentDateFlag:
         assert any("assume_current_date" in e for e in errors)
 
 
+class TestDemoteStaleDatelessFlag:
+    """demote_stale_dateless knob (bead jqwfq — stale-dateless demote rail).
+
+    DEFAULT TRUE — the rail guards assume_current_date users by default;
+    turning it OFF is the recurring-daily-event escape hatch. Absent-key
+    default-fill means every stored pre-knob config validates unchanged
+    and gets the guard.
+    """
+
+    def test_default_filled_true(self):
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert config["demote_stale_dateless"] is True
+
+    @pytest.mark.parametrize("good", [True, False])
+    def test_bool_accepted(self, good):
+        config = _valid_config(demote_stale_dateless=good)
+        assert validate_event_sync_config(config) == []
+        assert config["demote_stale_dateless"] is good
+
+    @pytest.mark.parametrize("bad", ["true", 1, 0])
+    def test_non_bool_rejected(self, bad):
+        config = _valid_config()
+        config["demote_stale_dateless"] = bad
+        errors = validate_event_sync_config(config)
+        assert any("demote_stale_dateless" in e for e in errors)
+
+
 class TestParseMasterFromStreamFlag:
     """parse_master_from_stream flag (bead parse-from-stream)."""
 

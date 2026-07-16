@@ -41,6 +41,7 @@ from services.event_sync_matcher import (
 from services.event_sync_resolver import (
     AMBIGUOUS_REASON_BAND,
     AMBIGUOUS_REASON_CONTESTED,
+    AMBIGUOUS_REASON_STALE_DATELESS_NAME,
     AMBIGUOUS_REASON_VENUE_TOKEN_CONFLICT,
     DISPOSITION_AMBIGUOUS,
     DISPOSITION_PARSE_FAILED,
@@ -807,3 +808,142 @@ class TestDebugLogging:
              r.best.master_name if r.best else None)
             for r in debugged.resolved
         ]
+
+
+class TestStaleDatelessDemote:
+    """bead jqwfq: the stale-dateless demote rail.
+
+    Field report: a provider left YESTERDAY's dateless slot name in the M3U;
+    assume_current_date synthesized TODAY's date; identical title + tiny dt
+    scored 1.0 and attached to the wrong master. The rail demotes such a
+    would-attach to the review queue (reason
+    ``stale_dateless_stream_name``) when the name is POSITIVELY stale
+    (``name_seen_before_today is True`` — previous-day snapshot membership)
+    AND the flag was load-bearing (counterfactual re-parse without it has no
+    start). Everything else — unknown freshness, dated parses, knob off,
+    prior operator decisions — must be untouched.
+    """
+
+    DATELESS_MASTERS = ["Boxing 01 : Fury vs. Usyk 6PM"]
+
+    @staticmethod
+    def _stream(seen: bool | None) -> SecondaryStream:
+        return SecondaryStream(
+            name="PPV 07 : Tyson Fury vs. Oleksandr Usyk 6PM",
+            group_id=20, stream_id=701, provider="PpvProvider",
+            provider_id=7, name_seen_before_today=seen,
+        )
+
+    def _resolve(self, seen: bool | None, decisions=None, **config_overrides):
+        config = _config(assume_current_date=True, **config_overrides)
+        resolution = resolve_event_sync(
+            config, self.DATELESS_MASTERS, [self._stream(seen)],
+            now=NOW, decisions=decisions,
+        )
+        (resolved,) = resolution.resolved
+        return resolved
+
+    def test_stale_dateless_would_attach_is_demoted(self):
+        resolved = self._resolve(seen=True)
+        assert resolved.disposition == DISPOSITION_AMBIGUOUS
+        assert resolved.ambiguous_reason == AMBIGUOUS_REASON_STALE_DATELESS_NAME
+        assert resolved.best is None
+        assert resolved.attach_source is None
+        # Review-queue eligible: the demoted pairing must be enqueueable.
+        assert resolved.review_candidates
+        assert resolved.review_candidates[0].master_name \
+            == self.DATELESS_MASTERS[0]
+
+    def test_unknown_freshness_never_demotes(self):
+        # FAIL OPEN: absence of a snapshot verdict is inconclusive.
+        resolved = self._resolve(seen=None)
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+
+    def test_fresh_name_never_demotes(self):
+        resolved = self._resolve(seen=False)
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+
+    def test_dated_stream_name_is_never_touched(self):
+        # The counterfactual gate: a DATED name parses without the flag, so
+        # assume_current_date was not load-bearing — stale or not, no demote.
+        stream = SecondaryStream(
+            name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            group_id=20, stream_id=702, provider_id=7,
+            name_seen_before_today=True,
+        )
+        resolution = resolve_event_sync(
+            _config(assume_current_date=True), MASTERS, [stream], now=NOW,
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.best.master_name == MASTERS[0]
+
+    def test_knob_off_disables_the_rail(self):
+        resolved = self._resolve(seen=True, demote_stale_dateless=False)
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.ambiguous_reason is None
+
+    def test_prior_accept_outranks_the_heuristic(self):
+        # The operator already answered THIS pairing: the demote lands the
+        # row in the ambiguous branch, where the standard accept-upgrade
+        # path lifts it right back to would_attach via the review queue.
+        from services.event_sync_matcher import parse_event_name
+        from services.event_sync_review import ReviewDecisions, pairing_key
+
+        master_parsed = parse_event_name(
+            self.DATELESS_MASTERS[0], None, now=NOW,
+            assume_current_date=True,
+        )
+        key = pairing_key(7, self._stream(True).name, master_parsed)
+        assert key is not None
+        decisions = ReviewDecisions(accepted=frozenset({key}))
+
+        resolved = self._resolve(seen=True, decisions=decisions)
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.attach_source == "review_queue"
+        assert resolved.best.master_name == self.DATELESS_MASTERS[0]
+        assert resolved.ambiguous_reason is None
+
+    def test_prior_reject_still_suppresses(self):
+        from services.event_sync_matcher import parse_event_name
+        from services.event_sync_review import ReviewDecisions, pairing_key
+
+        master_parsed = parse_event_name(
+            self.DATELESS_MASTERS[0], None, now=NOW,
+            assume_current_date=True,
+        )
+        key = pairing_key(7, self._stream(True).name, master_parsed)
+        decisions = ReviewDecisions(rejected=frozenset({key}))
+
+        resolved = self._resolve(seen=True, decisions=decisions)
+        # The rejected pairing is removed BEFORE classification — nothing
+        # left to attach OR demote-and-re-enqueue.
+        assert resolved.disposition == DISPOSITION_UNMATCHED
+        assert resolved.rejected_suppressed == 1
+        assert resolved.review_candidates == ()
+
+    def test_rail_is_inert_without_assume_current_date(self):
+        # Dated pair, stale flag set, knob default-on: with
+        # assume_current_date OFF the rail never arms (and the
+        # counterfactual would exclude dated names anyway).
+        stream = SecondaryStream(
+            name="WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+            group_id=20, stream_id=703, provider_id=7,
+            name_seen_before_today=True,
+        )
+        resolution = resolve_event_sync(_config(), MASTERS, [stream], now=NOW)
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+
+    def test_default_flag_is_none_and_does_not_demote(self):
+        # SecondaryStream default (no staleness computed) must behave
+        # exactly like unknown freshness.
+        stream = SecondaryStream(
+            name="PPV 07 : Tyson Fury vs. Oleksandr Usyk 6PM",
+            group_id=20, stream_id=704,
+        )
+        resolution = resolve_event_sync(
+            _config(assume_current_date=True), self.DATELESS_MASTERS,
+            [stream], now=NOW,
+        )
+        assert resolution.resolved[0].disposition == DISPOSITION_WOULD_ATTACH
