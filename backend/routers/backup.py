@@ -2520,6 +2520,7 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 # enhancedchannelmanager-orzck (W1): default False protects
                 # manual channels. Backups predating this column inherit False.
                 allow_manual_channel_merge=item.get("allow_manual_channel_merge", False),
+                fold_match_key=item.get("fold_match_key", False),
                 # ti939.1.3: keep the event_sync KIND across backup/restore.
                 # Backups predating this column omit it and inherit None
                 # (standard kind).

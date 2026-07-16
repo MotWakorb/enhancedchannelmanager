@@ -94,6 +94,11 @@ class CreateChannelPipelineRuleRequest(BaseModel):
     # Manual-channel isolation (enhancedchannelmanager-orzck / W1). Default False
     # protects hand-built manual channels from being adopted as merge targets.
     allow_manual_channel_merge: bool = False
+    # Fold match key (GH #645 / bead 0vao3). Opt-in: when True, the
+    # create_channel if_exists merge lookup also compares by casefolded,
+    # whitespace-stripped keys (match_fold.fold_match_key). Default False
+    # keeps existing installs' matching behavior unchanged.
+    fold_match_key: bool = False
     # Event Sync (ti939.1.3). Non-null makes the rule the event_sync KIND
     # (preview-only this phase — excluded from pipeline execution). Validated
     # by channel_pipeline_schema.validate_event_sync_config().
@@ -131,6 +136,8 @@ class UpdateChannelPipelineRuleRequest(BaseModel):
     match_scope_group_id: Optional[int] = None
     # enhancedchannelmanager-orzck (W1): None = leave unchanged.
     allow_manual_channel_merge: Optional[bool] = None
+    # GH #645 / bead 0vao3: None = leave unchanged.
+    fold_match_key: Optional[bool] = None
     # Event Sync (ti939.1.3). None is MEANINGFUL (clears the config, reverting
     # the rule to the standard kind), so the update handler distinguishes
     # "field present" from "field absent" via ``model_fields_set`` — the same
@@ -291,6 +298,8 @@ def _apply_rule_scalar_updates(
         _set("match_scope_group_id", request.match_scope_group_id)
     if getattr(request, "allow_manual_channel_merge", None) is not None:
         _set("allow_manual_channel_merge", request.allow_manual_channel_merge)
+    if getattr(request, "fold_match_key", None) is not None:
+        _set("fold_match_key", request.fold_match_key)
 
     return diff
 
@@ -801,6 +810,7 @@ async def create_auto_creation_rule(request: CreateChannelPipelineRuleRequest, _
                 match_scope_target_group=request.match_scope_target_group,
                 match_scope_group_id=request.match_scope_group_id,
                 allow_manual_channel_merge=request.allow_manual_channel_merge,
+                fold_match_key=request.fold_match_key,
                 event_sync_config=(
                     json.dumps(request.event_sync_config)
                     if request.event_sync_config else None
@@ -1209,6 +1219,7 @@ async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnable
                 match_scope_target_group=rule.match_scope_target_group,
                 match_scope_group_id=rule.match_scope_group_id,
                 allow_manual_channel_merge=rule.allow_manual_channel_merge,
+                fold_match_key=rule.fold_match_key,
                 # ti939.1.3: keep the KIND on duplication — dropping the
                 # config would silently turn the copy into a standard rule
                 # that executes in the pipeline.
@@ -1940,6 +1951,7 @@ async def export_auto_creation_rules_yaml():
                     "match_scope_target_group": rule.match_scope_target_group or False,
                     "match_scope_group_id": rule.match_scope_group_id,
                     "allow_manual_channel_merge": rule.allow_manual_channel_merge or False,
+                    "fold_match_key": rule.fold_match_key or False,
                     # ti939.1.3 (PR #612 review): export the event_sync KIND —
                     # omitting it would make an export→import round-trip
                     # resurrect the rule as a standard rule whose dormant
@@ -2135,6 +2147,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         existing.match_scope_target_group = rule_data.get("match_scope_target_group", True)
                         existing.match_scope_group_id = rule_data.get("match_scope_group_id")
                         existing.allow_manual_channel_merge = rule_data.get("allow_manual_channel_merge", False)
+                        existing.fold_match_key = rule_data.get("fold_match_key", False)
                         # ti939.1.3: preserve (or clear) the event_sync KIND
                         # on overwrite-import. Import-update overwrites every
                         # field unconditionally, so an exported standard rule
@@ -2176,6 +2189,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         match_scope_target_group=rule_data.get("match_scope_target_group", True),
                         match_scope_group_id=rule_data.get("match_scope_group_id"),
                         allow_manual_channel_merge=rule_data.get("allow_manual_channel_merge", False),
+                        fold_match_key=rule_data.get("fold_match_key", False),
                         # ti939.1.3: keep the event_sync KIND on import-create
                         # (validated above; None = standard kind).
                         event_sync_config=(

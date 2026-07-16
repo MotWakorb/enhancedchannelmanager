@@ -1988,6 +1988,18 @@ class ChannelPipelineRule(Base):
     # channels; each adoption is journaled for audit.
     allow_manual_channel_merge = Column(Boolean, default=False, nullable=False)
 
+    # Fold match key (GH #645 / bead 0vao3). When True (opt-in, default
+    # False so existing installs are unchanged), the create_channel
+    # ``if_exists`` merge lookup additionally compares names by a canonical
+    # fold key — casefold + strip ALL whitespace (match_fold.fold_match_key)
+    # — so spelling variants like "eurosport 2" / "Eurosport2" merge into one
+    # channel instead of creating duplicates. Comparison key ONLY: visible
+    # channel names are never altered (this is deliberately NOT a
+    # normalization rule — see docs/normalization.md parity contract).
+    # Caveat: folding can over-merge genuinely distinct channels whose names
+    # differ only in spacing/case, which is why it is per-rule opt-in.
+    fold_match_key = Column(Boolean, default=False, nullable=False)
+
     # Event Sync (enhancedchannelmanager-ti939.1.3, epic ti939). JSON config
     # for the event_sync rule KIND: master_group_id, secondary_group_ids[],
     # optional parse patterns (shared or per-group title/time/date regexes),
@@ -2130,6 +2142,7 @@ class ChannelPipelineRule(Base):
             "match_scope_target_group": self.match_scope_target_group or False,
             "match_scope_group_id": self.match_scope_group_id,
             "allow_manual_channel_merge": self.allow_manual_channel_merge or False,
+            "fold_match_key": self.fold_match_key or False,
             "event_sync_config": self.get_event_sync_config(),
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),

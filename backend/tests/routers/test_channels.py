@@ -2585,3 +2585,107 @@ class TestFindDuplicateChannelsScope:
             "scanning 3 channels (scoped to 3 selected)" in record.message
             for record in caplog.records
         )
+
+
+class TestFindDuplicatesFoldMatchKey:
+    """GH #645 / bead enhancedchannelmanager-0vao3: opt-in whitespace/case
+    folding for POST /api/channels/find-duplicates.
+
+    ``fold_match_key: true`` groups channels by the shared canonicalized key
+    (casefold + strip ALL whitespace via ``match_fold.fold_match_key``) so
+    the Find Duplicates surface matches what an opted-in auto-creation rule
+    would merge. Default (absent/false) preserves the current grouping.
+    """
+
+    @staticmethod
+    def _single_page(results):
+        return {"results": results, "count": len(results), "next": None}
+
+    @staticmethod
+    def _channel(cid, name):
+        return {
+            "id": cid,
+            "name": name,
+            "channel_number": cid,
+            "streams": [],
+            "channel_group_id": None,
+            "channel_group_name": "",
+        }
+
+    def _seeded_channels(self):
+        # The exact four spellings from the GH #645 report.
+        return [
+            self._channel(1, "eurosport 2"),
+            self._channel(2, "Eurosport 2"),
+            self._channel(3, "Eurosport2"),
+            self._channel(4, "eurosport2"),
+            # Must never group with the above, fold or no fold.
+            self._channel(5, "Eurosport 3"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_default_grouping_unchanged_without_flag(self, async_client):
+        """No fold flag -> case-insensitive exact grouping only: two pairs."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post("/api/channels/find-duplicates")
+
+        assert response.status_code == 200
+        data = response.json()
+        found_ids = {tuple(sorted(c["id"] for c in g["channels"])) for g in data["groups"]}
+        assert found_ids == {(1, 2), (3, 4)}
+
+    @pytest.mark.asyncio
+    async def test_fold_groups_whitespace_variants_together(self, async_client):
+        """fold_match_key: true -> all four spellings form ONE group; the
+        'Eurosport 3' near-miss stays out."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"fold_match_key": True}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 1
+        assert sorted(c["id"] for c in data["groups"][0]["channels"]) == [1, 2, 3, 4]
+        # Visible names are untouched — the fold is a comparison key only.
+        names = {c["name"] for c in data["groups"][0]["channels"]}
+        assert names == {"eurosport 2", "Eurosport 2", "Eurosport2", "eurosport2"}
+
+    @pytest.mark.asyncio
+    async def test_fold_false_explicit_matches_default(self, async_client):
+        """An explicit fold_match_key: false behaves exactly like the default."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"fold_match_key": False}
+            )
+
+        assert response.status_code == 200
+        found_ids = {tuple(sorted(c["id"] for c in g["channels"]))
+                     for g in response.json()["groups"]}
+        assert found_ids == {(1, 2), (3, 4)}
+
+    @pytest.mark.asyncio
+    async def test_fold_composes_with_channel_ids_scope(self, async_client):
+        """Fold + scope: only in-scope channels are grouped."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates",
+                json={"fold_match_key": True, "channel_ids": [1, 3, 5]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 1
+        assert sorted(c["id"] for c in data["groups"][0]["channels"]) == [1, 3]

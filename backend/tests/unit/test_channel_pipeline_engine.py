@@ -840,6 +840,7 @@ class TestPass3RenumberGating:
                                 match_scope_target_group=False,
                                 rule_scope_group_id=None,
                                 allow_manual_channel_merge=False,
+                                fold_match_key=False,
                                 rule_id=None):
             exec_ctx.current_channel_id = channel_id
             if created:
@@ -947,6 +948,7 @@ class TestPass3RenumberGating:
                                 match_scope_target_group=False,
                                 rule_scope_group_id=None,
                                 allow_manual_channel_merge=False,
+                                fold_match_key=False,
                                 rule_id=None):
             exec_ctx.current_channel_id = 501
             return self.ActionResult(
@@ -2373,3 +2375,80 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
         entries = mock_log.call_args.kwargs["entries"]
         assert len(entries) == 3
         assert {entry["batch_id"] for entry in entries} == {"1"}
+
+
+class TestEngineFoldMatchKeyPassThrough:
+    """GH #645 / bead enhancedchannelmanager-0vao3: the engine must thread the
+    rule's ``fold_match_key`` flag into every executor.execute call, the same
+    way the sibling per-rule flags are threaded."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.engine = ChannelPipelineEngine(self.client)
+        self.engine._existing_channels = []
+        self.engine._existing_groups = []
+
+    @patch("channel_pipeline_engine.get_session")
+    def test_rule_flag_reaches_executor(self, mock_get_session):
+        from channel_pipeline_executor import ActionResult
+
+        mock_get_session.return_value = MagicMock()
+
+        rule = MagicMock()
+        rule.id = 1
+        rule.name = "Folded Rule"
+        rule.priority = 0
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.enabled = True
+        rule.stop_on_first_match = True
+        rule.skip_struck_streams = False
+        rule.sort_field = None
+        rule.sort_order = "asc"
+        rule.sort_regex = None
+        rule.orphan_action = "none"
+        rule.managed_channel_ids = None
+        rule.get_managed_channel_ids.return_value = []
+        rule.get_conditions.return_value = [{"type": "always"}]
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "name_template": "{stream_name}",
+             "if_exists": "merge"}
+        ]
+        rule.get_normalization_group_ids.return_value = []
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.allow_manual_channel_merge = False
+        rule.fold_match_key = True
+
+        streams = [StreamContext(stream_id=101, stream_name="Eurosport 2",
+                                 m3u_account_id=1, m3u_account_name="P")]
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(return_value=ActionResult(
+                success=True, action_type="create_channel", description="ok",
+                entity_type="channel", entity_id=201, entity_name="Eurosport 2",
+                created=True,
+            ))
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor.reorder_streams_on_channels = AsyncMock(return_value=0)
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(streams, [rule], mock_execution, dry_run=False)
+            )
+
+        assert mock_executor.execute.await_count == 1
+        assert mock_executor.execute.await_args.kwargs.get("fold_match_key") is True
+

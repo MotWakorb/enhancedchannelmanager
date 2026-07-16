@@ -1775,6 +1775,13 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_rules "
                     "ADD COLUMN event_sync_config TEXT"
                 ))
+                # 0034 (GH #645 / bead 0vao3): opt-in fold-match-key flag on
+                # the pre-0005 auto_creation_rules table — same create_all()
+                # limitation, add the NOT NULL boolean by hand.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN fold_match_key BOOLEAN NOT NULL DEFAULT 0"
+                ))
                 # 0033 (enhancedchannelmanager-7wuhd): persisted event_sync run
                 # summary + pure-event_sync kind flag on the pre-0005
                 # auto_creation_executions table — create_all() can't add

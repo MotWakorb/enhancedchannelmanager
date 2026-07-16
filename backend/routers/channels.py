@@ -24,6 +24,7 @@ from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
 from dispatcharr_client import get_client, upstream_http_exception
+from match_fold import fold_match_key
 from normalization_engine import get_normalization_engine
 import journal
 
@@ -140,8 +141,18 @@ class FindDuplicatesRequest(BaseModel):
     An explicit empty list is a valid scope of "no channels": it returns an
     empty result (0 groups) rather than silently falling back to a global
     scan — a caller that asked to scope to nothing should not get everything.
+
+    ``fold_match_key`` (GH #645 / bead 0vao3): when True, channels are
+    grouped by the shared canonical fold key — casefold + strip ALL
+    whitespace (``match_fold.fold_match_key``) applied to the normalized
+    name — so "Eurosport 2" and "Eurosport2" land in one duplicate group,
+    matching what an auto-creation rule with its own ``fold_match_key``
+    flag would merge. Default False preserves the existing grouping
+    (normalized name, case-insensitive). Comparison key only — displayed
+    names are never altered.
     """
     channel_ids: Optional[list[int]] = None
+    fold_match_key: bool = False
 
 
 class BulkMergeItem(BaseModel):
@@ -2733,8 +2744,12 @@ async def find_duplicate_channels(request: Optional[FindDuplicatesRequest] = Non
     scoped_ids: Optional[set[int]] = None
     if request is not None and request.channel_ids is not None:
         scoped_ids = set(request.channel_ids)
+    # GH #645 / bead 0vao3: opt-in whitespace/case fold on the grouping key —
+    # same canonicalization the auto-creation fold_match_key rule flag uses.
+    fold = bool(request.fold_match_key) if request is not None else False
 
-    logger.debug("[CHANNELS] POST /channels/find-duplicates scoped=%s", scoped_ids is not None)
+    logger.debug("[CHANNELS] POST /channels/find-duplicates scoped=%s fold=%s",
+                 scoped_ids is not None, fold)
     from normalization_engine import get_normalization_engine
 
     client = get_client()
@@ -2793,7 +2808,7 @@ async def find_duplicate_channels(request: Optional[FindDuplicatesRequest] = Non
             if not normalized:
                 continue
 
-            key = normalized.lower()
+            key = fold_match_key(normalized) if fold else normalized.lower()
             if key not in groups:
                 groups[key] = []
             groups[key].append({

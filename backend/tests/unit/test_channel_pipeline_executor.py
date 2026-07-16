@@ -4117,3 +4117,177 @@ class TestNameTransformFailureVisibility:
                              rule_target_group_id=1)
         )
         assert executor._journal_buffer == []
+
+
+class TestCreateChannelFoldMatchKey:
+    """GH #645 / bead enhancedchannelmanager-0vao3: opt-in ``fold_match_key``.
+
+    When a rule opts in, the create_channel ``if_exists`` merge lookup
+    compares names by a canonicalized key (casefold + strip ALL whitespace,
+    via the shared ``match_fold.fold_match_key`` helper) so spellings like
+    "eurosport 2" / "Eurosport 2" / "Eurosport2" / "eurosport2" land in ONE
+    channel. Comparison key ONLY — the stored/visible channel name is never
+    altered. Default (flag off) preserves the current behavior exactly.
+    """
+
+    # The exact four spellings from the GH #645 report.
+    REPORTED_NAMES = ["eurosport 2", "Eurosport 2", "Eurosport2", "eurosport2"]
+
+    def _make_client(self):
+        client = MagicMock()
+        counter = {"next": 1000}
+
+        async def _create_channel(data):
+            counter["next"] += 1
+            return dict(data, id=counter["next"])
+
+        client.create_channel = AsyncMock(side_effect=_create_channel)
+        client.update_channel = AsyncMock(return_value={})
+        client.get_channel = AsyncMock(return_value={"streams": []})
+        return client
+
+    def _run(self, executor, names, fold_match_key, dry_run=False):
+        """Feed streams named ``names`` through create_channel if_exists=merge."""
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }
+        created, merged = [], []
+        for i, name in enumerate(names):
+            stream_ctx = StreamContext(stream_id=100 + i, stream_name=name,
+                                       m3u_account_id=1)
+            result = asyncio.get_event_loop().run_until_complete(
+                executor.execute(action, stream_ctx, ExecutionContext(dry_run=dry_run),
+                                 fold_match_key=fold_match_key)
+            )
+            assert result.success is True
+            (created if result.created else merged).append(name)
+        return created, merged
+
+    def test_golden_reported_names_fold_on_one_channel(self):
+        """Flag ON: the four reported spellings produce exactly ONE channel."""
+        client = self._make_client()
+        executor = ActionExecutor(client, existing_channels=[])
+
+        created, merged = self._run(executor, self.REPORTED_NAMES, fold_match_key=True)
+
+        assert created == ["eurosport 2"]
+        assert merged == ["Eurosport 2", "Eurosport2", "eurosport2"]
+        # The stored name is the FIRST spelling seen — never rewritten.
+        client.create_channel.assert_called_once()
+        assert client.create_channel.call_args[0][0]["name"] == "eurosport 2"
+
+    def test_golden_reported_names_flag_off_preserves_current_behavior(self):
+        """Flag OFF (default): case-only pairs merge, whitespace pairs do NOT
+        (two channels) — the pre-flag behavior, pinned."""
+        client = self._make_client()
+        executor = ActionExecutor(client, existing_channels=[])
+
+        created, merged = self._run(executor, self.REPORTED_NAMES, fold_match_key=False)
+
+        assert created == ["eurosport 2", "Eurosport2"]
+        assert merged == ["Eurosport 2", "eurosport2"]
+
+    def test_fold_matches_existing_channel_from_previous_run(self):
+        """Second-run topology: existing channel 'eurosport 2', incoming
+        'Eurosport2' with the flag ON merges instead of creating."""
+        client = self._make_client()
+        existing = [{"id": 7, "name": "eurosport 2", "streams": [],
+                     "auto_created": True}]
+        executor = ActionExecutor(client, existing_channels=existing)
+
+        created, merged = self._run(executor, ["Eurosport2"], fold_match_key=True)
+
+        assert created == []
+        assert merged == ["Eurosport2"]
+        client.create_channel.assert_not_called()
+
+    def test_fold_matches_number_prefixed_existing_channel(self):
+        """The fold also folds the number-prefix-stripped base name of an
+        existing channel ('4000 | Euro Sport' matches 'EuroSport')."""
+        client = self._make_client()
+        existing = [{"id": 8, "name": "4000 | Euro Sport", "streams": [],
+                     "auto_created": True}]
+        executor = ActionExecutor(client, existing_channels=existing)
+
+        created, merged = self._run(executor, ["EuroSport"], fold_match_key=True)
+
+        assert created == []
+        assert merged == ["EuroSport"]
+        client.create_channel.assert_not_called()
+
+    def test_fold_does_not_over_merge_distinct_names(self):
+        """Flag ON must not merge names that differ beyond whitespace/case."""
+        client = self._make_client()
+        executor = ActionExecutor(client, existing_channels=[])
+
+        names = ["Eurosport 2", "Eurosport 3", "Eurosport 2 HD", "ESPN", "ESPN2"]
+        created, merged = self._run(executor, names, fold_match_key=True)
+
+        assert created == names
+        assert merged == []
+
+    def test_fold_dry_run_dedupes_like_execute(self):
+        """Dry-run preview with the flag ON simulates the same single channel."""
+        client = self._make_client()
+        executor = ActionExecutor(client, existing_channels=[])
+
+        created, merged = self._run(executor, self.REPORTED_NAMES,
+                                    fold_match_key=True, dry_run=True)
+
+        assert created == ["eurosport 2"]
+        assert merged == ["Eurosport 2", "Eurosport2", "eurosport2"]
+        client.create_channel.assert_not_called()
+
+    def test_fold_respects_group_scope(self):
+        """A folded match in a DIFFERENT group is still rejected when
+        match_scope_target_group is on (scope wins over fold)."""
+        client = self._make_client()
+        existing = [{"id": 9, "name": "Eurosport2", "streams": [],
+                     "auto_created": True, "channel_group_id": 7}]
+        executor = ActionExecutor(client, existing_channels=existing)
+
+        action = {"type": "create_channel", "name_template": "{stream_name}",
+                  "if_exists": "merge", "group_id": 9}
+        stream_ctx = StreamContext(stream_id=100, stream_name="Eurosport 2",
+                                   m3u_account_id=1)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             match_scope_target_group=True,
+                             fold_match_key=True)
+        )
+
+        assert result.success is True
+        assert result.created is True
+        client.create_channel.assert_called_once()
+
+    def test_fold_respects_manual_channel_gate(self):
+        """A folded match on a MANUAL channel is still blocked when
+        allow_manual_channel_merge is off (manual gate wins over fold)."""
+        client = self._make_client()
+        existing = [{"id": 10, "name": "Eurosport2", "streams": [],
+                     "auto_created": False}]
+        executor = ActionExecutor(client, existing_channels=existing)
+
+        created, merged = self._run(executor, ["Eurosport 2"], fold_match_key=True)
+
+        assert created == ["Eurosport 2"]
+        assert merged == []
+        # The manual channel was never touched.
+        for call in client.update_channel.call_args_list:
+            assert call[0][0] != 10
+
+    def test_exact_match_wins_over_folded_match(self):
+        """When both an exact and a folded candidate exist, the exact one is
+        chosen — the fold is a fallback, not a replacement."""
+        client = self._make_client()
+        existing = [
+            {"id": 11, "name": "Eurosport 2", "streams": [], "auto_created": True},
+            {"id": 12, "name": "Eurosport2", "streams": [], "auto_created": True},
+        ]
+        executor = ActionExecutor(client, existing_channels=existing)
+
+        found = executor._find_channel_by_name("eurosport 2", fold_key=True)
+        assert found is not None
+        assert found["id"] == 11
