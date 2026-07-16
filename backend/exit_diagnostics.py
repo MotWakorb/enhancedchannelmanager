@@ -30,6 +30,7 @@ Wiring: ``install()`` is called at import time from ``main.py``;
 ``install_loop_handler()`` is called from the FastAPI startup event once
 the event loop is running.
 """
+import asyncio
 import atexit
 import logging
 import sys
@@ -216,3 +217,72 @@ def uninstall() -> None:
 def is_installed() -> bool:
     """Whether the process-level hooks are currently installed."""
     return _installed
+
+
+class BaseExceptionContainmentMiddleware:
+    """Contain ``SystemExit``-class BaseExceptions raised while handling a
+    request so they cannot silently kill the whole server process (GH #546).
+
+    Mechanism being defended against (verified empirically on this exact
+    stack — uvicorn 0.46 + uvloop + Starlette ``BaseHTTPMiddleware``): every
+    ``@app.middleware("http")`` layer runs the layers inside it in a separate
+    asyncio task. ``asyncio.Task.__step`` special-cases ``SystemExit`` and
+    ``KeyboardInterrupt`` — instead of being stored on the task like ordinary
+    exceptions, they are re-raised *out of the event loop itself*
+    (``run_forever`` → ``asyncio.run``), aborting uvicorn's ``serve()``
+    coroutine. uvicorn performs no shutdown sequence, and a bare
+    ``SystemExit`` exits the interpreter with status 0 and no traceback —
+    exactly the silent ExitCode-0 death reported in GH #546.
+
+    This middleware is pure ASGI (no task boundary of its own) and MUST be
+    registered as the INNERMOST user middleware (the first
+    ``app.add_middleware(...)`` call in main.py) so that it runs inside the
+    same task as route handlers and their dependencies. Any ``SystemExit`` /
+    ``KeyboardInterrupt`` (or exotic third-party ``BaseException``) raised by
+    a handler is caught here — inside the task, before ``Task.__step`` can
+    re-raise it into the loop — logged with its full traceback, and converted
+    to an ordinary ``RuntimeError``. The normal Starlette error path then
+    turns it into a logged 500 response; the process survives.
+
+    Deliberately NOT contained:
+    - ``Exception`` subclasses — the existing 500 handling owns those.
+    - ``asyncio.CancelledError`` — client-disconnect and request-timeout
+      cancellation semantics must propagate untouched.
+    - ``GeneratorExit`` — only ever raised by the interpreter during
+      coroutine finalization; swallowing it corrupts generator cleanup.
+
+    Auth semantics are untouched: this layer is inside ``auth_middleware``
+    and only transforms the exception type of an already-authorized request.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        try:
+            await self.app(scope, receive, send)
+        except Exception:
+            # Ordinary errors: existing ServerErrorMiddleware/logging path.
+            raise
+        except (asyncio.CancelledError, GeneratorExit):
+            # Cancellation / finalization semantics must pass through.
+            raise
+        except BaseException as exc:
+            logger.critical(
+                "%s BaseException %s escaped the handler for %s %s — contained "
+                "before it could kill the event loop (GH #546). Converting to "
+                "RuntimeError so it surfaces as an ordinary 500.\n%s",
+                _PREFIX,
+                type(exc).__name__,
+                scope.get("method", "?"),
+                scope.get("path", "?"),
+                _format_exception(type(exc), exc, exc.__traceback__),
+            )
+            raise RuntimeError(
+                f"{type(exc).__name__} raised while handling "
+                f"{scope.get('method', '?')} {scope.get('path', '?')} "
+                "(contained by BaseExceptionContainmentMiddleware, GH #546)"
+            ) from exc
