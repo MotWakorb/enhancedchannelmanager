@@ -914,6 +914,27 @@ class TestWatchHistory:
         assert data["history"] == []
         assert "summary" in data
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce a negative SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get(
+            "/api/stats/watch-history", params={"page": page}
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 101])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size out of [1, 100] is rejected by validation (422) instead
+        of being silently clamped."""
+        response = await async_client.get(
+            "/api/stats/watch-history", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
+
 
 class TestPopularityRankings:
     """Tests for GET /api/stats/popularity/rankings."""

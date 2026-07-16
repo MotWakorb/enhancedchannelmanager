@@ -110,15 +110,34 @@ class TestGetJournalEntries:
         assert "ESPN" in data["results"][0]["entity_name"]
 
     @pytest.mark.asyncio
-    async def test_page_size_clamped(self, async_client, test_session):
-        """page_size is clamped between 1 and 200."""
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce a negative SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get("/api/journal", params={"page": page})
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 251])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size outside [1, 250] is rejected by validation (422) instead
+        of being silently clamped."""
+        response = await async_client.get(
+            "/api/journal", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_valid_max_page_size_still_works(self, async_client, test_session):
+        """page_size=250 (the Journal tab UI's largest option) passes through
+        unchanged rather than being clamped to 200."""
         _create_journal_entry(test_session)
 
-        # Too large page_size gets clamped to 200
-        response = await async_client.get("/api/journal", params={"page_size": 999})
+        response = await async_client.get("/api/journal", params={"page_size": 250})
         assert response.status_code == 200
         data = response.json()
-        assert data["page_size"] == 200
+        assert data["page_size"] == 250
 
     @pytest.mark.asyncio
     async def test_filter_by_batch_id_returns_only_matching_rows(self, async_client, test_session):

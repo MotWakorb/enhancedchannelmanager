@@ -9,7 +9,7 @@ import time
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from cache import get_cache
@@ -124,8 +124,13 @@ def _apply_assignment(streams: list[dict], index: dict[int, list[int]]) -> None:
 
 @router.get("/api/streams")
 async def get_streams(
-    page: int = 1,
-    page_size: int = 100,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 / page_size<1 were passed straight to the upstream
+    # Dispatcharr client, which raised and surfaced as a 500. Upper bound is
+    # generous — App.tsx legitimately requests page_size=500 (searchStreams,
+    # loadStreamGroup).
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(100, ge=1, le=1000, description="Results per page"),
     search: Optional[str] = None,
     channel_group_name: Optional[str] = None,
     m3u_account: Optional[int] = None,

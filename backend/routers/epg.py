@@ -13,7 +13,7 @@ import zlib
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -527,8 +527,14 @@ async def trigger_epg_import():
 
 @router.get("/data")
 async def get_epg_data(
-    page: int = 1,
-    page_size: int = 100,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 / page_size<1 were passed straight to the upstream
+    # Dispatcharr client, which raised and surfaced as a 500. No caller
+    # currently passes an explicit page_size (frontend always uses the
+    # default) — upper bound follows the generous headroom pattern used by
+    # sibling list endpoints (get_channels, get_logos, get_streams).
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(100, ge=1, le=1000, description="Results per page"),
     search: Optional[str] = None,
     epg_source: Optional[int] = None,
 ):

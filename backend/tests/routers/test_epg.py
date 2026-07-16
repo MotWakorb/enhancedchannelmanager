@@ -336,6 +336,36 @@ class TestGetEPGData:
             page=1, page_size=100, search="ESPN", epg_source=1,
         )
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422_not_500(self, async_client, page):
+        """page < 1 is rejected by validation (422), never passed upstream to
+        become a 500 (bead enhancedchannelmanager-g4z2h, systemic sibling of
+        1a5mf)."""
+        mock_client = AsyncMock()
+        mock_client.get_epg_data.return_value = {"results": [], "count": 0}
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/data", params={"page": page})
+
+        assert response.status_code == 422
+        mock_client.get_epg_data.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 1001])
+    async def test_invalid_page_size_returns_422_not_500(self, async_client, page_size):
+        """page_size out of [1, 1000] is rejected by validation (422)."""
+        mock_client = AsyncMock()
+        mock_client.get_epg_data.return_value = {"results": [], "count": 0}
+
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/epg/data", params={"page_size": page_size}
+            )
+
+        assert response.status_code == 422
+        mock_client.get_epg_data.assert_not_called()
+
 
 class TestGetEPGDataById:
     """Tests for GET /api/epg/data/{data_id}."""
