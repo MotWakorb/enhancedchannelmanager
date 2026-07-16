@@ -725,6 +725,71 @@ describe('RuleBuilder', () => {
     });
   });
 
+  describe('fold match key opt-in (fold_match_key, GH #645)', () => {
+    it('renders the toggle unchecked by default', () => {
+      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      expect(
+        screen.getByRole('checkbox', { name: /ignore spacing and case differences/i }),
+      ).not.toBeChecked();
+    });
+
+    it('round-trips a rule with the flag enabled', () => {
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'Folded',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+        fold_match_key: true,
+      };
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      expect(
+        screen.getByRole('checkbox', { name: /ignore spacing and case differences/i }),
+      ).toBeChecked();
+    });
+
+    it('defaults fold_match_key to false in the save payload', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'Strict',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+      };
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(
+          expect.objectContaining({ fold_match_key: false }),
+        );
+      });
+    });
+
+    it('includes fold_match_key true after toggling on', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'Folded',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+      };
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(
+        screen.getByRole('checkbox', { name: /ignore spacing and case differences/i }),
+      );
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(
+          expect.objectContaining({ fold_match_key: true }),
+        );
+      });
+    });
+  });
+
   describe('grouped two-pane redesign (bead m1s38.3)', () => {
     const VALID_RULE = {
       name: 'Sports',
