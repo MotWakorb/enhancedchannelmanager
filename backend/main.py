@@ -140,7 +140,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0096",
+    version="0.17.6-0097",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -189,6 +189,18 @@ app.openapi = custom_openapi
 from auth.routes import limiter
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# BaseException containment (GH #546 / bead xzdx9) — MUST stay the FIRST
+# add_middleware call so it is the INNERMOST user middleware. Starlette's
+# add_middleware prepends (later registration = more OUTER), so being first
+# here places this guard directly around the router, inside the same asyncio
+# task that runs route handlers and their dependencies. That position is what
+# lets it catch a SystemExit/KeyboardInterrupt raised by handler code BEFORE
+# asyncio.Task.__step re-raises it out of the event loop and silently kills
+# the whole process with ExitCode 0 (uvicorn skips its shutdown sequence and
+# a bare SystemExit prints nothing). See exit_diagnostics.py for the full
+# mechanism write-up.
+app.add_middleware(exit_diagnostics.BaseExceptionContainmentMiddleware)
 
 # CORS for development
 app.add_middleware(
