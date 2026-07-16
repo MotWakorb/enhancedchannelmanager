@@ -101,6 +101,27 @@ function severityBadge(severity: RuleAnalyzerFinding['severity']): string {
   return 'badge-info';
 }
 
+// Whether a create_channel action's Channel Number resolves to "auto" (the
+// engine's default sentinel). Full mirror of the backend's
+// _get_rule_starting_number (channel_pipeline_engine.py): unset defaults to
+// "auto"; an integer is a fixed start; the literal string "auto" is auto; a
+// range string like "500-999" uses the start segment; and anything
+// unparseable as an integer (empty string, malformed range, non-numeric
+// text) raises ValueError there and falls back to auto — i.e. the renumber
+// pass is skipped. This is a different question from ActionEditor's local
+// parseStartingNumber (which only detects the "N-99999" range format for its
+// own mode toggle).
+function isAutoChannelNumber(spec: string | number | undefined): boolean {
+  if (spec === undefined || spec === null) return true;
+  if (typeof spec === 'number') return false;
+  if (spec === 'auto') return true;
+  // Range strings like "500-999" — the backend uses the start segment.
+  const part = spec.includes('-') ? spec.split('-')[0] : spec;
+  // Python int() accepts optional sign + digits with surrounding whitespace;
+  // anything else is a ValueError -> treated as auto by the backend.
+  return !/^\s*[+-]?\d+\s*$/.test(part);
+}
+
 export function RuleBuilder({
   rule,
   onSave,
@@ -435,6 +456,20 @@ export function RuleBuilder({
     actions.some(a => a.type === 'create_group');
 
   const orphansDeleted = orphanAction === 'delete' || orphanAction === 'delete_and_cleanup_groups';
+
+  // Sort-vs-numbering gotcha (enhancedchannelmanager-bn0wa / GH #644):
+  // sort_field only orders stream PROCESSING, and the rule-level renumber it
+  // enables is silently skipped when the rule's Channel Number resolves to
+  // Auto. The backend's _get_rule_starting_number returns on the FIRST
+  // create_channel action it finds — later create_channel actions are never
+  // consulted — so the hint must match: only the first create_channel action
+  // decides. Point the operator at Sort Group (which always renumbers) or a
+  // fixed number range instead of leaving them to discover the skip by trial
+  // and error.
+  const firstCreateChannel = actions.find(a => a.type === 'create_channel');
+  const hasAutoNumberedCreateChannel =
+    firstCreateChannel !== undefined && isAutoChannelNumber(firstCreateChannel.channel_number);
+  const showSortNumberingHint = !!sortField && hasAutoNumberedCreateChannel;
 
   // Client-side, plain-language intent sentence. Bold clauses are the
   // destructive / risky choices (orphan delete, manual-channel merge, stop-on-
@@ -830,7 +865,7 @@ export function RuleBuilder({
 
               <div className="form-field">
                 <label>Channel Sort</label>
-                <span className="field-hint">Controls the order channels are numbered (renumbers on every run)</span>
+                <span className="field-hint">Controls the order streams are processed; renumbers channels only when Create Channel uses a fixed number range</span>
                 <div className="sort-config-row">
                   <CustomSelect
                     options={[
@@ -891,6 +926,14 @@ export function RuleBuilder({
                       Gathers resolution data for streams that haven't been probed. Adds time to execution.
                     </p>
                   </div>
+                )}
+                {showSortNumberingHint && (
+                  <span className="norm-hint" data-testid="sort-numbering-hint">
+                    <span className="material-icons norm-hint-icon">info</span>
+                    Sorting here controls stream processing order, not channel numbers — Channel Number is
+                    Auto on a Create Channel action, so this won&apos;t renumber channels. Add a Sort Group
+                    action, or set a number range on Create Channel, to actually reorder the numbers.
+                  </span>
                 )}
               </div>
 
