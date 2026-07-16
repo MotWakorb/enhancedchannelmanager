@@ -2336,6 +2336,9 @@ class ChannelPipelineEngine:
                     match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False)),
                     rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None),
                     allow_manual_channel_merge=bool(getattr(winning_rule, 'allow_manual_channel_merge', False)),
+                    # GH #645 / bead 0vao3: opt-in whitespace/case fold on the
+                    # create_channel if_exists merge lookup's comparison key.
+                    fold_match_key=bool(getattr(winning_rule, 'fold_match_key', False)),
                     rule_id=winning_rule.id,
                 )
 

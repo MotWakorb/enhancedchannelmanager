@@ -200,3 +200,9 @@
 .find-duplicates-modal .modal-header h2 .material-icons {
   font-size: 1.25rem;
 }
+
+/* Ignore-spacing fold toggle (GH #645) — sits above the scan states so it
+   stays reachable when the exact scan finds nothing. */
+.dup-fold-toggle {
+  margin-bottom: 0.75rem;
+}

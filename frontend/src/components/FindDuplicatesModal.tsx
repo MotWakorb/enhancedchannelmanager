@@ -24,6 +24,10 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // GH #645: opt-in whitespace/case-insensitive grouping ("Eurosport 2" /
+  // "Eurosport2" in one group) — same canonicalization as the auto-creation
+  // fold_match_key rule flag. Flipping it re-runs the scan.
+  const [foldMatchKey, setFoldMatchKey] = useState(false);
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [totalDuplicates, setTotalDuplicates] = useState(0);
 
@@ -45,13 +49,14 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
   const groupListRef = useRef<HTMLDivElement | null>(null);
   const [renderGuardTripped, setRenderGuardTripped] = useState(false);
 
-  // Fetch duplicates on mount
+  // Fetch duplicates on mount and whenever the fold toggle flips.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setMergeResult(null);
 
-    api.findDuplicateChannels(scopedChannelIds)
+    api.findDuplicateChannels(scopedChannelIds, foldMatchKey)
       .then(response => {
         if (cancelled) return;
         setGroups(response.groups);
@@ -75,11 +80,12 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
       });
 
     return () => { cancelled = true; };
-    // Mount-only by design: the parent only ever mounts a fresh instance of
-    // this modal on open (conditional render, not a persisted instance), so
-    // there is no "prop changed while mounted" case to react to.
+    // Re-runs only when the fold toggle flips. scopedChannelIds is
+    // deliberately NOT a dependency: the parent only ever mounts a fresh
+    // instance of this modal on open (conditional render, not a persisted
+    // instance), so there is no "prop changed while mounted" case to react to.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [foldMatchKey]);
 
   // Merge-blind safety net: after the group list (re)renders, verify the
   // DOM actually has a row per group. Deferred one frame so the rows have
@@ -186,6 +192,24 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
               )}
             </div>
           )}
+
+          <div className="dup-fold-toggle">
+            <label className="modal-checkbox-label" title={
+              'Also group names that differ only by spacing or case '
+              + '(e.g. "Eurosport 2" and "Eurosport2"). Names are only compared this way — '
+              + 'they are never renamed. Uses the same matching as the auto-creation rule option '
+              + '"Ignore spacing & case differences when matching".'
+            }>
+              <input
+                type="checkbox"
+                checked={foldMatchKey}
+                onChange={e => setFoldMatchKey(e.target.checked)}
+                disabled={loading || merging}
+                aria-label="Ignore spacing differences"
+              />
+              <span>Ignore spacing differences</span>
+            </label>
+          </div>
 
           {loading ? (
             <div className="loading-state">

@@ -270,6 +270,11 @@ export interface ChannelPipelineRule {
   // log) and the rule may create a new auto channel instead. True = this
   // rule may merge into manual channels; each adoption is journaled.
   allow_manual_channel_merge?: boolean;
+  // Fold match key (GH #645). Opt-in: when true, the create_channel
+  // "if exists: merge" lookup also compares names ignoring case and ALL
+  // whitespace ("Euro Sport 2" matches "EuroSport2"). Comparison key only —
+  // visible channel names are never altered. Default false.
+  fold_match_key?: boolean;
   /**
    * Event Sync rule kind (epic ti939). Non-null = this rule IS an event_sync
    * rule: its conditions/actions are placeholders ignored by the engine, and
@@ -313,6 +318,8 @@ export interface CreateRuleData {
   match_scope_group_id?: number | null;
   // Allow this rule to merge into hand-built manual channels (default false).
   allow_manual_channel_merge?: boolean;
+  // Compare merge-lookup names ignoring spacing/case (GH #645, default false).
+  fold_match_key?: boolean;
   // Event Sync rule kind (epic ti939). Validated by the backend's
   // validate_event_sync_config at save time; null explicitly clears the kind.
   event_sync_config?: EventSyncConfig | null;

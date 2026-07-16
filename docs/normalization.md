@@ -23,6 +23,7 @@ These three paths **must produce the same output for the same input**. That is t
 - It is not search. `GET /api/channels?search=foo` does its own matching without invoking the normalization rule set.
 - It is not EPG matching. EPG match uses channel name + TVG-ID against EPG data; normalization affects the channel name that feeds into EPG match but is not itself EPG logic.
 - It is not a regex sandbox. Regex rules run under `safe_regex` (100 ms timeout, bounded pattern size); pathological patterns fail fast with `[SAFE_REGEX]` WARN in logs and are rejected at save time by the linter.
+- It is not the **fold match key** (GH #645). The opt-in per-rule flag `fold_match_key` (Channel Pipeline rule editor: *"Ignore spacing & case differences when matching"*) and the Find Duplicates *"Ignore spacing differences"* toggle compare names by a canonical key — casefold + strip ALL whitespace, one shared helper (`backend/match_fold.py`) for both surfaces — **without ever rewriting the visible channel name**. Normalization rules transform stored names; the fold only changes how names are *compared* during the `create_channel` `if_exists: merge` lookup and duplicate grouping. Because the fold never touches stored names, the parity contract below is unaffected by it. Caveat: with the fold on, genuinely distinct channels whose names differ only by spacing/case merge too — including spacing inside digit runs ("Canal 5 2" vs "Canal 52" fold to the same key) and word boundaries ("Sky Cinema" vs "SkyCinema") — that is why it is opt-in and off by default.
 
 ## Quick start
 
@@ -234,6 +235,19 @@ Verification:
 
 - Test Rules with the raw stream name should already show the desired normalized output (proof the engine and tag groups are correct).
 - After enabling `normalization_group_ids`, run the rule in **dry-run mode** first and inspect the execution log for `Normalization applied` entries — these confirm the new behavior on the actual streams.
+
+### "Auto-creation created duplicate channels that differ only by spacing" (GH #645)
+
+Symptom: a rule with `if_exists: merge` produced several channels for the same logical channel — e.g. `eurosport 2`, `Eurosport 2`, `Eurosport2`, `eurosport2`.
+
+Cause: the merge lookup compares names case-insensitively but does **not** collapse whitespace, so `Eurosport 2` and `Eurosport2` are different names. Enabling normalization groups on the rule does not change this — user normalization rules collapse *runs* of whitespace to one space but never remove single interior spaces.
+
+Fix (two halves, both opt-in):
+
+1. **Stop new duplicates**: edit the rule → enable **"Ignore spacing & case differences when matching"** (`fold_match_key`). Future runs compare names by a folded key (casefold + strip all whitespace) so all four spellings merge into whichever channel exists first. Stored names are never rewritten.
+2. **Clean up existing duplicates**: Channels tab → Find Duplicates → enable **"Ignore spacing differences"**. The same folded key groups the existing spelling variants so you can bulk-merge them.
+
+Leave both off if your provider uses spacing/case to distinguish genuinely different channels — note that digit runs collide too ("Canal 5 2" and "Canal 52" fold to the same key).
 
 ### `[SAFE_REGEX]` log entries
 

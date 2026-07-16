@@ -12,7 +12,12 @@ import re
 
 import safe_regex
 import journal
+from match_fold import fold_match_key
 from channel_pipeline_schema import Action, ActionType, TemplateVariables
+
+# Alias for use inside methods whose ``fold_match_key`` BOOL parameter (the
+# per-rule flag, kept name-identical to the schema field) shadows the helper.
+_fold_key = fold_match_key
 from channel_pipeline_evaluator import StreamContext
 from services.dedup_matcher import (
     NameCleanMode,
@@ -282,6 +287,20 @@ class ActionExecutor:
             if stripped != c["name"]:
                 self._base_name_to_channel.setdefault(stripped.lower(), c)
 
+        # Folded-key mapping (GH #645 / bead 0vao3): canonical comparison key
+        # (casefold + strip ALL whitespace, via the shared match_fold helper)
+        # -> channel, for both the raw stored name and its number-prefix-
+        # stripped base name. Consulted by _find_channel_by_name ONLY when the
+        # firing rule opted in via its fold_match_key flag; built
+        # unconditionally because one executor serves every rule in a run.
+        # First-seen wins on key collisions, matching the other lookup maps.
+        self._fold_key_to_channel: dict[str, dict] = {}
+        for c in self.existing_channels:
+            stripped = _num_prefix.sub('', c["name"])
+            self._fold_key_to_channel.setdefault(fold_match_key(c["name"]), c)
+            if stripped != c["name"]:
+                self._fold_key_to_channel.setdefault(fold_match_key(stripped), c)
+
         # Pre-populate normalized-name mapping so merge_streams auto-lookup
         # can find channels the same way normalized_name_in_group does
         self._normalized_name_to_channel: dict[str, dict] = {}
@@ -479,6 +498,7 @@ class ActionExecutor:
                       match_scope_target_group: bool = True,
                       rule_scope_group_id: int = None,
                       allow_manual_channel_merge: bool = False,
+                      fold_match_key: bool = False,
                       rule_id: int = None) -> ActionResult:
         """
         Execute a single action.
@@ -515,6 +535,14 @@ class ActionExecutor:
                 behavior and may adopt manual channels (the adoption is
                 journaled). Threaded into the resolution chokepoint as
                 ``block_manual = not allow_manual_channel_merge``.
+            fold_match_key: When True (GH #645 / bead 0vao3 — opt-in per
+                rule, default False), the create_channel ``if_exists`` merge
+                lookup additionally compares names by the shared canonical
+                fold key (casefold + strip ALL whitespace) so whitespace/case
+                spelling variants merge into one channel instead of creating
+                duplicates. Comparison key only — stored channel names are
+                never altered. Threaded into ``_find_channel_by_name`` as
+                ``fold_key``.
 
         Returns:
             ActionResult with execution details
@@ -554,6 +582,7 @@ class ActionExecutor:
                 match_scope_target_group=match_scope_target_group,
                 rule_scope_group_id=rule_scope_group_id,
                 allow_manual_channel_merge=allow_manual_channel_merge,
+                fold_match_key=fold_match_key,
             )
         elif action_type == ActionType.CREATE_GROUP:
             result = await self._execute_create_group(action, stream_ctx, exec_ctx, template_ctx)
@@ -842,7 +871,8 @@ class ActionExecutor:
                                        normalization_group_ids: list[int] = None,
                                        match_scope_target_group: bool = True,
                                        rule_scope_group_id: int = None,
-                                       allow_manual_channel_merge: bool = False) -> ActionResult:
+                                       allow_manual_channel_merge: bool = False,
+                                       fold_match_key: bool = False) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
@@ -909,6 +939,9 @@ class ActionExecutor:
         existing = self._find_channel_by_name(
             channel_name, scope_group_id=scope_group_id,
             block_manual=not allow_manual_channel_merge,
+            # GH #645 / bead 0vao3: opt-in whitespace/case fold on the merge
+            # lookup's comparison key (never on the stored name).
+            fold_key=fold_match_key,
         )
         if existing is not None and allow_manual_channel_merge \
                 and self._is_manual_channel(existing):
@@ -970,6 +1003,11 @@ class ActionExecutor:
                             self._channel_by_name.pop(old_lower, None)
                             existing["name"] = new_name
                             self._channel_by_name[new_name.lower()] = existing
+                            # GH #645 / bead 0vao3: the renamed spelling must
+                            # also be fold-findable (old fold keys still point
+                            # at the same mutated dict, so they stay correct).
+                            self._fold_key_to_channel.setdefault(
+                                _fold_key(new_name), existing)
                         except Exception as e:
                             logger.warning("[AUTO-CREATE-EXEC] Failed to rename channel '%s' to '%s': %s", existing_name, new_name, e)
                             action_details.append(f"Failed to rename channel: {e}")
@@ -1106,6 +1144,10 @@ class ActionExecutor:
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
             if base_name.lower() != channel_name.lower():
                 self._base_name_to_channel[base_name.lower()] = simulated
+            # GH #645 / bead 0vao3: register the fold keys so later streams in
+            # this run can fold-match the simulated channel (first-seen wins).
+            self._fold_key_to_channel.setdefault(_fold_key(channel_name), simulated)
+            self._fold_key_to_channel.setdefault(_fold_key(base_name), simulated)
             self._used_channel_numbers.add(channel_number)
             exec_ctx.current_channel_id = dry_id
             exec_ctx.created_channel_ids.add(dry_id)
@@ -1162,6 +1204,10 @@ class ActionExecutor:
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
             if base_name.lower() != channel_name.lower():
                 self._base_name_to_channel[base_name.lower()] = new_channel
+            # GH #645 / bead 0vao3: register the fold keys so later streams in
+            # this run can fold-match the new channel (first-seen wins).
+            self._fold_key_to_channel.setdefault(_fold_key(channel_name), new_channel)
+            self._fold_key_to_channel.setdefault(_fold_key(base_name), new_channel)
             self._used_channel_numbers.add(channel_number)
             self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
@@ -3903,7 +3949,8 @@ class ActionExecutor:
 
     def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None,
                               exact_only: bool = False,
-                              block_manual: bool = True) -> Optional[dict]:
+                              block_manual: bool = True,
+                              fold_key: bool = False) -> Optional[dict]:
         """Find channel by exact name (case-insensitive).
 
         Also checks the base-name mapping so that a lookup for "USA Network"
@@ -3943,6 +3990,15 @@ class ActionExecutor:
         allow_manual_channel_merge``; the rule-level ``allow_manual_channel_merge``
         flag (default False) is the only way to opt a rule back into adopting
         manual channels.
+
+        When ``fold_key`` is True (GH #645 / bead 0vao3 — the rule's opt-in
+        ``fold_match_key`` flag), a LAST-RESORT fallback compares by the
+        shared canonical fold key (casefold + strip ALL whitespace, see
+        ``match_fold.fold_match_key``) so "Eurosport2" finds "eurosport 2".
+        The fold is consulted only after every exact/normalized lookup above
+        it misses — an exact match always wins — and the folded candidate
+        still passes the same scope and manual-channel gates. Comparison key
+        only: stored channel names are never altered.
         """
         def _in_scope(c: Optional[dict]) -> bool:
             if c is None:
@@ -4028,6 +4084,19 @@ class ActionExecutor:
                 if _in_scope(cand):
                     logger.debug("[AUTO-CREATE-EXEC] '%s' found via core-name fallback (core='%s', id=%s)",
                                  name, core_lower, cand.get('id'))
+                    return cand
+        # Folded-key fallback (GH #645 / bead 0vao3): opt-in per rule. Runs
+        # LAST so any exact/normalized match above always wins; the candidate
+        # goes through the same _in_scope gates (group scope + manual block).
+        if fold_key:
+            folded = fold_match_key(name)
+            if folded:
+                cand = self._fold_key_to_channel.get(folded)
+                if _in_scope(cand):
+                    logger.debug(
+                        "[AUTO-CREATE-EXEC] '%s' found via fold-match-key fallback "
+                        "(key='%s', id=%s, name='%s')",
+                        name, folded, cand.get('id'), cand.get('name'))
                     return cand
         return None
 

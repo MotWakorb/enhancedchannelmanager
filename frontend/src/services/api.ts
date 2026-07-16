@@ -376,10 +376,20 @@ export interface BulkMergeResponse {
   results: { target_channel_id: number; target_name?: string; sources_deleted?: number; total_streams?: number; success: boolean; error?: string }[];
 }
 
-export async function findDuplicateChannels(channelIds?: number[]): Promise<FindDuplicatesResponse> {
+export async function findDuplicateChannels(
+  channelIds?: number[],
+  foldMatchKey?: boolean,
+): Promise<FindDuplicatesResponse> {
+  // fold_match_key (GH #645): opt-in whitespace/case-insensitive grouping —
+  // the same canonicalization the auto-creation fold_match_key rule flag
+  // uses. Only sent when true so the default request stays byte-identical
+  // to the pre-flag behavior.
+  const body: { channel_ids?: number[]; fold_match_key?: boolean } = {};
+  if (channelIds !== undefined) body.channel_ids = channelIds;
+  if (foldMatchKey) body.fold_match_key = true;
   return fetchJson(`${API_BASE}/channels/find-duplicates`, {
     method: 'POST',
-    ...(channelIds !== undefined ? { body: JSON.stringify({ channel_ids: channelIds }) } : {}),
+    ...(Object.keys(body).length > 0 ? { body: JSON.stringify(body) } : {}),
   });
 }
 

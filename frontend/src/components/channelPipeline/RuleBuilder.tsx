@@ -154,6 +154,7 @@ export function RuleBuilder({
   const [matchScopeTargetGroup, setMatchScopeTargetGroup] = useState(rule?.match_scope_target_group ?? true);
   const [matchScopeGroupId, setMatchScopeGroupId] = useState<number | null>(rule?.match_scope_group_id ?? null);
   const [allowManualChannelMerge, setAllowManualChannelMerge] = useState(rule?.allow_manual_channel_merge ?? false);
+  const [foldMatchKey, setFoldMatchKey] = useState(rule?.fold_match_key ?? false);
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
 
@@ -257,12 +258,13 @@ export function RuleBuilder({
     match_scope_target_group: matchScopeTargetGroup,
     match_scope_group_id: matchScopeTargetGroup ? matchScopeGroupId : null,
     allow_manual_channel_merge: allowManualChannelMerge,
+    fold_match_key: foldMatchKey,
   }), [
     name, description, enabled, priority, conditions, actions, runOnRefresh,
     stopOnFirstMatch, sortField, sortOrder, probeOnSort, sortRegex, streamSortField,
     streamSortOrder, qualityTieBreakOrder, qualityM3uTieBreakEnabled, normalizationGroupIds,
     skipStruckStreams, orphanAction, matchScopeTargetGroup, matchScopeGroupId,
-    allowManualChannelMerge,
+    allowManualChannelMerge, foldMatchKey,
   ]);
 
   // FULL-FIELD dirty check (bead m1s38.3 data-loss fix). Replaces the old
@@ -512,13 +514,14 @@ export function RuleBuilder({
           <> Orphaned channels move to Uncategorized.</>
         ) : null}
         {allowManualChannelMerge && <> <strong>May merge streams into manual channels.</strong></>}
+        {foldMatchKey && <> Merge matching ignores spacing &amp; case differences.</>}
         {stopOnFirstMatch && <> <strong>Stops after the first matching rule.</strong></>}
         {runOnRefresh && <> Runs automatically after each M3U refresh.</>}
       </>
     );
   }, [
     conditions, actions, sortField, streamSortField, orphansDeleted, orphanAction,
-    allowManualChannelMerge, stopOnFirstMatch, runOnRefresh,
+    allowManualChannelMerge, foldMatchKey, stopOnFirstMatch, runOnRefresh,
   ]);
 
   return (
@@ -796,6 +799,39 @@ export function RuleBuilder({
                       aria-label="Allow merging into manual channels"
                     />
                     <span>Allow merging into manual channels</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label>Spacing &amp; case in merge matching</label>
+                <span className="field-hint">
+                  Off (default): names that differ in spacing stay separate channels
+                  (&quot;Eurosport 2&quot; vs &quot;Eurosport2&quot;).
+                </span>
+                <details className="modal-why">
+                  <summary>Why / when to use</summary>
+                  <p className="rule-why-body">
+                    On: when this rule merges into existing channels (Create Channel with
+                    &quot;If exists: merge&quot;), names are compared ignoring case and ALL spacing —
+                    &quot;eurosport 2&quot;, &quot;Eurosport 2&quot; and &quot;Eurosport2&quot; become one channel
+                    instead of several. This only changes how names are COMPARED; the visible channel
+                    name keeps its original spelling and is never rewritten. Caveat: genuinely distinct
+                    channels whose names differ only by spacing or case would also be merged — including
+                    digits (&quot;Canal 5 2&quot; matches &quot;Canal 52&quot;) — leave
+                    this off if your provider uses spacing to distinguish real channels.
+                  </p>
+                </details>
+                <div className="checkbox-group">
+                  <label className="checkbox-item">
+                    <input
+                      type="checkbox"
+                      checked={foldMatchKey}
+                      onChange={e => setFoldMatchKey(e.target.checked)}
+                      disabled={isLoading}
+                      aria-label="Ignore spacing and case differences when matching"
+                    />
+                    <span>Ignore spacing &amp; case differences when matching</span>
                   </label>
                 </div>
               </div>

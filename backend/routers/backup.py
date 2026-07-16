@@ -75,7 +75,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.17.6-0099"
+APP_VERSION = "0.17.6-0100"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2520,6 +2520,7 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 # enhancedchannelmanager-orzck (W1): default False protects
                 # manual channels. Backups predating this column inherit False.
                 allow_manual_channel_merge=item.get("allow_manual_channel_merge", False),
+                fold_match_key=item.get("fold_match_key", False),
                 # ti939.1.3: keep the event_sync KIND across backup/restore.
                 # Backups predating this column omit it and inherit None
                 # (standard kind).

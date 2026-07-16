@@ -88,9 +88,10 @@ def _insert_rule(conn, rule_id: int) -> None:
         "(id, name, enabled, priority, conditions, actions, run_on_refresh, "
         " stop_on_first_match, probe_on_sort, quality_m3u_tie_break_enabled, "
         " skip_struck_streams, orphan_action, match_scope_target_group, "
-        " allow_manual_channel_merge, match_count, created_at, updated_at) "
+        " allow_manual_channel_merge, fold_match_key, match_count, "
+        " created_at, updated_at) "
         "VALUES (:id, :name, 1, 0, '[]', '[]', 0, 1, 0, 1, 0, 'delete', 1, "
-        "0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        "0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     ), {"id": rule_id, "name": f"rule-{rule_id}"})
 
 

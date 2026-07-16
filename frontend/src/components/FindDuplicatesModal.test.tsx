@@ -204,7 +204,7 @@ describe('FindDuplicatesModal — scope label and scoped API call (enhancedchann
     );
 
     await waitFor(() => {
-      expect(api.findDuplicateChannels).toHaveBeenCalledWith([10, 20, 30]);
+      expect(api.findDuplicateChannels).toHaveBeenCalledWith([10, 20, 30], false);
     });
     expect(screen.getByText('Scanned 3 selected channels')).toBeInTheDocument();
   });
@@ -213,7 +213,7 @@ describe('FindDuplicatesModal — scope label and scoped API call (enhancedchann
     render(<FindDuplicatesModal onClose={mockClose} onMerged={mockMerged} />);
 
     await waitFor(() => {
-      expect(api.findDuplicateChannels).toHaveBeenCalledWith(undefined);
+      expect(api.findDuplicateChannels).toHaveBeenCalledWith(undefined, false);
     });
     expect(screen.getByText('Scanned all channels')).toBeInTheDocument();
   });
@@ -222,7 +222,7 @@ describe('FindDuplicatesModal — scope label and scoped API call (enhancedchann
     render(<FindDuplicatesModal onClose={mockClose} onMerged={mockMerged} channelIds={[]} />);
 
     await waitFor(() => {
-      expect(api.findDuplicateChannels).toHaveBeenCalledWith(undefined);
+      expect(api.findDuplicateChannels).toHaveBeenCalledWith(undefined, false);
     });
     expect(screen.getByText('Scanned all channels')).toBeInTheDocument();
   });
@@ -285,5 +285,82 @@ describe('FindDuplicatesModal — merge-blind DOM-presence guard (enhancedchanne
 
     expect(screen.queryByText(/failed to render/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Merge 5 Groups/ })).not.toBeDisabled();
+  });
+});
+
+describe('FindDuplicatesModal — ignore-spacing fold toggle (GH #645)', () => {
+  const mockClose = vi.fn();
+  const mockMerged = vi.fn();
+
+  const EMPTY_RESPONSE: FindDuplicatesResponse = {
+    groups: [],
+    total_groups: 0,
+    total_duplicate_channels: 0,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.findDuplicateChannels).mockResolvedValue(DUPLICATE_RESPONSE);
+  });
+
+  it('renders the toggle unchecked and scans without folding by default', async () => {
+    render(<FindDuplicatesModal onClose={mockClose} onMerged={mockMerged} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Merge 1 Group/ })).toBeInTheDocument();
+    });
+
+    const toggle = screen.getByRole('checkbox', { name: /ignore spacing differences/i });
+    expect(toggle).not.toBeChecked();
+    expect(api.findDuplicateChannels).toHaveBeenCalledTimes(1);
+    expect(api.findDuplicateChannels).toHaveBeenCalledWith(undefined, false);
+  });
+
+  it('re-scans with folding enabled when the toggle is switched on', async () => {
+    render(<FindDuplicatesModal onClose={mockClose} onMerged={mockMerged} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Merge 1 Group/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ignore spacing differences/i }));
+
+    await waitFor(() => {
+      expect(api.findDuplicateChannels).toHaveBeenCalledTimes(2);
+    });
+    expect(api.findDuplicateChannels).toHaveBeenLastCalledWith(undefined, true);
+  });
+
+  it('passes the channel scope through on a folded re-scan', async () => {
+    render(<FindDuplicatesModal onClose={mockClose} onMerged={mockMerged} channelIds={[1, 2, 3]} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Merge 1 Group/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ignore spacing differences/i }));
+
+    await waitFor(() => {
+      expect(api.findDuplicateChannels).toHaveBeenLastCalledWith([1, 2, 3], true);
+    });
+  });
+
+  it('keeps the toggle available when the exact scan finds nothing', async () => {
+    vi.mocked(api.findDuplicateChannels).mockResolvedValue(EMPTY_RESPONSE);
+
+    render(<FindDuplicatesModal onClose={mockClose} onMerged={mockMerged} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No duplicate channels found/)).toBeInTheDocument();
+    });
+
+    // Operator can still opt into the folded scan from the empty state.
+    const toggle = screen.getByRole('checkbox', { name: /ignore spacing differences/i });
+    vi.mocked(api.findDuplicateChannels).mockResolvedValue(DUPLICATE_RESPONSE);
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Merge 1 Group/ })).toBeInTheDocument();
+    });
   });
 });

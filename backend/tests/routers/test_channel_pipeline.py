@@ -3441,3 +3441,125 @@ class TestChannelPipelineCanonicalPrefixMount:
         response = await async_client.get(f"/api/channel-pipeline/rules/{rule.id}")
         assert response.status_code == 200
         assert response.json()["name"] == "Canonical Prefix Rule"
+
+
+class TestFoldMatchKeyPersistence:
+    """GH #645 / bead enhancedchannelmanager-0vao3: persist + round-trip the
+    opt-in ``fold_match_key`` flag.
+
+    The flag must default to False (existing installs unchanged), survive
+    create, be readable via GET, be settable via PUT, survive rule
+    duplication, and round-trip through the YAML export/import pair.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_defaults_flag_to_false(self, async_client):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            create = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Strict Match Rule",
+                "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            })
+        assert create.status_code == 200, create.text
+        assert create.json()["fold_match_key"] is False
+
+    @pytest.mark.asyncio
+    async def test_create_persists_opt_in_and_get_round_trips(self, async_client):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            create = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Folded Match Rule",
+                "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}",
+                             "if_exists": "merge"}],
+                "fold_match_key": True,
+            })
+        assert create.status_code == 200, create.text
+        rule_id = create.json()["id"]
+        assert create.json()["fold_match_key"] is True
+
+        get = await async_client.get(f"/api/auto-creation/rules/{rule_id}")
+        assert get.status_code == 200
+        assert get.json()["fold_match_key"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_sets_flag(self, async_client, test_session):
+        rule = _create_rule(test_session, name="ToFold")
+        assert rule.fold_match_key is False
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"fold_match_key": True},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["fold_match_key"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_omitting_field_leaves_flag_unchanged(self, async_client, test_session):
+        rule = _create_rule(test_session, name="KeepFold", fold_match_key=True)
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"name": "Renamed KeepFold"},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["fold_match_key"] is True
+
+    @pytest.mark.asyncio
+    async def test_duplicate_preserves_flag(self, async_client, test_session):
+        rule = _create_rule(test_session, name="FoldOriginal", fold_match_key=True)
+        with patch("routers.channel_pipeline.journal"):
+            response = await async_client.post(
+                f"/api/auto-creation/rules/{rule.id}/duplicate"
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["fold_match_key"] is True
+
+    @pytest.mark.asyncio
+    async def test_export_includes_flag(self, async_client, test_session):
+        _create_rule(test_session, name="ExportFold", fold_match_key=True)
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = []
+        mock_client.get_m3u_accounts.return_value = []
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
+            response = await async_client.get("/api/auto-creation/export/yaml")
+        assert response.status_code == 200
+        assert "fold_match_key" in response.text
+
+    @pytest.mark.asyncio
+    async def test_import_round_trips_flag(self, async_client, test_session):
+        """A YAML doc with fold_match_key: true imports as an opted-in rule;
+        one without the key defaults to False (backward compatible)."""
+        yaml_content = """
+rules:
+  - name: Imported Folded Rule
+    conditions:
+      - type: stream_name_contains
+        value: ESPN
+    actions:
+      - type: create_channel
+        name_template: "{stream_name}"
+        if_exists: merge
+    fold_match_key: true
+  - name: Imported Legacy Rule
+    conditions:
+      - type: stream_name_contains
+        value: CNN
+    actions:
+      - type: create_channel
+        name_template: "{stream_name}"
+"""
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            response = await async_client.post("/api/auto-creation/import/yaml", json={
+                "yaml_content": yaml_content,
+            })
+        assert response.status_code == 200, response.text
+
+        rules = (await async_client.get("/api/auto-creation/rules")).json()["rules"]
+        by_name = {r["name"]: r for r in rules}
+        assert by_name["Imported Folded Rule"]["fold_match_key"] is True
+        assert by_name["Imported Legacy Rule"]["fold_match_key"] is False
