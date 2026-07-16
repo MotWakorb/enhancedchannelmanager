@@ -22,6 +22,8 @@ function getCategoryIcon(category: JournalCategory): string {
       return 'schedule';
     case 'auto_creation':
       return 'auto_fix_high';
+    case 'event_sync':
+      return 'sync_alt';
     default:
       return 'article';
   }
@@ -67,6 +69,8 @@ function formatCategory(category: JournalCategory): string {
       return 'Task';
     case 'auto_creation':
       return 'Channel Pipeline';
+    case 'event_sync':
+      return 'Event Sync';
     default:
       return category;
   }
@@ -251,6 +255,10 @@ export function JournalTab() {
                 <span className="material-icons">auto_fix_high</span>
                 {stats.by_category.auto_creation || 0}
               </span>
+              <span className="header-stat" title="Event Sync entries">
+                <span className="material-icons">sync_alt</span>
+                {stats.by_category.event_sync || 0}
+              </span>
               <span className="header-total" title="Total journal entries">({stats.total_entries.toLocaleString()} total)</span>
             </div>
           )}
@@ -320,6 +328,7 @@ export function JournalTab() {
             { value: 'task', label: 'Task' },
             { value: 'watch', label: 'Watch' },
             { value: 'auto_creation', label: 'Channel Pipeline' },
+            { value: 'event_sync', label: 'Event Sync' },
           ]}
         />
         <CustomSelect

@@ -2,7 +2,7 @@
  * Journal types for tracking changes to channels, EPG sources, and M3U accounts.
  */
 
-export type JournalCategory = 'channel' | 'epg' | 'm3u' | 'watch' | 'task' | 'auto_creation';
+export type JournalCategory = 'channel' | 'epg' | 'm3u' | 'watch' | 'task' | 'auto_creation' | 'event_sync';
 
 export type MutationSource = 'ui' | 'mcp_ai' | 'scheduler' | 'auto_creation';
 

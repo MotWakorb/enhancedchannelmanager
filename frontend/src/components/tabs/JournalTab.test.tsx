@@ -218,6 +218,61 @@ describe('JournalTab', () => {
     });
   });
 
+  describe('event_sync category (bead yjchp)', () => {
+    it('renders the Event Sync label and sync_alt icon for an event_sync entry', async () => {
+      vi.mocked(api.getJournalEntries).mockResolvedValue(
+        mockResponse([
+          makeEntry({
+            category: 'event_sync',
+            entity_name: 'Peacock 14: Mercury vs. Aces',
+            description: 'Merged stream into master channel',
+          }),
+        ])
+      );
+
+      renderWithProviders(<JournalTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      expect(screen.getByText('Event Sync')).toBeInTheDocument();
+      const icons = Array.from(document.querySelectorAll('.material-icons')).map(
+        (i) => i.textContent
+      );
+      expect(icons).toContain('sync_alt');
+    });
+
+    it('shows the event_sync count in the header stats', async () => {
+      vi.mocked(api.getJournalStats).mockResolvedValue({
+        ...mockStats,
+        by_category: { ...mockStats.by_category, event_sync: 7 },
+      });
+
+      renderWithProviders(<JournalTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      const stat = document.querySelector('[title="Event Sync entries"]');
+      expect(stat).not.toBeNull();
+      expect(stat?.textContent).toContain('7');
+    });
+
+    it('defaults the event_sync header stat to 0 when the category is absent', async () => {
+      renderWithProviders(<JournalTab />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+
+      const stat = document.querySelector('[title="Event Sync entries"]');
+      expect(stat).not.toBeNull();
+      expect(stat?.textContent).toContain('0');
+    });
+  });
+
   describe('empty state', () => {
     it('shows empty state when no entries exist', async () => {
       vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([]));

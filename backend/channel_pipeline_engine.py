@@ -3128,6 +3128,25 @@ class ChannelPipelineEngine:
         # for the optional pre-refresh-on-run step. Filled lazily on first use.
         prerefresh_provider_cache: dict = {}
 
+        # bead yjchp: cross-rule context for the unattended pre-flight —
+        # when a failing secondary group is ANOTHER enabled event_sync
+        # rule's MASTER, the failure message must not advise disabling
+        # auto_channel_sync (masters require it ON). Loaded once per phase
+        # from ALL enabled rules, not just this run's rules — the
+        # conflicting rule may not be opted into auto_run and so may be
+        # absent from ``event_sync_rules``. Best-effort: a load failure
+        # falls back to the untailored (still-correct check id) messages.
+        all_enabled_rules: list = []
+        if unattended:
+            try:
+                all_enabled_rules = await self._load_rules()
+            except Exception as e:
+                logger.warning(
+                    "[EVENT-SYNC] Failed to load rules for cross-rule "
+                    "pre-flight context (%s) — pre-flight messages fall "
+                    "back to the generic advice", e,
+                )
+
         # Provider display names, fetched once for the whole phase.
         try:
             accounts = await self.client.get_m3u_accounts() or []
@@ -3197,11 +3216,15 @@ class ChannelPipelineEngine:
                 # into a notification. Manual runs never pre-flight here;
                 # the preview is the operator's pre-flight surface.
                 from services.event_sync_preflight import (
+                    build_event_sync_master_rule_lookup,
                     check_event_sync_group_settings,
                 )
                 try:
                     preflight = await check_event_sync_group_settings(
-                        self.client, config
+                        self.client, config,
+                        other_master_rules=build_event_sync_master_rule_lookup(
+                            all_enabled_rules, exclude_rule_id=rule.id
+                        ),
                     )
                 except Exception as e:
                     preflight = {

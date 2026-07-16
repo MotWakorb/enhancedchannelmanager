@@ -20,6 +20,7 @@ from services.event_sync_preflight import (
     CHECK_GROUP_SETTINGS_FOUND,
     CHECK_MASTER_AUTO_SYNC_ON,
     CHECK_SECONDARY_AUTO_SYNC_OFF,
+    build_event_sync_master_rule_lookup,
     check_event_sync_group_settings,
     resolve_effective_master_group_id,
 )
@@ -306,3 +307,118 @@ class TestProviderScopedPreflight:
             client, _config(master=10, secondaries=(20,))
         )
         client.get_m3u_group_settings_by_provider.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Cross-rule conflict context (bead yjchp): a failing secondary group that is
+# ANOTHER enabled event_sync rule's MASTER must not get "disable auto-sync"
+# advice — masters REQUIRE auto_channel_sync ON.
+# ---------------------------------------------------------------------------
+
+
+class _FakeRule:
+    """ChannelPipelineRule shape for build_event_sync_master_rule_lookup."""
+
+    def __init__(self, rule_id, name, config, event_sync=True):
+        self.id = rule_id
+        self.name = name
+        self._config = config
+        self._event_sync = event_sync
+
+    def is_event_sync(self):
+        return self._event_sync
+
+    def get_event_sync_config(self):
+        return self._config
+
+
+class TestBuildMasterRuleLookup:
+    def test_maps_enabled_event_sync_masters(self):
+        rules = [
+            _FakeRule(1, "PPV", {"master_group_id": 356}),
+            _FakeRule(2, "Dirtvision", {"master_group_id": 42}),
+        ]
+        assert build_event_sync_master_rule_lookup(rules) == {
+            356: "PPV", 42: "Dirtvision",
+        }
+
+    def test_excludes_the_rule_under_check(self):
+        rules = [
+            _FakeRule(1, "PPV", {"master_group_id": 356}),
+            _FakeRule(2, "Dirtvision", {"master_group_id": 42}),
+        ]
+        lookup = build_event_sync_master_rule_lookup(rules, exclude_rule_id=2)
+        assert lookup == {356: "PPV"}
+
+    def test_skips_disabled_configs_and_non_event_sync_rules(self):
+        rules = [
+            _FakeRule(1, "Disabled", {"master_group_id": 1, "enabled": False}),
+            _FakeRule(2, "NotEventSync", None, event_sync=False),
+            _FakeRule(3, "NoConfig", None),
+        ]
+        assert build_event_sync_master_rule_lookup(rules) == {}
+
+    def test_reads_nested_master_scope_shape(self):
+        # bead jiscc provider-scoped shape: master group id may live in the
+        # nested "master" scope instead of the flat key.
+        rules = [_FakeRule(
+            1, "Scoped", {"master": {"group_id": 77, "m3u_account_id": 3}},
+        )]
+        assert build_event_sync_master_rule_lookup(rules) == {77: "Scoped"}
+
+
+class TestCrossRuleSecondaryConflict:
+    async def test_conflicting_master_gets_tailored_message(self):
+        # The live shape (user debug bundle): rule "Dirtvision" lists group
+        # 356 as a secondary, but 356 is rule "PPV"'s MASTER (auto-sync ON
+        # by requirement). The stock advice would break PPV.
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=True),
+            356: _group(auto_sync=True),  # PPV's master, our secondary
+        })
+        result = await check_event_sync_group_settings(
+            client, _config(master=10, secondaries=(356,)),
+            other_master_rules={356: "PPV"},
+        )
+        assert result["ok"] is False
+        (failure,) = result["failures"]
+        # Machine-readable check id is UNCHANGED (API contract).
+        assert failure["check"] == CHECK_SECONDARY_AUTO_SYNC_OFF
+        assert failure["conflicting_rule"] == "PPV"
+        assert "'PPV'" in failure["message"]
+        assert "Do NOT disable auto_channel_sync" in failure["message"]
+        assert "remove this group from this rule's secondary groups" \
+            in failure["message"]
+        # The stock "disable it" advice must be gone.
+        assert "Disable auto_channel_sync for it" not in failure["message"]
+
+    async def test_non_conflicting_group_keeps_generic_message(self):
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=True),
+            20: _group(auto_sync=True),  # plain misconfiguration
+        })
+        result = await check_event_sync_group_settings(
+            client, _config(master=10, secondaries=(20,)),
+            other_master_rules={356: "PPV"},  # different group
+        )
+        (failure,) = result["failures"]
+        assert failure["check"] == CHECK_SECONDARY_AUTO_SYNC_OFF
+        assert "conflicting_rule" not in failure
+        assert "Disable auto_channel_sync for it in Dispatcharr" \
+            in failure["message"]
+
+    async def test_omitted_lookup_preserves_prior_shape(self):
+        # Backward compatibility: callers that never pass the lookup get the
+        # exact pre-yjchp failure dict (no conflicting_rule key).
+        client = _ReadOnlyClient({
+            10: _group(auto_sync=True),
+            20: _group(auto_sync=True),
+        })
+        result = await check_event_sync_group_settings(
+            client, _config(master=10, secondaries=(20,))
+        )
+        (failure,) = result["failures"]
+        assert "conflicting_rule" not in failure
+        assert set(failure) == {
+            "group_id", "role", "check", "expected", "got", "message",
+        }
