@@ -716,6 +716,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
 
         {/* Footer */}
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
           <button
             className="modal-btn modal-btn-primary"
             onClick={handleSaveTask}

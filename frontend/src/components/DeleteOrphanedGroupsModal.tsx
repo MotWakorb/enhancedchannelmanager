@@ -111,6 +111,9 @@ function DeleteOrphanedGroupsModalInner({
         </div>
 
         <div className="modal-footer">
+          <button type="button" className="modal-btn modal-btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
           <button
             type="button"
             className="modal-btn modal-btn-danger"

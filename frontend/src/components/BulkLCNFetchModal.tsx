@@ -472,6 +472,9 @@ function BulkLCNFetchModalInner({
         </div>
 
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
           <button
             className="modal-btn modal-btn-primary"
             onClick={handleAssign}

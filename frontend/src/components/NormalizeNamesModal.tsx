@@ -197,6 +197,9 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
         </div>
 
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
           {normalizations.length > 0 && !loading && (
             <button
               className="modal-btn modal-btn-primary"
