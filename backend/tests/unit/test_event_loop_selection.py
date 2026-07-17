@@ -20,21 +20,27 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from tls.https_server import HTTPSServerManager, resolve_loop_choice
 from tls.settings import TLS_DIR
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
-def _run_entrypoint_launch_logic(loop_env_value):
+def _run_entrypoint_launch_logic(loop_env_value, extra_env=None):
     """Execute the real launch tail of entrypoint.sh (defaults + whitelist
     case-block + exec line) in a POSIX shell, with the final ``exec gosu
     appuser uvicorn`` swapped for an argv dumper.
 
+    ``extra_env`` overlays additional environment variables (e.g. the
+    numeric ECM_PORT / ECM_LIMIT_CONCURRENCY / ECM_TIMEOUT_KEEP_ALIVE
+    overrides guarded by bead enhancedchannelmanager-1xoiq).
+
     Returns ``(argv, warnings)`` where ``argv`` is the exact word-split
     argument vector uvicorn would have received — so these tests catch both
-    whitelist regressions AND quoting regressions (an unquoted ``--loop``
-    expansion would field-split a crafted value into extra argv entries).
+    whitelist regressions AND quoting regressions (an unquoted expansion
+    would field-split a crafted value into extra argv entries).
     """
     script = (BACKEND_DIR / "entrypoint.sh").read_text()
     marker = "ECM_LIMIT_CONCURRENCY="
@@ -50,6 +56,8 @@ def _run_entrypoint_launch_logic(loop_env_value):
     env = {"PATH": "/usr/bin:/bin", "ECM_PORT": "6100"}
     if loop_env_value is not None:
         env["ECM_UVICORN_LOOP"] = loop_env_value
+    if extra_env:
+        env.update(extra_env)
     proc = subprocess.run(
         ["sh", "-c", harness], capture_output=True, text=True, env=env,
     )
@@ -60,8 +68,12 @@ def _run_entrypoint_launch_logic(loop_env_value):
     return argv, warnings
 
 
+def _arg_value(argv, flag):
+    return argv[argv.index(flag) + 1]
+
+
 def _loop_value(argv):
-    return argv[argv.index("--loop") + 1]
+    return _arg_value(argv, "--loop")
 
 
 class TestResolveLoopChoice:
@@ -153,6 +165,93 @@ class TestEntrypointScript:
         script = (BACKEND_DIR / "entrypoint.sh").read_text()
         assert '--loop "${ECM_UVICORN_LOOP}"' in script, (
             "entrypoint.sh --loop expansion must be double-quoted"
+        )
+
+
+# (var, flag, default) for the numeric args on the entrypoint exec line
+# (bead enhancedchannelmanager-1xoiq; docs/style_guide.md "Shell Scripting").
+_NUMERIC_ARGS = [
+    ("ECM_PORT", "--port", "6100"),
+    ("ECM_LIMIT_CONCURRENCY", "--limit-concurrency", "100"),
+    ("ECM_TIMEOUT_KEEP_ALIVE", "--timeout-keep-alive", "30"),
+]
+
+
+class TestEntrypointNumericArgs:
+    """Behavioral guards for the numeric env expansions on the exec line
+    (bead enhancedchannelmanager-1xoiq): quoted, whitelist-validated to
+    digits, and failing closed to the default with a warning — never an
+    exit (set -e + exec would turn an exit into a container crash-loop).
+    """
+
+    def test_defaults_pass_through(self):
+        argv, warnings = _run_entrypoint_launch_logic(None)
+        assert _arg_value(argv, "--port") == "6100"
+        assert _arg_value(argv, "--limit-concurrency") == "100"
+        assert _arg_value(argv, "--timeout-keep-alive") == "30"
+        assert warnings == []
+
+    @pytest.mark.parametrize("var,flag,_default", _NUMERIC_ARGS)
+    def test_valid_override_passes_through(self, var, flag, _default):
+        argv, warnings = _run_entrypoint_launch_logic(None, {var: "4242"})
+        assert _arg_value(argv, flag) == "4242"
+        assert warnings == []
+
+    @pytest.mark.parametrize("var,flag,default", _NUMERIC_ARGS)
+    def test_non_numeric_falls_back_with_warning(self, var, flag, default):
+        argv, warnings = _run_entrypoint_launch_logic(None, {var: "banana"})
+        assert _arg_value(argv, flag) == default
+        assert len(warnings) == 1 and var in warnings[0]
+        assert "banana" in warnings[0]
+
+    def test_empty_limit_and_keepalive_use_defaults_silently(self):
+        # Empty (as opposed to invalid) is absorbed by the ${VAR:-default}
+        # expansions before validation runs — same silent-default behavior
+        # as before the guard existed.
+        argv, warnings = _run_entrypoint_launch_logic(
+            None, {"ECM_LIMIT_CONCURRENCY": "", "ECM_TIMEOUT_KEEP_ALIVE": ""}
+        )
+        assert _arg_value(argv, "--limit-concurrency") == "100"
+        assert _arg_value(argv, "--timeout-keep-alive") == "30"
+        assert warnings == []
+
+    def test_empty_port_falls_back(self):
+        # In production an empty ECM_PORT is defaulted at the top of the
+        # script; the launch-tail guard still refuses to hand uvicorn an
+        # empty --port value if it ever gets there.
+        argv, _ = _run_entrypoint_launch_logic(None, {"ECM_PORT": ""})
+        assert _arg_value(argv, "--port") == "6100"
+
+    @pytest.mark.parametrize("var,flag,default", _NUMERIC_ARGS)
+    def test_flag_injection_does_not_word_split(self, var, flag, default):
+        # A crafted multi-word value must never smuggle extra uvicorn flags
+        # into the argv: validation rejects it (fallback + warning), and the
+        # quoted expansion would keep it a single argv word even if
+        # validation were bypassed.
+        crafted = f"{default} --proxy-headers"
+        argv, warnings = _run_entrypoint_launch_logic(None, {var: crafted})
+        assert _arg_value(argv, flag) == default
+        assert "--proxy-headers" not in argv
+        assert len(warnings) == 1 and var in warnings[0]
+
+    def test_glob_value_is_not_expanded(self):
+        # An unquoted "*" would pathname-expand against the cwd before
+        # uvicorn ever saw it; it must instead be rejected and replaced by
+        # the default, with no filenames leaking into the argv.
+        argv, warnings = _run_entrypoint_launch_logic(
+            None, {"ECM_TIMEOUT_KEEP_ALIVE": "*"}
+        )
+        assert _arg_value(argv, "--timeout-keep-alive") == "30"
+        assert all("/" not in a and not a.endswith(".py") for a in argv[1:])
+        assert len(warnings) == 1 and "ECM_TIMEOUT_KEEP_ALIVE" in warnings[0]
+
+    @pytest.mark.parametrize("var,flag,_default", _NUMERIC_ARGS)
+    def test_expansion_is_quoted(self, var, flag, _default):
+        # Text-level belt to the behavioral suspenders (same guard as
+        # test_loop_expansion_is_quoted).
+        script = (BACKEND_DIR / "entrypoint.sh").read_text()
+        assert f'{flag} "${{{var}}}"' in script, (
+            f"entrypoint.sh {flag} expansion must be double-quoted"
         )
 
 

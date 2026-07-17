@@ -273,6 +273,31 @@ check_tls_config
 cd /app
 ECM_LIMIT_CONCURRENCY=${ECM_LIMIT_CONCURRENCY:-100}
 ECM_TIMEOUT_KEEP_ALIVE=${ECM_TIMEOUT_KEEP_ALIVE:-30}
+# Numeric guard (bead enhancedchannelmanager-1xoiq; docs/style_guide.md
+# "Shell Scripting"): these values land on the exec argv below, so
+# arbitrary env content must never pass through — digits only. Like the
+# ECM_UVICORN_LOOP whitelist, an invalid value fails CLOSED to the default
+# with a warning instead of exiting: set -e + exec would turn uvicorn's
+# argv rejection into a container restart loop with the same bad env var
+# still set on every attempt.
+case "${ECM_PORT}" in
+    *[!0-9]*|'')
+        print_warning "Invalid ECM_PORT='${ECM_PORT}' (must be numeric) — falling back to 6100"
+        ECM_PORT=6100
+        ;;
+esac
+case "${ECM_LIMIT_CONCURRENCY}" in
+    *[!0-9]*|'')
+        print_warning "Invalid ECM_LIMIT_CONCURRENCY='${ECM_LIMIT_CONCURRENCY}' (must be numeric) — falling back to 100"
+        ECM_LIMIT_CONCURRENCY=100
+        ;;
+esac
+case "${ECM_TIMEOUT_KEEP_ALIVE}" in
+    *[!0-9]*|'')
+        print_warning "Invalid ECM_TIMEOUT_KEEP_ALIVE='${ECM_TIMEOUT_KEEP_ALIVE}' (must be numeric) — falling back to 30"
+        ECM_TIMEOUT_KEEP_ALIVE=30
+        ;;
+esac
 # Whitelist mirror of tls/https_server.py resolve_loop_choice(): the value
 # lands in the uvicorn argv, so arbitrary env content must never pass
 # through (quoted expansion below prevents field-splitting a crafted value
@@ -291,7 +316,7 @@ case "${ECM_UVICORN_LOOP:-}" in
 esac
 exec gosu appuser uvicorn main:app \
     --host 0.0.0.0 \
-    --port ${ECM_PORT} \
+    --port "${ECM_PORT}" \
     --loop "${ECM_UVICORN_LOOP}" \
-    --limit-concurrency ${ECM_LIMIT_CONCURRENCY} \
-    --timeout-keep-alive ${ECM_TIMEOUT_KEEP_ALIVE}
+    --limit-concurrency "${ECM_LIMIT_CONCURRENCY}" \
+    --timeout-keep-alive "${ECM_TIMEOUT_KEEP_ALIVE}"
