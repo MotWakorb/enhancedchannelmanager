@@ -1590,11 +1590,23 @@ export async function getLogos(params?: {
   page?: number;
   pageSize?: number;
   search?: string;
+  /** Sort column. Passing either this or `unusedOnly` (or a non-empty
+   * `search`) routes the request through the backend's full-dataset
+   * aggregate path (bead enhancedchannelmanager-09x38.13) — see
+   * backend/routers/channels.py get_logos() for why Dispatcharr itself
+   * cannot sort or honor `search`. */
+  sortBy?: 'name' | 'channel_count';
+  sortOrder?: 'asc' | 'desc';
+  /** Only return logos with channel_count === 0. */
+  unusedOnly?: boolean;
 }): Promise<PaginatedResponse<Logo>> {
   const query = buildQuery({
     page: params?.page,
     page_size: params?.pageSize,
     search: params?.search,
+    sort_by: params?.sortBy,
+    sort_order: params?.sortOrder,
+    unused_only: params?.unusedOnly ? true : undefined,
   });
   // Debug instrumentation (bd-nh50y): the channel-edit-modal logo picker
   // had zero observability between the API response and the rendered grid,

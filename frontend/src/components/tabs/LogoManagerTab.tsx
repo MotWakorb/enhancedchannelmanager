@@ -1,5 +1,5 @@
 import { logger } from '../../utils/logger';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { Logo } from '../../types';
 import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
@@ -9,17 +9,34 @@ import './LogoManagerTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 
 type ViewMode = 'list' | 'grid';
+type SortColumn = 'name' | 'channel_count';
+type SortOrder = 'asc' | 'desc';
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250] as const;
 
 export function LogoManagerTab() {
   const notifications = useNotifications();
 
-  // Data state
+  // Data state — one server-fetched page at a time (bead
+  // enhancedchannelmanager-09x38.13). Previously this component called
+  // api.getAllLogos(1000) to pull the ENTIRE catalog (2,946+ logos) into the
+  // browser and did search/sort/pagination client-side. Sort and the
+  // unused-only filter are now server-side (see api.getLogos /
+  // backend/routers/channels.py get_logos()), so the tab fetches only the
+  // current page — sort/filter/search/pagination all compose in one request.
   const [logos, setLogos] = useState<Logo[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   // Search state
   const [searchInput, setSearchInput] = useState('');
+
+  // Sort state — defaults match Dispatcharr's own default ordering (by name,
+  // ascending) so a fresh page load looks identical to the old behavior.
+  const [sortBy, setSortBy] = useState<SortColumn>('name');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+
+  // Unused-only filter (channel_count === 0)
+  const [unusedOnly, setUnusedOnly] = useState(false);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -39,21 +56,28 @@ export function LogoManagerTab() {
   // Track logos with failed image loads
   const [failedImages, setFailedImages] = useState<Set<number>>(new Set());
 
-  // Load all logos (Dispatcharr caps at 1000/page and ignores server-side search).
-  // Pagination + diagnostics live in api.getAllLogos (bd-nh50y) — see
-  // services/api.ts for the log-line contract this path emits.
+  // Load the current page of logos from the server, with the active
+  // search/sort/unused-only filter composed into one request.
   const loadLogos = useCallback(async () => {
     setLoading(true);
     setFailedImages(new Set());
     try {
-      const allLogos = await api.getAllLogos(1000);
-      setLogos(allLogos);
+      const response = await api.getLogos({
+        page,
+        pageSize,
+        search: searchInput || undefined,
+        sortBy,
+        sortOrder,
+        unusedOnly,
+      });
+      setLogos(response.results);
+      setTotalCount(response.count);
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to load logos', 'Logos');
     } finally {
       setLoading(false);
     }
-  }, [notifications]);
+  }, [page, pageSize, searchInput, sortBy, sortOrder, unusedOnly, notifications]);
 
   // Handle image load error
   const handleImageError = useCallback((logoId: number) => {
@@ -64,23 +88,31 @@ export function LogoManagerTab() {
     loadLogos();
   }, [loadLogos]);
 
-  // Client-side filtering (Dispatcharr doesn't support server-side search)
-  const filteredLogos = useMemo(() => {
-    if (!searchInput) return logos;
-    const searchLower = searchInput.toLowerCase();
-    return logos.filter(l => l.name.toLowerCase().includes(searchLower));
-  }, [logos, searchInput]);
-
-  // Reset to page 1 when search or page size changes
+  // Reset to page 1 whenever search, sort, the unused-only filter, or page
+  // size changes — the previous page number is meaningless against a new
+  // result set.
   useEffect(() => {
     setPage(1);
-  }, [searchInput, pageSize]);
+  }, [searchInput, sortBy, sortOrder, unusedOnly, pageSize]);
 
-  // Pagination calculations
-  const totalPages = Math.max(1, Math.ceil(filteredLogos.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const startIdx = (safePage - 1) * pageSize;
-  const pageLogos = filteredLogos.slice(startIdx, startIdx + pageSize);
+  // Column sort handler — mirrors M3UChangesTab's sortable-header pattern
+  // (docs/style_guide.md): same column toggles direction, a new column
+  // defaults to ascending.
+  const handleSort = (column: SortColumn) => {
+    if (sortBy === column) {
+      setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(column);
+      setSortOrder('asc');
+    }
+  };
+
+  const getSortIndicator = (column: SortColumn) => {
+    if (sortBy !== column) return null;
+    return sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward';
+  };
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const handleAddLogo = () => {
     setEditingLogo(null);
@@ -129,7 +161,7 @@ export function LogoManagerTab() {
   };
 
   // Render loading state
-  if (loading && logos.length === 0) {
+  if (loading && logos.length === 0 && totalCount === 0) {
     return (
       <div className="logo-manager-tab">
         <div className="tab-loading">
@@ -140,13 +172,15 @@ export function LogoManagerTab() {
     );
   }
 
+  const filtersActive = Boolean(searchInput) || unusedOnly;
+
   return (
     <div className="logo-manager-tab">
       {/* Header */}
       <PageHeader
         className="logo-header"
         title="Logos"
-        description={`Manage logos for your channels (${filteredLogos.length}${searchInput ? ` of ${logos.length}` : ''} total)`}
+        description={`Manage logos for your channels (${totalCount}${filtersActive ? ' matching' : ' total'})`}
         actions={(
           <>
             {/* Search */}
@@ -170,6 +204,19 @@ export function LogoManagerTab() {
                 </button>
               )}
             </div>
+
+            {/* Unused-only filter toggle */}
+            <button
+              type="button"
+              className={`unused-only-toggle${unusedOnly ? ' active' : ''}`}
+              onClick={() => setUnusedOnly(prev => !prev)}
+              title="Show only logos with no channels using them"
+              aria-label="Show only unused logos"
+              aria-pressed={unusedOnly}
+            >
+              <span className="material-icons" aria-hidden="true">filter_alt</span>
+              Unused only
+            </button>
 
             {/* View Toggle */}
             <div className="view-toggle">
@@ -204,17 +251,17 @@ export function LogoManagerTab() {
 
       {/* Content */}
       <div className="logos-container">
-        {filteredLogos.length === 0 ? (
+        {logos.length === 0 ? (
           // Empty State
           <div className="empty-state">
             <span className="material-icons">image</span>
-            <h3>{searchInput ? 'No logos found' : 'No logos yet'}</h3>
+            <h3>{filtersActive ? 'No logos found' : 'No logos yet'}</h3>
             <p>
-              {searchInput
-                ? 'Try adjusting your search terms'
+              {filtersActive
+                ? 'Try adjusting your search or filters'
                 : 'Add your first logo to get started'}
             </p>
-            {!searchInput && (
+            {!filtersActive && (
               <button className="btn-primary" onClick={handleAddLogo}>
                 <span className="material-icons">add</span>
                 Add Logo
@@ -226,12 +273,22 @@ export function LogoManagerTab() {
           <div className="logos-list">
             <div className="list-header">
               <span>Logo</span>
-              <span>Name</span>
+              <span className="sortable" onClick={() => handleSort('name')}>
+                Name
+                {getSortIndicator('name') && (
+                  <span className="material-icons sort-icon">{getSortIndicator('name')}</span>
+                )}
+              </span>
               <span>URL</span>
-              <span>Used By</span>
+              <span className="sortable" onClick={() => handleSort('channel_count')}>
+                Used By
+                {getSortIndicator('channel_count') && (
+                  <span className="material-icons sort-icon">{getSortIndicator('channel_count')}</span>
+                )}
+              </span>
               <span>Actions</span>
             </div>
-            {pageLogos.map((logo) => (
+            {logos.map((logo) => (
               <div key={logo.id} className="logo-row">
                 <div className="logo-thumbnail">
                   {failedImages.has(logo.id) ? (
@@ -289,9 +346,10 @@ export function LogoManagerTab() {
             ))}
           </div>
         ) : (
-          // Grid View
+          // Grid View — same server-sorted/filtered page as List View, just
+          // no column headers to click (there's nothing to sort by in a grid).
           <div className="logos-grid">
-            {pageLogos.map((logo) => (
+            {logos.map((logo) => (
               <div key={logo.id} className="logo-card">
                 <div className="card-thumbnail">
                   {failedImages.has(logo.id) ? (
@@ -353,18 +411,18 @@ export function LogoManagerTab() {
       </div>
 
       {/* Pagination */}
-      {filteredLogos.length > 0 && (
+      {totalCount > 0 && (
         <div className="logo-pagination">
           <div className="pagination-left">
             <span className="pagination-info">
-              {startIdx + 1}–{Math.min(startIdx + pageSize, filteredLogos.length)} of {filteredLogos.length}
+              {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalCount)} of {totalCount}
             </span>
           </div>
           <div className="pagination-center">
             <button
               className="page-btn"
               onClick={() => setPage(1)}
-              disabled={safePage <= 1}
+              disabled={page <= 1 || loading}
               title="First page"
               aria-label="First page"
             >
@@ -373,19 +431,19 @@ export function LogoManagerTab() {
             <button
               className="page-btn"
               onClick={() => setPage(p => p - 1)}
-              disabled={safePage <= 1}
+              disabled={page <= 1 || loading}
               title="Previous page"
               aria-label="Previous page"
             >
               <span className="material-icons" aria-hidden="true">chevron_left</span>
             </button>
             <span className="page-indicator">
-              Page {safePage} of {totalPages}
+              Page {page} of {totalPages}
             </span>
             <button
               className="page-btn"
               onClick={() => setPage(p => p + 1)}
-              disabled={safePage >= totalPages}
+              disabled={page >= totalPages || loading}
               title="Next page"
               aria-label="Next page"
             >
@@ -394,7 +452,7 @@ export function LogoManagerTab() {
             <button
               className="page-btn"
               onClick={() => setPage(totalPages)}
-              disabled={safePage >= totalPages}
+              disabled={page >= totalPages || loading}
               title="Last page"
               aria-label="Last page"
             >

@@ -461,20 +461,66 @@ async def get_logos(
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     page_size: int = Query(100, ge=1, le=10000, description="Results per page"),
     search: Optional[str] = None,
+    sort_by: Optional[Literal["name", "channel_count"]] = Query(
+        None, description="Column to sort by. Requires ECM-side aggregation (see below)."
+    ),
+    sort_order: Literal["asc", "desc"] = Query("asc", description="Sort direction"),
+    unused_only: bool = Query(False, description="Only return logos with channel_count == 0"),
 ):
-    """List logos with pagination and search.
+    """List logos with pagination, search, sort, and an unused-only filter.
 
     Emits a single-line INFO diagnostic per request (bd-nh50y) so operators
     can grep one log line per request and see page/page_size/search/result
     count/elapsed/next-flag without enabling DEBUG. Per-row logging is
     intentionally avoided — at page_size=500 this is the channel-edit-modal
     fetch path and per-row would flood the log.
+
+    Sort/filter (bead enhancedchannelmanager-09x38.13): Dispatcharr's
+    LogoViewSet has no ordering support and its ``search`` query param is a
+    no-op (only ``name``/``used``/``ids`` are read — confirmed by reading
+    apps/channels/api_views.py in the live dispatcharr container). So when
+    ``sort_by``, ``unused_only``, or a non-empty ``search`` is requested,
+    this endpoint fetches the COMPLETE logo list from Dispatcharr in one
+    call (client.get_all_logos_raw(), via Dispatcharr's `no_pagination=true`
+    escape hatch) and sorts/filters/paginates it locally in Python — this
+    is what makes sort and the unused-only filter truthful across pages.
+    Requests using none of those three params take the original zero-
+    overhead single-Dispatcharr-page passthrough (unchanged, backward
+    compatible with LogoModal's picker, AutoSyncSettingsModal, GuideTab,
+    and getAllLogos()).
     """
     logger.debug("[CHANNELS-LOGO] GET /channels/logos - page=%s search=%s", page, search)
     client = get_client()
     try:
         start = time.time()
-        result = await client.get_logos(page=page, page_size=page_size, search=search)
+        if sort_by is not None or unused_only or search:
+            all_logos = await client.get_all_logos_raw()
+            if search:
+                search_lower = search.lower()
+                all_logos = [
+                    logo for logo in all_logos
+                    if search_lower in (logo.get("name") or "").lower()
+                ]
+            if unused_only:
+                all_logos = [logo for logo in all_logos if (logo.get("channel_count") or 0) == 0]
+
+            reverse = sort_order == "desc"
+            if sort_by == "channel_count":
+                all_logos.sort(key=lambda logo: logo.get("channel_count") or 0, reverse=reverse)
+            else:
+                all_logos.sort(key=lambda logo: (logo.get("name") or "").lower(), reverse=reverse)
+
+            total = len(all_logos)
+            start_idx = (page - 1) * page_size
+            page_items = all_logos[start_idx:start_idx + page_size]
+            result = {
+                "count": total,
+                "next": "true" if start_idx + page_size < total else None,
+                "previous": "true" if page > 1 else None,
+                "results": page_items,
+            }
+        else:
+            result = await client.get_logos(page=page, page_size=page_size, search=search)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS-LOGO] Fetched logos in %.1fms", elapsed_ms)
         # Single-line INFO diagnostic for the operator-grepable trace (bd-nh50y).

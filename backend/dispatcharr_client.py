@@ -890,6 +890,24 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_all_logos_raw(self) -> list[dict]:
+        """Fetch the complete, unpaginated list of logos from Dispatcharr.
+
+        Dispatcharr's LogoViewSet has no ordering support and its DjangoFilterBackend
+        declares no filterset_fields, so there is no ``ordering`` param to forward
+        (confirmed by reading apps/channels/api_views.py in the live dispatcharr
+        container — get_queryset() unconditionally ends with `.order_by('name')`).
+        ECM's sort_by/sort_order/unused_only support (bead enhancedchannelmanager-
+        09x38.13) therefore fetches everything in one call — via the
+        ``no_pagination=true`` escape hatch LogoPagination.paginate_queryset already
+        supports — and sorts/filters/paginates locally in Python.
+        """
+        response = await self._request(
+            "GET", "/api/channels/logos/", params={"no_pagination": "true"}
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_logo(self, logo_id: int) -> dict:
         """Get a single logo by ID."""
         response = await self._request("GET", f"/api/channels/logos/{logo_id}/")
