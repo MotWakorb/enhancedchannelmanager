@@ -281,10 +281,36 @@
   }
 }
 
-/* Dummy EPG Sources Section */
+/* Dummy EPG Sources Section (legacy, grandfathered) */
 .dummy-epg-section {
   margin-top: 2rem;
   flex-shrink: 0;
+}
+
+/* Legacy deprecation notice (bead 09x38.4) */
+.dummy-epg-deprecation-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-warning, #8a6d1f);
+  border-left: 3px solid var(--color-warning, #d9a627);
+  border-radius: var(--radius-lg);
+}
+
+.dummy-epg-deprecation-notice .material-icons {
+  font-size: 20px;
+  color: var(--color-warning, #d9a627);
+  flex-shrink: 0;
+}
+
+.dummy-epg-deprecation-notice p {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
 }
 
 /* Dummy Empty State */

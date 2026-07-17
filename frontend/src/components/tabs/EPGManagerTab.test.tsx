@@ -1,0 +1,133 @@
+/**
+ * Unit tests for EPGManagerTab — legacy "Dummy EPG Sources" section folding
+ * (bead enhancedchannelmanager-09x38.4).
+ *
+ * PO DECISION #2 (Option B): the ECM "Dummy EPG Profiles" path is the
+ * supported one; the legacy Dispatcharr `source_type=dummy` section is
+ * deprecated. When an instance has ZERO legacy dummy sources the whole
+ * section disappears (no empty state, no "+ Add"). When legacy sources exist
+ * (grandfathered on other deployments) they render — visible, editable — with
+ * a deprecation notice and NO new-creation affordance.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { EPGManagerTab } from './EPGManagerTab';
+import type { EPGSource } from '../../types';
+
+vi.mock('../../services/api', () => ({
+  getEPGSources: vi.fn(),
+  getEPGSource: vi.fn(),
+  updateEPGSource: vi.fn(),
+  deleteEPGSource: vi.fn(),
+  refreshEPGSource: vi.fn(),
+  createEPGSource: vi.fn(),
+  triggerEPGImport: vi.fn(),
+}));
+
+// Isolate the legacy section: stub the ECM profiles section (it fetches on
+// mount) and the legacy edit modal.
+vi.mock('../DummyEPGManagerSection', () => ({
+  DummyEPGManagerSection: () => <div data-testid="ecm-dummy-epg-profiles" />,
+}));
+vi.mock('../DummyEPGSourceModal', () => ({
+  DummyEPGSourceModal: () => null,
+}));
+
+vi.mock('../../contexts/NotificationContext', () => ({
+  useNotifications: () => ({
+    success: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+import * as api from '../../services/api';
+
+function makeSource(overrides: Partial<EPGSource>): EPGSource {
+  return {
+    id: 1,
+    name: 'Source',
+    source_type: 'xmltv',
+    url: 'https://example.com/epg.xml',
+    api_key: null,
+    username: null,
+    is_active: true,
+    file_path: null,
+    refresh_interval: 24,
+    priority: 0,
+    status: 'success',
+    last_message: null,
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-01T00:00:00Z',
+    custom_properties: null,
+    epg_data_count: '0',
+    ...overrides,
+  };
+}
+
+describe('EPGManagerTab — legacy Dummy EPG Sources section', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('hides the legacy section entirely when there are zero legacy dummy sources', async () => {
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru XMLTV', source_type: 'xmltv' }),
+    ]);
+
+    render(<EPGManagerTab />);
+
+    // Standard list has rendered.
+    expect(await screen.findByText('Guru XMLTV')).toBeInTheDocument();
+
+    // No legacy section header, empty-state, deprecation notice, or Add button.
+    expect(screen.queryByText(/Dummy EPG Sources/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Add Dummy EPG/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/No dummy EPG sources/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/deprecated/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('grandfathers existing legacy dummy sources: visible, manageable, deprecation notice, no Add', async () => {
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru XMLTV', source_type: 'xmltv' }),
+      makeSource({
+        id: 2,
+        name: 'Old Dummy Source',
+        source_type: 'dummy',
+        url: null,
+      }),
+    ]);
+
+    render(<EPGManagerTab />);
+
+    // Legacy source renders (not stranded).
+    expect(await screen.findByText('Old Dummy Source')).toBeInTheDocument();
+
+    // Section header marks it legacy, deprecation notice points to profiles.
+    expect(screen.getByText(/Dummy EPG Sources \(Legacy\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/deprecated/i)).toBeInTheDocument();
+    expect(screen.getByText(/Dummy EPG Profiles/i)).toBeInTheDocument();
+
+    // Manageable: edit/delete/toggle controls still present on the legacy row.
+    const legacyRow = screen.getByText('Old Dummy Source').closest('.dummy-source-row') as HTMLElement;
+    expect(legacyRow).not.toBeNull();
+    const within = (name: RegExp) =>
+      Array.from(legacyRow.querySelectorAll('button')).find(
+        (b) => name.test(b.getAttribute('aria-label') || '')
+      );
+    expect(within(/Edit EPG source/i)).toBeTruthy();
+    expect(within(/Delete EPG source/i)).toBeTruthy();
+    expect(within(/Enable EPG source|Disable EPG source/i)).toBeTruthy();
+
+    // No new-creation affordance.
+    expect(
+      screen.queryByRole('button', { name: /Add Dummy EPG/i })
+    ).not.toBeInTheDocument();
+  });
+});

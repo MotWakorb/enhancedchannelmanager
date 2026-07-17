@@ -67,6 +67,22 @@ SD enforces rate limits, so the refresh interval has a **2-hour minimum** (24
 hours recommended). After adding lineups, run a refresh, then use
 **channel-to-EPG matching** to link your channels to SD stations.
 
+## Dummy EPG
+
+Dummy EPG generates programme listings from channel/stream **names** (via regex
+patterns and templates) for channels that have no upstream guide data. In ECM
+this is managed in the **Dummy EPG Profiles** section at the bottom of the EPG
+Manager tab: create a profile, then copy its XMLTV URL (or use *Add to
+Dispatcharr*) to wire it in as a guide source. Profiles offer live preview,
+rich per-state templates, and Event Sync integration.
+
+> **Legacy note.** ECM previously also exposed Dispatcharr's native
+> `source_type=dummy` EPG sources through a separate "Dummy EPG Sources"
+> section. That path is **deprecated**: the section now appears only if such
+> sources already exist on your instance, and it no longer lets you create new
+> ones. Existing legacy sources keep working and stay editable — nothing is
+> removed — but new dummy EPG should be authored as a **Dummy EPG Profile**.
+
 ## Going deeper
 
 - [`docs/template_engine.md`](../../template_engine.md) — full dummy EPG template syntax reference (placeholders, pipes, conditionals).

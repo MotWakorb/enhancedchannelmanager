@@ -948,12 +948,9 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     onSourcesChange?.();
   };
 
-  // Dummy EPG handlers
-  const handleAddDummySource = () => {
-    setEditingDummySource(null);
-    setDummyModalOpen(true);
-  };
-
+  // Dummy EPG handlers. New-creation is intentionally absent: the legacy
+  // Dispatcharr `source_type=dummy` path is deprecated in favor of the Dummy
+  // EPG Profiles section (bead 09x38.4). Existing legacy sources stay editable.
   const handleEditDummySource = async (source: EPGSource) => {
     try {
       // Fetch full source details to get custom_properties
@@ -1140,27 +1137,33 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         </div>
       )}
 
-      {/* Dummy EPG Sources Section */}
+      {/*
+        Legacy "Dummy EPG Sources" section (Dispatcharr-native
+        `source_type=dummy`). Deprecated in favor of Dummy EPG Profiles
+        (bead 09x38.4). Renders ONLY when legacy sources already exist so it
+        folds away entirely on instances with none; existing ones are
+        grandfathered — editable, but with no new-creation affordance.
+      */}
+      {dummySources.length > 0 && (
       <div className="dummy-epg-section">
         <PageHeader
           className="epg-header"
-          title="Dummy EPG Sources"
-          description="Pattern-based EPG sources that generate programs from channel/stream names."
-          actions={(
-            <button className="btn-primary" onClick={handleAddDummySource}>
-              <span className="material-icons">add</span>
-              Add Dummy EPG
-            </button>
-          )}
+          title="Dummy EPG Sources (Legacy)"
+          description="Legacy Dispatcharr dummy EPG sources. Existing sources stay editable."
         />
 
-        {dummySources.length === 0 ? (
-          <div className="dummy-empty-state">
-            <span className="material-icons">auto_fix_high</span>
-            <p>No dummy EPG sources. Create one to generate EPG data from channel names using regex patterns.</p>
-          </div>
-        ) : (
-          <div className="dummy-sources-list">
+        <div className="dummy-epg-deprecation-notice">
+          <span className="material-icons" aria-hidden="true">info</span>
+          <p>
+            This legacy dummy EPG source type is deprecated. Use the{' '}
+            <strong>Dummy EPG Profiles</strong> section below for new dummy EPG
+            data — it offers live preview, richer templates, and Event Sync
+            integration. Existing sources here remain editable but new ones can
+            no longer be created.
+          </p>
+        </div>
+
+        <div className="dummy-sources-list">
             {dummySources.map((source) => (
               <div key={source.id} className={`dummy-source-row ${!source.is_active ? 'inactive' : ''}`}>
                 <div className={`dummy-status ${source.is_active ? 'active' : 'disabled'}`}>
@@ -1206,9 +1209,9 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                 </div>
               </div>
             ))}
-          </div>
-        )}
+        </div>
       </div>
+      )}
 
       <EPGSourceModal
         isOpen={modalOpen}
@@ -1224,7 +1227,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         onSave={handleSaveDummySource}
       />
 
-      {/* ECM Native Dummy EPG Profiles */}
+      {/* Dummy EPG Profiles — the supported dummy EPG path (bead 09x38.4) */}
       <DummyEPGManagerSection onSourcesChanged={loadSources} />
     </div>
   );

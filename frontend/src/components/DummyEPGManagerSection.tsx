@@ -255,7 +255,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
   if (loading) {
     return (
       <div className="dep-manager-section">
-        <PageHeader className="dep-manager-header" title="ECM Dummy EPG Profiles" />
+        <PageHeader className="dep-manager-header" title="Dummy EPG Profiles" />
         <div className="dep-loading">
           <span className="material-icons spinning">sync</span>
           Loading profiles...
@@ -268,7 +268,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
     <div className="dep-manager-section">
       <PageHeader
         className="dep-manager-header"
-        title="ECM Dummy EPG Profiles"
+        title="Dummy EPG Profiles"
         description="Generate EPG data from channel/stream names using regex patterns and substitution rules. Copy the XMLTV URL to add as a source in Dispatcharr."
         actions={(
           <>
@@ -318,7 +318,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
       {profiles.length === 0 ? (
         <div className="dep-empty-state">
           <span className="material-icons">auto_fix_high</span>
-          <p>No ECM Dummy EPG profiles. Create one to generate EPG data from channel names using regex patterns and substitution pairs.</p>
+          <p>No Dummy EPG profiles. Create one to generate EPG data from channel names using regex patterns and substitution pairs.</p>
         </div>
       ) : (
         <div className="dep-profiles-list">
@@ -333,7 +333,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
               <div className="dep-profile-info">
                 <div className="dep-profile-name">{profile.name}</div>
                 <div className="dep-profile-details">
-                  <span className="dep-profile-type">ECM Dummy</span>
+                  <span className="dep-profile-type">Dummy</span>
                   <span className="dep-profile-channels">
                     {profile.group_count ?? 0} group{(profile.group_count ?? 0) !== 1 ? 's' : ''}
                   </span>
