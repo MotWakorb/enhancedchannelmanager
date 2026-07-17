@@ -275,20 +275,26 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
     }
   };
 
-  // Build and save custom properties
+  // Build and save custom properties.
+  // Start from the group's CURRENT stored custom_properties and overlay only
+  // the keys this form manages — Dispatcharr's group-settings upsert replaces
+  // custom_properties wholesale, and its sync consumes keys this form doesn't
+  // model (channel_numbering_mode, force_dummy_epg, ...), so unknown keys
+  // must survive verbatim (bead enhancedchannelmanager-igqcy). Managed keys
+  // that were cleared are deleted (Dispatcharr treats absence as unset).
   const handleSave = () => {
-    const props: AutoSyncCustomProperties = {};
+    const props: AutoSyncCustomProperties = { ...(customProperties ?? {}) };
 
-    if (epgSourceId) props.custom_epg_id = epgSourceId;
-    if (groupOverride) props.group_override = parseInt(groupOverride, 10);
-    if (nameRegexPattern) props.name_regex_pattern = nameRegexPattern;
-    if (nameReplacePattern !== undefined && nameRegexPattern) props.name_replace_pattern = nameReplacePattern;
-    if (channelNameFilter) props.name_match_regex = channelNameFilter;
-    if (selectedProfileIds.size > 0) props.channel_profile_ids = Array.from(selectedProfileIds);
-    if (sortOrder) props.channel_sort_order = sortOrder as 'provider' | 'name' | 'tvg_id' | 'updated_at';
-    if (sortReverse) props.channel_sort_reverse = sortReverse;
-    if (streamProfileId) props.stream_profile_id = parseInt(streamProfileId, 10);
-    if (customLogoId) props.custom_logo_id = parseInt(customLogoId, 10);
+    if (epgSourceId) props.custom_epg_id = epgSourceId; else delete props.custom_epg_id;
+    if (groupOverride) props.group_override = parseInt(groupOverride, 10); else delete props.group_override;
+    if (nameRegexPattern) props.name_regex_pattern = nameRegexPattern; else delete props.name_regex_pattern;
+    if (nameReplacePattern !== undefined && nameRegexPattern) props.name_replace_pattern = nameReplacePattern; else delete props.name_replace_pattern;
+    if (channelNameFilter) props.name_match_regex = channelNameFilter; else delete props.name_match_regex;
+    if (selectedProfileIds.size > 0) props.channel_profile_ids = Array.from(selectedProfileIds); else delete props.channel_profile_ids;
+    if (sortOrder) props.channel_sort_order = sortOrder as 'provider' | 'name' | 'tvg_id' | 'updated_at'; else delete props.channel_sort_order;
+    if (sortReverse) props.channel_sort_reverse = sortReverse; else delete props.channel_sort_reverse;
+    if (streamProfileId) props.stream_profile_id = parseInt(streamProfileId, 10); else delete props.stream_profile_id;
+    if (customLogoId) props.custom_logo_id = parseInt(customLogoId, 10); else delete props.custom_logo_id;
 
     onSave(props);
     onClose();
@@ -799,6 +805,14 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                 )}
               </div>
               <span className="form-hint">Override the logo for all channels in this group</span>
+            </div>
+
+            {/* Saving here only stages the settings on the parent modal —
+                no refresh happens until the operator hits Save & Refresh. */}
+            <div className="modal-form-group">
+              <span className="form-hint">
+                Saved settings are applied when you Save &amp; Refresh in Manage Groups.
+              </span>
             </div>
           </div>
         </div>
