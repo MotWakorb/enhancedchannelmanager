@@ -1210,6 +1210,86 @@ describe('EventSyncRuleEditor', () => {
     });
   });
 
+  describe('stream order (bead io0tv)', () => {
+    it('defaults to no sorting: save emits empty stream_sort_field (no behavior change)', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].stream_sort_field).toBe('');
+    });
+
+    it('selecting Provider Order emits stream_sort_field with the desc default', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await goToStep(user, 3);
+      await user.click(screen.getByText('Stream order', { selector: 'summary' }));
+      await user.click(
+        screen.getByRole('button', { name: /no sorting — attach order/i })
+      );
+      await user.click(
+        await screen.findByRole('option', { name: 'Provider Order (M3U)' })
+      );
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0];
+      expect(saved.stream_sort_field).toBe('provider_order');
+      expect(saved.stream_sort_order).toBe('desc');
+    });
+
+    it('round-trips an existing rule with stream sort set on an untouched save', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(
+        <EventSyncRuleEditor
+          rule={{
+            ...EXISTING_RULE,
+            stream_sort_field: 'provider_order',
+            stream_sort_order: 'asc',
+          }}
+          onSave={onSave}
+          onCancel={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const saved = onSave.mock.calls[0][0];
+      expect(saved.stream_sort_field).toBe('provider_order');
+      expect(saved.stream_sort_order).toBe('asc');
+    });
+
+    it('mentions the stream order in the rule-intent sentence once a sort is picked', async () => {
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      render(
+        <EventSyncRuleEditor
+          rule={{ ...EXISTING_RULE, stream_sort_field: 'provider_order' }}
+          onSave={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+
+      const intent = await screen.findByTestId('event-sync-intent');
+      expect(intent).toHaveTextContent(
+        /orders each master channel's streams by provider order/i
+      );
+    });
+  });
+
   it('has NO apply or attach control anywhere (Phase 1A hard constraint)', async () => {
     seedGroups();
     stubGroupSettings({ 1: true, 2: false });

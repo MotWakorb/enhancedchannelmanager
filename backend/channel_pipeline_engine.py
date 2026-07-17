@@ -2480,6 +2480,13 @@ class ChannelPipelineEngine:
                 event_sync_rules, executor, results, dry_run,
                 triggered_by=triggered_by,
                 channels_touched_ids=channels_touched_ids,
+                # bead io0tv: the attach phase registers each rule's touched
+                # master channels for Pass 3.5 stream reorder, and extends
+                # stream_m3u_map with provider ids for the master + secondary
+                # streams so provider_order / quality-tie-break sorts score
+                # them correctly.
+                rule_channel_order_streams=rule_channel_order_streams,
+                stream_m3u_map=stream_m3u_map,
             )
 
         # =====================================================================
@@ -2600,8 +2607,17 @@ class ChannelPipelineEngine:
             # Pass 3.5: Reorder streams within channels by smart sort
             # =================================================================
             logger.debug("[AUTO-CREATE-ENGINE] Starting stream reorder within channels")
+            # bead io0tv: event_sync rules participate in Pass 3.5 too — their
+            # stream_sort_field/stream_sort_order columns order streams within
+            # the master channels the attach phase touched this run (registered
+            # in rule_channel_order_streams by _run_event_sync_rules). Rules
+            # without stream_sort_field are no-ops inside, so pre-feature
+            # event_sync rules keep their append-only behavior unchanged.
+            # Pass 3 (renumber) and Pass 4 (orphan reconcile) still receive
+            # ONLY the standard rules.
             await self._reorder_channel_streams(
-                rules, rule_channel_order_streams, results, dry_run,
+                rules + list(event_sync_rules or []),
+                rule_channel_order_streams, results, dry_run,
                 settings=settings, stream_m3u_map=stream_m3u_map,
                 custom_stream_ids=custom_stream_ids,
             )
@@ -3061,6 +3077,8 @@ class ChannelPipelineEngine:
         dry_run: bool,
         triggered_by: str,
         channels_touched_ids: set,
+        rule_channel_order_streams: dict = None,
+        stream_m3u_map: dict = None,
     ) -> None:
         """Execute the event_sync attach phase (bead ti939.2.1 — Phase 1B).
 
@@ -3082,6 +3100,21 @@ class ChannelPipelineEngine:
 
         NEVER: creates/deletes channels, touches managed_channel_ids, or
         toggles Dispatcharr group settings.
+
+        Pass 3.5 participation (bead io0tv): when the caller supplies
+        ``rule_channel_order_streams``, each rule registers the master
+        channels its attaches touched — INCLUDING idempotent already-attached
+        no-ops — so a rule with ``stream_sort_field`` set (e.g.
+        ``provider_order``) reorders its masters' streams on EVERY run, not
+        only runs that performed a new attach (ordering heals after the
+        operator changes M3U account priorities). ``stream_m3u_map`` is
+        extended with provider ids from the secondary fetch (which still
+        contains streams attached on PRIOR runs — they stay resident in
+        their secondary groups) plus one bulk ``get_streams_by_ids`` read
+        for the masters' own uncovered streams, so provider_order scoring
+        sees every stream on the channel. Rules without a
+        ``stream_sort_field`` register too but Pass 3.5 no-ops them —
+        pre-feature rules keep append-only attach semantics unchanged.
 
         Unattended (watermark-triggered, ti939.3.1) calls add three gates on
         top of the manual path, each pinned by its own test:
@@ -3467,6 +3500,80 @@ class ChannelPipelineEngine:
                         "would_create": False,
                         "would_modify": not entry.get("skipped", False),
                     })
+
+            # bead io0tv: register this rule's touched master channels for
+            # Pass 3.5 stream reorder. Two sources, unioned:
+            # * exec_ctx.merged_channel_ids — masters that received a REAL
+            #   attach this run (the add_result chokepoint; live and dry-run);
+            # * skipped attach_entries — masters whose stream was ALREADY
+            #   attached (idempotent no-op). Registering these too means a
+            #   stream_sort_field rule re-heals ordering on every run, not
+            #   only on runs that performed a new attach (attach is
+            #   idempotent, so steady-state runs are mostly no-ops).
+            # Dedupe preserves first-seen order (same pattern as Pass 2's
+            # rule_channel_order_streams append).
+            if rule_channel_order_streams is not None:
+                order_list = rule_channel_order_streams.setdefault(rule.id, [])
+                reorder_cids = list(exec_ctx.merged_channel_ids)
+                reorder_cids.extend(
+                    entry["entity_id"] for entry in attach_entries
+                    if entry.get("success") and entry.get("entity_id") is not None
+                )
+                for cid in reorder_cids:
+                    if cid not in order_list:
+                        order_list.append(cid)
+
+                # Provider coverage for provider_order / quality-tie-break
+                # scoring: without a stream_id -> m3u_account_id entry a
+                # stream scores priority 0 and sinks. The secondary fetch
+                # already carries provider_id for every secondary-group
+                # stream — including ones attached on PRIOR runs, which stay
+                # resident in their secondary groups.
+                if stream_m3u_map is not None:
+                    for s in secondary_streams:
+                        if s.stream_id is not None \
+                                and s.stream_id not in stream_m3u_map:
+                            stream_m3u_map[s.stream_id] = s.provider_id
+
+                    # The masters' own streams (Dispatcharr-attached from the
+                    # master group's provider) are NOT in the secondary fetch
+                    # unless include_master_group_streams is on — resolve the
+                    # remainder with one bulk read. Only when this rule will
+                    # actually sort (stream_sort_field set): otherwise the
+                    # call would be a wasted round-trip.
+                    if getattr(rule, "stream_sort_field", None):
+                        uncovered: list[int] = []
+                        for cid in order_list:
+                            ch = executor._channel_by_id.get(cid) or {}
+                            for s in ch.get("streams", []) or []:
+                                sid = s["id"] if isinstance(s, dict) else s
+                                if sid is not None \
+                                        and sid not in stream_m3u_map \
+                                        and sid not in uncovered:
+                                    uncovered.append(sid)
+                        if uncovered:
+                            try:
+                                from stream_prober import extract_m3u_account_id
+                                fetched = await self.client.get_streams_by_ids(
+                                    uncovered
+                                )
+                                for s in fetched or []:
+                                    sid = s.get("id")
+                                    if sid is not None \
+                                            and sid not in stream_m3u_map:
+                                        stream_m3u_map[sid] = (
+                                            extract_m3u_account_id(
+                                                s.get("m3u_account")
+                                            )
+                                        )
+                            except Exception as e:
+                                logger.warning(
+                                    "[EVENT-SYNC] Rule '%s' (id=%s): failed to "
+                                    "resolve M3U accounts for %s master "
+                                    "stream(s) (%s) — they score priority 0 "
+                                    "in this run's stream reorder",
+                                    rule.name, rule.id, len(uncovered), e,
+                                )
 
             # Attach-cap overage: WARN surface on the execution record
             # (the executor already logger.warning'd when the cap tripped).

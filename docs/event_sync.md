@@ -1085,6 +1085,57 @@ reference), but a *disabled* profile or a missing Dispatcharr source only
 warns and skips the EPG step — attaches are never blocked by a guide-data
 convenience.
 
+## Preferred-provider stream ordering (stream sort)
+
+By default an attach **appends**: the master channel's own
+Dispatcharr-synced stream stays first and every attached secondary
+stream lands at the bottom, in attach order. If you want a specific
+provider's stream to *play* — the first stream on the channel is the one
+clients get — set a **stream sort** on the rule (bead io0tv).
+
+Event Sync rules use the same per-rule stream sort as standard pipeline
+rules (`stream_sort_field` / `stream_sort_order` on the rule — columns,
+not `event_sync_config` keys). In the rule editor: **Behavior → Stream
+order**.
+
+### Recipe — preferred provider's stream on top
+
+1. **Set provider priorities** — M3U Manager → *Save Priorities*. Give
+   your preferred provider the **highest** number. These are the same
+   ECM-side priorities Smart Sort's `m3u_priority` criterion uses; they
+   live in ECM settings (`m3u_account_priorities`), not in Dispatcharr.
+2. **On the Event Sync rule** — Behavior → Stream order → *Provider
+   Order (M3U)*, direction **Descending** (highest priority first; this
+   is the default direction the editor picks).
+3. **Run the rule** (or let auto-run fire). After the attach phase, the
+   engine's stream-reorder pass rewrites each touched master channel's
+   stream list in priority order — the preferred provider's stream
+   first.
+
+### Behavior notes
+
+* **Ordering heals on every run** — including runs where every stream
+  was already attached (idempotent no-ops). Changing provider
+  priorities takes effect on the next run; you never need to detach or
+  re-attach anything.
+* Only master channels the rule touched this run (attached **or**
+  already-attached) are reordered — the rule never reorders channels
+  outside its master group.
+* **No sort field = no change**: existing rules keep pure append-only
+  behavior. The reorder pass skips rules without a `stream_sort_field`.
+* All the standard sort modes work (`provider_order`, `quality`,
+  `stream_name`, `stream_name_natural`, `smart_sort`), but
+  `provider_order` is the one this recipe needs; `quality` requires
+  probe stats to be useful.
+* Interaction with **dummy EPG**: guide text comes from parsing the
+  master channel's *name* (or its first stream's name with
+  *parse master from stream*), not from stream order — stream sort
+  changes which provider's feed **plays**, not what the guide says. The
+  two combine cleanly: dummy EPG for programme info, provider order for
+  the feed.
+* Dry-run (Test) reports `Would reorder N streams in '<channel>' by
+  provider order (M3U account priority)` without writing.
+
 ## Reviewing ambiguous matches (Phase 2 review queue)
 
 Ambiguous-band matches — a candidate that scored below the attach
