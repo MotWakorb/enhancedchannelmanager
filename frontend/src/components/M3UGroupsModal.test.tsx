@@ -13,7 +13,7 @@
  * visible. When false (default), behavior is unchanged from before this bead.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { render, screen, within, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { M3UGroupsModal } from './M3UGroupsModal';
 import type { M3UAccount } from '../types';
@@ -343,5 +343,152 @@ describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)
 
     await waitFor(() => expect(api.updateM3UGroupSettings).toHaveBeenCalled());
     expect(api.refreshM3UAccount).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Bead enhancedchannelmanager-09x38.7 — dirty-guard on close.
+ *
+ * Confirmed live: toggling a group's Enabled/Auto-Sync tracks dirty state
+ * (enables Save & Refresh) but closing via the X button or Escape discarded
+ * all pending changes instantly with zero confirmation. There is no Cancel
+ * button in this modal, only X and Save & Refresh. Outside-click close does
+ * NOT exist for this modal — ModalOverlay disables backdrop-click-to-close
+ * by default and M3UGroupsModal never opts in (no `onClick` passed to
+ * ModalOverlay) — so there is no third path to cover here.
+ *
+ * Fix: both the X button and Escape now route through a shared
+ * handleRequestClose that, when dirty, calls window.confirm('Discard
+ * unsaved changes?') before closing. Declining the confirm leaves the modal
+ * open with in-progress toggle state intact. A clean close (no changes)
+ * remains instant with no confirm call. Save & Refresh is untouched — it
+ * never goes through handleRequestClose.
+ */
+describe('M3UGroupsModal — dirty-guard on close (bead 09x38.7)', () => {
+  const account = makeAccount();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getM3UAccount).mockResolvedValue(account);
+    vi.mocked(api.getChannelGroups).mockResolvedValue([
+      { id: 100, name: 'Sports HD' } as never,
+    ]);
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({ message: 'ok' });
+    vi.mocked(api.refreshM3UAccount).mockResolvedValue({ success: true, message: 'started' });
+    // Default confirm to true; individual tests override to exercise decline.
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  });
+
+  async function renderDirtied(onClose = vi.fn()) {
+    render(
+      <M3UGroupsModal
+        isOpen={true}
+        onClose={onClose}
+        onSaved={vi.fn()}
+        account={account}
+        allAccounts={[account]}
+      />
+    );
+
+    await screen.findByText('Sports HD');
+    const row = screen.getByText('Sports HD').closest('.group-row') as HTMLElement;
+    const enabledCell = row.querySelector('.group-enabled') as HTMLElement;
+    const enabledCheckbox = within(enabledCell).getByRole('checkbox') as HTMLInputElement;
+
+    const user = userEvent.setup();
+    await user.click(enabledCheckbox); // dirty: was true, now false
+    expect(enabledCheckbox.checked).toBe(false);
+
+    return { onClose, enabledCheckbox };
+  }
+
+  it('clean close (no changes) via X closes instantly with no confirm prompt', async () => {
+    const onClose = vi.fn();
+    render(
+      <M3UGroupsModal
+        isOpen={true}
+        onClose={onClose}
+        onSaved={vi.fn()}
+        account={account}
+        allAccounts={[account]}
+      />
+    );
+    await screen.findByText('Sports HD');
+
+    fireEvent.click(screen.getByLabelText('Close'));
+
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('clean close (no changes) via Escape closes instantly with no confirm prompt', async () => {
+    const onClose = vi.fn();
+    render(
+      <M3UGroupsModal
+        isOpen={true}
+        onClose={onClose}
+        onSaved={vi.fn()}
+        account={account}
+        allAccounts={[account]}
+      />
+    );
+    await screen.findByText('Sports HD');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('dirty + X-close prompts "Discard unsaved changes?" and discards on confirm', async () => {
+    const { onClose } = await renderDirtied();
+
+    fireEvent.click(screen.getByLabelText('Close'));
+
+    expect(window.confirm).toHaveBeenCalledWith('Discard unsaved changes?');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('dirty + X-close: declining the confirm keeps the modal open with state intact', async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    const { onClose, enabledCheckbox } = await renderDirtied();
+
+    fireEvent.click(screen.getByLabelText('Close'));
+
+    expect(window.confirm).toHaveBeenCalledWith('Discard unsaved changes?');
+    expect(onClose).not.toHaveBeenCalled();
+    // Still rendered, still showing the dirtied (unchecked) state.
+    expect(screen.getByText('Sports HD')).toBeInTheDocument();
+    expect(enabledCheckbox.checked).toBe(false);
+  });
+
+  it('dirty + Escape prompts "Discard unsaved changes?" and discards on confirm', async () => {
+    const { onClose } = await renderDirtied();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(window.confirm).toHaveBeenCalledWith('Discard unsaved changes?');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('dirty + Escape: declining the confirm keeps the modal open with state intact', async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    const { onClose, enabledCheckbox } = await renderDirtied();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(window.confirm).toHaveBeenCalledWith('Discard unsaved changes?');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(enabledCheckbox.checked).toBe(false);
+  });
+
+  it('Save & Refresh is unaffected by the dirty-guard — no confirm prompt, saves and closes', async () => {
+    const { onClose } = await renderDirtied();
+
+    fireEvent.click(screen.getByRole('button', { name: /Save & Refresh/i }));
+
+    await waitFor(() => expect(api.updateM3UGroupSettings).toHaveBeenCalled());
+    expect(window.confirm).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });
