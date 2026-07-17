@@ -26,6 +26,7 @@ import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import { SettingsModal } from '../SettingsModal';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
+import { useScrollTopReset } from '../../hooks/useScrollTopReset';
 import {
   DndContext,
   closestCenter,
@@ -295,6 +296,11 @@ import type { SettingsPage } from '../../hooks';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete, initialSettingsPage, onSettingsPageChange }: SettingsTabProps) {
   const [activePage, setActivePageInternal] = useState<SettingsPage>(initialSettingsPage || 'general');
+  const settingsContentRef = useRef<HTMLDivElement>(null);
+  // Reset scroll position when navigating between Settings sub-pages — the
+  // content pane otherwise preserves scrollTop from the previously viewed
+  // sub-page, landing mid-page and burying top-of-page warnings (bead 09x38.11).
+  useScrollTopReset(settingsContentRef, activePage);
 
   // Wrap setActivePage to also notify parent for hash routing
   const setActivePage = (page: SettingsPage) => {
@@ -5822,7 +5828,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </ul>
       </nav>
 
-      <div className="settings-content">
+      <div className="settings-content" ref={settingsContentRef}>
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
