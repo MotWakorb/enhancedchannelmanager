@@ -253,6 +253,9 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
 
         {hasChanges && !isEditing && (
           <div className="modal-footer">
+            <button className="modal-btn modal-btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
             <button className="modal-btn modal-btn-primary" onClick={handleSaveAll}>
               Save Changes
             </button>

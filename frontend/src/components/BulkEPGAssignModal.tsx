@@ -926,6 +926,9 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
         </div>
 
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
           {phase === 'configure' ? (
             <button
               className="modal-btn modal-btn-primary"

@@ -368,6 +368,9 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
         </div>
 
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onClose} disabled={loading}>
+            Cancel
+          </button>
           <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={loading}>
             {loading ? 'Saving...' : isEdit ? 'Save Changes' : 'Add Logo'}
           </button>

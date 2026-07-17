@@ -575,6 +575,9 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         </div>
 
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onClose} disabled={loading}>
+            Cancel
+          </button>
           <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={loading}>
             {loading ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Account'}
           </button>
