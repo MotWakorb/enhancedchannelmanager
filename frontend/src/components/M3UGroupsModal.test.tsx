@@ -207,6 +207,64 @@ describe('M3UGroupsModal — multi-provider auto-sync guard (bd-dgs64)', () => {
     expect(settingsBtn.disabled).toBe(true);
   });
 
+  it('gear tooltip names BOTH missing prerequisites when the group itself is disabled (bead 09x38.8)', async () => {
+    const disabledGroupAccount = makeAccount({
+      channel_groups: [
+        {
+          id: 10,
+          channel_group: 100,
+          channel_group_name: 'Sports HD',
+          enabled: false,
+          enabled_vod: false,
+          enabled_series: false,
+          auto_channel_sync: false,
+          auto_sync_channel_start: null,
+          custom_properties: null,
+        },
+      ],
+    });
+    vi.mocked(api.getM3UAccount).mockResolvedValue(disabledGroupAccount);
+
+    render(
+      <M3UGroupsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+        account={disabledGroupAccount}
+        allAccounts={[disabledGroupAccount]}
+      />
+    );
+
+    await screen.findByText('Sports HD');
+    const row = screen.getByText('Sports HD').closest('.group-row') as HTMLElement;
+    const settingsBtn = row.querySelector('.settings-btn') as HTMLButtonElement;
+
+    expect(settingsBtn.disabled).toBe(true);
+    expect(settingsBtn.title).toBe('Enable this group and turn on Auto-Sync to configure settings');
+  });
+
+  it('gear tooltip names only the Auto-Sync prerequisite when the group is already enabled (bead 09x38.8)', async () => {
+    render(
+      <M3UGroupsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+        account={account}
+        allAccounts={[account]}
+      />
+    );
+
+    await screen.findByText('Sports HD');
+    const row = screen.getByText('Sports HD').closest('.group-row') as HTMLElement;
+    const settingsBtn = row.querySelector('.settings-btn') as HTMLButtonElement;
+
+    // Fixture's group is enabled: true, auto_channel_sync: false — only the
+    // Auto-Sync toggle is the blocker, so the tooltip should not also claim
+    // the group needs to be enabled.
+    expect(settingsBtn.disabled).toBe(true);
+    expect(settingsBtn.title).toBe('Turn on Auto-Sync to configure settings');
+  });
+
   it('sends the updated auto_channel_sync value in the save payload after toggling and clicking Save', async () => {
     render(
       <M3UGroupsModal

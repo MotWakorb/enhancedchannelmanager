@@ -562,7 +562,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                 className={filterError ? 'error' : ''}
               />
               {filterError && <span className="form-error">{filterError}</span>}
-              <span className="form-hint">Only sync channels whose names match this pattern</span>
+              <span className="form-hint">
+                Only syncs this group&apos;s already-imported streams whose names match this
+                pattern, applied at sync time — distinct from the per-account &quot;Manage
+                Filters&quot;, which filters at M3U import time across the whole account.
+              </span>
             </div>
 
             {/* Channel Profile Assignment */}
@@ -605,7 +609,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                   </div>
                 )}
               </div>
-              <span className="form-hint">Assign channel profiles to synced channels</span>
+              <span className="form-hint">
+                Assigns Dispatcharr Channel Profiles (client-facing visibility) to channels
+                synced from this group — a different entity than the per-account &quot;Manage
+                Account Profiles&quot; screen, which sets M3U stream failover profiles.
+              </span>
             </div>
 
             {/* Channel Sort Order */}
@@ -695,7 +703,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                   </div>
                 )}
               </div>
-              <span className="form-hint">Assign a stream profile to synced channels</span>
+              <span className="form-hint">
+                Assigns the Dispatcharr stream (transcode) profile for channels synced from
+                this group. The top-level &quot;Stream Profiles&quot; screen is a read-only
+                catalog — this is where assignment actually happens.
+              </span>
             </div>
 
             {/* Custom Logo */}
