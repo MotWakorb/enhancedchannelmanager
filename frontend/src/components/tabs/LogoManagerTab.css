@@ -67,6 +67,61 @@
   font-size: 18px;
 }
 
+/* Unused-only filter toggle (bead enhancedchannelmanager-09x38.13) — same
+   pill affordance as .btn-secondary, with an .active state that mirrors
+   .view-toggle button.active so both binary toggles in this header read
+   consistently. */
+.logo-header .unused-only-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 36px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  background-color: var(--input-bg);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.logo-header .unused-only-toggle:hover:not(.active) {
+  background-color: var(--border-primary);
+}
+
+.logo-header .unused-only-toggle.active {
+  background-color: var(--button-primary-bg);
+  border-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+.logo-header .unused-only-toggle .material-icons {
+  font-size: 18px;
+}
+
+/* Sortable list-header columns (Name, Used By) — mirrors M3UChangesTab's
+   .sortable / .sort-icon pattern (docs/style_guide.md: follow the in-app
+   precedent rather than inventing a new sort-header idiom). */
+.logos-list .list-header .sortable {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.logos-list .list-header .sortable:hover {
+  color: var(--text-primary);
+}
+
+.logos-list .list-header .sort-icon {
+  font-size: 14px !important;
+  opacity: 0.8;
+}
+
 /* .loading-state is defined in shared/common.css */
 /* .spinning is defined in shared/common.css */
 /* .empty-state is defined in shared/common.css */

@@ -824,22 +824,34 @@ class TestGetLogos:
         is the line operators grep when triaging "logos not loading" reports
         — it lets us correlate the backend response to the frontend log
         sequence emitted by getAllLogos() in services/api.ts.
+
+        A non-empty ``search`` now routes through the local aggregate-and-
+        filter path (bead 09x38.13): Dispatcharr's LogoViewSet.get_queryset
+        never reads a ``search`` param — only ``name``/``used``/``ids``
+        (confirmed by reading apps/channels/api_views.py in the live
+        dispatcharr container). The previous version of this test mocked
+        ``get_logos`` to return already-filtered results, which papered
+        over the fact that upstream ``search`` was actually a no-op — it
+        never exercised real filtering. This version uses a raw, unfiltered
+        fixture and asserts the ECM-side filter narrows it for real.
         """
         import logging
         mock_client = AsyncMock()
-        mock_client.get_logos.return_value = {
-            "results": [{"id": 1, "name": "ESPN"}, {"id": 2, "name": "FOX"}],
-            "count": 2,
-            "next": None,
-        }
+        mock_client.get_all_logos_raw.return_value = [
+            {"id": 1, "name": "ESPN", "channel_count": 1},
+            {"id": 2, "name": "FOX", "channel_count": 1},
+        ]
 
         with patch("routers.channels.get_client", return_value=mock_client):
             with caplog.at_level(logging.INFO, logger="routers.channels"):
                 response = await async_client.get(
-                    "/api/channels/logos?page=3&page_size=250&search=ESPN",
+                    "/api/channels/logos?page=1&page_size=250&search=ESPN",
                 )
 
         assert response.status_code == 200
+        data = response.json()
+        assert [l["name"] for l in data["results"]] == ["ESPN"]
+        mock_client.get_logos.assert_not_called()
         info_lines = [
             r.getMessage() for r in caplog.records
             if r.levelno == logging.INFO and "[CHANNELS-LOGO]" in r.getMessage()
@@ -848,14 +860,194 @@ class TestGetLogos:
         line = info_lines[0]
         # Required fields — operators grep for these
         assert "GET /logos" in line
-        assert "page=3" in line
+        assert "page=1" in line
         assert "page_size=250" in line
         assert "search=ESPN" in line
-        assert "returned 2 logos" in line
+        assert "returned 1 logos" in line
         assert "next=false" in line
         # Elapsed-ms field is present and formatted as a number followed by "ms"
         import re
         assert re.search(r"in \d+\.\dms", line), f"Missing elapsed-ms field in: {line}"
+
+
+class TestGetLogosSortAndFilter:
+    """Tests for GET /api/channels/logos sort_by / sort_order / unused_only
+    (bead enhancedchannelmanager-09x38.13).
+
+    Dispatcharr's LogoViewSet has no ordering support at all (confirmed by
+    reading apps/channels/api_views.py in the live dispatcharr container:
+    get_queryset() always ends with ``.order_by('name')``, and the only
+    REST_FRAMEWORK filter backend configured is DjangoFilterBackend with no
+    filterset_fields declared on the view — there is no ``ordering`` param
+    to forward). So whenever sort_by, unused_only, or search is requested,
+    ECM fetches the complete logo list from Dispatcharr in one call via the
+    ``no_pagination=true`` escape hatch Dispatcharr's LogoPagination already
+    supports, then sorts/filters/paginates locally in Python before
+    returning the same paginated envelope shape. Requests using none of
+    these three params keep taking the original zero-overhead passthrough
+    path (locked by test_uses_passthrough_when_no_sort_filter_or_search).
+    """
+
+    @staticmethod
+    def _raw_logos():
+        return [
+            {"id": 1, "name": "ESPN", "channel_count": 3},
+            {"id": 2, "name": "abc Sports", "channel_count": 0},
+            {"id": 3, "name": "Zed TV", "channel_count": 1},
+            {"id": 4, "name": "Fox News", "channel_count": 0},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_sort_by_name_ascending(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"sort_by": "name", "sort_order": "asc"},
+            )
+
+        assert response.status_code == 200
+        names = [l["name"] for l in response.json()["results"]]
+        assert names == ["abc Sports", "ESPN", "Fox News", "Zed TV"]
+
+    @pytest.mark.asyncio
+    async def test_sort_by_name_descending(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"sort_by": "name", "sort_order": "desc"},
+            )
+
+        assert response.status_code == 200
+        names = [l["name"] for l in response.json()["results"]]
+        assert names == ["Zed TV", "Fox News", "ESPN", "abc Sports"]
+
+    @pytest.mark.asyncio
+    async def test_sort_by_channel_count_ascending_surfaces_unused_first(self, async_client):
+        """The live-verification scenario: sorting used-by count ascending
+        must surface unused (channel_count=0) logos first."""
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"sort_by": "channel_count", "sort_order": "asc"},
+            )
+
+        assert response.status_code == 200
+        counts = [l["channel_count"] for l in response.json()["results"]]
+        assert counts == sorted(counts)
+        assert counts[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_sort_by_channel_count_descending(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"sort_by": "channel_count", "sort_order": "desc"},
+            )
+
+        assert response.status_code == 200
+        counts = [l["channel_count"] for l in response.json()["results"]]
+        assert counts == sorted(counts, reverse=True)
+
+    @pytest.mark.asyncio
+    async def test_unused_only_filters_to_zero_channel_count(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"unused_only": "true"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 2
+        assert all(l["channel_count"] == 0 for l in data["results"])
+
+    @pytest.mark.asyncio
+    async def test_unused_only_composes_with_search(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"unused_only": "true", "search": "fox"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["results"][0]["name"] == "Fox News"
+
+    @pytest.mark.asyncio
+    async def test_sort_and_filter_paginate_correctly(self, async_client):
+        """Pagination is computed AFTER sort/filter, over the full dataset —
+        not per-Dispatcharr-page — so results/count/next are truthful."""
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"sort_by": "name", "sort_order": "asc", "page": 2, "page_size": 2},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 4
+        assert [l["name"] for l in data["results"]] == ["Fox News", "Zed TV"]
+        assert data["next"] is None
+        assert data["previous"] is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sort_by", ["bogus", "url", ""])
+    async def test_invalid_sort_by_returns_422(self, async_client, sort_by):
+        mock_client = AsyncMock()
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"sort_by": sort_by},
+            )
+        assert response.status_code == 422
+        mock_client.get_all_logos_raw.assert_not_called()
+        mock_client.get_logos.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalid_sort_order_returns_422(self, async_client):
+        mock_client = AsyncMock()
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"sort_by": "name", "sort_order": "sideways"},
+            )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_uses_passthrough_when_no_sort_filter_or_search(self, async_client):
+        """Locks backward compatibility: existing callers (LogoModal picker,
+        AutoSyncSettingsModal, GuideTab, getAllLogos()) that never pass
+        sort_by/unused_only/search must keep hitting the cheap single-page
+        Dispatcharr passthrough, not the full-dataset aggregate path."""
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {"results": [], "count": 0, "next": None}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"page": 2, "page_size": 50},
+            )
+
+        assert response.status_code == 200
+        mock_client.get_logos.assert_called_once_with(page=2, page_size=50, search=None)
+        mock_client.get_all_logos_raw.assert_not_called()
 
 
 class TestGetLogo:

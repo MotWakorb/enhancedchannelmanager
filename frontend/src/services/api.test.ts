@@ -39,6 +39,8 @@ import {
   updateAlertMethod,
   // Logos (bd-nh50y debug-logging contract)
   getAllLogos,
+  // Logos sort/filter query params (bead enhancedchannelmanager-09x38.13)
+  getLogos,
   // Integration test-connection wire-format guards (bd-8zi93)
   testEmbyConnection,
   testPlexConnection,
@@ -1480,6 +1482,56 @@ describe('API Service', () => {
         errSpy.mockRestore();
         logger.setLevel(prevLevel);
       }
+    });
+  });
+
+  // Logo Manager sort/unused-filter query params (bead
+  // enhancedchannelmanager-09x38.13). Locks the wire contract getLogos()
+  // sends so LogoManagerTab's server-side sort/filter stays correct.
+  describe('getLogos sort/filter query params (bead 09x38.13)', () => {
+    it('sends sort_by/sort_order/unused_only when provided', async () => {
+      let capturedUrl: URL | null = null;
+      server.use(
+        http.get('/api/channels/logos', ({ request }) => {
+          capturedUrl = new URL(request.url);
+          return HttpResponse.json({ results: [], count: 0, next: null, previous: null });
+        }),
+      );
+
+      await getLogos({
+        page: 2,
+        pageSize: 50,
+        search: 'espn',
+        sortBy: 'channel_count',
+        sortOrder: 'asc',
+        unusedOnly: true,
+      });
+
+      expect(capturedUrl).not.toBeNull();
+      const params = capturedUrl!.searchParams;
+      expect(params.get('page')).toBe('2');
+      expect(params.get('page_size')).toBe('50');
+      expect(params.get('search')).toBe('espn');
+      expect(params.get('sort_by')).toBe('channel_count');
+      expect(params.get('sort_order')).toBe('asc');
+      expect(params.get('unused_only')).toBe('true');
+    });
+
+    it('omits sort/filter params entirely when not requested', async () => {
+      let capturedUrl: URL | null = null;
+      server.use(
+        http.get('/api/channels/logos', ({ request }) => {
+          capturedUrl = new URL(request.url);
+          return HttpResponse.json({ results: [], count: 0, next: null, previous: null });
+        }),
+      );
+
+      await getLogos({ page: 1, pageSize: 50 });
+
+      expect(capturedUrl).not.toBeNull();
+      const params = capturedUrl!.searchParams;
+      expect(params.has('sort_by')).toBe(false);
+      expect(params.has('unused_only')).toBe(false);
     });
   });
 
