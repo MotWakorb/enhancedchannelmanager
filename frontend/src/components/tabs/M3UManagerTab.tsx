@@ -258,8 +258,8 @@ function M3UAccountRow({
         <button
           className="action-btn"
           onClick={() => onManageProfiles(account)}
-          title="Manage Profiles"
-          aria-label="Manage Profiles"
+          title="Manage Account Profiles"
+          aria-label="Manage Account Profiles"
         >
           <span className="material-icons" aria-hidden="true">account_circle</span>
         </button>

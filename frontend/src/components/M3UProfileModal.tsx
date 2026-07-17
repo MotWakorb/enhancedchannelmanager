@@ -175,7 +175,7 @@ function M3UProfileModalInner({
         <div className="modal-header">
           <h2>
             <span className="material-icons">account_circle</span>
-            Manage Profiles - {account.name}
+            Account Profiles - {account.name}
           </h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
