@@ -957,6 +957,61 @@ describe('ChannelPipelineTab', () => {
         expect(rollbackBtn).toBeNull(); // No rollback for dry runs
       });
     });
+
+    // bead 09x38.9: the Rollback and "Undo this run" row actions were
+    // asymmetrically explained (Rollback had zero tooltip elaboration next
+    // to a fully-explained sibling) — a user couldn't tell what distinguishes
+    // them before clicking. These tests lock the explanatory, cross-referencing
+    // copy in place.
+    it('gives the Rollback button an explanatory tooltip distinguishing it from "Undo this run"', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute' })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      const rollbackBtn = await screen.findByRole('button', { name: /rollback/i });
+      expect(rollbackBtn.title).toMatch(/this run's own recorded changes/i);
+      expect(rollbackBtn.title).toMatch(/does not use the full pre-run snapshot/i);
+      expect(rollbackBtn.title).toMatch(/undo this run/i);
+    });
+
+    it('does not call the rollback API when the confirm dialog is cancelled', async () => {
+      const user = userEvent.setup();
+      let rollbackCalled = false;
+      server.use(
+        http.post('/api/channel-pipeline/executions/:id/rollback', () => {
+          rollbackCalled = true;
+          return HttpResponse.json({ success: true, entities_removed: 0, entities_restored: 0 });
+        })
+      );
+
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', channels_created: 2 })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await user.click(await screen.findByRole('button', { name: /rollback/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/confirm.*rollback/i)).toBeInTheDocument();
+      });
+      // The dialog explains the legacy-undo mechanism and points to the
+      // alternative full-restore action, not just a bare confirmation.
+      expect(screen.getByText(/legacy per-run undo/i)).toBeInTheDocument();
+      // Text spans a <strong> boundary ("not"), so match against the dialog's
+      // full text content rather than a single node.
+      expect(screen.getByRole('dialog').textContent).toMatch(/not.*the full pre-run snapshot/i);
+
+      await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+
+      expect(rollbackCalled).toBe(false);
+    });
   });
 
   describe('snapshot revert affordance (ADR-010 uc51o.7)', () => {
@@ -970,6 +1025,21 @@ describe('ChannelPipelineTab', () => {
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /undo this run/i })).toBeInTheDocument();
       });
+    });
+
+    // bead 09x38.9: the "Undo this run" tooltip must state it is a full
+    // snapshot restore and contrast with the sibling Rollback action.
+    it('gives the "Undo this run" button an explanatory tooltip distinguishing it from Rollback', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      const undoBtn = await screen.findByRole('button', { name: /undo this run/i });
+      expect(undoBtn.title).toMatch(/pre-run snapshot/i);
+      expect(undoBtn.title).toMatch(/overwriting any changes made since/i);
+      expect(undoBtn.title).toMatch(/unlike rollback/i);
     });
 
     it('hides the revert button when has_snapshot is false', async () => {
@@ -1020,6 +1090,8 @@ describe('ChannelPipelineTab', () => {
         // ADR-010 §D5 mandatory overwrite warning must be visible
         expect(screen.getByTestId('revert-warning')).toBeInTheDocument();
         expect(screen.getByText(/overwrite the current stream assignments/i)).toBeInTheDocument();
+        // bead 09x38.9: the confirm copy must contrast with the Rollback action.
+        expect(screen.getByText(/unlike rollback, this restores every affected channel/i)).toBeInTheDocument();
       });
     });
 
