@@ -30,6 +30,12 @@ container names) in nature.
   - [Exceptions](#exceptions)
   - [Operational notes](#operational-notes)
 - [Error Handling and Logging](#error-handling-and-logging)
+- [Shell Scripting](#shell-scripting)
+  - [Rule](#rule-1)
+  - [Whitelist env-var values that select behavior](#whitelist-env-var-values-that-select-behavior)
+  - [Fail closed with a warning, not a crash loop](#fail-closed-with-a-warning-not-a-crash-loop)
+  - [Why this matters](#why-this-matters)
+  - [Reference](#reference)
 - [CSS Conventions](#css-conventions)
 - [Frontend Lint Policy](#frontend-lint-policy)
 - [Test Conventions](#test-conventions)
@@ -100,7 +106,18 @@ container names) in nature.
   `BulkLCNFetchModal.tsx`.
 - **Hook files**: `use<Behavior>.ts` (no `.tsx` unless the hook returns JSX,
   which is rare).
-- **Markdown docs**: `snake_case.md` under `docs/`.
+- **Markdown docs**: `snake_case.md` under `docs/`, with one documented
+  exception: files under `docs/user_guide/` use `kebab-case.md` instead
+  (`runaway-safety-cap.md`, `debugging-rules.md`, `fuzzy-locals-matching.md`,
+  `sort-vs-numbering.md`, `cross-instance-sync.md`,
+  `stats-v2-history-cutover.md`, etc.) — every existing file in that subtree
+  already follows kebab-case, and `docs/user_guide/README.md` (the
+  subtree's own authoring guide) documents it as the convention for new
+  articles: "Filename matches the article title in kebab-case." Do not
+  rename these files to snake_case or flag them in review — the exception
+  is intentional. `index.md` and `README.md` filenames are exempt from
+  both conventions (single conventional names with no word-separator to
+  judge).
 
 ---
 
@@ -449,6 +466,100 @@ prohibited.
 see `docs/api.md` for the contract. Routers raise `HTTPException` with
 domain-meaningful status codes (422 for validation, 404 for not-found, 409
 for conflict, 500 only for genuine internal errors).
+
+---
+
+## Shell Scripting
+
+### Rule
+
+**Quote every parameter expansion in `entrypoint.sh` (or any POSIX `sh`
+script) that flows into an `exec`'d argv.** This includes expansions built
+entirely from the script's own defaults (`${VAR:-default}`) — a default
+doesn't stop an operator from overriding the value at container-run time
+with something containing spaces, globs, or extra words.
+
+```sh
+# Good — quoted, cannot be word-split or glob-expanded by the shell
+exec gosu appuser uvicorn main:app \
+    --port "${ECM_PORT}" \
+    --limit-concurrency "${ECM_LIMIT_CONCURRENCY}"
+
+# Bad — unquoted expansion on an exec argv is subject to word-splitting
+# and pathname expansion before uvicorn ever sees it
+exec gosu appuser uvicorn main:app \
+    --port ${ECM_PORT}
+```
+
+This unquoted-expansion class has now appeared twice in
+`backend/entrypoint.sh`: the `ECM_UVICORN_LOOP` case (fixed; see below) and
+the still-open `ECM_PORT` / `ECM_LIMIT_CONCURRENCY` /
+`ECM_TIMEOUT_KEEP_ALIVE` expansions on the same exec line
+(`enhancedchannelmanager-1xoiq`). Quote a new env-derived argv token even
+when the value "looks like it will always be numeric" — the type is
+enforced by validation, not by the shape of today's default.
+
+### Whitelist env-var values that select behavior
+
+When an environment variable selects *behavior* — a mode, a flag choice,
+anything that changes what gets handed to `exec` rather than being opaque
+data — validate it against an explicit whitelist before use. `entrypoint.sh`
+already does this for `ECM_UVICORN_LOOP`:
+
+```sh
+case "${ECM_UVICORN_LOOP:-}" in
+    auto|asyncio|uvloop)
+        ;;
+    *)
+        if [ -n "${ECM_UVICORN_LOOP:-}" ]; then
+            print_warning "Invalid ECM_UVICORN_LOOP='${ECM_UVICORN_LOOP}' (allowed: auto, asyncio, uvloop) — falling back to asyncio"
+        fi
+        ECM_UVICORN_LOOP=asyncio
+        ;;
+esac
+```
+
+A `case` statement against literal alternatives is enough — no regex, no
+external validator needed. The point is that arbitrary env content never
+reaches the exec argv unfiltered, even a value that would otherwise quote
+cleanly should still be constrained to the set of values the script
+actually knows how to handle.
+
+### Fail closed with a warning, not a crash loop
+
+An invalid whitelisted value must fall back to a safe default and continue
+— never `exit 1` or let the bad value propagate into a rejection from the
+process being exec'd. `entrypoint.sh` runs under `set -e` with an `exec` at
+the bottom of the script; a container manager restarts the container on
+exit, and the same bad env var is still set on the next attempt. Treating
+an invalid value as fatal doesn't fail once — it fails forever, in a
+restart loop, until an operator notices and intervenes. Log a
+`print_warning` naming the rejected value and the fallback chosen, then
+continue on the fallback — the operator gets a diagnosable warning in the
+logs instead of a container stuck restarting.
+
+### Why this matters
+
+- **Word-splitting / glob risk.** An unquoted `$VAR` on an argv line is
+  subject to the shell's field-splitting (`IFS`) and pathname expansion
+  before the target binary ever sees it. A value containing a space
+  becomes two argv tokens; a value containing `*` can expand against
+  files in the working directory. On an `exec` line this is a path for
+  env-var content to inject extra flags into the launched process.
+- **Fail-closed vs. crash-loop.** This project's containers restart on
+  exit. A validation failure that exits non-zero, or a bad value that
+  reaches the launched process and causes it to reject its own argv,
+  doesn't degrade once — it degrades on every restart until an operator
+  intervenes. Falling back to a known-good default with a logged warning
+  keeps the service available and makes the misconfiguration visible
+  without downtime.
+
+### Reference
+
+See `backend/entrypoint.sh` for the worked example (the `ECM_UVICORN_LOOP`
+case block and its surrounding comment block) and
+`enhancedchannelmanager-1xoiq` for the open follow-up applying this rule to
+`ECM_PORT`, `ECM_LIMIT_CONCURRENCY`, and `ECM_TIMEOUT_KEEP_ALIVE`.
 
 ---
 
