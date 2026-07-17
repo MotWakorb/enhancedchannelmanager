@@ -20,7 +20,7 @@ Every cloud destination URL passes through ECM's SSRF (Server-Side Request Forge
 
 - **Always-blocked addresses** (in both LAN-friendly and public-only mode): loopback (`127.x.x.x`), link-local (`169.254.x.x` — includes the AWS/cloud metadata endpoint), CGNAT (`100.64.x.x/10`), multicast, IPv6 ULA/link-local, and non-http(s) URL schemes.
 - **LAN-friendly mode (default):** RFC 1918 private addresses (`192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`) are allowed. Use this when your WebDAV server or S3-compatible endpoint is on a local NAS.
-- **Public-only mode:** RFC 1918 addresses are blocked. Switch to this mode if your threat model requires it (Settings → Security → SSRF policy, if exposed in the UI).
+- **Public-only mode:** RFC 1918 addresses are blocked. Switch to this mode if your threat model requires it: Settings → Backup & Restore → "Where backups can be sent".
 
 DNS-rebinding is mitigated by resolving the endpoint hostname before connecting and then connecting by the resolved IP address, not by re-resolving at connection time.
 

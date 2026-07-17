@@ -10,7 +10,6 @@ import { UserManagementSection } from '../settings/UserManagementSection';
 import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
 import { TLSSettingsSection } from '../settings/TLSSettingsSection';
 import { BackupRestoreSection } from '../settings/BackupRestoreSection';
-import { SecuritySettingsSection } from '../settings/SecuritySettingsSection';
 import { MCPSettingsSection } from '../settings/MCPSettingsSection';
 import { LookupTableSection } from '../settings/LookupTableSection';
 import { AlertMethodsSection } from '../settings/AlertMethodsSection';
@@ -5810,13 +5809,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 TLS Certificates
               </li>
               <li
-                className={`settings-nav-item ${activePage === 'security' ? 'active' : ''}`}
-                onClick={() => setActivePage('security')}
-              >
-                <span className="material-icons">shield</span>
-                Security
-              </li>
-              <li
                 className={`settings-nav-item ${activePage === 'mcp-settings' ? 'active' : ''}`}
                 onClick={() => setActivePage('mcp-settings')}
               >
@@ -5845,7 +5837,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'auth-settings' && <AuthSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'user-management' && <UserManagementSection isAdmin={user?.is_admin ?? false} currentUserId={user?.id ?? 0} />}
         {activePage === 'tls-settings' && <TLSSettingsSection isAdmin={user?.is_admin ?? false} />}
-        {activePage === 'security' && <SecuritySettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'mcp-settings' && <MCPSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={!user || user.is_admin} />}
       </div>

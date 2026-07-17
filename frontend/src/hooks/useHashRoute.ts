@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { TabId } from '../components/TabNavigation';
 
-export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'integrations' | 'scheduled-tasks' | 'channel-pipeline' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'security' | 'backup-restore';
+export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'integrations' | 'scheduled-tasks' | 'channel-pipeline' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'backup-restore';
 
 const VALID_TABS: Set<string> = new Set([
   'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
@@ -28,6 +28,11 @@ const LEGACY_TAB_ALIASES: Record<string, TabId> = {
 
 const LEGACY_SETTINGS_PAGE_ALIASES: Record<string, SettingsPage> = {
   'auto-creation': 'channel-pipeline',
+  // Administration → "Security" page removed (bead 09x38.12): its one
+  // setting (backup-destination SSRF allowlist) relocated to Backup &
+  // Restore. Bookmarked/shared #settings/security URLs keep resolving there
+  // instead of silently falling back to settings/general.
+  security: 'backup-restore',
 };
 
 const DEFAULT_TAB: TabId = 'channel-manager';
