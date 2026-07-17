@@ -309,10 +309,24 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
 
   const enabledCount = groups.filter(g => g.enabled).length;
 
+  // bd 09x38.7: X and Escape both route through this shared close-request
+  // handler. Dirty state (hasChanges) guards against silently discarding
+  // unsaved toggles — the modal has no Cancel button, so X/Escape were the
+  // only ways to lose a batch of pending changes with zero confirmation.
+  // Outside-click close does not exist for this modal (ModalOverlay disables
+  // backdrop-click-to-close unless an `onClick` handler is passed in, and none
+  // is here), so there's no third path to guard.
+  const handleRequestClose = () => {
+    if (hasChanges && !window.confirm('Discard unsaved changes?')) {
+      return;
+    }
+    onClose();
+  };
+
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
+    <ModalOverlay onClose={handleRequestClose}>
       <div className="modal-container modal-lg m3u-groups-modal" style={{ height: '80vh', minHeight: '80vh', maxHeight: '80vh' }}>
         <div className="modal-header">
           <div className="header-info">
@@ -325,7 +339,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               </span>
             )}
           </div>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+          <button className="modal-close-btn" onClick={handleRequestClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
