@@ -42,9 +42,99 @@ The rule of thumb: if the audience is "someone trying to **use** ECM to manage t
 - **Open with the audience and the outcome.** First sentence: who this article is for and what they will be able to do when they finish it.
 - **Use the in-UI label, exactly.** If the tab is "Channel Pipeline" in the navigation, write *Channel Pipeline*, not *auto-creation* or *Auto-Create*. Terminology drift between docs and UI is a usability bug — the Tech Writer and UX Designer own consistency jointly. The DBAS feature is labelled **Backup & Restore** in the UI, per UX grooming, and should be called Backup & Restore in user-facing docs (the acronym DBAS only appears in dev docs and the threat model).
 - **Cross-link, don't duplicate.** If the developer reference for a feature already exists (e.g., `docs/normalization.md#developer-reference`, `docs/template_engine.md`), link to it from a "Going deeper" section rather than copying material.
-- **Screenshots live in `docs/images/user_guide/<section>/`.** Match the existing convention used by `docs/images/normalization/`. Refer to `docs/css_guidelines.md` if you need to take screenshots of UI surfaces with custom theming.
+- **Screenshots live in `docs/images/user_guide/<section>/`.** See [Screenshot conventions](#screenshot-conventions) below for the full spec (viewport, theme, filenames, placement).
 - **Show the result.** Where a workflow has a verifiable end state (a new channel exists, a backup file appears, a setting takes effect), say what the user will see. "It works" is not a verification step — see `docs/_shared/engineering-discipline.md` style "Verification of Completion."
 - **Stub before article.** Every section in this scaffold ships as a stub (purpose, audience, placeholder TOC). The actual articles are filed as separate beads and written in their own PRs. This keeps user-facing content reviewable in small chunks and lets each article be evaluated by both UX (for the user model) and Tech Writer (for clarity).
+
+## Per-tab tutorial template
+
+Every ECM UI tab gets a "Common tasks" tutorial article that follows the
+authoring conventions above, formalized into one literal, copyable skeleton.
+It distills the pattern already in production in
+[`backup-restore/index.md`](backup-restore/index.md) (the "Start here"
+task-router) and [`integrations/index.md`](integrations/index.md) /
+[`integrations/emby.md`](integrations/emby.md) (goal-first setup steps with
+an explicit end state) — read those two before writing a new tab tutorial.
+
+```markdown
+# <Tab Name>
+
+> **Audience:** <one sentence — who reads this and what they walk away able to do>
+
+<Tab Name> is for <2 sentences max — what this tab is for, no more>.
+
+## Common tasks
+
+### <Operator's goal, phrased as an action — "Merge two duplicate channels", not "Merge Duplicates feature">
+
+1. <Step>
+2. <Step>
+3. <Step>
+
+**Result:** <what the operator sees when it worked — the verifiable end state>
+
+### <Next goal>
+
+1. <Step>
+2. <Step>
+
+**Result:** <what the operator sees when it worked>
+
+## Going deeper
+
+- [<link text>](<relative path>) — <why an operator would follow this>
+```
+
+Notes on filling in the skeleton:
+
+- **Title** — the exact in-UI tab label (see [Authoring conventions](#authoring-conventions) — "Use the in-UI label, exactly").
+- **Audience blockquote** — one sentence, same voice as `backup-restore/index.md`'s `> **Audience:**` line. Don't restate the tab name; say who the reader is and what they need.
+- **"What this tab is for"** — two sentences maximum, no more. This is orientation, not documentation — the `## Common tasks` walkthroughs carry the actual content.
+- **`## Common tasks`** — one `###` subsection per goal. Head each subsection with the goal phrased as the operator's action ("Find and merge duplicate channels"), never as a UI-element name ("The Find Duplicates Button"). Steps are numbered. Every walkthrough ends with a **Result:** line — this is the "Show the result" rule made literal and mandatory for tutorial articles specifically (existing non-tutorial articles, like the DBAS reference pages, apply "Show the result" more loosely).
+- **`## Going deeper`** — cross-links only, per "Cross-link, don't duplicate." Link to the developer reference, the API doc section, or a sibling article — never re-explain what's already written elsewhere.
+
+## Screenshot conventions
+
+Screenshots are captured to a fixed spec so they're comparable across
+articles and reproducible by whoever writes the next tutorial. This
+formalizes the pattern already used by
+[`docs/images/event_sync/`](../images/event_sync/) (see the numbered
+`1-kind-chooser.png`-style filenames referenced from
+[`docs/event_sync.md`](../event_sync.md)) as the repo-wide convention for
+`docs/user_guide/` and beyond.
+
+- **Viewport: 1280×720.** The same fixed size Playwright's visual-regression
+  suite already pins for deterministic screenshots
+  (`e2e/visual-regression.spec.ts`). Don't capture at your browser's ambient
+  window size — resize to 1280×720 first.
+- **Theme: dark.** ECM's default theme. Capture in dark unless the article is
+  specifically documenting the light/dark toggle itself.
+- **Filenames: numbered kebab-case, `<n>-<short-name>.png`.** The number
+  reflects capture/appearance order within the article (`1-kind-chooser.png`,
+  `2-editor-master-guidance.png`, …), matching the `docs/images/event_sync/`
+  set.
+- **Location: `docs/images/user_guide/<section>/`.** One image directory per
+  user-guide section, matching the section's directory name under
+  `docs/user_guide/`.
+- **Placement: inline, immediately after the step it illustrates.** Never a
+  screenshot dump at the end of the article — a screenshot belongs directly
+  under the numbered step (or `###` goal) it shows the result of, the same
+  way `docs/event_sync.md` interleaves its `images/event_sync/*.png`
+  references between steps.
+- **Grandfathering: `docs/images/normalization/` is exempt.** Those two
+  images predate this convention and are not being recaptured to match it.
+  New normalization-section screenshots follow this spec; the existing two
+  are left as-is.
+
+### Capture mechanics
+
+Capture screenshots with Playwright against the dev container
+(`ecm-ecm-1`), using representative seeded data (real-shaped channel
+groups, streams, and rules — not an empty instance) so the screenshot
+shows what an operator's screen actually looks like. Capture during the
+same writing pass as the tutorial bead that needs the image, not as a
+separate follow-up pass — an article and its screenshots ship in the same
+PR.
 
 ## Information architecture
 

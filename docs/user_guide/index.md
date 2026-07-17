@@ -67,6 +67,32 @@ Earlier DBAS articles (backup, restore, migration) are planned for a follow-on r
 
 Common problems, how to read ECM's logs, and what to gather before asking for help.
 
+## By tab
+
+Looking for the tutorial for a specific ECM tab? This table lists every tab
+in the order it appears in ECM's navigation and links straight to the
+section that owns (or will own) its "Common tasks" tutorials.
+
+| Tab | Tutorials live in |
+|-|-|
+| M3U Manager | [`m3u-manager/`](m3u-manager/index.md) — **Planned** |
+| EPG Manager | [EPG](epg/index.md) |
+| Channel Manager | [Channels & Streams](channels-streams/index.md) |
+| Guide | [`guide/`](guide/index.md) — **Planned** |
+| Logo Manager | [`logo-manager/`](logo-manager/index.md) — **Planned** |
+| M3U Changes | [`m3u-changes/`](m3u-changes/index.md) — **Planned** |
+| Channel Pipeline | [Channel Pipeline](channel-pipeline/index.md) |
+| Journal | [`journal/`](journal/index.md) — **Planned** |
+| Stats | [Stats](stats/index.md) |
+| Settings | [`settings/`](settings/index.md) — **Planned** |
+
+Settings is one tab but many pages: some of its subsections already have a
+home in an existing section — Normalization ([`normalization/`](normalization/index.md)),
+Backup & Restore ([`backup-restore/`](backup-restore/index.md)), and MCP
+Integration ([`integrations/mcp.md`](integrations/mcp.md)) — and are
+cross-linked from the Settings landing page once it ships rather than
+duplicated there.
+
 ## Conventions
 
 - **In-UI labels are authoritative.** When this guide refers to a tab, button, or setting, it uses the exact label you'll see in ECM's UI.
