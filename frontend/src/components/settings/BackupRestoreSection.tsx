@@ -9,6 +9,7 @@ import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { SyncTargetsCard } from './SyncTargetsCard';
 import { CloudTargetsCard } from './CloudTargetsCard';
 import { BackupScheduleBanner } from './BackupScheduleBanner';
+import { OutboundPolicyCard } from './OutboundPolicyCard';
 import { getDateLocale } from '../../utils/formatting';
 import './BackupRestoreSection.css';
 
@@ -213,6 +214,10 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           Scheduled DBAS backup ships OFF by default, so surface the unscheduled
           state prominently to prevent an operator silently keeping zero backups. */}
       <BackupScheduleBanner />
+
+      {/* Where backups can be sent (relocated from the removed Administration
+          → Security page, bead 09x38.12; original setting is bead nngkg). */}
+      <OutboundPolicyCard />
 
       {/* YAML Export (config only) */}
       <div className="backup-card">

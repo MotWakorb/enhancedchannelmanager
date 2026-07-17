@@ -1229,7 +1229,8 @@ export interface SettingsResponse {
   // never to gate. Default empty.
   trusted_media_networks: string[];
   // nngkg / bead 0i2vt.5: DBAS outbound-destination policy mode. Read by the
-  // first-run wizard + Settings > Security section. The always-on denylist is
+  // first-run wizard + Settings > Backup & Restore (relocated from the
+  // removed Security page by bead 09x38.12). The always-on denylist is
   // enforced unconditionally in the backend regardless of this value.
   ssrf_outbound_mode: OutboundPolicyMode;
 }
@@ -1246,8 +1247,10 @@ export type OutboundPolicyMode = 'lan_friendly' | 'public_only';
 
 /**
  * Persist the outbound-policy mode (nngkg). Dedicated endpoint so the
- * Settings > Security section and the first-run wizard can save the operator's
- * choice without a full settings round-trip. Returns the saved mode.
+ * Settings > Backup & Restore card (OutboundPolicyCard, relocated from the
+ * removed Security page by bead 09x38.12) and the first-run wizard can save
+ * the operator's choice without a full settings round-trip. Returns the
+ * saved mode.
  */
 export async function saveSecurityMode(
   mode: OutboundPolicyMode,

@@ -22,8 +22,9 @@ vi.mock('../../services/api', () => ({
   deleteSavedBackup: vi.fn(),
   restoreSavedBackup: vi.fn(),
   restoreDbasBackupSaved: vi.fn(),
-  getSettings: vi.fn(() => Promise.resolve({ url: '' })),
+  getSettings: vi.fn(() => Promise.resolve({ url: '', ssrf_outbound_mode: 'lan_friendly' })),
   getTaskHistory: vi.fn(() => Promise.resolve({ history: [] })),
+  saveSecurityMode: vi.fn(),
 }));
 
 // Mock the one-time backup-schedule setup banner (bead ikv8z) — it has its own
@@ -106,6 +107,16 @@ describe('BackupRestoreSection', () => {
       await waitFor(() => {
         expect(screen.getByText('Settings')).toBeInTheDocument();
       });
+    });
+
+    it('renders the relocated backup destination policy card (bead 09x38.12)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Where backups can be sent')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('outbound-mode-lan_friendly')).toBeInTheDocument();
+      expect(screen.getByTestId('outbound-mode-public_only')).toBeInTheDocument();
     });
 
     it('renders page header', async () => {
@@ -448,6 +459,24 @@ describe('BackupRestoreSection', () => {
 
       fireEvent.click(screen.getByText('Close DBAS Modal'));
       expect(screen.queryByTestId('dbas-restore-saved-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('backup destination policy (relocated from Security page, bead 09x38.12)', () => {
+    it('does not persist on radio click — only on explicit Save', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('outbound-mode-public_only')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('outbound-mode-public_only'));
+      expect(api.saveSecurityMode).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('outbound-policy-save'));
+      await waitFor(() => {
+        expect(api.saveSecurityMode).toHaveBeenCalledWith('public_only');
+      });
     });
   });
 });

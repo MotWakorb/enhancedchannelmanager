@@ -11,7 +11,8 @@
  * The "already answered" semantics live in the localStorage flag
  * (SECURITY_FIRST_RUN_KEY): persist() sets it once the operator makes (or skips)
  * the choice, and the host refuses to re-open the modal while it is set. After
- * that, the choice is changed in Settings > Security — never re-prompted.
+ * that, the choice is changed in Settings > Backup & Restore (relocated from
+ * the removed Security page by bead 09x38.12) — never re-prompted.
  *
  * The DEFAULT is the home-network choice (lan_friendly), so a backup to a local
  * NAS works out of the box. Dismissing the modal (Escape, the backdrop, or
@@ -64,7 +65,7 @@ export function SecurityFirstRunModal({ onClose }: SecurityFirstRunModalProps) {
       await api.saveSecurityMode(mode);
     } catch (err) {
       // Non-blocking: the backend default is already the safe LAN-friendly mode,
-      // and the operator can set it explicitly later in Settings > Security.
+      // and the operator can set it explicitly later in Settings > Backup & Restore.
       logger.warn('Failed to persist first-run security choice', err);
     }
     onClose();
@@ -84,7 +85,7 @@ export function SecurityFirstRunModal({ onClose }: SecurityFirstRunModalProps) {
     setSaving(true);
     await persist(DEFAULT_MODE);
     notifications.info(
-      'Using your home network for backups. You can change this in Settings > Security.',
+      'Using your home network for backups. You can change this in Settings > Backup & Restore.',
       'Security',
     );
     setSaving(false);

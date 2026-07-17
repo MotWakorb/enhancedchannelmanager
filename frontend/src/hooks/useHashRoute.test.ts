@@ -51,6 +51,12 @@ describe('legacy hash aliases (Auto-Creation -> Channel Pipeline rename)', () =>
   });
 });
 
+describe('legacy hash alias (Security page removal, bead 09x38.12)', () => {
+  it('resolves the old settings/security sub-page hash to settings/backup-restore', () => {
+    expect(_parseHash('#settings/security')).toEqual({ tab: 'settings', settingsPage: 'backup-restore' });
+  });
+});
+
 describe('buildHash', () => {
   it('builds simple tab hashes', () => {
     expect(_buildHash('channel-manager')).toBe('#channel-manager');
