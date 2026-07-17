@@ -8,11 +8,16 @@
   overflow: hidden;
 }
 
-/* Header */
+/* Header — shared header/toolbar overflow policy (bead 09x38.2): wrap so the
+   5-button action row drops below the "Normalization Rules Engine" title
+   instead of crowding/wrapping into it at 1280/1440. See
+   docs/css_guidelines.md § "Header / toolbar overflow policy". */
 .norm-engine-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
   margin-bottom: 0.75rem;
 }
 
@@ -446,6 +451,8 @@
 .norm-engine-header-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 

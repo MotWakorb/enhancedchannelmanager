@@ -88,11 +88,50 @@ describe('M3UManagerTab', () => {
 
       expect(screen.queryByTestId('server-groups-modal')).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /server groups/i }));
+      // Server Groups now lives inside the header kebab (bead 09x38.2).
+      fireEvent.click(screen.getByRole('button', { name: /m3u setup actions/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /server groups/i }));
       expect(screen.getByTestId('server-groups-modal')).toBeInTheDocument();
 
       fireEvent.click(screen.getByText('Close Server Groups'));
       expect(screen.queryByTestId('server-groups-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Header overflow kebab (bead 09x38.2)', () => {
+    it('keeps Refresh All and Add M3U Account as primary toolbar buttons', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([makeAccount()]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+      await waitFor(() => expect(screen.getByText('Standard Playlist')).toBeInTheDocument());
+
+      // Primary actions are directly visible (not hidden behind the kebab).
+      expect(screen.getByRole('button', { name: /refresh all/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /add m3u account/i })).toBeInTheDocument();
+
+      // Setup/admin actions are NOT rendered until the kebab is opened.
+      expect(screen.queryByRole('menuitem', { name: /server groups/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('menuitem', { name: /manage links/i })).not.toBeInTheDocument();
+    });
+
+    it('opens the kebab to reveal all four setup/admin actions, then closes on selection', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([makeAccount()]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+      await waitFor(() => expect(screen.getByText('Standard Playlist')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /m3u setup actions/i }));
+
+      expect(screen.getByRole('menuitem', { name: /server groups/i })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /stream profiles/i })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /manage links/i })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /sync groups/i })).toBeInTheDocument();
+
+      // Selecting an item closes the menu.
+      fireEvent.click(screen.getByRole('menuitem', { name: /manage links/i }));
+      expect(screen.queryByRole('menuitem', { name: /server groups/i })).not.toBeInTheDocument();
     });
   });
 
@@ -152,7 +191,8 @@ describe('M3UManagerTab', () => {
 
       expect(screen.queryByTestId('stream-profiles-modal')).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /stream profiles/i }));
+      fireEvent.click(screen.getByRole('button', { name: /m3u setup actions/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /stream profiles/i }));
       expect(screen.getByTestId('stream-profiles-modal')).toBeInTheDocument();
       expect(screen.getByText('1 profile(s)')).toBeInTheDocument();
 
@@ -170,7 +210,8 @@ describe('M3UManagerTab', () => {
       );
       await waitFor(() => expect(screen.getByText('Standard Playlist')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /stream profiles/i }));
+      fireEvent.click(screen.getByRole('button', { name: /m3u setup actions/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /stream profiles/i }));
       fireEvent.click(screen.getByText('Trigger Changed'));
 
       expect(onStreamProfilesChange).toHaveBeenCalledTimes(1);

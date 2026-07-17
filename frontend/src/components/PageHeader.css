@@ -4,9 +4,14 @@
    defined once in shared/common.css (§ TAB HEADERS) — this file only
    supplies the outer row layout. */
 
+/* flex-wrap keeps this row on the shared overflow policy (bead 09x38.2):
+   the actions cluster drops to a second row rather than squeezing the
+   title. See docs/css_guidelines.md § "Header / toolbar overflow policy". */
 .page-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
   margin-bottom: 1.5rem;
 }

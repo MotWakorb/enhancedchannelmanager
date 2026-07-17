@@ -839,10 +839,19 @@
 /* Tab header styles
    Extracted from: M3UManagerTab.css, LogoManagerTab.css, JournalTab.css, EPGManagerTab.css */
 
+/* Header / toolbar overflow policy (bead 09x38.2):
+   Header rows wrap. `flex-wrap: wrap` lets the actions cluster drop to a
+   second row when it no longer fits beside the title, instead of squeezing
+   the title column to min-content (M3U title wrapped one word per line) or
+   overflowing an `overflow:hidden` ancestor (Guide "Print Guide" clipped).
+   This is the single reusable idiom — see docs/css_guidelines.md
+   § "Header / toolbar overflow policy". `row-gap` spaces the wrapped rows. */
 .tab-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
 
@@ -873,10 +882,16 @@
   color: var(--text-secondary);
 }
 
+/* flex-shrink:0 keeps the toolbar its natural size in the title/actions
+   fight; flex-wrap:wrap lets the buttons themselves reflow once the cluster
+   is on its own row at very narrow widths (bead 09x38.2). justify-content
+   keeps them right-aligned so a wrapped cluster still hugs the row edge. */
 .header-actions {
   display: flex;
   gap: 0.75rem;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   flex-shrink: 0;
 }
 
