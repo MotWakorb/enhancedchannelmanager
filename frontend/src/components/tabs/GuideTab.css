@@ -11,10 +11,17 @@
 /* .tab-loading → App.css */
 
 /* Controls */
+/* flex-wrap follows the shared header/toolbar overflow policy (bead 09x38.2):
+   the .guide-tab ancestor is overflow:hidden, so without wrapping the
+   "Print Guide" button was clipped (invisible, unreachable) below ~1400px.
+   Wrapping drops overflowing controls to a second row instead. See
+   docs/css_guidelines.md § "Header / toolbar overflow policy". */
 .guide-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.5rem;
+  row-gap: 0.75rem;
   padding: 1rem 1.5rem;
   background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);

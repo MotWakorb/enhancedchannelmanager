@@ -12,6 +12,8 @@ import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
 import { PageHeader } from '../PageHeader';
+import { OverflowMenu } from '../OverflowMenu';
+import type { OverflowMenuItem } from '../OverflowMenu';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
 import './M3UManagerTab.css';
@@ -739,6 +741,36 @@ export function M3UManagerTab({
       });
   }, [accounts, filterServerGroup]);
 
+  // Setup/admin actions surfaced through the header kebab (bead 09x38.2).
+  const adminMenuItems: OverflowMenuItem[] = [
+    {
+      label: 'Server Groups',
+      icon: 'workspaces',
+      onClick: () => setServerGroupsModalOpen(true),
+      title: 'Create, rename, or delete server groups',
+    },
+    {
+      label: 'Stream Profiles',
+      icon: 'settings_input_component',
+      onClick: () => setStreamProfilesModalOpen(true),
+      title: 'View and create stream profiles',
+    },
+    {
+      label: 'Manage Links',
+      icon: 'link',
+      onClick: () => setLinkedAccountsModalOpen(true),
+    },
+    {
+      label: syncingGroups ? 'Syncing...' : 'Sync Groups',
+      icon: 'sync_alt',
+      onClick: handleSyncGroups,
+      disabled: syncingGroups || linkedM3UAccounts.length === 0,
+      title: linkedM3UAccounts.length === 0
+        ? 'No linked accounts configured'
+        : 'Sync enabled groups across all linked accounts',
+    },
+  ];
+
   if (loading) {
     return (
       <div className="m3u-manager-tab">
@@ -783,35 +815,6 @@ export function M3UManagerTab({
                 ]}
               />
             )}
-            <button
-              className="btn-secondary"
-              onClick={() => setServerGroupsModalOpen(true)}
-              title="Create, rename, or delete server groups"
-            >
-              <span className="material-icons">workspaces</span>
-              Server Groups
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={() => setStreamProfilesModalOpen(true)}
-              title="View and create stream profiles"
-            >
-              <span className="material-icons">settings_input_component</span>
-              Stream Profiles
-            </button>
-            <button className="btn-secondary" onClick={() => setLinkedAccountsModalOpen(true)}>
-              <span className="material-icons">link</span>
-              Manage Links
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={handleSyncGroups}
-              disabled={syncingGroups || linkedM3UAccounts.length === 0}
-              title={linkedM3UAccounts.length === 0 ? 'No linked accounts configured' : 'Sync enabled groups across all linked accounts'}
-            >
-              <span className={`material-icons ${syncingGroups ? 'spinning' : ''}`}>sync_alt</span>
-              {syncingGroups ? 'Syncing...' : 'Sync Groups'}
-            </button>
             <button className="btn-secondary" onClick={handleRefreshAll} disabled={anyRefreshing}>
               <span className={`material-icons ${anyRefreshing ? 'spinning' : ''}`}>sync</span>
               {anyRefreshing ? 'Refreshing...' : 'Refresh All'}
@@ -820,6 +823,10 @@ export function M3UManagerTab({
               <span className="material-icons">add</span>
               Add M3U Account
             </button>
+            {/* Setup/admin actions collapse into a kebab so the 7-button
+                toolbar no longer squeezes the title column at 1280 (bead
+                09x38.2). Refresh All + Add M3U Account stay primary. */}
+            <OverflowMenu items={adminMenuItems} label="M3U setup actions" />
           </>
         )}
       />

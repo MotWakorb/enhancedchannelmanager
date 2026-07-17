@@ -14,10 +14,18 @@
   overscroll-behavior: contain;
 }
 
+/* Shared header/toolbar overflow policy (bead 09x38.2): wrap so the
+   "Refresh" control drops below the provider tiles instead of being clipped
+   by the overflow:hidden .stats-tab ancestor at 1440px. The inner tile
+   cluster (.header-left / .header-summary) wraps too so the 6 provider tiles
+   reflow gracefully. See docs/css_guidelines.md § "Header / toolbar overflow
+   policy". */
 .stats-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
   margin-bottom: 1rem;
   flex-shrink: 0;
 }
@@ -25,7 +33,9 @@
 .header-left {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.5rem;
+  row-gap: 0.75rem;
 }
 
 .header-left h2 {
@@ -37,7 +47,9 @@
 .header-summary {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.5rem;
+  row-gap: 0.75rem;
 }
 
 .summary-stat {
@@ -86,6 +98,8 @@
   display: flex;
   gap: 0.75rem;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .refresh-indicator {

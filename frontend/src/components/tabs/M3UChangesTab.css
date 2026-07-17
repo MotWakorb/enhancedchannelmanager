@@ -18,10 +18,15 @@
   box-sizing: border-box;
 }
 
+/* Shared header/toolbar overflow policy (bead 09x38.2): wrap so the row is
+   future-proof against a wider title/stats/actions combination rather than
+   squeezing. See docs/css_guidelines.md § "Header / toolbar overflow policy". */
 .changes-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
   margin-bottom: 0.75rem;
   flex-shrink: 0;
 }
@@ -29,7 +34,9 @@
 .header-left {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.5rem;
+  row-gap: 0.5rem;
 }
 
 .header-left h2 {
