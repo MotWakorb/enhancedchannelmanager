@@ -3,6 +3,7 @@ import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile,
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
 import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
+import { categorizeStreamGroups } from '../utils/streamGroupCategories';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
@@ -213,6 +214,10 @@ export function StreamsPane({
   const collapseAllGroups = useCallback(() => {
     collapseAllGroupsInternal();
     setGroupRenderLimits({});
+    // "Collapse all" collapses categories too (bead 09x38.5) -- otherwise
+    // the button would silently do nothing when categories are already
+    // hiding every group.
+    setExpandedCategoryNames(new Set());
   }, [collapseAllGroupsInternal]);
 
   // Hide mapped streams toggle state (persisted in localStorage)
@@ -225,6 +230,37 @@ export function StreamsPane({
   useEffect(() => {
     localStorage.setItem('ecm-hide-mapped-streams', String(hideMappedStreams));
   }, [hideMappedStreams]);
+
+  // Category header collapse/expand state (bead 09x38.5), persisted in
+  // localStorage following the same idiom as hideMappedStreams above.
+  // Default is collapsed -- a category name is only "expanded" once the
+  // operator has explicitly opened it (or it's auto-surfaced by search,
+  // handled separately below without touching this persisted set).
+  const [expandedCategoryNames, setExpandedCategoryNames] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem('ecm-streams-category-expanded');
+      if (stored) return new Set(JSON.parse(stored));
+    } catch {
+      // Corrupt/old localStorage value -- fall back to all-collapsed.
+    }
+    return new Set();
+  });
+
+  useEffect(() => {
+    localStorage.setItem('ecm-streams-category-expanded', JSON.stringify(Array.from(expandedCategoryNames)));
+  }, [expandedCategoryNames]);
+
+  const toggleCategoryExpanded = useCallback((category: string) => {
+    setExpandedCategoryNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  }, []);
 
   // Copy feedback state
   const { copySuccess, copyError, handleCopy } = useCopyFeedback();
@@ -273,6 +309,13 @@ export function StreamsPane({
     return filtered;
   }, [channelGroups, providerGroupSettings, deletedGroupIds, isEditMode]);
 
+  // Whether a search is currently active. The `streams` prop itself is
+  // already search-filtered server-side (App.tsx sends `search` to the
+  // API), so this only governs local display decisions: whether to include
+  // empty lazy-load placeholder groups, and (bead 09x38.5) whether category
+  // headers auto-surface regardless of their persisted collapse state.
+  const isSearching = searchTerm.trim().length > 0;
+
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
   // When searching: only show groups with matching streams
@@ -290,7 +333,6 @@ export function StreamsPane({
   // Note: streamGroups is already filtered by provider from the API
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
-    const isSearching = searchTerm.trim().length > 0;
     const hasGroupFilter = selectedStreamGroups.length > 0;
 
     // When NOT searching, create empty entries for groups from the API
@@ -344,7 +386,7 @@ export function StreamsPane({
         if (b === 'Ungrouped') return -1;
         return naturalCompare(a, b);
       });
-  }, [filteredStreams, hideUngroupedStreams, streamGroups, searchTerm, selectedStreamGroups]);
+  }, [filteredStreams, hideUngroupedStreams, streamGroups, isSearching, selectedStreamGroups]);
 
   // Compute streams in display order (flattened array for selection)
   // This must be computed before useSelection so shift-click works correctly
@@ -500,14 +542,39 @@ export function StreamsPane({
     }));
   }, [sortedStreamGroups, isGroupExpanded]);
 
-  // Expand all groups (wrapper to pass group names)
+  // Bucket the visible (already filtered) groups under their derived
+  // category (bead 09x38.5). Categories apply AFTER provider/group filters
+  // and search have already narrowed `groupedStreams`, so a category only
+  // ever shows groups the operator can currently see.
+  const categorizedGroups = useMemo(() => categorizeStreamGroups(groupedStreams), [groupedStreams]);
+
+  // A category is visually expanded if the operator has toggled it open, OR
+  // a search is active. Search results are already narrowed to matching
+  // groups (see `isSearching` above), so forcing every remaining category
+  // open surfaces matches immediately instead of requiring the operator to
+  // also expand a collapsed category header to see them. This does not
+  // mutate the persisted expandedCategoryNames set -- clearing the search
+  // restores whatever collapse state the operator had before.
+  const isCategoryExpanded = useCallback(
+    (category: string) => isSearching || expandedCategoryNames.has(category),
+    [isSearching, expandedCategoryNames]
+  );
+
+  // Expand all groups (wrapper to pass group names). Also expands every
+  // category (bead 09x38.5) so the newly-expanded groups are actually
+  // visible instead of hidden behind still-collapsed category headers.
   const expandAllGroups = useCallback(() => {
     expandAllGroupsInternal(groupedStreams.map(g => g.name));
-  }, [groupedStreams, expandAllGroupsInternal]);
+    setExpandedCategoryNames(new Set(categorizedGroups.map(c => c.category)));
+  }, [groupedStreams, categorizedGroups, expandAllGroupsInternal]);
 
-  // Check if all groups are expanded or collapsed
-  const allExpanded = groupedStreams.length > 0 && expandedGroups.size === groupedStreams.length;
-  const allCollapsed = expandedGroups.size === 0;
+  // Check if all groups AND all categories are expanded/collapsed, so the
+  // expand-all/collapse-all buttons reflect the true fully-expanded state.
+  const allExpanded =
+    groupedStreams.length > 0 &&
+    expandedGroups.size === groupedStreams.length &&
+    (isSearching || expandedCategoryNames.size === categorizedGroups.length);
+  const allCollapsed = expandedGroups.size === 0 && (!isSearching && expandedCategoryNames.size === 0);
 
   // Clear selection when exiting edit mode
   useEffect(() => {
@@ -1806,7 +1873,23 @@ export function StreamsPane({
         ) : (
           <>
             <div className="streams-list">
-              {groupedStreams.map((group) => (
+              {categorizedGroups.map(({ category, groups }) => (
+                <div key={category} className="stream-category">
+                  <button
+                    type="button"
+                    className="stream-category-header"
+                    onClick={() => toggleCategoryExpanded(category)}
+                    aria-expanded={isCategoryExpanded(category)}
+                  >
+                    <span className="material-icons expand-icon" aria-hidden="true">
+                      {isCategoryExpanded(category) ? 'expand_more' : 'chevron_right'}
+                    </span>
+                    <span className="category-name">{category}</span>
+                    <span className="category-count">{groups.length}</span>
+                  </button>
+                  {isCategoryExpanded(category) && (
+                    <div className="stream-category-groups">
+                      {groups.map((group) => (
                 <div key={group.name} className={`stream-group ${(isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name))) && isEditMode ? 'group-selected' : ''}`}>
                   <div
                     className="stream-group-header"
@@ -2026,6 +2109,10 @@ export function StreamsPane({
                     </div>
                     );
                   })()}
+                </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

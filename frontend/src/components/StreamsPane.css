@@ -210,6 +210,71 @@
   gap: 0.5rem;
 }
 
+/* Category headers grouping stream groups by naming-convention prefix
+   (bead 09x38.5) -- e.g. "CA", "UK", "US", "Sports". A real <button>
+   (not a role="button" div) so it gets native keyboard/focus semantics
+   for free; the icon+visible-text label satisfies the icon-only-button
+   a11y audit without any extra aria-label. */
+.stream-category {
+  display: flex;
+  flex-direction: column;
+}
+
+.stream-category-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  appearance: none;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.stream-category-header:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-primary);
+}
+
+.stream-category-header:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.stream-category-header .expand-icon {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+}
+
+.stream-category-header .category-name {
+  flex: 1;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stream-category-header .category-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background-color: var(--border-primary);
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-2xl);
+}
+
+.stream-category-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding-left: 0.5rem;
+}
+
 .stream-group {
   display: flex;
   flex-direction: column;
