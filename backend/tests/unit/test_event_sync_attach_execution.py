@@ -1118,6 +1118,123 @@ class TestParseMasterFromStream:
         assert summary["attached"] == 0
 
 
+class TestEventSyncStreamSortBehavior:
+    """bead io0tv: event_sync stream_sort_field orders master-channel streams
+    at the LIVE surface — the attach phase registers the master + provider
+    map, and Pass 3.5's reorder issues update_channel with the
+    higher-priority provider's stream FIRST."""
+
+    def _event_rule_with_sort(self, sort_field="provider_order",
+                              sort_order="desc"):
+        rule = _event_rule()
+        rule.stream_sort_field = sort_field
+        rule.stream_sort_order = sort_order
+        # _reorder_streams_for_rule getattr-probes these; keep them
+        # deterministic on the MagicMock rule.
+        rule.quality_tie_break_order = "desc"
+        rule.quality_m3u_tie_break_enabled = True
+        return rule
+
+    def _two_provider_setup(self):
+        """Master 100 owns native stream 9001 (provider 1, priority 1); the
+        secondary fetch supplies stream 7001 (provider 2, priority 10 — the
+        operator's preferred provider)."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 2}]
+
+        client = MagicMock()
+        client.get_m3u_accounts = AsyncMock(return_value=[
+            {"id": 1, "name": "ProvA"},
+            {"id": 2, "name": "ProvB"},
+        ])
+        client._channel_group_name_for_id = AsyncMock(return_value="EVENTS B")
+        client.get_streams = AsyncMock(return_value={
+            "count": len(batch), "results": batch, "next": None,
+        })
+        client.get_all_m3u_group_settings = AsyncMock(return_value={})
+        client.get_streams_by_ids = AsyncMock(return_value=[
+            {"id": 9001, "name": "native", "m3u_account": 1},
+        ])
+        client.update_channel = AsyncMock(return_value={})
+
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = channels
+        executor = ActionExecutor(
+            client, existing_channels=channels, existing_groups=[],
+            execution_id=EXECUTION_ID,
+        )
+
+        settings = MagicMock()
+        settings.m3u_account_priorities = {"1": 1, "2": 10}
+        return engine, executor, client, settings
+
+    def test_preferred_provider_stream_reordered_to_top(self):
+        engine, executor, client, settings = self._two_provider_setup()
+        rule = self._event_rule_with_sort("provider_order", "desc")
+        results = _results()
+        rule_channel_order_streams: dict = {}
+        stream_m3u_map: dict = {}
+
+        _run(engine._run_event_sync_rules(
+            [rule], executor, results, dry_run=False,
+            triggered_by="manual", channels_touched_ids=set(),
+            rule_channel_order_streams=rule_channel_order_streams,
+            stream_m3u_map=stream_m3u_map,
+        ))
+
+        # Attach appended the secondary stream at the tail...
+        assert client.update_channel.await_args_list[0].args == (
+            100, {"streams": [9001, 7001]},
+        )
+        # ...and registered the master + provider map for Pass 3.5.
+        assert rule_channel_order_streams.get(rule.id) == [100]
+        assert stream_m3u_map == {7001: 2, 9001: 1}
+
+        # Pass 3.5 exactly as _process_streams invokes it.
+        reorder_results = {"execution_log": [], "dry_run_results": []}
+        _run(engine._reorder_channel_streams(
+            [rule], rule_channel_order_streams, reorder_results,
+            dry_run=False, settings=settings, stream_m3u_map=stream_m3u_map,
+        ))
+
+        # LIVE surface: the preferred provider's stream (7001, priority 10)
+        # is written FIRST on the master channel.
+        client.update_channel.assert_awaited_with(
+            100, {"streams": [7001, 9001]},
+        )
+
+    def test_no_sort_field_keeps_append_order(self):
+        """Contrast rail: without stream_sort_field the attach stays
+        append-only — Pass 3.5 issues no second update_channel."""
+        engine, executor, client, settings = self._two_provider_setup()
+        rule = self._event_rule_with_sort(sort_field=None)
+        results = _results()
+        rule_channel_order_streams: dict = {}
+        stream_m3u_map: dict = {}
+
+        _run(engine._run_event_sync_rules(
+            [rule], executor, results, dry_run=False,
+            triggered_by="manual", channels_touched_ids=set(),
+            rule_channel_order_streams=rule_channel_order_streams,
+            stream_m3u_map=stream_m3u_map,
+        ))
+        # No sort field -> the master-native get_streams_by_ids enrichment is
+        # skipped (no wasted round-trip).
+        client.get_streams_by_ids.assert_not_awaited()
+
+        reorder_results = {"execution_log": [], "dry_run_results": []}
+        _run(engine._reorder_channel_streams(
+            [rule], rule_channel_order_streams, reorder_results,
+            dry_run=False, settings=settings, stream_m3u_map=stream_m3u_map,
+        ))
+
+        # Only the attach write ever happened — order stays [native, attach].
+        assert client.update_channel.await_count == 1
+        assert client.update_channel.await_args.args == (
+            100, {"streams": [9001, 7001]},
+        )
+
+
 # =============================================================================
 # Full manual run through run_pipeline (execution record + snapshot +
 # managed_channel_ids)

@@ -86,6 +86,17 @@ const WIZARD_STEPS: { n: WizardStep; label: string }[] = [
   { n: 4, label: 'Review' },
 ];
 
+/** Intent-sentence labels for the stream-sort modes (bead io0tv) — mirrors
+ * RuleBuilder's STREAM_SORT_LABELS for the modes the engine's Pass 3.5
+ * dispatch supports. */
+const STREAM_SORT_LABELS: Record<string, string> = {
+  smart_sort: 'smart sort',
+  quality: 'quality',
+  stream_name: 'stream name',
+  stream_name_natural: 'stream name (natural)',
+  provider_order: 'provider order',
+};
+
 export interface EventSyncRuleEditorProps {
   /** Existing event_sync rule to edit; omit to create a new one. */
   rule?: Partial<ChannelPipelineRule>;
@@ -361,6 +372,16 @@ export function EventSyncRuleEditor({
     config?.dummy_epg_profile_id ?? null
   );
   const [dummyProfiles, setDummyProfiles] = useState<DummyEPGProfile[]>([]);
+  // bead io0tv: Pass 3.5 stream ordering within master channels. Stored on
+  // the rule's existing stream_sort_field/stream_sort_order COLUMNS (the same
+  // surface RuleBuilder uses), NOT in event_sync_config. '' = no sorting
+  // (default — attaches stay append-only, pre-feature behavior).
+  const [streamSortField, setStreamSortField] = useState(rule?.stream_sort_field ?? '');
+  // Default 'desc' — for Provider Order that means highest priority first,
+  // the direction the preferred-provider recipe wants.
+  const [streamSortOrder, setStreamSortOrder] = useState<'asc' | 'desc'>(
+    rule?.stream_sort_order === 'asc' ? 'asc' : 'desc'
+  );
 
   // Reference data
   const [channelGroups, setChannelGroups] = useState<{ id: number; name: string }[]>([]);
@@ -790,6 +811,11 @@ export function EventSyncRuleEditor({
         conditions: rule?.conditions?.length ? rule.conditions : [{ type: 'always' }],
         actions: rule?.actions?.length ? rule.actions : [{ type: 'skip' }],
         event_sync_config: builtConfig,
+        // bead io0tv: Pass 3.5 stream ordering — rule columns, same encoding
+        // as RuleBuilder ('' = no sorting; the update endpoint maps '' to
+        // NULL).
+        stream_sort_field: streamSortField || '',
+        stream_sort_order: streamSortOrder,
       });
     } finally {
       setSaving(false);
@@ -873,14 +899,16 @@ export function EventSyncRuleEditor({
       assumeCurrentDate !== (config?.assume_current_date ?? false) ||
       demoteStaleDateless !== (config?.demote_stale_dateless ?? true) ||
       parseMasterFromStream !== (config?.parse_master_from_stream ?? false) ||
-      dummyEpgProfileId !== (config?.dummy_epg_profile_id ?? null)
+      dummyEpgProfileId !== (config?.dummy_epg_profile_id ?? null) ||
+      streamSortField !== (rule?.stream_sort_field ?? '') ||
+      streamSortOrder !== (rule?.stream_sort_order === 'asc' ? 'asc' : 'desc')
     );
   }, [
     name, description, enabled, masterScope, secondaryScopes, selectedPatternIds,
     customShared, groupOverrides, timeWindowText, thresholdText, enforceTimeWindow,
     autoRun, refreshProvidersBeforeRun, includeMasterGroupStreams, assumeCurrentDate,
     demoteStaleDateless, parseMasterFromStream, dummyEpgProfileId, config, rule,
-    initial, customSharedMeta,
+    initial, customSharedMeta, streamSortField, streamSortOrder,
   ]);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -987,6 +1015,12 @@ export function EventSyncRuleEditor({
           from yesterday&apos;s playlist can auto-attach.</>
         )}
         {dummyEpgProfileId != null && <> Assigns dummy EPG guide data on every run.</>}
+        {streamSortField && (
+          <>
+            {' '}Orders each master channel&apos;s streams by{' '}
+            {STREAM_SORT_LABELS[streamSortField] || streamSortField} on every run.
+          </>
+        )}
       </>
     );
   }, [
@@ -1001,6 +1035,7 @@ export function EventSyncRuleEditor({
     assumeCurrentDate,
     demoteStaleDateless,
     dummyEpgProfileId,
+    streamSortField,
     groupName,
   ]);
 
@@ -1020,6 +1055,7 @@ export function EventSyncRuleEditor({
   const scopeExtChanged =
     (includeMasterGroupStreams ? 1 : 0) + (parseMasterFromStream ? 1 : 0);
   const guideChanged = dummyEpgProfileId != null ? 1 : 0;
+  const streamOrderChanged = streamSortField ? 1 : 0;
 
   /** Collapsed-subgroup "N changed" badge (S2). */
   const changedBadge = (count: number) =>
@@ -1973,6 +2009,71 @@ export function EventSyncRuleEditor({
                   </div>
                 </div>
               </details>
+
+              {/* Stream-order subgroup (bead io0tv). */}
+              <details className="modal-subgroup">
+                <summary>
+                  Stream order {changedBadge(streamOrderChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <div className="form-group">
+                    <label>Order streams within master channels (optional)</label>
+                    <div className="sort-config-row">
+                      <CustomSelect
+                        options={[
+                          { value: '', label: 'No sorting — attach order (default)' },
+                          { value: 'provider_order', label: 'Provider Order (M3U)' },
+                          { value: 'quality', label: 'Quality (Resolution)' },
+                          { value: 'stream_name', label: 'Stream Name' },
+                          { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
+                          { value: 'smart_sort', label: 'Smart Sort (from Settings)' },
+                        ]}
+                        value={streamSortField}
+                        onChange={setStreamSortField}
+                        placeholder="No sorting — attach order (default)"
+                        disabled={isLoading}
+                      />
+                      {streamSortField && streamSortField !== 'smart_sort' && (
+                        <CustomSelect
+                          options={[
+                            { value: 'desc', label: 'Descending' },
+                            { value: 'asc', label: 'Ascending' },
+                          ]}
+                          value={streamSortOrder}
+                          onChange={value => setStreamSortOrder(value as 'asc' | 'desc')}
+                          disabled={isLoading}
+                        />
+                      )}
+                    </div>
+                    <span className="form-hint">
+                      Reorders each touched master channel&apos;s streams after
+                      every run — new attaches otherwise land at the bottom.
+                    </span>
+                    {streamSortField === 'provider_order' && (
+                      <span className="form-hint">
+                        Uses the priority values from M3U Manager (Save
+                        Priorities). Choose Descending so your preferred
+                        (highest-priority) provider&apos;s stream plays first.
+                      </span>
+                    )}
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Off by default — attached streams simply append after
+                          the master&apos;s own stream. Pick{' '}
+                          <strong>Provider Order</strong> to always float your
+                          preferred provider&apos;s stream to the top of each
+                          event channel (set provider priorities in M3U Manager
+                          first). Ordering re-heals on every run, including
+                          runs where everything was already attached, so a
+                          priority change takes effect on the next run.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
             </section>
 
             {/* ── Step 4: Review & Preview ───────────────────────────────── */}
@@ -2066,6 +2167,9 @@ export function EventSyncRuleEditor({
                     {refreshProvidersBeforeRun ? ' · refresh providers before run (Test writes)' : ''}
                     {parseMasterFromStream ? ' · master time from stream' : ''}
                     {dummyEpgProfileId != null ? ' · dummy EPG guide data' : ''}
+                    {streamSortField
+                      ? ` · streams ordered by ${STREAM_SORT_LABELS[streamSortField] || streamSortField}`
+                      : ''}
                   </dd>
                 </div>
               </dl>

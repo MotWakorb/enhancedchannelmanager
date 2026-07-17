@@ -1106,6 +1106,303 @@ class TestPass3RenumberGating:
         assert call_args.args[1] == 4000
 
 
+class TestPass35SkippedMergeRegistration:
+    """Pin the skipped-merge -> Pass 3.5 registration side effect (bead io0tv).
+
+    A merge_stream result with skipped=True (stream already on the channel)
+    still lands in actions_log with type "merge_stream" and entity_id, so the
+    modified_this_run gate registers the channel in rule_channel_order_streams
+    — meaning a stream_sort_field rule re-heals ordering even on no-op re-runs.
+    The QA spike flagged this as load-bearing (companion-rule recipes depend on
+    it) but previously unpinned; this test keeps future cleanups from silently
+    killing it.
+    """
+
+    def setup_method(self):
+        from channel_pipeline_executor import ActionResult
+
+        self.ActionResult = ActionResult
+        self.client = MagicMock()
+        self.client.assign_channel_numbers = AsyncMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.engine = ChannelPipelineEngine(self.client)
+        self.engine._existing_channels = []
+        self.engine._existing_groups = []
+
+    @patch("channel_pipeline_engine.get_session")
+    def test_skipped_merge_still_registers_channel_for_reorder(self, mock_get_session):
+        mock_get_session.return_value = MagicMock()
+
+        streams = [
+            StreamContext(stream_id=201, stream_name="A", m3u_account_id=1, m3u_account_name="P"),
+        ]
+
+        rule = MagicMock()
+        rule.id = 3
+        rule.name = "Rule"
+        rule.priority = 0
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.enabled = True
+        rule.stop_on_first_match = True
+        rule.skip_struck_streams = False
+        rule.sort_field = None
+        rule.sort_order = "asc"
+        rule.sort_regex = None
+        rule.starting_channel_number = None
+        rule.orphan_action = "none"
+        rule.managed_channel_ids = None
+        rule.get_managed_channel_ids.return_value = []
+        rule.get_conditions.return_value = [{"type": "always"}]
+        rule.get_actions.return_value = [{"type": "create_channel", "params": {}}]
+        rule.get_normalization_group_ids.return_value = []
+        rule.match_scope_target_group = False
+        rule.stream_sort_field = "provider_order"
+        rule.stream_sort_order = "desc"
+
+        # Idempotent no-op merge: the stream is ALREADY on channel 501, so the
+        # executor returns skipped=True and modified=False.
+        async def _fake_execute(action, stream_ctx, exec_ctx,
+                                rule_target_group_id=None,
+                                normalization_group_ids=None,
+                                match_scope_target_group=False,
+                                rule_scope_group_id=None,
+                                allow_manual_channel_merge=False,
+                                fold_match_key=False,
+                                rule_id=None):
+            exec_ctx.current_channel_id = 501
+            return self.ActionResult(
+                success=True,
+                action_type="merge_stream",
+                description="Stream already in channel 'ch-501' (2 streams)",
+                entity_type="channel",
+                entity_id=501,
+                entity_name="ch-501",
+                skipped=True,
+            )
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls, \
+             patch.object(self.engine, "_reorder_channel_streams", new_callable=AsyncMock) as mock_reorder:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(side_effect=_fake_execute)
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(streams, [rule], mock_execution, dry_run=False)
+            )
+
+        assert mock_reorder.await_count == 1
+        passed_rule_channel_order = mock_reorder.await_args.args[1]
+        assert passed_rule_channel_order.get(rule.id) == [501], (
+            "skipped merge no longer registers the channel for Pass 3.5 — "
+            "stream_sort_field rules would stop healing order on no-op re-runs"
+        )
+
+
+class TestEventSyncStreamReorderWiring:
+    """Pass 3.5 wiring for event_sync rules (bead io0tv).
+
+    The attach phase registers touched master channels in
+    rule_channel_order_streams and the Pass 3.5 call receives the event_sync
+    rules alongside the standard rules, so an event_sync rule's
+    stream_sort_field orders streams within its master channels.
+    """
+
+    EVENT_SYNC_CONFIG = {
+        "master_group_id": 10,
+        "secondary_group_ids": [20],
+        "time_window_minutes": 30,
+        "attach_threshold": 0.80,
+        "enabled": True,
+    }
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock(return_value={})
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_m3u_accounts = AsyncMock(return_value=[])
+        self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
+        self.client.get_streams_by_ids = AsyncMock(return_value=[])
+        self.engine = ChannelPipelineEngine(self.client)
+        self.engine._existing_channels = []
+        self.engine._existing_groups = []
+
+    def _make_event_rule(self, rule_id=9, stream_sort_field="provider_order"):
+        rule = MagicMock()
+        rule.id = rule_id
+        rule.name = "Event Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.get_event_sync_config.return_value = dict(self.EVENT_SYNC_CONFIG)
+        rule.is_event_sync.return_value = True
+        rule.stream_sort_field = stream_sort_field
+        rule.stream_sort_order = "desc"
+        rule.get_actions.return_value = []
+        rule.get_normalization_group_ids.return_value = []
+        rule.get_conditions.return_value = []
+        return rule
+
+    def _run_process_streams(self, event_rule, mock_reorder_patch=True,
+                             merged_ids=(501,), attach_entries=None):
+        """Drive _process_streams with only an event_sync rule; the executor's
+        execute_event_sync_rule is mocked to simulate attaches into master
+        channels (exec_ctx.merged_channel_ids)."""
+        summary_template = {
+            "rule_id": event_rule.id,
+            "rule_name": event_rule.name,
+            "master_group_id": 10,
+            "secondary_group_ids": [20],
+            "secondary_streams": 1,
+            "master_channels": 1,
+            "master_channels_unparsed": 0,
+            "attached": len(merged_ids),
+            "already_attached": 0,
+            "ambiguous_skipped": 0,
+            "contested_skipped": 0,
+            "unmatched": 0,
+            "parse_failed": 0,
+            "attach_errors": 0,
+            "cap": 100,
+            "capped": False,
+            "cap_overage": 0,
+            "attach_entries": list(attach_entries or []),
+            "queue_attached": 0,
+            "rejected_suppressed": 0,
+            "review_candidates": [],
+        }
+
+        async def _fake_event_sync(rule_id, rule_name, config,
+                                   secondary_streams, exec_ctx,
+                                   decisions=None,
+                                   effective_master_group_id=None):
+            for cid in merged_ids:
+                exec_ctx.merged_channel_ids.add(cid)
+            return dict(summary_template)
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        patches = [
+            patch("channel_pipeline_engine.ActionExecutor"),
+            patch("channel_pipeline_engine.get_session", return_value=MagicMock()),
+            patch.object(self.engine, "_fetch_event_sync_secondary_streams",
+                         new=AsyncMock(return_value=[])),
+        ]
+        if mock_reorder_patch:
+            reorder_patch = patch.object(
+                self.engine, "_reorder_channel_streams", new_callable=AsyncMock
+            )
+        else:
+            reorder_patch = None
+
+        with patches[0] as mock_exec_cls, patches[1], patches[2]:
+            mock_executor = MagicMock()
+            mock_executor.execute_event_sync_rule = AsyncMock(
+                side_effect=_fake_event_sync
+            )
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+
+            if reorder_patch is not None:
+                with reorder_patch as mock_reorder:
+                    asyncio.get_event_loop().run_until_complete(
+                        self.engine._process_streams(
+                            [], [], mock_execution, dry_run=False,
+                            triggered_by="manual",
+                            event_sync_rules=[event_rule],
+                        )
+                    )
+                    return mock_reorder
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(
+                    [], [], mock_execution, dry_run=False,
+                    triggered_by="manual",
+                    event_sync_rules=[event_rule],
+                )
+            )
+            return None
+
+    def test_event_sync_attach_registers_masters_for_reorder(self):
+        """Mirror of test_stream_reorder_runs_on_modified_existing_channel for
+        the event_sync path: an attach into master 501 must hand
+        {event_rule.id: [501]} to Pass 3.5, with the event rule in the rules
+        list Pass 3.5 receives."""
+        event_rule = self._make_event_rule(stream_sort_field="provider_order")
+
+        mock_reorder = self._run_process_streams(event_rule, merged_ids=(501,))
+
+        assert mock_reorder.await_count == 1
+        passed_rules = mock_reorder.await_args.args[0]
+        assert event_rule in passed_rules, (
+            "event_sync rule missing from Pass 3.5 rules list — its "
+            "stream_sort_field can never apply"
+        )
+        passed_rule_channel_order = mock_reorder.await_args.args[1]
+        assert passed_rule_channel_order.get(event_rule.id) == [501]
+
+    def test_already_attached_no_op_run_still_registers_for_reorder(self):
+        """Idempotent re-run: zero new attaches, one already-attached skip.
+        The master must STILL be registered so ordering heals on every run
+        (e.g. after the operator changes m3u_account_priorities)."""
+        event_rule = self._make_event_rule(stream_sort_field="provider_order")
+        skip_entry = {
+            "type": "event_sync_attach",
+            "description": "Stream already in channel 'master' (2 streams)",
+            "success": True,
+            "skipped": True,
+            "entity_id": 501,
+            "entity_name": "master",
+            "error": None,
+            "match": {},
+        }
+
+        mock_reorder = self._run_process_streams(
+            event_rule, merged_ids=(), attach_entries=[skip_entry]
+        )
+
+        assert mock_reorder.await_count == 1
+        passed_rule_channel_order = mock_reorder.await_args.args[1]
+        assert passed_rule_channel_order.get(event_rule.id) == [501], (
+            "already-attached no-op run no longer registers the master for "
+            "Pass 3.5 — ordering would stop healing on steady-state runs"
+        )
+
+    def test_event_sync_rule_without_sort_field_never_reorders(self):
+        """No stream_sort_field -> Pass 3.5 no-ops the rule: no update_channel
+        call for the master even though it was registered (no behavior change
+        for existing event_sync rules)."""
+        event_rule = self._make_event_rule(stream_sort_field=None)
+        # Real _reorder_channel_streams runs; give it a master with 2 streams
+        # so a reorder WOULD be possible if the gate failed.
+        self.engine._existing_channels = [
+            {"id": 501, "name": "master", "streams": [9001, 7001]},
+        ]
+
+        self._run_process_streams(
+            event_rule, mock_reorder_patch=False, merged_ids=(501,)
+        )
+
+        self.client.update_channel.assert_not_awaited()
+
+
 class TestChannelPipelineEngineStreamReorderLogging:
     """Tests for Pass 3.5 stream reorder logging."""
 
