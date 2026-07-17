@@ -10,9 +10,11 @@ If a topic you need is missing, check the cross-references at the bottom — muc
 
 ## Sections
 
-### 1. [Getting Started](getting-started/index.md) — Stub
+### 1. [Getting Started](getting-started/index.md) — In progress
 
 Install ECM, connect it to Dispatcharr, and verify the connection is healthy. Start here on day one.
+
+- **[Set Up Your First Channels](getting-started/your-first-channels.md)** — end-to-end workflow tutorial: add an M3U account, add an EPG source, choose which stream groups to sync, refresh, then create channels, channel groups, and stream assignments in Channel Manager.
 
 ### 2. [Channels & Streams](channels-streams/index.md) — Stub
 
