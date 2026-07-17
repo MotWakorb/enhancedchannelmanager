@@ -441,7 +441,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
           {/* Manage & Groups */}
           <button className="pane-toolbar-menu-item" onClick={() => { close(); onOpenProfiles(); }}>
             <span className="material-icons">group</span>
-            <span>Manage Profiles</span>
+            <span>Channel Profiles</span>
           </button>
           {isEditMode && (
             <button className="pane-toolbar-menu-item" onClick={() => { close(); onShowHiddenGroups(); }}>
