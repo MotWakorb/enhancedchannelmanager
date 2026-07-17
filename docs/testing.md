@@ -13,6 +13,20 @@ This project has comprehensive test coverage at three levels.
 
 ## 1. Backend Tests (Python/pytest)
 
+> **Always run backend tests under the project venv**, not a bare system
+> `python3`: `.venv/bin/python -m pytest` (or the path-relative equivalent
+> from wherever you're running — the point is the interpreter, not the cwd).
+> The project pins `cryptography` at 42+; a bare system `python3` commonly
+> resolves an older `cryptography` (e.g. 41.0.7) that is missing
+> `x509.Certificate.not_valid_before_utc` / `not_valid_after_utc` (added in
+> cryptography 42). That gap produces 7-9 confusing failures in
+> `backend/tests/unit/test_tls_storage.py` — assertion failures on subject/
+> validity fields, not an obvious `AttributeError`, because the code under
+> test catches the exception broadly. Two engineers independently lost time
+> to this (bead `enhancedchannelmanager-vol5d`) before the affected tests
+> were given a version-gated skip that names the fix in its reason string —
+> if you see that skip fire, you're not on the venv interpreter.
+
 Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 
 **Router Tests** (`backend/tests/routers/`): Tests for extracted router modules.

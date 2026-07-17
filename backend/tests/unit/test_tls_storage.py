@@ -26,6 +26,52 @@ from tls.storage import CertificateInfo, CertificateStorage
 
 
 # ---------------------------------------------------------------------------
+# cryptography >= 42 gate (bead enhancedchannelmanager-vol5d).
+#
+# CertificateStorage.parse_certificate() reads x509.Certificate.not_valid_
+# before_utc / not_valid_after_utc, added in cryptography 42. Older
+# cryptography (e.g. the 41.0.7 that ships with a bare system python3, vs.
+# the 42+ pinned in the project .venv) raises AttributeError there, which
+# parse_certificate's broad except Exception swallows into an is_valid=False
+# CertificateInfo — so the tests below fail on assertions (wrong subject,
+# wrong is_valid, wrong dates), not on an obvious ImportError/AttributeError,
+# which is what made the failure mode confusing enough to cost two engineers
+# real time. Gate exactly the tests whose assertions depend on a genuinely
+# parsed certificate; everything else (directory perms, raw file round-trips,
+# ACME JSON persistence, the already-invalid/malformed/mismatched paths, the
+# timezone-skew suite that constructs CertificateInfo directly) runs
+# unmodified under any cryptography version.
+def _cryptography_version_tuple() -> tuple[int, ...]:
+    """Best-effort (major, minor, ...) parse of cryptography.__version__.
+
+    Deliberately avoids depending on `packaging` here — the version gate
+    itself must not be able to fail before it explains why the real test
+    would have.
+    """
+    import cryptography
+
+    parts = []
+    for chunk in cryptography.__version__.split("."):
+        digits = ""
+        for ch in chunk:
+            if not ch.isdigit():
+                break
+            digits += ch
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+_CRYPTOGRAPHY_TOO_OLD = _cryptography_version_tuple() < (42,)
+_CRYPTOGRAPHY_SKIP_REASON = (
+    "cryptography >= 42 required (not_valid_before_utc); run under the "
+    "project venv: .venv/bin/python -m pytest"
+)
+requires_cryptography_42 = pytest.mark.skipif(
+    _CRYPTOGRAPHY_TOO_OLD, reason=_CRYPTOGRAPHY_SKIP_REASON
+)
+
+
+# ---------------------------------------------------------------------------
 # Helpers: generate real key material and self-signed certs on the fly.
 # ---------------------------------------------------------------------------
 
@@ -187,6 +233,7 @@ class TestSaveLoadCertificate:
 # ---------------------------------------------------------------------------
 
 class TestValidatePair:
+    @requires_cryptography_42
     def test_valid_rsa_pair(self, storage, rsa_pair):
         cert_pem, key_pem = rsa_pair
         info = storage.validate_pair(cert_pem, key_pem)
@@ -194,6 +241,7 @@ class TestValidatePair:
         assert info.validation_error is None
         assert info.subject == "example.com"
 
+    @requires_cryptography_42
     def test_valid_ec_pair(self, storage):
         cert_pem, key_pem = _ec_pair()
         info = storage.validate_pair(cert_pem, key_pem)
@@ -247,6 +295,7 @@ class TestValidatePair:
 # ---------------------------------------------------------------------------
 
 class TestParseCertificate:
+    @requires_cryptography_42
     def test_extracts_subject_issuer_and_sans(self, storage):
         cert_pem, _ = _rsa_pair(cn="host.example.com", sans=["host.example.com", "alt.example.com"])
         info = storage.parse_certificate(cert_pem)
@@ -262,6 +311,7 @@ class TestParseCertificate:
         assert info.domains.count("host.example.com") == 1
         assert info.serial_number  # hex string, non-empty
 
+    @requires_cryptography_42
     def test_cert_without_sans(self, storage):
         cert_pem, _ = _rsa_pair(cn="nosan.example.com", sans=None)
         info = storage.parse_certificate(cert_pem)
@@ -283,6 +333,7 @@ class TestCertificateInfoAccessors:
     def test_get_certificate_info_none_when_absent(self, storage):
         assert storage.get_certificate_info() is None
 
+    @requires_cryptography_42
     def test_get_certificate_info_after_save(self, storage, rsa_pair):
         cert_pem, key_pem = rsa_pair
         storage.save_certificate(cert_pem, key_pem)
@@ -293,6 +344,7 @@ class TestCertificateInfoAccessors:
     def test_is_expiring_soon_false_when_absent(self, storage):
         assert storage.is_expiring_soon() is False
 
+    @requires_cryptography_42
     def test_is_expiring_soon_true_for_near_expiry(self, storage):
         now = datetime.now(timezone.utc)
         cert_pem, key_pem = _rsa_pair(
@@ -304,6 +356,7 @@ class TestCertificateInfoAccessors:
         assert storage.is_expiring_soon(days=30) is True
         assert storage.is_expiring_soon(days=5) is False
 
+    @requires_cryptography_42
     def test_is_expiring_soon_false_for_distant_expiry(self, storage, rsa_pair):
         cert_pem, key_pem = rsa_pair  # 365-day cert
         storage.save_certificate(cert_pem, key_pem)
@@ -315,6 +368,7 @@ class TestCertificateInfoAccessors:
 # ---------------------------------------------------------------------------
 
 class TestCertificateInfoDataclass:
+    @requires_cryptography_42
     def test_days_until_expiry_and_flags_for_valid_cert(self, storage):
         now = datetime.now(timezone.utc)
         cert_pem, _ = _rsa_pair(
@@ -336,6 +390,7 @@ class TestCertificateInfoDataclass:
         assert info.is_expired() is True
         assert info.days_until_expiry() == 0
 
+    @requires_cryptography_42
     def test_not_yet_valid_cert_flags(self, storage):
         now = datetime.now(timezone.utc)
         cert_pem, _ = _rsa_pair(
