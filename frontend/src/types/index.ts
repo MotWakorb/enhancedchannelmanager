@@ -247,6 +247,13 @@ export interface AutoSyncCustomProperties {
   channel_sort_reverse?: boolean;           // Reverse sort order
   stream_profile_id?: number | null;        // Stream Profile ID
   custom_logo_id?: number | null;           // Custom Logo ID
+  // Dispatcharr keeps adding keys its sync consumes (v0.27.2:
+  // channel_numbering_mode, channel_numbering_fallback,
+  // name_match_exclude_regex, force_dummy_epg, ...). Its group-settings
+  // upsert replaces custom_properties wholesale, so unknown keys MUST be
+  // carried through verbatim on every save — never rebuild this object
+  // from the known keys above (bead enhancedchannelmanager-igqcy).
+  [key: string]: unknown;
 }
 
 export interface ChannelGroupM3UAccount {
@@ -258,6 +265,9 @@ export interface ChannelGroupM3UAccount {
   enabled_series: boolean;
   auto_channel_sync: boolean;
   auto_sync_channel_start: number | null;
+  // Added in Dispatcharr v0.25.0; optional so payloads from older
+  // Dispatcharr versions (key absent) still typecheck.
+  auto_sync_channel_end?: number | null;
   custom_properties: AutoSyncCustomProperties | null;
 }
 

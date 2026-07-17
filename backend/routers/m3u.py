@@ -988,6 +988,47 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
 # M3U Group Settings
 # -------------------------------------------------------------------------
 
+# The exact field set Dispatcharr's update_group_settings upserts (its
+# bulk_create update_fields list, apps/m3u/api_views.py). Dispatcharr
+# v0.25.0+ performs a FULL-ROW upsert with ``setting.get(...)`` defaults:
+# every field omitted from a row is silently reset (enabled -> True,
+# auto_channel_sync -> False, start/end -> None, custom_properties -> {}).
+# Every write must therefore carry the complete set, merged over the
+# group's current stored state (bead enhancedchannelmanager-igqcy).
+GROUP_SETTINGS_UPSERT_FIELDS = (
+    "enabled",
+    "auto_channel_sync",
+    "auto_sync_channel_start",
+    "auto_sync_channel_end",
+    "custom_properties",
+)
+
+
+def merge_group_settings_row(current: dict | None, incoming: dict) -> dict:
+    """Overlay an incoming (possibly partial) group-settings row onto the
+    group's CURRENT stored state so Dispatcharr's full-row upsert never
+    resets fields the caller did not intend to change.
+
+    Semantics: a key **present** in ``incoming`` wins verbatim (explicit
+    ``null`` clears a value); a key **absent** from ``incoming`` is filled
+    from ``current``. ``custom_properties`` is taken verbatim when present —
+    callers that edit it must send the already-merged dict (unknown keys
+    preserved), because a deep merge here would make clearing a key
+    impossible. Unknown/new upsert fields in ``incoming`` pass through
+    untouched.
+    """
+    current = current or {}
+    merged = dict(incoming)
+    # Dispatcharr identifies the row by (m3u_account, channel_group); the id
+    # is optional but forwarded when known (matches the modal's payloads).
+    if "id" not in merged and current.get("id") is not None:
+        merged["id"] = current["id"]
+    for field in GROUP_SETTINGS_UPSERT_FIELDS:
+        if field not in merged and field in current:
+            merged[field] = current[field]
+    return merged
+
+
 @router.patch("/accounts/{account_id}/group-settings")
 async def update_m3u_group_settings(account_id: int, request: Request):
     """Update group settings for an M3U account."""
@@ -1000,11 +1041,14 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         account_name = account.get("name", "Unknown")
         # Store full settings for each group (all auto-sync related fields)
         before_groups = {}
+        current_rows = {}
         for g in account.get("channel_groups", []):
+            current_rows[g.get("channel_group")] = g
             before_groups[g.get("channel_group")] = {
                 "enabled": g.get("enabled"),
                 "auto_channel_sync": g.get("auto_channel_sync"),
                 "auto_sync_channel_start": g.get("auto_sync_channel_start"),
+                "auto_sync_channel_end": g.get("auto_sync_channel_end"),
                 "custom_properties": g.get("custom_properties"),
             }
 
@@ -1013,6 +1057,22 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         group_name_map = {g["id"]: g["name"] for g in channel_groups}
 
         data = await request.json()
+        # Dispatcharr's group-settings upsert is full-row: complete every
+        # (possibly partial) incoming row from the group's current stored
+        # state before forwarding, so omitted fields are never reset
+        # (bead enhancedchannelmanager-igqcy).
+        incoming_settings = data.get("group_settings")
+        if isinstance(incoming_settings, list):
+            data = {
+                **data,
+                "group_settings": [
+                    merge_group_settings_row(
+                        current_rows.get(gs.get("channel_group")), gs
+                    )
+                    if isinstance(gs, dict) else gs
+                    for gs in incoming_settings
+                ],
+            }
         result = await client.update_m3u_group_settings(account_id, data)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[M3U] Updated group settings for account %s in %.1fms", account_id, elapsed_ms)
@@ -1025,6 +1085,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
             auto_sync_enabled_names = []
             auto_sync_disabled_names = []
             start_channel_changed = []
+            end_channel_changed = []
             settings_changed_names = []
             changed_groups = []
 
@@ -1062,6 +1123,13 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     start_channel_changed.append(f"{group_name} ({old_start} → {new_start})")
                     changes_for_group["auto_sync_channel_start"] = {"was": old_start, "now": new_start}
 
+                # Check auto_sync_channel_end change (Dispatcharr v0.25.0+)
+                new_end = gs.get("auto_sync_channel_end")
+                old_end = before.get("auto_sync_channel_end")
+                if old_end != new_end:
+                    end_channel_changed.append(f"{group_name} ({old_end} → {new_end})")
+                    changes_for_group["auto_sync_channel_end"] = {"was": old_end, "now": new_end}
+
                 # Check custom_properties change
                 # Normalize empty dict and None to be equivalent
                 new_custom = gs.get("custom_properties")
@@ -1092,6 +1160,8 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     changes.append(f"Auto-sync off: {', '.join(auto_sync_disabled_names)}")
                 if start_channel_changed:
                     changes.append(f"Start channel: {', '.join(start_channel_changed)}")
+                if end_channel_changed:
+                    changes.append(f"End channel: {', '.join(end_channel_changed)}")
                 if settings_changed_names:
                     changes.append(f"Settings: {', '.join(settings_changed_names)}")
 
@@ -1226,16 +1296,13 @@ async def toggle_group_auto_sync(
             }
 
         # Exactly ONE group's record, all other fields preserved verbatim —
-        # the same per-group payload shape the M3U Groups modal sends.
-        group_settings = {
+        # merged over the current stored row so Dispatcharr's full-row
+        # upsert never resets omitted fields (incl. auto_sync_channel_end,
+        # bead enhancedchannelmanager-igqcy).
+        group_settings = merge_group_settings_row(current, {
             "channel_group": channel_group_id,
-            "enabled": current.get("enabled"),
             "auto_channel_sync": request.auto_channel_sync,
-            "auto_sync_channel_start": current.get("auto_sync_channel_start"),
-            "custom_properties": current.get("custom_properties"),
-        }
-        if current.get("id") is not None:
-            group_settings["id"] = current["id"]
+        })
         await client.update_m3u_group_settings(
             account_id, {"group_settings": [group_settings]}
         )

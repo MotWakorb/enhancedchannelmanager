@@ -22,6 +22,7 @@ vi.mock('../services/api', () => ({
   getM3UAccount: vi.fn(),
   getChannelGroups: vi.fn(),
   updateM3UGroupSettings: vi.fn(),
+  refreshM3UAccount: vi.fn(),
 }));
 
 // Stable object reference (NOT recreated per call) — the real
@@ -93,6 +94,8 @@ describe('M3UGroupsModal — multi-provider auto-sync guard (bd-dgs64)', () => {
     vi.mocked(api.getChannelGroups).mockResolvedValue([
       { id: 100, name: 'Sports HD' } as never,
     ]);
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({ message: 'ok' });
+    vi.mocked(api.refreshM3UAccount).mockResolvedValue({ success: true, message: 'started' });
   });
 
   it('locks the row with an owned-by indicator when the setting is off (default, unchanged behavior)', async () => {
@@ -225,7 +228,7 @@ describe('M3UGroupsModal — multi-provider auto-sync guard (bd-dgs64)', () => {
     await user.click(autoSyncCheckbox);
     expect(autoSyncCheckbox.checked).toBe(true);
 
-    await user.click(screen.getByRole('button', { name: /Save Changes/i }));
+    await user.click(screen.getByRole('button', { name: /Save & Refresh/i }));
 
     await waitFor(() => expect(api.updateM3UGroupSettings).toHaveBeenCalled());
     const [accountId, payload] = vi.mocked(api.updateM3UGroupSettings).mock.calls[0];
@@ -233,5 +236,112 @@ describe('M3UGroupsModal — multi-provider auto-sync guard (bd-dgs64)', () => {
     const groupPayload = (payload as { group_settings: Array<{ channel_group: number; auto_channel_sync: boolean }> })
       .group_settings.find((g) => g.channel_group === 100);
     expect(groupPayload?.auto_channel_sync).toBe(true);
+  });
+});
+
+/**
+ * Bead enhancedchannelmanager-igqcy — Dispatcharr v0.25.0+ group-settings is a
+ * FULL-ROW upsert (omitted fields silently reset: auto_channel_sync -> false,
+ * start/end -> null, custom_properties -> {}). Proven live against v0.27.2:
+ * an enabled-only ECM write wiped a natively-configured group. Every save must
+ * carry the complete field set — including auto_sync_channel_end (v0.25.0+)
+ * and custom_properties verbatim (unknown keys like channel_numbering_mode
+ * must survive the round-trip). Save also chains an M3U refresh (Dispatcharr
+ * parity: its modal's only save action is Save & Refresh) — but only after a
+ * successful save.
+ *
+ * The channel_groups row shape below mirrors the REAL v0.27.2 serializer
+ * payload recorded during the bd-478fe QA pass.
+ */
+describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)', () => {
+  // Real v0.27.2 row shape: auto_sync_channel_end present, custom_properties
+  // carrying keys ECM does not model.
+  const nativeConfiguredAccount = makeAccount({
+    channel_groups: [
+      {
+        id: 10,
+        channel_group: 100,
+        enabled: true,
+        auto_channel_sync: true,
+        auto_sync_channel_start: 1,
+        auto_sync_channel_end: 500,
+        custom_properties: {
+          group_override: 7,                    // ECM-known key
+          channel_numbering_mode: 'assigned',   // unknown to ECM (v0.27.2)
+          force_dummy_epg: true,                // unknown to ECM (v0.27.2)
+        },
+      },
+    ] as never,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getM3UAccount).mockResolvedValue(nativeConfiguredAccount);
+    vi.mocked(api.getChannelGroups).mockResolvedValue([
+      { id: 100, name: 'Sports HD' } as never,
+    ]);
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({ message: 'ok' });
+    vi.mocked(api.refreshM3UAccount).mockResolvedValue({ success: true, message: 'started' });
+  });
+
+  async function toggleEnabledAndSave() {
+    render(
+      <M3UGroupsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+        account={nativeConfiguredAccount}
+        allAccounts={[nativeConfiguredAccount]}
+      />
+    );
+
+    await screen.findByText('Sports HD');
+    const row = screen.getByText('Sports HD').closest('.group-row') as HTMLElement;
+    const enabledCell = row.querySelector('.group-enabled') as HTMLElement;
+    const enabledCheckbox = within(enabledCell).getByRole('checkbox') as HTMLInputElement;
+
+    const user = userEvent.setup();
+    await user.click(enabledCheckbox); // enabled-only intent (the live-proven clobber)
+    await user.click(screen.getByRole('button', { name: /Save & Refresh/i }));
+  }
+
+  it('sends the complete field set — an enabled-only toggle preserves auto-sync, start, end, and custom_properties verbatim', async () => {
+    await toggleEnabledAndSave();
+
+    await waitFor(() => expect(api.updateM3UGroupSettings).toHaveBeenCalled());
+    const [, payload] = vi.mocked(api.updateM3UGroupSettings).mock.calls[0];
+    const sent = (payload as { group_settings: Array<Record<string, unknown>> })
+      .group_settings.find((g) => g.channel_group === 100);
+
+    expect(sent).toBeDefined();
+    expect(sent?.enabled).toBe(false);            // the intended change
+    expect(sent?.auto_channel_sync).toBe(false);  // disabling the group also disables auto-sync (existing UI rule)
+    expect(sent?.auto_sync_channel_start).toBe(1);
+    expect(sent?.auto_sync_channel_end).toBe(500);
+    // Unknown custom_properties keys survive the round-trip verbatim.
+    expect(sent?.custom_properties).toEqual({
+      group_override: 7,
+      channel_numbering_mode: 'assigned',
+      force_dummy_epg: true,
+    });
+  });
+
+  it('chains an M3U refresh of the account after a successful save', async () => {
+    await toggleEnabledAndSave();
+
+    await waitFor(() => expect(api.refreshM3UAccount).toHaveBeenCalledWith(nativeConfiguredAccount.id));
+    // Refresh fires strictly after the save.
+    const saveOrder = vi.mocked(api.updateM3UGroupSettings).mock.invocationCallOrder[0];
+    const refreshOrder = vi.mocked(api.refreshM3UAccount).mock.invocationCallOrder[0];
+    expect(refreshOrder).toBeGreaterThan(saveOrder);
+  });
+
+  it('does NOT fire the refresh when the save fails', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockRejectedValue(new Error('save failed'));
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() => expect(api.updateM3UGroupSettings).toHaveBeenCalled());
+    expect(api.refreshM3UAccount).not.toHaveBeenCalled();
   });
 });

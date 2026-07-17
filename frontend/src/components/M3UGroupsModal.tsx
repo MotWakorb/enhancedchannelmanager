@@ -219,19 +219,29 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
     setSaving(true);
 
     try {
-      // Build settings for this account
-      // Include id field - Dispatcharr needs this to identify the relationship record
+      // Build settings for this account.
+      // Include id field - Dispatcharr needs this to identify the relationship record.
+      // Dispatcharr's group-settings upsert is FULL-ROW (omitted fields are
+      // reset to defaults), so every row must carry the complete field set —
+      // including auto_sync_channel_end and custom_properties verbatim
+      // (bead enhancedchannelmanager-igqcy).
       const groupSettings = groups.map(g => ({
         id: g.id,
         channel_group: g.channel_group,
         enabled: g.enabled,
         auto_channel_sync: g.auto_channel_sync,
         auto_sync_channel_start: g.auto_sync_channel_start,
+        auto_sync_channel_end: g.auto_sync_channel_end,
         custom_properties: g.custom_properties,
       }));
 
       // Save this account first
       await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+
+      // Accounts to refresh after a successful save (Dispatcharr parity:
+      // its modal's only save action is Save & Refresh — settings take
+      // effect only when the M3U refreshes).
+      const refreshAccountIds: number[] = [account.id];
 
       // Cascade to linked accounts if any
       if (linkedAccountInfo.isLinked && linkedAccountInfo.linkedAccountIds.length > 0) {
@@ -246,7 +256,9 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
             // Fetch the linked account's current groups
             const linkedAccount = await api.getM3UAccount(linkedAccountId);
 
-            // Build settings for linked account - match by channel_group ID
+            // Build settings for linked account - match by channel_group ID.
+            // Full rows: only `enabled` is overlaid; every other field is the
+            // linked account's own current value, passed through verbatim.
             const linkedSettings = linkedAccount.channel_groups.map(lg => {
               // Look up by channel_group ID (the group ID is shared across M3U accounts)
               const matchEnabled = groupEnabledById.get(lg.channel_group);
@@ -255,15 +267,35 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                 enabled: matchEnabled !== undefined ? matchEnabled : lg.enabled,  // Use this account's setting if matched
                 auto_channel_sync: lg.auto_channel_sync,  // Keep linked account's own value
                 auto_sync_channel_start: lg.auto_sync_channel_start,  // Keep linked account's own value
+                auto_sync_channel_end: lg.auto_sync_channel_end,  // Keep linked account's own value
+                custom_properties: lg.custom_properties,  // Keep linked account's own value
               };
             });
 
             await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+            refreshAccountIds.push(linkedAccountId);
           } catch (linkedErr) {
             // Log error but continue with other linked accounts
             logger.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);
           }
         }
+      }
+
+      // Chain the M3U refresh (Save & Refresh, mirroring Dispatcharr's
+      // native modal). Only fires after a successful save; a refresh
+      // failure does not undo the save.
+      try {
+        await Promise.all(refreshAccountIds.map(id => api.refreshM3UAccount(id)));
+        notifications.success(
+          `Group settings saved — M3U refresh started for ${account.name}`,
+          'M3U Groups'
+        );
+      } catch (refreshErr) {
+        logger.error('Failed to start M3U refresh after group settings save:', refreshErr);
+        notifications.warning(
+          'Group settings saved, but the M3U refresh failed to start — changes take effect on the next refresh',
+          'M3U Groups'
+        );
       }
 
       onSaved();
@@ -455,8 +487,13 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               <span>Auto-sync only</span>
             </label>
           </div>
-          <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={saving || !hasChanges}>
-            {saving ? 'Saving...' : 'Save Changes'}
+          <button
+            className="modal-btn modal-btn-primary"
+            onClick={handleSave}
+            disabled={saving || !hasChanges}
+            title="Save group settings and refresh this M3U account so they take effect"
+          >
+            {saving ? 'Saving...' : 'Save & Refresh'}
           </button>
         </div>
       </div>

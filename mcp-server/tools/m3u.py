@@ -372,16 +372,46 @@ def register(mcp: FastMCP):
             logger.error("[MCP] delete_m3u_account failed: %s", e)
             return f"Error deleting M3U account {account_id}: {e}"
 
+    # The row fields Dispatcharr's group-settings upsert overwrites. Its
+    # bulk_create(update_conflicts=True) is FULL-ROW: any field omitted from
+    # a row is silently reset to its default (enabled -> True,
+    # auto_channel_sync -> False, start/end -> None, custom_properties -> {}),
+    # so every write must carry the complete current row with only the
+    # intended fields overlaid (bead enhancedchannelmanager-igqcy).
+    _GROUP_ROW_FIELDS = (
+        "id",
+        "enabled",
+        "auto_channel_sync",
+        "auto_sync_channel_start",
+        "auto_sync_channel_end",
+        "custom_properties",
+    )
+
+    def _full_group_row(current: dict, **overrides) -> dict:
+        """Build a complete group-settings row from the group's current stored
+        state, overlaying only the fields the caller intends to change.
+        ``custom_properties`` passes through verbatim — unknown keys survive.
+        """
+        row = {k: current[k] for k in _GROUP_ROW_FIELDS if k in current}
+        row["channel_group"] = current.get("channel_group")
+        row.update(overrides)
+        return row
+
     async def _resolve_group_ids(client, account_id: int, group_names: list[str]) -> tuple[list[dict], list[str]]:
-        """Map a list of group names to the integer channel_group IDs expected by
+        """Map a list of group names to the group-settings rows expected by
         PATCH /api/m3u/accounts/{id}/group-settings.
 
-        The M3U account response embeds ``channel_groups`` — a list of dicts with
-        ``channel_group`` (int id) and ``name`` (str).  This helper fetches the
-        account, builds a name→id map, then returns:
+        The M3U account response embeds ``channel_groups`` — a list of dicts
+        keyed by ``channel_group`` (int id). Dispatcharr's serializer stopped
+        providing a ``name`` field on those entries in v0.24.0, so names are
+        resolved by joining ``channel_group`` against the global channel-group
+        list (``groups_list`` endpoint). Older payloads that still embed
+        ``name`` are honored without the extra fetch. Returns:
 
-        * A list of ``{"channel_group": <id>, "name": <name>}`` dicts for each
-          matched group name (preserving the order of *group_names*).
+        * A list of ``{"channel_group": <id>, "name": <name>,
+          "current": <full embedded row>}`` dicts for each matched group name
+          (preserving the order of *group_names*). ``current`` feeds
+          ``_full_group_row`` so writes never clobber unrelated fields.
         * A list of unresolved names (those not found in the account).
 
         Backend expects the structured body — not a flat ``{name: bool}`` dict
@@ -390,23 +420,39 @@ def register(mcp: FastMCP):
         account = await client.call_endpoint(
             ENDPOINTS["m3u_get_account"], path_args={"account_id": account_id}
         )
-        # channel_groups is embedded in the account; each entry has "channel_group" (int id)
-        # and "name" (str, provided by Dispatcharr).
         embedded_groups = account.get("channel_groups", []) if isinstance(account, dict) else []
-        # Build case-insensitive name → id map.
-        name_to_id: dict[str, int] = {}
+
+        # v0.24.0+ serializer entries carry no "name" — fetch the global
+        # channel-group list once and join on the integer id. Skipped when
+        # every embedded entry already has a name (pre-v0.24 payloads).
+        id_to_name: dict[int, str] = {}
+        if any(not g.get("name") for g in embedded_groups):
+            groups = await client.call_endpoint(ENDPOINTS["groups_list"])
+            if isinstance(groups, list):
+                id_to_name = {
+                    g["id"]: g.get("name", "")
+                    for g in groups
+                    if isinstance(g, dict) and g.get("id") is not None
+                }
+
+        # Build case-insensitive name → embedded-row map.
+        name_to_row: dict[str, dict] = {}
         for g in embedded_groups:
-            gname = g.get("name", "")
             gid = g.get("channel_group")
+            gname = g.get("name") or id_to_name.get(gid, "")
             if gname and gid is not None:
-                name_to_id[gname.casefold()] = gid
+                name_to_row[gname.casefold()] = g
 
         resolved: list[dict] = []
         unresolved: list[str] = []
         for name in group_names:
-            gid = name_to_id.get(name.casefold())
-            if gid is not None:
-                resolved.append({"channel_group": gid, "name": name})
+            row = name_to_row.get(name.casefold())
+            if row is not None:
+                resolved.append({
+                    "channel_group": row.get("channel_group"),
+                    "name": name,
+                    "current": row,
+                })
             else:
                 unresolved.append(name)
         return resolved, unresolved
@@ -416,13 +462,20 @@ def register(mcp: FastMCP):
         account_id: int,
         group_name: str,
         enabled: bool,
+        trigger_refresh: bool = False,
     ) -> str:
         """Enable or disable a stream group on an M3U account.
+
+        Settings take effect on the next M3U refresh of the account; pass
+        ``trigger_refresh=True`` to start that refresh immediately after the
+        save (mirrors the UI's Save & Refresh).
 
         Args:
             account_id: The M3U account ID
             group_name: The stream group name to toggle
             enabled: True to enable, False to disable
+            trigger_refresh: Start an M3U refresh of the account after saving
+                (default False — the change waits for the next refresh)
         """
         try:
             client = get_ecm_client()
@@ -437,14 +490,24 @@ def register(mcp: FastMCP):
                     f"Check the group name and try again."
                 )
             group_entry = resolved[0]
+            # Full row: current stored state with only `enabled` overlaid —
+            # Dispatcharr's upsert resets any omitted field (bead igqcy).
             body = {
                 "group_settings": [
-                    {"channel_group": group_entry["channel_group"], "enabled": enabled}
+                    _full_group_row(group_entry["current"], enabled=enabled)
                 ]
             }
             await client.patch(f"/api/m3u/accounts/{account_id}/group-settings", json_data=body)  # contract-exempt: dynamic-key body (group names)
             state = "enabled" if enabled else "disabled"
-            return f"Group '{group_name}' {state} on M3U account {account_id}."
+            result = f"Group '{group_name}' {state} on M3U account {account_id}."
+            if trigger_refresh:
+                await client.call_endpoint(
+                    ENDPOINTS["m3u_refresh_account"], path_args={"account_id": account_id}
+                )
+                result += " M3U refresh started."
+            else:
+                result += " Takes effect on the next M3U refresh."
+            return result
         except Exception as e:
             logger.error("[MCP] update_m3u_group_settings failed: %s", e)
             return f"Error updating group settings: {e}"
@@ -453,12 +516,19 @@ def register(mcp: FastMCP):
     async def bulk_update_m3u_group_settings(
         account_id: int,
         groups: dict[str, bool],
+        trigger_refresh: bool = False,
     ) -> str:
         """Enable or disable multiple stream groups on an M3U account at once.
+
+        Settings take effect on the next M3U refresh of the account; pass
+        ``trigger_refresh=True`` to start that refresh immediately after the
+        save (mirrors the UI's Save & Refresh).
 
         Args:
             account_id: The M3U account ID
             groups: Dict of group_name -> enabled. Example: {"Sports": false, "News": false, "Movies": true}
+            trigger_refresh: Start an M3U refresh of the account after saving
+                (default False — the changes wait for the next refresh)
         """
         try:
             client = get_ecm_client()
@@ -466,8 +536,11 @@ def register(mcp: FastMCP):
             # expects {"group_settings": [{"channel_group": <id>, "enabled": bool}]}.
             resolved, unresolved = await _resolve_group_ids(client, account_id, list(groups.keys()))
 
+            # Full rows: each group's current stored state with only
+            # `enabled` overlaid — Dispatcharr's upsert resets any omitted
+            # field (bead igqcy).
             group_settings = [
-                {"channel_group": g["channel_group"], "enabled": groups[g["name"]]}
+                _full_group_row(g["current"], enabled=groups[g["name"]])
                 for g in resolved
             ]
             body = {"group_settings": group_settings}
@@ -485,6 +558,13 @@ def register(mcp: FastMCP):
                     f"  WARNING: {len(unresolved)} group(s) not found: "
                     + ", ".join(f"'{n}'" for n in unresolved)
                 )
+            if resolved and trigger_refresh:
+                await client.call_endpoint(
+                    ENDPOINTS["m3u_refresh_account"], path_args={"account_id": account_id}
+                )
+                lines.append("  M3U refresh started.")
+            elif resolved:
+                lines.append("  Takes effect on the next M3U refresh.")
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] bulk_update_m3u_group_settings failed: %s", e)
