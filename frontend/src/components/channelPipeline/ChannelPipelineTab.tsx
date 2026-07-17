@@ -1283,10 +1283,15 @@ export function ChannelPipelineTab() {
                     </button>
                     {execution.status === 'completed' && execution.mode === 'execute' && (
                       <button
-                        className="action-btn"
+                        className="action-btn danger"
                         onClick={() => handleRollbackClick(execution)}
                         aria-label="Rollback"
-                        title="Rollback"
+                        title={
+                          'Rollback — deletes the channel(s) this run created and reverts the ' +
+                          "channel(s) it modified, using this run's own recorded changes. This is " +
+                          'the legacy per-run undo; it does not use the full pre-run snapshot ' +
+                          '(see "Undo this run").'
+                        }
                       >
                         <span className="material-icons">undo</span>
                       </button>
@@ -1300,7 +1305,12 @@ export function ChannelPipelineTab() {
                         className="action-btn action-btn-revert"
                         onClick={() => handleRevertClick(execution)}
                         aria-label="Undo this run"
-                        title="Undo this run — restores pre-run channel state from snapshot"
+                        title={
+                          'Undo this run — restores ALL affected channels to their exact state ' +
+                          'from the pre-run snapshot, overwriting any changes made since ' +
+                          '(including edits made after this run). Unlike Rollback, this is a ' +
+                          "full snapshot restore, not just this run's own changes."
+                        }
                         data-testid="revert-btn"
                       >
                         <span className="material-icons">settings_backup_restore</span>
@@ -1539,8 +1549,14 @@ export function ChannelPipelineTab() {
             </div>
             <div className="modal-body">
               <p>
-                Are you sure you want to rollback this execution?
-                This will delete {showRollbackConfirm.channels_created} created channels.
+                This is the legacy per-run undo: it deletes the{' '}
+                <strong>{showRollbackConfirm.channels_created}</strong> channel(s) this run
+                created and reverts any channels it modified, using this run's own recorded
+                changes — <strong>not</strong> the full pre-run snapshot.
+              </p>
+              <p className="revert-warning-detail">
+                For a complete restore to the exact pre-run state (including edits made after
+                this run), cancel and use &quot;Undo this run&quot; instead.
               </p>
             </div>
             <div className="modal-footer">
@@ -1586,6 +1602,10 @@ export function ChannelPipelineTab() {
               <p className="revert-warning-detail">
                 Any changes made since that snapshot — manual edits, automatic merges, or
                 Dispatcharr updates — <strong>will be lost</strong>. This cannot be undone.
+              </p>
+              <p className="revert-warning-detail">
+                Unlike Rollback, this restores every affected channel to the pre-run snapshot —
+                not just the changes this run itself made.
               </p>
             </div>
             <div className="modal-footer">
