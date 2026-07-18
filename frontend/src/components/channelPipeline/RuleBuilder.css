@@ -352,11 +352,20 @@
 /* Footer */
 .rule-builder-footer {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 12px;
   padding: 16px 20px;
   border-top: 1px solid var(--border-primary);
   background: var(--bg-secondary);
+}
+
+/* Wizard nav cluster (Back · Save · Next) sits at the trailing edge; Cancel
+   stays at the leading edge (bead 09x38.10). */
+.rule-builder-footer-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 /* Buttons */
@@ -419,6 +428,12 @@
 
   .rule-builder-footer {
     flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .rule-builder-footer-nav {
+    flex-direction: column-reverse;
+    align-items: stretch;
   }
 
   .rule-builder-footer .btn {
@@ -515,15 +530,11 @@
   padding-bottom: 10px;
 }
 
-/* Phase sections + scroll-spy titles. */
+/* Wizard step sections (bead 09x38.10): exactly one renders at a time via the
+   `hidden` attribute, so the old stacked-phase separator (margin/border between
+   adjacent phases) no longer applies — each step stands alone. */
 .rule-phase {
   scroll-margin-top: 8px;
-}
-
-.rule-phase + .rule-phase {
-  margin-top: 28px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border-primary);
 }
 
 .rule-phase-title {
