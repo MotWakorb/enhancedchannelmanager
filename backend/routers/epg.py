@@ -1000,6 +1000,44 @@ class EPGLinkRequest(BaseModel):
     tvg_id: str | None = None
 
 
+# Shared by match_channels_to_epg and audit_epg_duplicates (bead vznut.6).
+_CHANNELS_FETCH_PAGE_SIZE = 1000
+_CHANNELS_FETCH_MAX_PAGES = 1000  # hard stop so a misbehaving upstream cannot loop forever
+
+
+async def _fetch_all_channels(client) -> list[dict]:
+    """Fetch every channel from Dispatcharr, paging past the API's page-size cap.
+
+    Both ``match_channels_to_epg`` and ``audit_epg_duplicates`` previously
+    fetched a single ``page_size=10000`` page, silently truncating fleets
+    larger than 10000 channels -- ``total_channels`` then misreported the true
+    fleet size (code-review nit #4, bead vznut.1 -> vznut.6). This walks every
+    page using the same paged-scan shape as the stale-ids endpoint
+    (routers/streams.py) and stream_stats.get_stale_streams
+    (routers/stream_stats.py), with a hard page-count stop (precedent:
+    routers/backup.py's _CHANNELS_MAX_PAGES) so a misbehaving upstream can't
+    loop forever.
+    """
+    channels: list[dict] = []
+    fetched = 0
+    page = 1
+    while page <= _CHANNELS_FETCH_MAX_PAGES:
+        result = await client.get_channels(page=page, page_size=_CHANNELS_FETCH_PAGE_SIZE)
+        page_channels = result.get("results", [])
+        channels.extend(page_channels)
+        fetched += len(page_channels)
+        if fetched >= result.get("count", 0) or not page_channels:
+            break
+        page += 1
+    else:
+        logger.warning(
+            "[EPG] Channel pagination safety stop at %d pages (%d channels "
+            "fetched); fleet may exceed the scan ceiling",
+            _CHANNELS_FETCH_MAX_PAGES, fetched,
+        )
+    return channels
+
+
 @router.post("/match")
 async def match_channels_to_epg(request: EPGMatchRequest):
     """Batch match channels to EPG data with confidence scoring.
@@ -1050,9 +1088,8 @@ async def match_channels_to_epg(request: EPGMatchRequest):
         return cached
 
     try:
-        # Fetch channels
-        channels_result = await client.get_channels(page=1, page_size=10000)
-        all_channels = channels_result.get("results", [])
+        # Fetch channels (paginated -- bead vznut.6, see _fetch_all_channels)
+        all_channels = await _fetch_all_channels(client)
 
         # Filter to requested channel IDs (if specified)
         if request.channel_ids:
@@ -1228,8 +1265,8 @@ async def audit_epg_duplicates():
     logger.info("[EPG-AUDIT] GET /audit-duplicates")
     client = get_client()
     try:
-        channels_result = await client.get_channels(page=1, page_size=10000)
-        channels = channels_result.get("results", [])
+        # Paginated fetch -- bead vznut.6, see _fetch_all_channels.
+        channels = await _fetch_all_channels(client)
 
         # EPG rows are fetched only to enrich each group with the shared row's
         # name / tvg_id / source. A failure here degrades to linkage-only output

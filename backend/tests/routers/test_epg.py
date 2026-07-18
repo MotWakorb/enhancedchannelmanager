@@ -49,6 +49,17 @@ def _xmltv(channels_xml: str) -> bytes:
     ).encode("utf-8")
 
 
+def _channels_page(channels, count=None):
+    """Build a single-page get_channels() response envelope (bead vznut.6).
+
+    ``count`` defaults to ``len(channels)`` -- a single-page, non-truncated
+    response -- matching the shape existing single-page mocks in this file
+    already use (no explicit ``count`` key). Pass an explicit ``count`` larger
+    than ``len(channels)`` to simulate one page of a multi-page fleet.
+    """
+    return {"count": count if count is not None else len(channels), "results": channels}
+
+
 class TestGetEPGSources:
     """Tests for GET /api/epg/sources."""
 
@@ -959,6 +970,66 @@ class TestMatchChannelsToEPG:
         assert response.status_code == 200
         assert self._best(response.json())["epg_source"]["id"] == 1
 
+    @pytest.mark.asyncio
+    async def test_paginates_beyond_single_page(self, async_client):
+        """bead vznut.6: /match fetches ALL channel pages, not just the first
+        page_size=10000 page (code-review nit #4) -- total_channels reflects
+        the full requested set even when it spans multiple Dispatcharr pages."""
+        from cache import get_cache
+        get_cache().clear()
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = []
+        mock_client.get_channels.side_effect = [
+            _channels_page([{"id": 1, "name": "ESPN", "streams": []}], count=2),
+            _channels_page([{"id": 2, "name": "CNN", "streams": []}], count=2),
+        ]
+        mock_client.get_streams.return_value = {"results": [], "next": None}
+        mock_client.get_epg_data.return_value = []
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post("/api/epg/match", json={})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["summary"]["total_channels"] == 2
+        assert mock_client.get_channels.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_single_page_small_fleet_unchanged(self, async_client):
+        """A fleet that fits in one page still resolves with exactly one
+        get_channels() call."""
+        from cache import get_cache
+        get_cache().clear()
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = []
+        mock_client.get_channels.return_value = _channels_page(
+            [{"id": 1, "name": "ESPN", "streams": []}]
+        )
+        mock_client.get_streams.return_value = {"results": [], "next": None}
+        mock_client.get_epg_data.return_value = []
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post("/api/epg/match", json={})
+        assert response.status_code == 200
+        assert response.json()["summary"]["total_channels"] == 1
+        assert mock_client.get_channels.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_fleet(self, async_client):
+        """An empty fleet returns empty match buckets and zero total_channels,
+        without error."""
+        from cache import get_cache
+        get_cache().clear()
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = []
+        mock_client.get_channels.return_value = _channels_page([])
+        mock_client.get_streams.return_value = {"results": [], "next": None}
+        mock_client.get_epg_data.return_value = []
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post("/api/epg/match", json={})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exact"] == data["multiple"] == data["none"] == []
+        assert data["summary"]["total_channels"] == 0
+        assert mock_client.get_channels.call_count == 1
+
 
 class TestMatchCachePersistsAcrossRepeatCalls:
     """bd-41pcv: the /match response cache exists so a repeat request for the
@@ -1216,6 +1287,67 @@ class TestAuditEpgDuplicates:
         mock_client.update_channel.assert_not_called()
         mock_client.create_channel.assert_not_called()
         mock_client.delete_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_paginates_beyond_single_page(self, async_client):
+        """bead vznut.6: a fleet spanning multiple pages is fully counted, not
+        silently truncated at the first page (previously a single
+        page_size=10000 call, code-review nit #4)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.side_effect = [
+            _channels_page(
+                [{"id": 1, "name": "USA Network", "epg_data_id": 500}], count=3
+            ),
+            _channels_page(
+                [{"id": 2, "name": "USA Network West", "epg_data_id": 500}], count=3
+            ),
+            _channels_page(
+                [{"id": 3, "name": "CNN", "epg_data_id": 501}], count=3
+            ),
+        ]
+        mock_client.get_epg_data.return_value = []
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/audit-duplicates")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["summary"]["total_channels"] == 3
+        assert mock_client.get_channels.call_count == 3
+        group = data["shared_links"][0]
+        assert group["epg_data_id"] == 500
+        assert [c["channel_id"] for c in group["channels"]] == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_single_page_small_fleet_unchanged(self, async_client):
+        """A fleet that fits in one page still resolves with exactly one
+        get_channels() call -- pagination does not add a spurious extra
+        round-trip for the common (small-fleet) case."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = _channels_page(
+            [
+                {"id": 1, "name": "ESPN", "epg_data_id": 100},
+                {"id": 2, "name": "CNN", "epg_data_id": 101},
+            ]
+        )
+        mock_client.get_epg_data.return_value = []
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/audit-duplicates")
+        assert response.status_code == 200
+        assert response.json()["summary"]["total_channels"] == 2
+        assert mock_client.get_channels.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_fleet(self, async_client):
+        """An empty fleet reports zero channels and zero groups, without error."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = _channels_page([])
+        mock_client.get_epg_data.return_value = []
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.get("/api/epg/audit-duplicates")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["shared_links"] == []
+        assert data["summary"]["total_channels"] == 0
+        assert mock_client.get_channels.call_count == 1
 
 
 class TestMatchEmbedsSharedLinks:

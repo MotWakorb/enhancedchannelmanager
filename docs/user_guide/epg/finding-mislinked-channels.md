@@ -65,6 +65,9 @@ For each channel that is on the **wrong** EPG row:
    channel and the chosen `tvg_id` or `epg_data_id`).
 3. Re-run the audit to confirm the group is gone.
 
-> **Tip:** If the correct Pacific entry doesn't rank well in auto-match, that's a
-> separate matcher-scoring issue (tracked under the timezone-aware scoring work).
-> The audit's job is to *find* the mis-links; re-linking is the fix.
+> **Tip:** The matcher is now [timezone/region-aware](index.md#channel-to-epg-matching)
+> — re-matching a West channel today should rank its Pacific entry correctly in
+> most cases, so re-matching (instead of manually re-linking) is often enough to
+> clear a flagged group. If a regional entry still doesn't rank well after
+> re-matching, that's a matcher-scoring gap worth reporting. Either way, the
+> audit's job is to *find* mis-links; re-linking (or re-matching) is the fix.

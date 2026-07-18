@@ -12,6 +12,7 @@ import re
 
 import safe_regex
 import journal
+from epg_matching import detect_region
 from match_fold import fold_match_key
 from channel_pipeline_schema import Action, ActionType, TemplateVariables
 
@@ -2519,6 +2520,31 @@ class ActionExecutor:
         name_part = re.sub(r'\([^)]+\)', '', name_part)
         return ActionExecutor._normalize_for_epg(name_part)
 
+    @staticmethod
+    def _region_rank(channel_region: Optional[str], entry: dict) -> int:
+        """Region-consistency rank for a candidate EPG entry (bead vznut.4).
+
+        Mirrors the shipped vznut.2 semantics from epg_matching._sort_matches
+        (region detection is REUSED via epg_matching.detect_region — one
+        source of regional truth: West == Pacific, Mountain/Central their own
+        regions, tvg_id-paren-then-last-word with quality/digit skipping):
+
+          0 = entry's region matches the channel's (or channel has no region)
+          1 = entry has no region (neutral)
+          2 = conflict (channel and entry in different regions)
+
+        Inert when ``channel_region`` is None — every candidate ranks 0, so
+        non-regional channels sort exactly as before vznut.4.
+        """
+        if channel_region is None:
+            return 0
+        entry_region = detect_region(entry.get("tvg_id"), entry.get("name"))
+        if entry_region == channel_region:
+            return 0
+        if entry_region is None:
+            return 1
+        return 2
+
     def _match_epg_data(self, channel: dict, source_entries: list[dict]) -> Optional[dict]:
         """
         Find the best EPG data entry for a channel from a list of source entries.
@@ -2529,6 +2555,17 @@ class ActionExecutor:
         2. Exact normalized name match (channel name == entry tvg_id or name)
         3. Prefix match (channel name starts with entry name or vice versa)
         4. Fallback: first entry (for single-entry sources like dummy EPGs)
+
+        Within tiers 2 and 3, candidates sort by region consistency first
+        (bead vznut.4, mirroring vznut.2: a "...West" channel prefers the
+        "(Pacific)" guide row over the East/base default), then by name-length
+        similarity. Region goes AHEAD of the length tie-break because length
+        similarity is a coincidental signal (the main matcher dropped it
+        entirely in m4hp1) while the region tag is deliberate — a wrong-region
+        row winning on character count is exactly the KNM failure mode. The
+        preference is tier-preserving: a region-matched prefix candidate never
+        outranks an exact candidate, and it is inert for channels with no
+        detected region.
         """
         channel_tvg_id = channel.get("tvg_id")
         channel_name = channel.get("name", "")
@@ -2549,13 +2586,19 @@ class ActionExecutor:
                 return source_entries[0]
             return None
 
-        # Build lookup from source entries
+        # Region of the channel itself (vznut.4). Detected once, then each
+        # candidate gets a consistency rank via _region_rank.
+        channel_region = detect_region(channel_tvg_id, channel_name)
+
+        # Build lookup from source entries.
+        # Candidate tuples: (entry, normalized_key, region_rank, len_diff).
         exact_matches = []
         prefix_matches = []
 
         for entry in source_entries:
             entry_tvg_id = entry.get("tvg_id") or ""
             entry_name = entry.get("name") or ""
+            region_rank = self._region_rank(channel_region, entry)
 
             # Normalize tvg_id and name
             norm_tvg = self._parse_tvg_id(entry_tvg_id) if entry_tvg_id else ""
@@ -2563,7 +2606,8 @@ class ActionExecutor:
 
             # 2. Exact normalized match
             if norm_channel == norm_tvg or norm_channel == norm_name:
-                exact_matches.append((entry, norm_tvg, abs(len(norm_tvg) - len(norm_channel))))
+                exact_matches.append((entry, norm_tvg, region_rank,
+                                      abs(len(norm_tvg) - len(norm_channel))))
                 continue
 
             # Also check call sign in parentheses: "CartoonNetwork(STOONHD).us"
@@ -2573,24 +2617,25 @@ class ActionExecutor:
                 # Strip HD/SD suffix from call sign
                 call_sign_base = re.sub(r'(hd|sd|fhd|uhd)$', '', call_sign)
                 if norm_channel == call_sign or norm_channel == call_sign_base:
-                    exact_matches.append((entry, norm_tvg, 0))
+                    exact_matches.append((entry, norm_tvg, region_rank, 0))
                     continue
 
             # 3. Prefix match (at least 4 chars to avoid false positives)
             if len(norm_channel) >= 4 and norm_tvg:
                 if norm_tvg.startswith(norm_channel) or norm_channel.startswith(norm_tvg):
                     len_diff = abs(len(norm_tvg) - len(norm_channel))
-                    prefix_matches.append((entry, norm_tvg, len_diff))
+                    prefix_matches.append((entry, norm_tvg, region_rank, len_diff))
             if len(norm_channel) >= 4 and norm_name:
                 if norm_name.startswith(norm_channel) or norm_channel.startswith(norm_name):
                     len_diff = abs(len(norm_name) - len(norm_channel))
                     # Avoid duplicates
                     if not any(e[0]["id"] == entry["id"] for e in prefix_matches):
-                        prefix_matches.append((entry, norm_name, len_diff))
+                        prefix_matches.append((entry, norm_name, region_rank, len_diff))
 
-        # Pick best match: exact > prefix, then sort by name length similarity
+        # Pick best match: exact > prefix; within a tier sort by region
+        # consistency (vznut.4), then name length similarity.
         if exact_matches:
-            exact_matches.sort(key=lambda x: x[2])
+            exact_matches.sort(key=lambda x: (x[2], x[3]))
             best = exact_matches[0][0]
             logger.debug(
                 "[AUTO-CREATE-EXEC] Exact name match: '%s' -> "
@@ -2600,7 +2645,7 @@ class ActionExecutor:
             return best
 
         if prefix_matches:
-            prefix_matches.sort(key=lambda x: x[2])
+            prefix_matches.sort(key=lambda x: (x[2], x[3]))
             best = prefix_matches[0][0]
             logger.debug(
                 "[AUTO-CREATE-EXEC] Prefix match: '%s' -> "
