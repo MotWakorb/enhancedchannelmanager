@@ -903,10 +903,11 @@ export function ChannelPipelineTab() {
             className="btn-secondary"
             onClick={handleDebugBundle}
             disabled={debugBundleLoading}
-            aria-label="Debug Bundle"
+            aria-label="Pipeline Debug Bundle"
+            title="Download a debug bundle scoped to Channel Pipeline rules and execution history. For a whole-app bundle, see Settings → General."
           >
             <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
-            {debugBundleLoading ? 'Generating...' : 'Debug Bundle'}
+            {debugBundleLoading ? 'Generating...' : 'Pipeline Debug Bundle'}
           </button>
         </div>
       </header>

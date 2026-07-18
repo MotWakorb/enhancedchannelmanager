@@ -391,8 +391,8 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
 
 const SECTION_LABELS: Record<string, string> = {
   settings: 'Settings',
-  scheduled_tasks: 'Scheduled Tasks',
-  task_schedules: 'Task Schedules',
+  scheduled_tasks: 'Task Settings & Alerts',
+  task_schedules: 'Task Run Schedules',
   normalization_rule_groups: 'Normalization Rules',
   tag_groups: 'Tag Groups',
   auto_creation_rules: 'Channel Pipeline Rules',

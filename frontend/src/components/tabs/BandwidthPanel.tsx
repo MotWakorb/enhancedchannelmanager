@@ -71,7 +71,7 @@ export function BandwidthPanel({ refreshTrigger }: BandwidthPanelProps) {
   const ratio = getRatio();
 
   return (
-    <div className="bandwidth-panel">
+    <div className="bandwidth-panel" id="stats-section-bandwidth-panel">
       <div className="panel-header">
         <div className="header-left">
           <h3 className="section-title">Bandwidth In/Out</h3>

@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { EPGManagerTab } from './EPGManagerTab';
+import { EPGManagerTab, getTiedPriorities } from './EPGManagerTab';
 import type { EPGSource } from '../../types';
 
 vi.mock('../../services/api', () => ({
@@ -129,5 +129,51 @@ describe('EPGManagerTab — legacy Dummy EPG Sources section', () => {
     expect(
       screen.queryByRole('button', { name: /Add Dummy EPG/i })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('getTiedPriorities', () => {
+  it('returns priorities shared by two or more sources', () => {
+    const sources = [
+      makeSource({ id: 1, priority: 5 }),
+      makeSource({ id: 2, priority: 5 }),
+      makeSource({ id: 3, priority: 9 }),
+    ];
+
+    expect(getTiedPriorities(sources)).toEqual(new Set([5]));
+  });
+
+  it('returns an empty set when every priority is unique', () => {
+    const sources = [
+      makeSource({ id: 1, priority: 1 }),
+      makeSource({ id: 2, priority: 2 }),
+      makeSource({ id: 3, priority: 3 }),
+    ];
+
+    expect(getTiedPriorities(sources)).toEqual(new Set());
+  });
+});
+
+describe('EPGManagerTab — priority-tie badge (bead 09x38.15 item 1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders a tie badge only on rows sharing a priority', async () => {
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Tied A', source_type: 'xmltv', priority: 3 }),
+      makeSource({ id: 2, name: 'Tied B', source_type: 'xmltv', priority: 3 }),
+      makeSource({ id: 3, name: 'Unique C', source_type: 'xmltv', priority: 7 }),
+    ]);
+
+    render(<EPGManagerTab />);
+
+    const tiedARow = (await screen.findByText('Tied A')).closest('.epg-source-row') as HTMLElement;
+    const tiedBRow = screen.getByText('Tied B').closest('.epg-source-row') as HTMLElement;
+    const uniqueRow = screen.getByText('Unique C').closest('.epg-source-row') as HTMLElement;
+
+    expect(tiedARow.querySelector('.priority-tie-badge')).toBeTruthy();
+    expect(tiedBRow.querySelector('.priority-tie-badge')).toBeTruthy();
+    expect(uniqueRow.querySelector('.priority-tie-badge')).toBeFalsy();
   });
 });

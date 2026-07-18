@@ -1314,7 +1314,7 @@ export function NormalizationEngineSection() {
                     <span className="norm-engine-badge builtin">Built-in</span>
                   )}
                   <span className="norm-engine-group-count">
-                    {group.rules?.length || 0} rules
+                    {group.rules?.length || 0} rule{(group.rules?.length ?? 0) === 1 ? '' : 's'}
                   </span>
                 </div>
                 <div className="norm-engine-group-actions" onClick={(e) => e.stopPropagation()}>
@@ -1426,7 +1426,7 @@ export function NormalizationEngineSection() {
                       <span className="norm-engine-badge builtin">Built-in</span>
                     )}
                     <span className="norm-engine-group-count">
-                      {group.rules?.length || 0} rules
+                      {group.rules?.length || 0} rule{(group.rules?.length ?? 0) === 1 ? '' : 's'}
                     </span>
                   </div>
                   <div className="norm-engine-group-actions" onClick={(e) => e.stopPropagation()}>

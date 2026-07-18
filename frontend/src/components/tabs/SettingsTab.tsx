@@ -2166,11 +2166,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
 
         <div className="form-group-vertical">
-          <label>Debug Bundle</label>
+          <label>App Debug Bundle</label>
           <span className="form-description">
-            Download a tar.gz containing channels, rules, settings, recent logs, and a
+            Download a tar.gz covering the whole app: channels, rules, settings, recent logs, and a
             channel groups diagnostic. Sensitive fields (URLs, passwords, tokens) are redacted.
-            Share this when reporting issues.
+            Share this when reporting issues. For a Channel Pipeline-only bundle, use the
+            Pipeline Debug Bundle button on the Channel Pipeline tab instead.
           </span>
           <button
             className="btn-secondary"
@@ -2179,7 +2180,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             style={{ alignSelf: 'flex-start' }}
           >
             <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
-            {debugBundleLoading ? 'Generating...' : 'Generate Debug Bundle'}
+            {debugBundleLoading ? 'Generating...' : 'Generate App Debug Bundle'}
           </button>
         </div>
       </div>

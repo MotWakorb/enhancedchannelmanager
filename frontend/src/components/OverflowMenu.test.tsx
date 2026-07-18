@@ -63,4 +63,18 @@ describe('OverflowMenu', () => {
     fireEvent.click(trigger);
     expect(screen.queryByRole('menuitem')).not.toBeInTheDocument();
   });
+
+  // bead 09x38.15 item 9: the Stats section jump nav reuses this component
+  // with a non-kebab trigger icon (e.g. "list") instead of the default
+  // "more_vert", so other consumers can signal a different affordance
+  // (navigation vs. actions) without a bespoke dropdown.
+  it('defaults the trigger icon to the kebab, and renders a custom icon when given one', () => {
+    const { rerender } = render(<OverflowMenu items={items()} label="More actions" />);
+    expect(screen.getByRole('button', { name: /more actions/i }).textContent).toContain('more_vert');
+
+    rerender(<OverflowMenu items={items()} label="Jump to section" icon="list" />);
+    const trigger = screen.getByRole('button', { name: /jump to section/i });
+    expect(trigger.textContent).toContain('list');
+    expect(trigger.textContent).not.toContain('more_vert');
+  });
 });

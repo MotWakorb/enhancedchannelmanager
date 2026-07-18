@@ -1,4 +1,4 @@
-export { ChannelsPane } from './ChannelsPane';
+export { ChannelsPane, NAVIGATE_TO_ORPHANED_GROUPS_EVENT } from './ChannelsPane';
 export { StreamsPane } from './StreamsPane';
 export { SettingsModal } from './SettingsModal';
 export { SplitPane } from './SplitPane';

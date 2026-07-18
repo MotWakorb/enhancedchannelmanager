@@ -10,6 +10,7 @@ import {
   EditModeExitDialog,
   TabNavigation,
   UserMenu,
+  NAVIGATE_TO_ORPHANED_GROUPS_EVENT,
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
@@ -534,6 +535,17 @@ function App() {
     };
     window.addEventListener('ecm:open-task-editor', handler);
     return () => window.removeEventListener('ecm:open-task-editor', handler);
+  }, [setHash]);
+
+  // Listen for "Clean up empty groups" navigation from ChannelsPane's
+  // Channel List Filters panel (bead 09x38.15 item 3) — links to Settings →
+  // Maintenance → Orphaned Channel Groups rather than embedding the tool.
+  useEffect(() => {
+    const handler = () => {
+      setHash('settings', 'maintenance');
+    };
+    window.addEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
+    return () => window.removeEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
   }, [setHash]);
 
   // Check settings and load initial data

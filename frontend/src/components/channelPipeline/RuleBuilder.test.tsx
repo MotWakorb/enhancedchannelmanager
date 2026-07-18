@@ -917,6 +917,33 @@ describe('RuleBuilder', () => {
         expect(screen.getByText(/orphan cleanup/i)).toBeVisible();
       });
 
+      // Bead 09x38.15 item 6: Orphan Cleanup defaults to "Delete orphaned
+      // channels" with no visible warning — unlike the adjacent merge-scope
+      // control, which already warns inline (.norm-hint) when its default
+      // resolves to a risky fallback. Add the same idiom here.
+      it('warns inline when Orphan Cleanup is on its destructive default (delete)', async () => {
+        const user = userEvent.setup();
+        render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        await gotoStep(user, 3);
+
+        const orphanField = screen.getByText('Orphan Cleanup').closest('.form-field') as HTMLElement;
+        expect(within(orphanField).getByText(/will be deleted/i)).toBeVisible();
+        expect(within(orphanField).getByText('warning')).toBeInTheDocument();
+      });
+
+      it('hides the orphan-delete warning when set to a non-destructive action', async () => {
+        const user = userEvent.setup();
+        render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        await gotoStep(user, 3);
+        const orphanField = screen.getByText('Orphan Cleanup').closest('.form-field') as HTMLElement;
+        await user.click(within(orphanField).getByRole('button', { name: /delete orphaned channels/i }));
+        await user.click(await screen.findByRole('option', { name: /move to uncategorized/i }));
+
+        expect(within(orphanField).queryByText(/will be deleted/i)).not.toBeInTheDocument();
+      });
+
       it('adaptive footer: no Back on step 1, Back+Next on middle steps, Save (no Next) on the last step', async () => {
         const user = userEvent.setup();
         render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);

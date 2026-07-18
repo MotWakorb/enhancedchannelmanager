@@ -29,6 +29,23 @@ import { formatDateTime } from '../../utils/formatting';
 import '../ModalBase.css';
 import './EPGManagerTab.css';
 
+// Priorities shared by two or more sources resolve ties by internal ID
+// (bead 09x38.15 item 1) — the header tooltip explains this, but the tie
+// itself was otherwise invisible. Returns the set of priority values that
+// occur more than once among the given sources.
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper co-located with the only component that uses it; splitting is mechanical churn
+export function getTiedPriorities(sources: EPGSource[]): Set<number> {
+  const counts = new Map<number, number>();
+  for (const s of sources) {
+    counts.set(s.priority, (counts.get(s.priority) || 0) + 1);
+  }
+  const tied = new Set<number>();
+  for (const [priority, count] of counts) {
+    if (count > 1) tied.add(priority);
+  }
+  return tied;
+}
+
 interface SortableEPGSourceRowProps {
   source: EPGSource;
   onEdit: (source: EPGSource) => void;
@@ -36,9 +53,10 @@ interface SortableEPGSourceRowProps {
   onRefresh: (source: EPGSource) => void;
   onToggleActive: (source: EPGSource) => void;
   hideEpgUrls?: boolean;
+  isTied?: boolean;
 }
 
-function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleActive, hideEpgUrls = false }: SortableEPGSourceRowProps) {
+function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleActive, hideEpgUrls = false, isTied = false }: SortableEPGSourceRowProps) {
   const {
     attributes,
     listeners,
@@ -125,6 +143,14 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
 
       <div className="source-priority">
         {source.priority}
+        {isTied && (
+          <span
+            className="badge badge-warning badge-sm priority-tie-badge"
+            title="Another source shares this priority. Ties are broken by internal ID (lower wins) — drag in Reorder mode to assign a distinct priority."
+          >
+            tie
+          </span>
+        )}
       </div>
 
       <div className={`source-status ${getStatusClass(source.status)}`} title={source.last_message || ''}>
@@ -1044,6 +1070,8 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     );
   }
 
+  const tiedPriorities = getTiedPriorities(sources);
+
   return (
     <div className="epg-manager-tab">
       <PageHeader
@@ -1117,6 +1145,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                     onRefresh={handleRefreshSource}
                     onToggleActive={handleToggleActive}
                     hideEpgUrls={hideEpgUrls}
+                    isTied={tiedPriorities.has(source.priority)}
                   />
                 ))}
               </SortableContext>
@@ -1130,6 +1159,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                 onDelete={handleDeleteSource}
                 onRefresh={handleRefreshSource}
                 onToggleActive={handleToggleActive}
+                isTied={tiedPriorities.has(source.priority)}
                 hideEpgUrls={hideEpgUrls}
               />
             ))

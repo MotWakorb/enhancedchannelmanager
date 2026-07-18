@@ -219,6 +219,33 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           → Security page, bead 09x38.12; original setting is bead nngkg). */}
       <OutboundPolicyCard />
 
+      {/* "Which mechanism do I need" guidance (bead 09x38.15 item 7). This
+          page offers three overlapping-sounding restore paths; a first-time
+          operator has no way to tell them apart before reading every card
+          below. Text + light markup only — no new tool, just orientation. */}
+      <div className="backup-card backup-chooser-card">
+        <div className="backup-card-header">
+          <span className="material-icons">help_outline</span>
+          <h3>Which one do I need?</h3>
+        </div>
+        <ul className="backup-chooser-list">
+          <li>
+            <strong>YAML Export</strong> — a human-readable config file. Use it to version-control
+            settings, diff changes, or selectively restore just one section (e.g. only
+            Normalization Rules). Does not include logos or uploads.
+          </li>
+          <li>
+            <strong>DBAS Backup (.zip artifact)</strong> — the current (v0.18.0+) full-snapshot
+            format. Use it for disaster recovery: it's what scheduled backups produce, previews
+            changes before applying (dry run), and supports encryption and cloud upload.
+          </li>
+          <li>
+            <strong>Full Backup (legacy .zip)</strong> — the pre-v0.18.0 whole-app format. Only
+            needed to restore an older backup file created before the DBAS format existed.
+          </li>
+        </ul>
+      </div>
+
       {/* YAML Export (config only) */}
       <div className="backup-card">
         <div className="backup-card-header">

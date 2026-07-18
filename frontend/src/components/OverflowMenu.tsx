@@ -17,6 +17,8 @@ interface OverflowMenuProps {
   items: OverflowMenuItem[];
   /** aria-label + tooltip for the kebab trigger. */
   label?: string;
+  /** Material Icons glyph for the trigger button. Defaults to the kebab (⋮). */
+  icon?: string;
 }
 
 /**
@@ -31,7 +33,7 @@ interface OverflowMenuProps {
  * minus that component's bespoke submenus/loading states. Prefer this for new
  * header overflow menus; PaneToolbarMenu stays specialized to ChannelsPane.
  */
-export function OverflowMenu({ items, label = 'More actions' }: OverflowMenuProps) {
+export function OverflowMenu({ items, label = 'More actions', icon = 'more_vert' }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -73,7 +75,7 @@ export function OverflowMenu({ items, label = 'More actions' }: OverflowMenuProp
           setOpen(true);
         }}
       >
-        <span className="material-icons" aria-hidden="true">more_vert</span>
+        <span className="material-icons" aria-hidden="true">{icon}</span>
       </button>
       {open && position && createPortal(
         <div
