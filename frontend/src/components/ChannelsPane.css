@@ -691,6 +691,28 @@
   padding: 2px 8px 4px;
 }
 
+/* "Clean up empty groups" affordance (bead 09x38.15 item 3) — links out to
+   Settings → Maintenance → Orphaned Channel Groups instead of embedding the
+   scan/delete tool in this dropdown. */
+.filter-settings-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--accent-primary);
+  background: none;
+  border: none;
+  text-align: left;
+  transition: background-color 0.1s;
+}
+
+.filter-settings-link:hover {
+  background-color: var(--bg-hover);
+}
+
 .filter-settings-button.filter-active {
   border-color: var(--button-primary-bg);
   color: var(--button-primary-bg);

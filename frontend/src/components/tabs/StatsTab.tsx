@@ -17,6 +17,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { CustomSelect } from '../CustomSelect';
+import { OverflowMenu, type OverflowMenuItem } from '../OverflowMenu';
 import { EnhancedStatsPanel } from './EnhancedStatsPanel';
 import { PopularityPanel } from './PopularityPanel';
 import { WatchHistoryPanel } from './WatchHistoryPanel';
@@ -689,6 +690,39 @@ export function StatsTab() {
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
   const activeChannels = channelStats?.count || 0;
 
+  // Section jump nav (bead 09x38.15 item 9): ~10 sections stack inside
+  // .stats-content with no way to jump between them but scrolling. The
+  // first four are conditionally rendered (only when their data is
+  // non-empty); the rest are always-mounted child panels. Only list a
+  // conditional section when it will actually be in the DOM to scroll to.
+  const statsSectionNavItems: OverflowMenuItem[] = useMemo(() => {
+    const scrollToSection = (id: string) => () => {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    const items: OverflowMenuItem[] = [];
+    if (activeChannels > 0) {
+      items.push({ label: 'Active Channels', icon: 'live_tv', onClick: scrollToSection('stats-section-active-channels') });
+    }
+    if (streamingEvents.length > 0) {
+      items.push({ label: 'Recent Events', icon: 'event_note', onClick: scrollToSection('stats-section-recent-events') });
+    }
+    if (topWatchedChannels.length > 0) {
+      items.push({ label: 'Top Watched Channels', icon: 'trending_up', onClick: scrollToSection('stats-section-top-watched') });
+    }
+    if (bandwidthStats) {
+      items.push({ label: 'Bandwidth Usage', icon: 'data_usage', onClick: scrollToSection('stats-section-bandwidth-usage') });
+    }
+    items.push(
+      { label: 'Bandwidth In/Out', icon: 'swap_vert', onClick: scrollToSection('stats-section-bandwidth-panel') },
+      { label: 'Enhanced Statistics', icon: 'insights', onClick: scrollToSection('stats-section-enhanced') },
+      { label: 'Popularity Rankings', icon: 'star', onClick: scrollToSection('stats-section-popularity') },
+      { label: 'Watch History', icon: 'history', onClick: scrollToSection('stats-section-watch-history') },
+      { label: 'User Watch Time', icon: 'person', onClick: scrollToSection('stats-section-user-watch-time') },
+      { label: 'Providers', icon: 'cloud_queue', onClick: scrollToSection('stats-section-providers') },
+    );
+    return items;
+  }, [activeChannels, streamingEvents.length, topWatchedChannels.length, bandwidthStats]);
+
   // bd-ox5q8: M3U account name lookup for the Active Channels stream
   // badge. Backend's /api/stats/channels enrichment surfaces each row's
   // ``m3u_account_id`` (when the live resolver attributes the active
@@ -932,6 +966,8 @@ export function StatsTab() {
             <span className="material-icons">refresh</span>
             Refresh
           </button>
+
+          <OverflowMenu items={statsSectionNavItems} label="Jump to section" icon="list" />
         </div>
       </div>
 
@@ -956,7 +992,7 @@ export function StatsTab() {
 
         {/* Active Channels */}
         {activeChannels > 0 && (
-          <div className="active-channels">
+          <div className="active-channels" id="stats-section-active-channels">
             <h3 className="section-title">Active Channels</h3>
 
             {channelStats?.channels?.map((channel) => {
@@ -1611,7 +1647,7 @@ export function StatsTab() {
 
         {/* System Events - only show streaming-related events */}
         {streamingEvents.length > 0 && (
-          <div className="events-section">
+          <div className="events-section" id="stats-section-recent-events">
             <div className="events-header">
               <h3 className="section-title">Recent Events</h3>
               <div className="events-filter">
@@ -1660,7 +1696,7 @@ export function StatsTab() {
 
         {/* Top Watched Channels */}
         {topWatchedChannels.length > 0 && (
-          <div className="top-watched-section">
+          <div className="top-watched-section" id="stats-section-top-watched">
             <div className="top-watched-header">
               <h3 className="section-title">Top Watched Channels</h3>
               <div className="top-watched-toggle">
@@ -1704,7 +1740,7 @@ export function StatsTab() {
 
         {/* Bandwidth Usage Summary */}
         {bandwidthStats && (
-          <div className="bandwidth-section">
+          <div className="bandwidth-section" id="stats-section-bandwidth-usage">
             <h3 className="section-title">Bandwidth Usage</h3>
             <div className="bandwidth-summary">
               <div className="bandwidth-stat">

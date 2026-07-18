@@ -1325,7 +1325,7 @@ export const handlers = [
       exported_at: '2026-01-01T00:00:00+00:00',
       sections: [
         { key: 'settings', label: 'Settings', item_count: 10, available: true },
-        { key: 'scheduled_tasks', label: 'Scheduled Tasks', item_count: 3, available: true },
+        { key: 'scheduled_tasks', label: 'Task Settings & Alerts', item_count: 3, available: true },
         { key: 'tag_groups', label: 'Tag Groups', item_count: 2, available: true },
         { key: 'ffmpeg_profiles', label: 'FFmpeg Profiles', item_count: 0, available: false },
       ],

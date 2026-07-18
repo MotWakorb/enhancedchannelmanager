@@ -2,7 +2,7 @@
  * Unit tests for BackupRestoreSection component.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { BackupRestoreSection } from './BackupRestoreSection';
 
 // Mock the API module
@@ -124,6 +124,20 @@ describe('BackupRestoreSection', () => {
       expect(screen.getByText('Backup & Restore')).toBeInTheDocument();
 
       // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    it('renders the "which one do I need" mechanism-chooser guidance ahead of the cards it explains (bead 09x38.15 item 7)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const chooserCard = screen.getByText('Which one do I need?').closest('.backup-chooser-card') as HTMLElement;
+      expect(chooserCard).not.toBeNull();
+      expect(within(chooserCard).getByText(/^YAML Export$/)).toBeInTheDocument();
+      expect(within(chooserCard).getByText(/DBAS Backup \(\.zip artifact\)/)).toBeInTheDocument();
+      expect(within(chooserCard).getByText(/Full Backup \(legacy \.zip\)/)).toBeInTheDocument();
+
       await waitFor(() => {
         expect(screen.getByText('Settings')).toBeInTheDocument();
       });

@@ -63,6 +63,16 @@ import './ModalBase.css';
 // virtualization dependency and without unmounting rows @dnd-kit is using.
 const GROUP_RENDER_CHUNK_SIZE = 100;
 
+/**
+ * Window-level event that navigates to Settings → Maintenance → Orphaned
+ * Channel Groups (bead 09x38.15 item 3). Follows the same cross-tree
+ * navigation pattern as `ecm:open-task-editor` (App.tsx listens and calls
+ * `setHash`) rather than prop-drilling the hash-route setter down through
+ * ChannelManagerTab — ChannelsPane has no other reason to know about
+ * Settings sub-pages.
+ */
+export const NAVIGATE_TO_ORPHANED_GROUPS_EVENT = 'ecm:navigate-settings-maintenance';
+
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
   channels: Channel[];
@@ -7290,6 +7300,18 @@ export function ChannelsPane({
                   />
                   <span>Unprobed Streams</span>
                 </label>
+                <div className="filter-settings-separator" />
+                <button
+                  type="button"
+                  className="filter-settings-link"
+                  onClick={() => {
+                    setFilterSettingsOpen(false);
+                    window.dispatchEvent(new CustomEvent(NAVIGATE_TO_ORPHANED_GROUPS_EVENT));
+                  }}
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '16px' }}>cleaning_services</span>
+                  Clean up empty groups&hellip;
+                </button>
               </div>
             </div>
           )}

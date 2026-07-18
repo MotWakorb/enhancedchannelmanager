@@ -19,6 +19,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { StatsTab } from './StatsTab';
 import * as api from '../../services/api';
 import type {
@@ -1546,6 +1547,65 @@ describe('StatsTab — scroll-containment DOM structure (bd-tkcmu)', () => {
 
     // Sanity-check: .stats-content must not be the stats-tab root itself.
     expect(statsTab).not.toBe(statsContent);
+  });
+});
+
+// bead 09x38.15 item 9: ~10 sections stack inside .stats-content with no way
+// to jump between them but scrolling. A "Jump to section" dropdown (reusing
+// the OverflowMenu portal-dropdown idiom) lists only sections actually
+// present in the DOM and scrolls to them on click.
+describe('StatsTab — section jump nav (bead 09x38.15 item 9)', () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 0,
+      channels: [],
+    } as unknown as ChannelStatsResponse);
+    // No bandwidth data — the component swallows this into a `null` state
+    // (see fetchData's .catch) rather than surfacing an error, so the
+    // Bandwidth Usage summary section doesn't render.
+    vi.mocked(api.getBandwidthStats).mockRejectedValue(new Error('unavailable'));
+  });
+
+  it('always lists the always-mounted panels, but omits conditional sections with no data', async () => {
+    const user = userEvent.setup();
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /jump to section/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /jump to section/i }));
+
+    expect(screen.getByRole('menuitem', { name: /bandwidth in\/out/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /enhanced statistics/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /popularity rankings/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /watch history/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /user watch time/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /providers/i })).toBeInTheDocument();
+
+    // No active channels / events / top-watched / bandwidth summary data
+    // seeded — those sections don't render, so they must not appear either.
+    expect(screen.queryByRole('menuitem', { name: /^active channels$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /recent events/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /top watched channels/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^bandwidth usage$/i })).not.toBeInTheDocument();
+  });
+
+  it('lists Active Channels once channel-stats data is present, and clicking it scrolls to the section', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [{ channel_id: 'abc', channel_name: 'ESPN', channel_number: 1, state: 'streaming', client_count: 0, clients: [] }],
+    } as unknown as ChannelStatsResponse);
+    const user = userEvent.setup();
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('#stats-section-active-channels')).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /jump to section/i }));
+    await user.click(screen.getByRole('menuitem', { name: /^active channels$/i }));
+
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
   });
 });
 

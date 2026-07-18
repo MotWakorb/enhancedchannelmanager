@@ -75,7 +75,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.17.6-0126"
+APP_VERSION = "0.17.6-0127"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2045,8 +2045,8 @@ async def export_yaml(
 # Keys map to the YAML structure paths; "db_key" is the key under "database".
 RESTORABLE_SECTIONS = {
     "settings": {"label": "Settings"},
-    "scheduled_tasks": {"label": "Scheduled Tasks", "db_key": "scheduled_tasks"},
-    "task_schedules": {"label": "Task Schedules", "db_key": "task_schedules"},
+    "scheduled_tasks": {"label": "Task Settings & Alerts", "db_key": "scheduled_tasks"},
+    "task_schedules": {"label": "Task Run Schedules", "db_key": "task_schedules"},
     "normalization_rule_groups": {"label": "Normalization Rules", "db_key": "normalization_rule_groups"},
     "tag_groups": {"label": "Tag Groups", "db_key": "tag_groups"},
     "auto_creation_rules": {"label": "Auto-Creation Rules", "db_key": "auto_creation_rules"},

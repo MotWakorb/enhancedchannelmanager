@@ -62,6 +62,13 @@ describe('ChannelPipelineTab', () => {
       expect(screen.getByRole('button', { name: /^run$/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /dry run/i })).toBeInTheDocument();
     });
+
+    it('labels the header debug bundle action "Pipeline Debug Bundle" to disambiguate from the whole-app bundle in Settings (bead 09x38.15 item 4)', () => {
+      renderWithProviders(<ChannelPipelineTab />);
+
+      expect(screen.getByRole('button', { name: /pipeline debug bundle/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^debug bundle$/i })).not.toBeInTheDocument();
+    });
   });
 
   describe('rules list', () => {

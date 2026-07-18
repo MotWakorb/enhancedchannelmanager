@@ -1101,6 +1101,14 @@ export function RuleBuilder({
                   value={orphanAction}
                   onChange={(val) => setOrphanAction(val as 'delete' | 'none' | 'move_uncategorized' | 'delete_and_cleanup_groups')}
                 />
+                {orphansDeleted && (
+                  <span className="norm-hint">
+                    <span className="material-icons norm-hint-icon">warning</span>
+                    {orphanAction === 'delete_and_cleanup_groups'
+                      ? 'Channels that no longer match this rule will be deleted, along with any groups left empty.'
+                      : 'Channels that no longer match this rule will be deleted. This is the default — pick Move to Uncategorized or Do nothing to keep them.'}
+                  </span>
+                )}
               </div>
 
               {/* Run behavior — the former "Options" grab-bag, dissolved into

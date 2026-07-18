@@ -93,14 +93,14 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
 
   if (loading && !data) {
     return (
-      <div className="watch-history-panel">
+      <div className="watch-history-panel" id="stats-section-watch-history">
         <div className="loading-state">Loading watch history...</div>
       </div>
     );
   }
 
   return (
-    <div className="watch-history-panel">
+    <div className="watch-history-panel" id="stats-section-watch-history">
       <div className="panel-header">
         <div className="header-left">
           <h3 className="section-title">Watch History</h3>

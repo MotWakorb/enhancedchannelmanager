@@ -501,7 +501,7 @@ export function ProvidersPanel() {
   // Auth still resolving — stay quiet until we know the posture.
   if (authLoading) {
     return (
-      <div className="providers-panel">
+      <div className="providers-panel" id="stats-section-providers">
         <h3 className="section-title">Providers</h3>
         <div className="loading-state">Loading…</div>
       </div>
@@ -511,7 +511,7 @@ export function ProvidersPanel() {
   // Known non-admin or backend 403: show the admin-only notice.
   if (knownNonAdmin || adminOnly) {
     return (
-      <div className="providers-panel">
+      <div className="providers-panel" id="stats-section-providers">
         <h3 className="section-title">Providers</h3>
         <div className="admin-only-state" role="note">
           Provider statistics require admin access.
@@ -547,7 +547,7 @@ export function ProvidersPanel() {
   // watch-time" set — the bar chart's data already IS the watch-time set.
 
   return (
-    <div className="providers-panel">
+    <div className="providers-panel" id="stats-section-providers">
       <div className="panel-header">
         <h3 className="section-title">Providers</h3>
         <div className="panel-controls">
