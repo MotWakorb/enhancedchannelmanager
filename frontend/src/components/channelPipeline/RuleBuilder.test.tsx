@@ -818,17 +818,140 @@ describe('RuleBuilder', () => {
       return { registeredClose: () => registeredClose!(), onCancel };
     }
 
-    describe('phase order (logic first)', () => {
-      it('renders the phase spine as Logic -> Targeting -> Output & Run', () => {
+    // Bead 09x38.10: the Standard editor's nav strip is an on-page section
+    // nav (table-of-contents idiom), NOT the Event Sync wizard's step-pill
+    // strip. It renders all regions at once and only scroll-jumps between
+    // them, so it must not masquerade as a sequential wizard.
+    describe('section nav (table-of-contents idiom, not a wizard) — bead 09x38.10', () => {
+      function getSectionNav() {
+        return screen.getByRole('navigation', { name: /rule sections/i });
+      }
+
+      it('lists the sections Logic -> Targeting -> Output & Run as plain labels (no wizard step numbers)', () => {
         render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
 
-        const spine = screen.getByRole('navigation', { name: /rule sections/i });
-        const pills = within(spine).getAllByRole('button');
-        expect(pills.map(p => p.textContent)).toEqual([
-          '1 Logic',
-          '2 Targeting',
-          '3 Output & Run',
+        const links = within(getSectionNav()).getAllByRole('button');
+        // Labels only — the circled step-number badges that made this read as a
+        // wizard are gone.
+        expect(links.map(l => l.textContent?.trim())).toEqual([
+          'Logic',
+          'Targeting',
+          'Output & Run',
         ]);
+      });
+
+      it('carries a "Jump to" affordance so it reads as navigation, not progression', () => {
+        render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(within(getSectionNav()).getByText(/jump to/i)).toBeInTheDocument();
+      });
+
+      it('marks the active section with aria-current="location" (a place in the form, not a wizard step)', async () => {
+        const user = userEvent.setup();
+        render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        const nav = getSectionNav();
+        // No nav item claims to be the current wizard "step".
+        expect(nav.querySelector('[aria-current="step"]')).toBeNull();
+        // The first section is the current location by default.
+        expect(nav.querySelector('[aria-current="location"]')?.textContent?.trim()).toBe('Logic');
+
+        // Jumping to another section moves the current-location marker.
+        await user.click(within(nav).getByRole('button', { name: /output & run/i }));
+        expect(nav.querySelector('[aria-current="location"]')?.textContent?.trim()).toBe(
+          'Output & Run',
+        );
+      });
+
+      it('keeps every region rendered while navigating (it is not a step-at-a-time wizard)', async () => {
+        const user = userEvent.setup();
+        render(<RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        // Jump to the last section — earlier regions must stay in the DOM,
+        // unlike a wizard that unmounts inactive steps.
+        await user.click(
+          within(getSectionNav()).getByRole('button', { name: /output & run/i }),
+        );
+
+        expect(screen.getByRole('heading', { name: /conditions/i })).toBeInTheDocument();
+        expect(screen.getByLabelText(/allow merging into manual channels/i)).toBeInTheDocument();
+        expect(screen.getByText(/orphan cleanup/i)).toBeInTheDocument();
+      });
+    });
+
+    // Bead 09x38.10 round-trip invariant: opening a fully-configured existing
+    // rule, navigating through every section, then saving must produce a save
+    // payload identical to the loaded config — the nav restyle changes nothing
+    // about what Save persists.
+    describe('round-trip invariant across section navigation — bead 09x38.10', () => {
+      const FULL_RULE = {
+        name: 'Full Config',
+        description: 'Every field set',
+        enabled: true,
+        priority: 0,
+        conditions: [{ type: 'stream_name_contains', value: 'ESPN', connector: 'and' }],
+        actions: [{ type: 'skip' }],
+        run_on_refresh: true,
+        stop_on_first_match: false,
+        sort_field: 'stream_name',
+        sort_order: 'desc',
+        probe_on_sort: false,
+        sort_regex: '',
+        stream_sort_field: 'quality',
+        stream_sort_order: 'desc',
+        quality_tie_break_order: 'desc',
+        quality_m3u_tie_break_enabled: true,
+        normalization_group_ids: [],
+        skip_struck_streams: true,
+        orphan_action: 'move_uncategorized',
+        match_scope_target_group: true,
+        match_scope_group_id: 7,
+        allow_manual_channel_merge: true,
+        fold_match_key: true,
+      } as unknown as ChannelPipelineRule;
+
+      it('open -> step through every section -> save yields an unchanged payload', async () => {
+        const user = userEvent.setup();
+        const onSave = vi.fn().mockResolvedValue(undefined);
+        mockDataStore.channelGroups.push(createMockChannelGroup({ id: 7, name: 'Sports' }));
+
+        render(<RuleBuilder rule={FULL_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+        // Walk the section nav end to end, touching nothing else.
+        const nav = screen.getByRole('navigation', { name: /rule sections/i });
+        await user.click(within(nav).getByRole('button', { name: /targeting/i }));
+        await user.click(within(nav).getByRole('button', { name: /output & run/i }));
+        await user.click(within(nav).getByRole('button', { name: /logic/i }));
+
+        await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+        await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+        // The persisted payload is exactly the loaded config (normalized shape).
+        expect(onSave).toHaveBeenCalledWith({
+          name: 'Full Config',
+          description: 'Every field set',
+          enabled: true,
+          priority: 0,
+          conditions: [{ type: 'stream_name_contains', value: 'ESPN', connector: 'and' }],
+          actions: [{ type: 'skip' }],
+          run_on_refresh: true,
+          stop_on_first_match: false,
+          sort_field: 'stream_name',
+          sort_order: 'desc',
+          probe_on_sort: false,
+          sort_regex: '',
+          stream_sort_field: 'quality',
+          stream_sort_order: 'desc',
+          quality_tie_break_order: 'desc',
+          quality_m3u_tie_break_enabled: true,
+          normalization_group_ids: [],
+          skip_struck_streams: true,
+          orphan_action: 'move_uncategorized',
+          match_scope_target_group: true,
+          match_scope_group_id: 7,
+          allow_manual_channel_merge: true,
+          fold_match_key: true,
+        });
       });
     });
 

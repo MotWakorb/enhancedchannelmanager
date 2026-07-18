@@ -56,9 +56,9 @@ interface ValidationErrors {
 const ANALYZE_DEBOUNCE_MS = 400;
 
 const PHASES = [
-  { id: 'logic', num: 1, label: 'Logic' },
-  { id: 'targeting', num: 2, label: 'Targeting' },
-  { id: 'output', num: 3, label: 'Output & Run' },
+  { id: 'logic', label: 'Logic' },
+  { id: 'targeting', label: 'Targeting' },
+  { id: 'output', label: 'Output & Run' },
 ] as const;
 
 const ACTION_LABELS: Record<string, string> = {
@@ -582,19 +582,28 @@ export function RuleBuilder({
           </div>
         </div>
 
-        {/* Scroll-spy phase spine — logic FIRST. Pills scroll the main column;
-            the rail is persistent across phases. This is NOT a wizard. */}
-        <nav className="modal-stepper" aria-label="Rule sections">
+        {/* On-page section nav (bead 09x38.10) — a table-of-contents idiom,
+            deliberately NOT the Event Sync wizard's step-pill strip. All
+            regions render at once; these links only scroll-jump to an
+            already-visible section, and the scroll-spy tracks the active one.
+            aria-current="location" (a place in this form) — never "step" — and
+            no circled step numbers, so it cannot be mistaken for a sequential
+            wizard. */}
+        <nav className="rule-section-nav" aria-label="Rule sections">
+          <span className="rule-section-nav-label">
+            <span className="material-icons" aria-hidden="true">list</span>
+            Jump to
+          </span>
           {PHASES.map(phase => (
             <button
               key={phase.id}
               type="button"
-              className="modal-stepper-item"
-              aria-current={activePhase === phase.id ? 'step' : undefined}
+              className="rule-section-nav-item"
+              aria-current={activePhase === phase.id ? 'location' : undefined}
               onClick={() => goToPhase(phase.id)}
-              data-testid={`rule-phase-pill-${phase.id}`}
+              data-testid={`rule-section-link-${phase.id}`}
             >
-              <span className="modal-stepper-num">{phase.num}</span> {phase.label}
+              {phase.label}
             </button>
           ))}
         </nav>

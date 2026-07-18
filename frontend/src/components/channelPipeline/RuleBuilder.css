@@ -481,9 +481,76 @@
 /* ============================================================================
    Grouped two-pane redesign (bead m1s38.3) — consumes the shared .modal-*
    primitives from ModalBase.css (.modal-twopane / .modal-main / .modal-rail /
-   .modal-stepper / .modal-intent / .modal-why). Only the standard-builder-
-   specific pieces live here.
+   .modal-intent / .modal-why). Only the standard-builder-specific pieces live
+   here.
+
+   Section nav (bead 09x38.10): the Standard editor is one continuous form, so
+   its nav is a table-of-contents ("Jump to" links), NOT the shared
+   .modal-stepper step-pill strip the Event Sync WIZARD uses. Own styles below
+   (.rule-section-nav*) keep the two idioms visually distinct so neither
+   masquerades as the other.
    ============================================================================ */
+
+/* On-page section nav (table-of-contents idiom). Deliberately unlike the
+   Event Sync wizard's equal-width numbered step pills: left-aligned, a leading
+   "Jump to" label, underline-on-active text tabs, no circled step numbers. */
+.rule-section-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.rule-section-nav-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.rule-section-nav-label .material-icons {
+  font-size: 15px;
+}
+
+.rule-section-nav-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.rule-section-nav-item:hover {
+  color: var(--text-primary);
+  border-bottom-color: var(--border-secondary, var(--border-primary));
+}
+
+.rule-section-nav-item[aria-current='location'] {
+  color: var(--accent-primary, #6366f1);
+  border-bottom-color: var(--accent-primary, #6366f1);
+}
+
+.rule-section-nav-item:focus-visible {
+  outline: 2px solid var(--button-primary-bg, #6366f1);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
 
 /* Compact always-visible header: name*, enabled, description. */
 .rule-builder-headerbar {
