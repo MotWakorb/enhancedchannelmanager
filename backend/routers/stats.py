@@ -19,10 +19,12 @@ from bandwidth_tracker import (
     ChannelStreamsCache,
     resolve_active_channel_streams,
 )
+from cache import get_cache
 from database import get_session
 from dispatcharr_client import get_client
 from models import SessionTelemetry, UniqueClientConnection, User
 from observability import get_metric
+from routers.streams import _get_stream_channel_index
 
 logger = logging.getLogger(__name__)
 
@@ -2816,4 +2818,149 @@ async def get_providers_bitrate(
         raise
     except Exception:
         logger.exception("[STATS] Failed to get provider bitrate stats")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# =============================================================================
+# Provider Stream Usage (GH #482, bead enhancedchannelmanager-n5cwp)
+# =============================================================================
+#
+# CONFIGURATION data, NOT viewing telemetry: how many of each provider's
+# streams have actually been wired into an ECM channel. Distinct from the
+# /providers/buffering|watch-time|channel-heatmap|bitrate family above (those
+# read session_telemetry — "how much was this provider *watched*"); this
+# endpoint reads Dispatcharr's stream/channel catalog directly — "how much of
+# this provider's catalog is *assigned to channels*". Reporter's ask (GH
+# #482): neither Dispatcharr nor ECM shows this anywhere today.
+#
+# Two counting metrics are surfaced, both intentionally:
+#   * ``assigned_streams`` (PRIMARY) — distinct streams from this provider
+#     that appear in at least one channel's stream list. Answers "how many
+#     of my streams did I actually use" — a stream in 3 channels still
+#     counts once here.
+#   * ``total_assignments`` (secondary) — SUM of channel-memberships across
+#     those streams (a stream in 2 channels counts twice). Surfaces
+#     providers whose streams get heavily reused across channels, which
+#     ``assigned_streams`` alone would hide.
+# ``total_streams`` (provider's full catalog size) + ``utilization_pct``
+# (``assigned_streams / total_streams``) give scale/context.
+
+PROVIDER_STREAM_USAGE_CACHE_KEY = "provider_stream_usage"
+PROVIDER_STREAM_USAGE_TTL_SECONDS = 300
+
+
+@router.get("/providers/stream-usage")
+async def get_provider_stream_usage(bypass_cache: bool = False):
+    """Per-provider stream-assignment usage (GH-482 / bd-n5cwp).
+
+    For each M3U account (provider): total catalog size, how many of its
+    streams are assigned to at least one channel (``assigned_streams``),
+    and the total assignment count counting reuse across channels
+    (``total_assignments``). See the module comment above for why both
+    are surfaced.
+
+    Not admin-gated (unlike the /providers/* viewing-telemetry family
+    above): this is Dispatcharr-derived catalog/assignment data, the same
+    trust tier as ``GET /api/stats/channels`` — not per-user watch
+    history.
+
+    Reuses the cached reverse stream->channel index built by
+    ``routers.streams._get_stream_channel_index`` instead of re-sweeping
+    every channel. Response is itself cached
+    PROVIDER_STREAM_USAGE_TTL_SECONDS.
+    """
+    cache = get_cache()
+    if not bypass_cache:
+        cached = cache.get(PROVIDER_STREAM_USAGE_CACHE_KEY, ttl=PROVIDER_STREAM_USAGE_TTL_SECONDS)
+        if cached is not None:
+            return cached
+
+    client = get_client()
+    try:
+        accounts = await client.get_m3u_accounts()
+        providers: dict = {}
+        for acc in accounts:
+            pid = acc.get("id")
+            providers[pid] = {
+                "provider_id": pid,
+                "provider_name": acc.get("name") or f"Provider {pid}",
+                "total_streams": 0,
+                "assigned_streams": 0,
+                "total_assignments": 0,
+            }
+
+        # Total catalog size per provider: one cheap count-only call each
+        # (page_size=1 — only the pagination envelope's `count` is read,
+        # not the actual stream rows).
+        for acc in accounts:
+            pid = acc.get("id")
+            try:
+                result = await client.get_streams(m3u_account=pid, page_size=1)
+                providers[pid]["total_streams"] = result.get("count", 0) or 0
+            except Exception:
+                logger.warning(
+                    "[STATS] Failed to fetch stream count for provider %s (%s)",
+                    pid, acc.get("name"), exc_info=True,
+                )
+
+        # Reuse the cached reverse stream->channel index (routers.streams)
+        # rather than re-sweeping every channel ourselves.
+        index = await _get_stream_channel_index()
+        assigned_ids = list(index.keys())
+
+        # Resolve each assigned stream's m3u_account, batched by 100 (same
+        # batching convention as the CSV export / debug-bundle by-ids
+        # callers in routers/channels.py) — only the ASSIGNED subset is
+        # fetched, not the full catalog.
+        id_to_provider: dict = {}
+        for i in range(0, len(assigned_ids), 100):
+            batch = assigned_ids[i:i + 100]
+            try:
+                stream_details = await client.get_streams_by_ids(batch)
+            except Exception:
+                logger.warning(
+                    "[STATS] Failed to resolve provider for a stream batch",
+                    exc_info=True,
+                )
+                continue
+            for s in stream_details:
+                id_to_provider[s.get("id")] = s.get("m3u_account")
+
+        for sid, channel_ids in index.items():
+            pid = id_to_provider.get(sid)
+            entry = providers.get(pid)
+            if entry is None:
+                # A stream whose m3u_account isn't in the current accounts
+                # list (deleted provider) or is None (no upstream match) —
+                # surface it rather than silently dropping the count.
+                entry = {
+                    "provider_id": pid,
+                    "provider_name": "Unknown" if pid is None else f"Provider {pid}",
+                    "total_streams": 0,
+                    "assigned_streams": 0,
+                    "total_assignments": 0,
+                }
+                providers[pid] = entry
+            entry["assigned_streams"] += 1
+            entry["total_assignments"] += len(channel_ids)
+
+        data = list(providers.values())
+        for entry in data:
+            total = entry["total_streams"]
+            entry["utilization_pct"] = (
+                round(100.0 * entry["assigned_streams"] / total, 1) if total else 0.0
+            )
+        # Most-utilized providers first; name breaks ties for stable
+        # ordering across cache misses.
+        data.sort(key=lambda e: (-e["assigned_streams"], e["provider_name"]))
+
+        envelope = {
+            "data": data,
+            "meta": {"total_rows": len(data)},
+            "pagination": None,
+        }
+        cache.set(PROVIDER_STREAM_USAGE_CACHE_KEY, envelope)
+        return envelope
+    except Exception:
+        logger.exception("[STATS] Failed to get provider stream usage")
         raise HTTPException(status_code=500, detail="Internal server error")

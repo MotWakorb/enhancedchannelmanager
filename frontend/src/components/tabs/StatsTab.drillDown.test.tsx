@@ -89,6 +89,12 @@ beforeEach(() => {
   vi.mocked(api.getTopWatchedChannels).mockResolvedValue(baseTopWatched);
   vi.mocked(api.getEPGGrid).mockResolvedValue([]);
   vi.mocked(api.getEPGData).mockResolvedValue([]);
+  // ProviderStreamUsagePanel (bd-n5cwp) — always-mounted sibling panel.
+  vi.mocked(api.getProviderStreamUsage).mockResolvedValue({
+    data: [],
+    meta: { total_rows: 0 },
+    pagination: null,
+  });
 });
 
 afterEach(() => {

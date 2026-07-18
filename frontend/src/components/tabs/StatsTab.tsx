@@ -24,6 +24,7 @@ import { WatchHistoryPanel } from './WatchHistoryPanel';
 import { BandwidthPanel } from './BandwidthPanel';
 import { UserStatsPanel } from './UserStatsPanel';
 import { ProvidersPanel } from './ProvidersPanel';
+import { ProviderStreamUsagePanel } from './ProviderStreamUsagePanel';
 import { AttributionBadge } from '../AttributionBadge';
 import { ChannelStatsDetailModal } from '../ChannelStatsDetailModal';
 import type { Viewer } from '../../types';
@@ -39,6 +40,18 @@ interface HistoricalDataPoint {
 
 // Max number of data points to keep per channel
 const MAX_HISTORY_POINTS = 60;
+
+// Live Stats provider display (GH-481, bd-49obj): above this many providers,
+// the per-provider "tile" badges (.summary-stat) in the Live Stats header
+// stop being a legible way to scan capacity — beyond ~6 tiles the header
+// grows into several wrapped rows and, on the reporter's 11-provider
+// install, providers scroll out of view entirely. Auto-switch to a
+// condensed table above the threshold; keep the existing tile look below it
+// (it's the nicer, more scannable presentation for the common small-N case,
+// and this repo's local dev/test installs typically have few providers).
+// Chosen over a settings toggle (reporter's nice-to-have) — see component
+// comment for the follow-up-candidate note.
+const LIVE_STATS_CONDENSED_THRESHOLD = 6;
 
 // How often the EPG guide data (grid + tvg_id map) is considered fresh.
 // The grid covers "now" through +24h, so which program is Currently
@@ -719,6 +732,7 @@ export function StatsTab() {
       { label: 'Watch History', icon: 'history', onClick: scrollToSection('stats-section-watch-history') },
       { label: 'User Watch Time', icon: 'person', onClick: scrollToSection('stats-section-user-watch-time') },
       { label: 'Providers', icon: 'cloud_queue', onClick: scrollToSection('stats-section-providers') },
+      { label: 'Provider Stream Usage', icon: 'table_rows', onClick: scrollToSection('stats-section-provider-stream-usage') },
     );
     return items;
   }, [activeChannels, streamingEvents.length, topWatchedChannels.length, bandwidthStats]);
@@ -915,7 +929,12 @@ export function StatsTab() {
                 <div className="stat-label">Connected Clients</div>
               </div>
             </div>
-            {m3uConnectionStats.map((m3u) => {
+            {/* bd-49obj / GH-481: below the condensed threshold, keep the
+                tile presentation (nicer at a glance for a handful of
+                providers). At/above it, the tiles below are skipped and the
+                condensed table (rendered after header-summary) takes over —
+                see LIVE_STATS_CONDENSED_THRESHOLD comment. */}
+            {m3uConnectionStats.length <= LIVE_STATS_CONDENSED_THRESHOLD && m3uConnectionStats.map((m3u) => {
               // bd-lhxfu Unknown bucket: no upstream max to show — render
               // bare current count so the operator can read it as
               // "this many unattributed live streams" without a fake
@@ -938,6 +957,43 @@ export function StatsTab() {
               );
             })}
           </div>
+
+          {/* Condensed provider table (bd-49obj / GH-481): with many
+              providers, per-provider tile badges wrap into several rows and
+              providers scroll out of view (reporter: 11 providers, "many of
+              them are not visible at all"). A dense table keeps every
+              provider visible at once. Scrolls internally (max-height) only
+              if the provider count still overflows the available header
+              space — never clips silently. */}
+          {m3uConnectionStats.length > LIVE_STATS_CONDENSED_THRESHOLD && (
+            <div className="provider-live-table-wrapper" data-testid="provider-live-table-wrapper">
+              <table className="provider-live-table">
+                <caption className="visually-hidden">Active connections per provider</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Provider</th>
+                    <th scope="col">Active</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {m3uConnectionStats.map((m3u) => {
+                    const isUnknown = m3u.id === -1;
+                    return (
+                      <tr key={m3u.id} className={isUnknown ? 'unknown-bucket' : undefined}>
+                        <td>
+                          {isUnknown && <span className="material-icons">help_outline</span>}
+                          {m3u.name}
+                        </td>
+                        <td className="provider-live-table-count">
+                          {isUnknown ? m3u.current : `${m3u.current}/${m3u.max}`}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         <div className="header-actions">
@@ -1849,6 +1905,9 @@ export function StatsTab() {
 
         {/* Providers (v0.17.0 — GH-59, bd-skqln.18) */}
         <ProvidersPanel />
+
+        {/* Provider Stream Usage (GH-482, bd-n5cwp) */}
+        <ProviderStreamUsagePanel />
       </div>
 
       {drillDownTarget && (

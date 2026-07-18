@@ -2352,6 +2352,18 @@ export async function getProvidersBitrate(options: {
 }
 
 // =============================================================================
+// Provider Stream Usage (GH-482, bd-n5cwp)
+// =============================================================================
+//
+// NOT admin-gated (Dispatcharr-derived catalog/assignment data — see
+// ProviderStreamUsageResponse doc comment in types/index.ts for the
+// assigned_streams vs total_assignments distinction).
+
+export async function getProviderStreamUsage(): Promise<import('../types').ProviderStreamUsageResponse> {
+  return fetchJson(`${API_BASE}/stats/providers/stream-usage`);
+}
+
+// =============================================================================
 // Stream Stats / Probing
 // =============================================================================
 

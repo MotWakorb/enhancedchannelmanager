@@ -1069,6 +1069,10 @@ export interface M3UDigestSettings {
   send_to_discord: boolean;  // Send digest to Discord (uses shared webhook from General Settings)
   exclude_group_patterns: string[];  // Regex patterns to exclude groups from digest
   exclude_stream_patterns: string[];  // Regex patterns to exclude streams from digest
+  // M3U account IDs to include in digest NOTIFICATIONS (GH #496). DB change
+  // logging is never filtered by this -- only what gets emailed/Discorded.
+  // Empty array = all accounts (default, unchanged behavior).
+  account_ids: number[];
   last_digest_at: string | null;  // ISO timestamp
   created_at: string;  // ISO timestamp
   updated_at: string;  // ISO timestamp
@@ -1086,6 +1090,7 @@ export interface M3UDigestSettingsUpdate {
   send_to_discord?: boolean;
   exclude_group_patterns?: string[];
   exclude_stream_patterns?: string[];
+  account_ids?: number[];
 }
 
 // =============================================================================
@@ -1442,6 +1447,44 @@ export type ProviderBufferingResponse = ProviderStatsEnvelope<ProviderBufferingR
 export type ProviderWatchTimeResponse = ProviderStatsEnvelope<ProviderWatchTimeRow>;
 export type ProviderHeatmapResponse = ProviderStatsEnvelope<ProviderHeatmapRow>;
 export type ProviderBitrateResponse = ProviderStatsEnvelope<ProviderBitrateRow>;
+
+// =============================================================================
+// Provider Stream Usage (GH-482, bd-n5cwp)
+// =============================================================================
+//
+// GET /api/stats/providers/stream-usage — NOT admin-gated (Dispatcharr-derived
+// catalog/assignment data, same trust tier as GET /api/stats/channels — not
+// per-user watch history like the ProviderStats family above).
+//
+// Two counting metrics, both surfaced intentionally:
+//   * assigned_streams (PRIMARY) — distinct streams from this provider
+//     assigned to >=1 channel. A stream in 3 channels still counts once.
+//   * total_assignments (secondary) — SUM of channel-memberships across
+//     those streams (a stream in 2 channels counts twice) — surfaces
+//     providers whose streams get heavily reused across channels.
+// total_streams (provider's full catalog size) + utilization_pct
+// (assigned_streams / total_streams) give scale/context.
+//
+// provider_id is null for the synthetic "Unknown" bucket (an assigned
+// stream whose m3u_account didn't resolve to a known/current provider).
+export interface ProviderStreamUsageRow {
+  provider_id: number | null;
+  provider_name: string;
+  total_streams: number;
+  assigned_streams: number;
+  total_assignments: number;
+  utilization_pct: number;
+}
+
+export interface ProviderStreamUsageMeta {
+  total_rows: number;
+}
+
+export interface ProviderStreamUsageResponse {
+  data: ProviderStreamUsageRow[];
+  meta: ProviderStreamUsageMeta;
+  pagination: null;
+}
 
 // =============================================================================
 // Authentication Types

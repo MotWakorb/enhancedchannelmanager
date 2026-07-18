@@ -25,6 +25,7 @@ import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import { SettingsModal } from '../SettingsModal';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
+import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { useScrollTopReset } from '../../hooks/useScrollTopReset';
 import {
   DndContext,
@@ -491,6 +492,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
   const [digestLoading, setDigestLoading] = useState(false);
   const [digestSaving, setDigestSaving] = useState(false);
+  // M3U accounts for the digest notification account-filter picker (GH #496)
+  const [digestM3uAccounts, setDigestM3uAccounts] = useState<{ id: number; name: string }[]>([]);
 
   // Shared SMTP (Email) settings
   const [smtpHost, setSmtpHost] = useState('');
@@ -1457,8 +1460,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const loadDigestSettings = async () => {
     setDigestLoading(true);
     try {
-      const settings = await api.getM3UDigestSettings();
+      const [settings, accounts] = await Promise.all([
+        api.getM3UDigestSettings(),
+        api.getM3UAccounts(),
+      ]);
       setDigestSettings(settings);
+      setDigestM3uAccounts(accounts.map(a => ({ id: a.id, name: a.name })));
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to load digest settings', 'Digest Settings');
     } finally {
@@ -1489,6 +1496,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         send_to_discord: digestSettings.send_to_discord,
         exclude_group_patterns: digestSettings.exclude_group_patterns,
         exclude_stream_patterns: digestSettings.exclude_stream_patterns,
+        account_ids: digestSettings.account_ids,
       });
       setDigestSettings(updated);
       notifications.success('Settings saved successfully');
@@ -1515,6 +1523,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         send_to_discord: digestSettings.send_to_discord,
         exclude_group_patterns: digestSettings.exclude_group_patterns,
         exclude_stream_patterns: digestSettings.exclude_stream_patterns,
+        account_ids: digestSettings.account_ids,
       });
       // Now send the test
       const result = await api.sendTestM3UDigest();
@@ -4252,6 +4261,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   <label htmlFor="showDetailedList">Show detailed list</label>
                   <p>Include the full list of changed groups and streams in the digest. Disable to show only summary counts.</p>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Account Filter Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">checklist</span>
+              <h3>Account Filter</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group-vertical">
+                <label>M3U Accounts</label>
+                <span className="form-description">
+                  Limit digest notifications to changes from these M3U accounts. Change history is always logged for every account regardless of this setting — this only scopes what gets emailed or posted to Discord. Leave empty to include all accounts.
+                </span>
+                <GroupMultiSelectDropdown
+                  options={digestM3uAccounts.map(a => ({ id: a.id, name: a.name }))}
+                  selectedIds={digestSettings.account_ids}
+                  onChange={(ids) => handleDigestSettingChange('account_ids', ids)}
+                  label="M3U Accounts"
+                  placeholder="All accounts"
+                  emptyMessage="No M3U accounts configured."
+                  itemLabelSingular="account"
+                  itemLabelPlural="accounts"
+                />
               </div>
             </div>
           </div>

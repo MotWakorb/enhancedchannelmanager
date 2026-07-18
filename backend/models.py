@@ -1039,6 +1039,15 @@ class M3UDigestSettings(Base):
     # JSON arrays of regex patterns for excluding groups/streams from digest
     exclude_group_patterns = Column(Text, nullable=True)
     exclude_stream_patterns = Column(Text, nullable=True)
+    # JSON array of M3U account IDs to include in digest NOTIFICATIONS
+    # (GH #496). Scopes which accounts' changes are emailed/Discorded —
+    # DB logging in M3UChangeLog stays complete for every account
+    # regardless of this setting. Empty/null = all accounts (unchanged
+    # default behavior). Added for operators running a high-churn "FAST"
+    # provider (10k+ stream URL changes/hour) alongside slow-changing
+    # standard providers, who want the noisy provider excluded from
+    # notifications without losing its change history.
+    account_ids = Column(Text, nullable=True)
     # Tracking
     last_digest_at = Column(DateTime, nullable=True)
     # Timestamps
@@ -1084,6 +1093,19 @@ class M3UDigestSettings(Base):
         """Set exclude_stream_patterns from list."""
         self.exclude_stream_patterns = json.dumps(patterns) if patterns else None
 
+    def get_account_ids(self) -> list:
+        """Parse account_ids JSON into list."""
+        if not self.account_ids:
+            return []
+        try:
+            return json.loads(self.account_ids)
+        except (ValueError, TypeError):
+            return []
+
+    def set_account_ids(self, ids: list) -> None:
+        """Set account_ids from list."""
+        self.account_ids = json.dumps(ids) if ids else None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -1098,6 +1120,7 @@ class M3UDigestSettings(Base):
             "send_to_discord": self.send_to_discord,
             "exclude_group_patterns": self.get_exclude_group_patterns(),
             "exclude_stream_patterns": self.get_exclude_stream_patterns(),
+            "account_ids": self.get_account_ids(),
             "last_digest_at": self.last_digest_at.isoformat() + "Z" if self.last_digest_at else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
