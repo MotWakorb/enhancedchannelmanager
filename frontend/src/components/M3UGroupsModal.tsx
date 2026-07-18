@@ -460,7 +460,9 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                             ? `Also auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)} — may create duplicate channels`
                             : group.auto_channel_sync
                               ? 'Configure auto-sync settings'
-                              : 'Enable auto-sync to configure settings'
+                              : group.enabled
+                                ? 'Turn on Auto-Sync to configure settings'
+                                : 'Enable this group and turn on Auto-Sync to configure settings'
                       }
                       aria-label={
                         autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync
@@ -469,7 +471,9 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                             ? `Also auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)} — may create duplicate channels`
                             : group.auto_channel_sync
                               ? 'Configure auto-sync settings'
-                              : 'Enable auto-sync to configure settings'
+                              : group.enabled
+                                ? 'Turn on Auto-Sync to configure settings'
+                                : 'Enable this group and turn on Auto-Sync to configure settings'
                       }
                     >
                       <span className="material-icons" aria-hidden="true">settings</span>

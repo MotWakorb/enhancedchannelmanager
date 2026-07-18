@@ -132,3 +132,39 @@ describe('AutoSyncSettingsModal — custom_properties merge (bead igqcy)', () =>
     expect(saved.force_dummy_epg).toBe(true);
   });
 });
+
+describe('AutoSyncSettingsModal — collision-prone section disambiguation (bead 09x38.8)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('keeps the three original section titles (no field removal/rename)', () => {
+    renderModal(vi.fn());
+
+    expect(screen.getByText('Channel Profile Assignment')).toBeInTheDocument();
+    expect(screen.getByText('Stream Profile Assignment')).toBeInTheDocument();
+    expect(screen.getByText('Channel Name Filter (Regex)')).toBeInTheDocument();
+  });
+
+  it('Channel Profile Assignment help text names the Dispatcharr entity and cross-references Manage Account Profiles', () => {
+    renderModal(vi.fn());
+
+    expect(screen.getByText(/Dispatcharr Channel Profiles \(client-facing visibility\)/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Manage Account Profiles/i)).toBeInTheDocument();
+  });
+
+  it('Stream Profile Assignment help text explains the top-level Stream Profiles screen is read-only', () => {
+    renderModal(vi.fn());
+
+    expect(screen.getByText(/stream \(transcode\) profile/i)).toBeInTheDocument();
+    expect(screen.getByText(/Stream Profiles.*read-only catalog/i)).toBeInTheDocument();
+  });
+
+  it('Channel Name Filter help text distinguishes group-scoped sync-time filtering from account-wide Manage Filters', () => {
+    renderModal(vi.fn());
+
+    expect(screen.getByText(/applied at sync time/i)).toBeInTheDocument();
+    expect(screen.getByText(/Manage Filters/i)).toBeInTheDocument();
+  });
+});
