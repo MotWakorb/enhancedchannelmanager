@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ChannelPipelineRule } from '../../types/channelPipeline';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
+import { getNormalizationRules } from '../../services/api';
 
 vi.mock('../ModalOverlay', () => ({
   ModalOverlay: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -109,6 +110,53 @@ describe('BulkRuleSettingsModal', () => {
       screen.getByText(/Channel sort and stream sort are both applying Quality probing/i),
     ).toBeInTheDocument();
     expect(onApply).not.toHaveBeenCalled();
+  });
+
+  // bead enhancedchannelmanager-zi85o / GH #677: the normalization-groups
+  // checkbox list is now a GroupMultiSelectDropdown, collapsed by default.
+  it('opens the normalization-groups picker and selects a group', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getNormalizationRules).mockResolvedValueOnce({
+      groups: [
+        {
+          id: 1, name: 'Sports Cleanup', description: null, enabled: true,
+          priority: 0, is_builtin: false, created_at: '2026-04-22T00:00:00Z', updated_at: '2026-04-22T00:00:00Z',
+        },
+        {
+          id: 2, name: 'Legacy Rules', description: null, enabled: false,
+          priority: 1, is_builtin: false, created_at: '2026-04-22T00:00:00Z', updated_at: '2026-04-22T00:00:00Z',
+        },
+      ],
+    });
+    const onApply = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <BulkRuleSettingsModal
+        isOpen
+        onClose={() => {}}
+        selectedRuleIds={[1]}
+        rules={[mkRule({ id: 1 })]}
+        onApply={onApply}
+      />,
+    );
+
+    await user.click(screen.getByText('Apply normalization groups'));
+    const trigger = await screen.findByRole('button', { name: 'Normalization Groups' });
+    expect(screen.queryByText('Sports Cleanup')).not.toBeInTheDocument();
+
+    await user.click(trigger);
+    const group = await screen.findByRole('group', { name: 'Normalization Groups' });
+    expect(within(group).getByText('Legacy Rules (disabled)')).toBeInTheDocument();
+    await user.click(within(group).getByText('Sports Cleanup'));
+
+    await user.click(screen.getByRole('button', { name: /apply to selected/i }));
+
+    await waitFor(() => {
+      expect(onApply).toHaveBeenCalledWith(
+        [1],
+        expect.objectContaining({ normalization_group_ids: [1] }),
+      );
+    });
   });
 });
 

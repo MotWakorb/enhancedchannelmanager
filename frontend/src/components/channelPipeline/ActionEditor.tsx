@@ -6,6 +6,7 @@ import type { Action, ActionType, IfExistsBehavior } from '../../types/channelPi
 import { getChannelGroups, getEPGSources, getStreamProfiles, getChannelProfiles } from '../../services/api';
 import type { EPGSource, StreamProfile, ChannelProfile } from '../../types';
 import { CustomSelect } from '../CustomSelect';
+import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import './ActionEditor.css';
 
 interface ChannelGroup {
@@ -992,32 +993,20 @@ export function ActionEditor({
               <span className="field-hint">
                 After the merge target channel is resolved, skip the merge if that channel is in any selected group. Keeps merges OUT of these groups. This is a real target-channel guard — the stream-side &ldquo;not in group&rdquo; condition only decides whether the rule fires, not where it merges. Leave empty for no filter.
               </span>
-              {channelGroups.length === 0 ? (
-                <span className="field-hint">No channel groups available.</span>
-              ) : (
-                <div className="checkbox-group vertical" role="group" aria-label="Exclude target groups">
-                  {channelGroups.map(group => (
-                    <label key={group.id} className="checkbox-item">
-                      <input
-                        type="checkbox"
-                        checked={(action.target_channel_not_in_group ?? []).includes(group.id)}
-                        onChange={e => {
-                          const current = action.target_channel_not_in_group ?? [];
-                          const next = e.target.checked
-                            ? [...current, group.id]
-                            : current.filter(gid => gid !== group.id);
-                          onChange({
-                            ...action,
-                            target_channel_not_in_group: next.length > 0 ? next : undefined,
-                          });
-                        }}
-                        disabled={readonly}
-                      />
-                      <span>{group.name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
+              <GroupMultiSelectDropdown
+                options={channelGroups}
+                selectedIds={action.target_channel_not_in_group ?? []}
+                onChange={next =>
+                  onChange({
+                    ...action,
+                    target_channel_not_in_group: next.length > 0 ? next : undefined,
+                  })
+                }
+                label="Exclude target groups"
+                placeholder="No groups excluded"
+                emptyMessage="No channel groups available."
+                disabled={readonly}
+              />
             </div>
           </>
         )}

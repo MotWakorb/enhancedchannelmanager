@@ -3,7 +3,7 @@
  *
  * These tests define the expected behavior of the component BEFORE implementation.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -1366,6 +1366,61 @@ describe('RuleBuilder', () => {
         render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
 
         expect(screen.getByTestId('sort-numbering-hint')).toBeInTheDocument();
+      });
+    });
+  });
+
+  // bead enhancedchannelmanager-zi85o / GH #677: the Normalization Groups
+  // checkbox list is now a GroupMultiSelectDropdown, collapsed by default.
+  describe('normalization group picker (GroupMultiSelectDropdown)', () => {
+    beforeEach(() => {
+      server.use(
+        http.get('/api/normalization/rules', () =>
+          HttpResponse.json({
+            groups: [
+              { id: 1, name: 'Sports Cleanup', enabled: true },
+              { id: 2, name: 'Legacy Rules', enabled: false },
+            ],
+          }),
+        ),
+      );
+    });
+
+    it('renders the picker collapsed, with option names hidden until opened', async () => {
+      const user = userEvent.setup();
+      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await gotoStep(user, 2);
+      const trigger = await screen.findByRole('button', { name: 'Normalization Groups' });
+      expect(screen.queryByText('Sports Cleanup')).not.toBeInTheDocument();
+
+      await user.click(trigger);
+
+      expect(await screen.findByText('Sports Cleanup')).toBeInTheDocument();
+      expect(screen.getByText('Legacy Rules (disabled)')).toBeInTheDocument();
+    });
+
+    it('includes a selected normalization group id in the save payload', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'Normalized',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+      };
+      render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await gotoStep(user, 2);
+      await user.click(await screen.findByRole('button', { name: 'Normalization Groups' }));
+      const group = await screen.findByRole('group', { name: 'Normalization Groups' });
+      await user.click(within(group).getByText('Sports Cleanup'));
+
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(
+          expect.objectContaining({ normalization_group_ids: [1] }),
+        );
       });
     });
   });

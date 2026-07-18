@@ -252,8 +252,11 @@ describe('ActionEditor', () => {
       );
     });
 
-    // bd-0emgo.3: target-channel group filter
-    it('renders the exclude-target-groups control with a checkbox per group', async () => {
+    // bd-0emgo.3 / GH #677: target-channel group filter, now a shared
+    // GroupMultiSelectDropdown (bead enhancedchannelmanager-zi85o) --
+    // collapsed by default, so tests open it before asserting on options.
+    it('renders the exclude-target-groups control collapsed, with a checkbox per group once opened', async () => {
+      const user = userEvent.setup();
       mockDataStore.channelGroups.push(
         createMockChannelGroup({ id: 1, name: 'Sports' }),
         createMockChannelGroup({ id: 567, name: 'Excluded' })
@@ -268,12 +271,19 @@ describe('ActionEditor', () => {
       );
 
       expect(screen.getByText(/exclude target groups/i)).toBeInTheDocument();
+      const trigger = await screen.findByRole('button', { name: /exclude target groups/i });
+      // Collapsed: option names are not yet in the document.
+      expect(screen.queryByText('Excluded')).not.toBeInTheDocument();
+
+      await user.click(trigger);
+
       await waitFor(() => {
         expect(screen.getByText('Excluded')).toBeInTheDocument();
       });
     });
 
     it('reflects an existing target_channel_not_in_group selection as checked', async () => {
+      const user = userEvent.setup();
       mockDataStore.channelGroups.push(
         createMockChannelGroup({ id: 1, name: 'Sports' }),
         createMockChannelGroup({ id: 567, name: 'Excluded' })
@@ -286,6 +296,8 @@ describe('ActionEditor', () => {
           onRemove={vi.fn()}
         />
       );
+
+      await user.click(await screen.findByRole('button', { name: /exclude target groups/i }));
 
       const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
       await waitFor(() => {
@@ -312,6 +324,8 @@ describe('ActionEditor', () => {
           onRemove={vi.fn()}
         />
       );
+
+      await user.click(await screen.findByRole('button', { name: /exclude target groups/i }));
 
       const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
       const checkbox = await waitFor(() => {
@@ -343,6 +357,8 @@ describe('ActionEditor', () => {
           onRemove={vi.fn()}
         />
       );
+
+      await user.click(await screen.findByRole('button', { name: /exclude target groups/i }));
 
       const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
       const checkbox = await waitFor(() => {

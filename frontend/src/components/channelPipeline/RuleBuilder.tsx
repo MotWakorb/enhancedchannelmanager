@@ -27,6 +27,7 @@ import type { RuleAnalyzerFinding } from '../../types/channelPipeline';
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
 import { CustomSelect } from '../CustomSelect';
+import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { ModalOverlay } from '../ModalOverlay';
 import { getNormalizationRules, getChannelGroups } from '../../services/api';
 import { analyzeChannelPipelineRuleBody } from '../../services/channelPipelineApi';
@@ -873,27 +874,16 @@ export function RuleBuilder({
                         Clear all
                       </button>
                     </div>
-                    <div className="checkbox-group vertical">
-                      {availableNormGroups.map(group => (
-                        <label key={group.id} className="checkbox-item">
-                          <input
-                            type="checkbox"
-                            checked={normalizationGroupIds.includes(group.id)}
-                            onChange={e => {
-                              if (e.target.checked) {
-                                setNormalizationGroupIds([...normalizationGroupIds, group.id]);
-                              } else {
-                                setNormalizationGroupIds(normalizationGroupIds.filter(gid => gid !== group.id));
-                              }
-                            }}
-                            disabled={isLoading}
-                          />
-                          <span className={!group.enabled ? 'norm-group-disabled' : ''}>
-                            {group.name}{!group.enabled ? ' (disabled)' : ''}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
+                    <GroupMultiSelectDropdown
+                      options={availableNormGroups.map(g => ({ id: g.id, name: g.name, inactive: !g.enabled }))}
+                      selectedIds={normalizationGroupIds}
+                      onChange={setNormalizationGroupIds}
+                      label="Normalization Groups"
+                      placeholder="No groups selected"
+                      disabled={isLoading}
+                      itemLabelSingular="group"
+                      itemLabelPlural="groups"
+                    />
                     {normalizationGroupIds.length === 0 && availableNormGroups.some(g => g.enabled) && (
                       <span className="norm-hint">
                         <span className="material-icons norm-hint-icon">info</span>
