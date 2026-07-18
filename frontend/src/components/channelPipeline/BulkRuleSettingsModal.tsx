@@ -5,6 +5,7 @@
 import { useState, useEffect, useId, useRef } from 'react';
 import type { ChannelPipelineRule, BulkUpdateRulesPatch } from '../../types/channelPipeline';
 import { CustomSelect } from '../CustomSelect';
+import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { getNormalizationRules } from '../../services/api';
 import { ModalOverlay } from '../ModalOverlay';
 import './BulkRuleSettingsModal.css';
@@ -219,23 +220,15 @@ export function BulkRuleSettingsModal({
               <span>Apply normalization groups</span>
             </label>
             {applyNorm && availableNormGroups.length > 0 && (
-              <div className="checkbox-group vertical">
-                {availableNormGroups.map(group => (
-                  <label key={group.id} className="checkbox-item">
-                    <input
-                      type="checkbox"
-                      checked={normGroupIds.includes(group.id)}
-                      onChange={e => {
-                        if (e.target.checked) setNormGroupIds([...normGroupIds, group.id]);
-                        else setNormGroupIds(normGroupIds.filter(x => x !== group.id));
-                      }}
-                    />
-                    <span className={!group.enabled ? 'norm-group-disabled' : ''}>
-                      {group.name}{!group.enabled ? ' (disabled)' : ''}
-                    </span>
-                  </label>
-                ))}
-              </div>
+              <GroupMultiSelectDropdown
+                options={availableNormGroups.map(g => ({ id: g.id, name: g.name, inactive: !g.enabled }))}
+                selectedIds={normGroupIds}
+                onChange={setNormGroupIds}
+                label="Normalization Groups"
+                placeholder="No groups selected"
+                itemLabelSingular="group"
+                itemLabelPlural="groups"
+              />
             )}
             {applyNorm && availableNormGroups.length === 0 && (
               <p className="form-hint">No normalization groups configured.</p>

@@ -12,6 +12,7 @@ import time
 import uuid
 from datetime import date
 from typing import Optional, Literal, Union
+from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
@@ -451,8 +452,66 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
 # Logos — MUST be defined before /api/channels/{channel_id} routes
 # ---------------------------------------------------------------------------
 
+# Fallback browser-cache policy for the logo image proxy when Dispatcharr
+# sends no Cache-Control of its own (live-observed it sends 3600s for
+# remote-origin logos / 14400s for local files). Long max-age is safe because
+# the rewritten cache_url preserves Dispatcharr's ?v=<hash> cache-buster, so
+# a replaced logo gets a new URL. Without browser caching every channel-list
+# render would round-trip ECM -> Dispatcharr once per logo.
+_LOGO_IMAGE_DEFAULT_CACHE_CONTROL = "public, max-age=86400"
+
+
+def _ecm_origin(request: Request) -> str:
+    """Browser-facing origin (``scheme://host[:port]``) for absolute ECM URLs.
+
+    Honors ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` (first value of a
+    comma list wins) so reverse-proxied deployments produce the public
+    scheme/host — mirroring main.py's existing X-Forwarded-For convention —
+    and otherwise falls back to the request's own scheme and Host header.
+    The Host fallback is browser-reachable by construction: it is the host
+    the browser itself dialed. Always yields an http(s) URL, which matters
+    because LogoModal.tsx's preview sanitizer silently drops any other
+    scheme (GH #662 / bead enhancedchannelmanager-hhmat).
+    """
+    proto = request.headers.get("x-forwarded-proto")
+    scheme = (proto.split(",")[0].strip() if proto else request.url.scheme) or "http"
+    if scheme not in ("http", "https"):
+        scheme = "http"
+    fwd_host = request.headers.get("x-forwarded-host")
+    host = fwd_host.split(",")[0].strip() if fwd_host else request.url.netloc
+    return f"{scheme}://{host}"
+
+
+def _rewrite_logo_cache_url(logo, origin: str):
+    """Point a logo dict's ``cache_url`` at ECM's same-origin image proxy.
+
+    Dispatcharr builds ``cache_url`` from the Host header it saw on ECM's
+    server-side request — often a docker-internal hostname or LAN IP the
+    operator's browser cannot resolve, which breaks every logo (GH #662).
+    Rewriting to ``{origin}/api/channels/logos/{id}/image`` keeps the bytes
+    flowing through ECM's authenticated upstream client instead.
+
+    Preserves Dispatcharr's ``?v=<hash>`` cache-buster so long browser
+    caching stays correct across logo replacements. Leaves a falsy
+    ``cache_url`` untouched (the frontend then falls back to ``logo.url``,
+    which may be a browser-reachable external URL) and never touches
+    ``url`` itself. Mutates and returns ``logo``.
+    """
+    if not isinstance(logo, dict):
+        return logo
+    logo_id = logo.get("id")
+    cache_url = logo.get("cache_url")
+    if logo_id is None or not cache_url:
+        return logo
+    version = parse_qs(urlsplit(str(cache_url)).query).get("v", [None])[0]
+    suffix = f"?v={quote(version, safe='')}" if version else ""
+    logo["cache_url"] = f"{origin}/api/channels/logos/{logo_id}/image{suffix}"
+    return logo
+
+
 @router.get("/logos")
 async def get_logos(
+    request: Request,
     # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
     # of 1a5mf): page<1 / page_size<1 were passed straight to the upstream
     # Dispatcharr client, which raised and surfaced as a 500. Upper bound
@@ -521,6 +580,13 @@ async def get_logos(
             }
         else:
             result = await client.get_logos(page=page, page_size=page_size, search=search)
+        # Same-origin logo proxy rewrite (GH #662 / bead hhmat): see
+        # _rewrite_logo_cache_url. Applied to both branches so the
+        # passthrough and aggregate-and-sort paths stay consistent.
+        origin = _ecm_origin(request)
+        if isinstance(result, dict):
+            for logo in result.get("results", []):
+                _rewrite_logo_cache_url(logo, origin)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS-LOGO] Fetched logos in %.1fms", elapsed_ms)
         # Single-line INFO diagnostic for the operator-grepable trace (bd-nh50y).
@@ -550,13 +616,14 @@ async def get_logos(
 
 
 @router.get("/logos/{logo_id}")
-async def get_logo(logo_id: int):
+async def get_logo(logo_id: int, request: Request):
     """Get a single logo by ID."""
     logger.debug("[CHANNELS-LOGO] GET /channels/logos/%s", logo_id)
     client = get_client()
     try:
         start = time.time()
         result = await client.get_logo(logo_id)
+        _rewrite_logo_cache_url(result, _ecm_origin(request))
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS-LOGO] Fetched logo id=%s in %.1fms", logo_id, elapsed_ms)
         return result
@@ -565,8 +632,83 @@ async def get_logo(logo_id: int):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/logos/{logo_id}/image")
+async def get_logo_image(logo_id: int, request: Request):
+    """Proxy the logo image bytes from Dispatcharr's cache endpoint.
+
+    Browsers frequently cannot reach the host in Dispatcharr's ``cache_url``
+    (GH #662 / bead enhancedchannelmanager-hhmat): Dispatcharr builds it from
+    the Host header it saw on ECM's server-side request, which is often a
+    docker-internal hostname or LAN IP. get_logos/get_logo rewrite
+    ``cache_url`` to point here; this endpoint fetches the bytes server-side
+    over ECM's authenticated Dispatcharr client and serves them same-origin.
+
+    Live-observed upstream behavior (2026-07-18, against the deployed
+    Dispatcharr): ``/api/channels/logos/{id}/cache/`` returns 200 + bytes for
+    BOTH local-file and external-URL logos (it downloads and caches remote
+    originals server-side), 404 JSON for unknown ids, emits Cache-Control
+    (3600s remote / 14400s local) and no ETag, and never redirects.
+    Cache-Control and any future ETag pass through; ``If-None-Match``
+    forwards upstream so a 304 can short-circuit.
+
+    Auth: intentionally NOT in main.py's AUTH_EXEMPT_PATHS — same-origin
+    ``<img>`` tags send the httpOnly ``access_token`` cookie, so the global
+    auth middleware admits real browser sessions without any frontend change.
+    """
+    logger.debug("[CHANNELS-LOGO] GET /channels/logos/%s/image", logo_id)
+    client = get_client()
+    upstream_headers = {}
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match:
+        upstream_headers["If-None-Match"] = if_none_match
+    try:
+        upstream = await client._request(
+            "GET",
+            f"/api/channels/logos/{logo_id}/cache/",
+            headers=upstream_headers,
+        )
+    except Exception as e:
+        # Log only the exception TYPE — httpx error text can embed the full
+        # request URL (same hygiene rule as dispatcharr_client._request).
+        logger.warning(
+            "[CHANNELS-LOGO] Logo image proxy transport failure id=%s: %s",
+            logo_id,
+            type(e).__name__,
+        )
+        raise HTTPException(
+            status_code=502, detail="Failed to fetch logo image from Dispatcharr"
+        )
+
+    if upstream.status_code == 304:
+        return Response(status_code=304)
+    if upstream.status_code == 404:
+        raise HTTPException(status_code=404, detail="Logo image not found")
+    if upstream.status_code >= 400:
+        logger.warning(
+            "[CHANNELS-LOGO] Logo image upstream error id=%s status=%s",
+            logo_id,
+            upstream.status_code,
+        )
+        raise HTTPException(status_code=502, detail="Upstream logo fetch failed")
+
+    headers = {
+        "Cache-Control": upstream.headers.get("cache-control")
+        or _LOGO_IMAGE_DEFAULT_CACHE_CONTROL,
+    }
+    etag = upstream.headers.get("etag")
+    if etag:
+        headers["ETag"] = etag
+    return Response(
+        content=upstream.content,
+        media_type=upstream.headers.get("content-type") or "application/octet-stream",
+        headers=headers,
+    )
+
+
 @router.post("/logos")
-async def create_logo(request: CreateLogoRequest, _admin=RequireAdminIfEnabled):
+async def create_logo(
+    request: CreateLogoRequest, http_request: Request, _admin=RequireAdminIfEnabled
+):
     """Create a logo from a URL. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] POST /channels/logos - name=%s", request.name)
     client = get_client()
@@ -575,7 +717,10 @@ async def create_logo(request: CreateLogoRequest, _admin=RequireAdminIfEnabled):
         result = await client.create_logo({"name": request.name, "url": request.url})
         elapsed_ms = (time.time() - start) * 1000
         logger.info("[CHANNELS-LOGO] Created logo id=%s name=%s in %.1fms", result.get('id'), result.get('name'), elapsed_ms)
-        return result
+        # Rewrite so a just-created logo renders immediately — ChannelsPane
+        # and AutoSyncSettingsModal consume this response object directly
+        # (GH #662 / bead hhmat).
+        return _rewrite_logo_cache_url(result, _ecm_origin(http_request))
     except Exception as e:
         error_str = str(e)
         # Check if this is a "logo already exists" error from Dispatcharr
@@ -584,7 +729,9 @@ async def create_logo(request: CreateLogoRequest, _admin=RequireAdminIfEnabled):
                 existing_logo = await client.find_logo_by_url(request.url)
                 if existing_logo:
                     logger.info("[CHANNELS-LOGO] Found existing logo id=%s name=%s", existing_logo.get('id'), existing_logo.get('name'))
-                    return existing_logo
+                    return _rewrite_logo_cache_url(
+                        existing_logo, _ecm_origin(http_request)
+                    )
                 else:
                     logger.warning("[CHANNELS-LOGO] Logo exists but could not find it by URL: %s", request.url)
             except Exception as search_err:
@@ -613,14 +760,17 @@ async def upload_logo(request: Request, file: UploadFile = File(...), _admin=Req
         )
         elapsed_ms = (time.time() - start) * 1000
         logger.info("[CHANNELS-LOGO] Uploaded logo id=%s name=%s in %.1fms", result.get('id'), name, elapsed_ms)
-        return result
+        # Rewrite so a just-uploaded logo renders immediately (GH #662).
+        return _rewrite_logo_cache_url(result, _ecm_origin(request))
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Logo upload failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/logos/{logo_id}")
-async def update_logo(logo_id: int, data: dict, _admin=RequireAdminIfEnabled):
+async def update_logo(
+    logo_id: int, data: dict, request: Request, _admin=RequireAdminIfEnabled
+):
     """Update a logo. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] PATCH /channels/logos/%s", logo_id)
     client = get_client()
@@ -629,7 +779,8 @@ async def update_logo(logo_id: int, data: dict, _admin=RequireAdminIfEnabled):
         result = await client.update_logo(logo_id, data)
         elapsed_ms = (time.time() - start) * 1000
         logger.info("[CHANNELS-LOGO] Updated logo id=%s in %.1fms", logo_id, elapsed_ms)
-        return result
+        # Rewrite so the edited logo renders immediately (GH #662).
+        return _rewrite_logo_cache_url(result, _ecm_origin(request))
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Failed to update logo id=%s", logo_id)
         raise HTTPException(status_code=500, detail="Internal server error")
