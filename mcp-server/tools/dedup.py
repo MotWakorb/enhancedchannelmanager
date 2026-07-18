@@ -101,8 +101,14 @@ def register(mcp: FastMCP):
         Returns:
             {merges: [...], total, page, page_size, total_pages}
             Each merge row contains: id, stream_name, group_id,
-            candidate_channel_id, confidence, status, created_at,
-            resolved_at, resolution_source, trigger_context.
+            candidate_channel_id, candidate_channel_name,
+            candidate_channel_number, candidate_channel_group_name,
+            confidence, status, created_at, resolved_at,
+            resolution_source, trigger_context. The three
+            candidate_channel_* name/number/group fields are resolved
+            from Dispatcharr at list time and are None when the
+            candidate channel could not be resolved (e.g. deleted since
+            queuing) — bead enhancedchannelmanager-09x38.14.
         """
         client = get_ecm_client()
         query: dict = {}

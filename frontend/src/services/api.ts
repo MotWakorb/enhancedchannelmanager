@@ -4393,12 +4393,25 @@ export async function deleteLookupTable(id: number): Promise<void> {
  * `backend/routers/channel_merges.py`. `confidence` is a 0.0–1.0 float
  * captured at queue-time; the UI renders it as an integer-percent badge.
  * `created_at` and `resolved_at` are epoch-ms integers per ADR-007/§D8.
+ *
+ * `candidate_channel_name` / `candidate_channel_number` /
+ * `candidate_channel_group_name` are additive fields (bead
+ * enhancedchannelmanager-09x38.14) resolved server-side from Dispatcharr
+ * at list time so the operator can see what they'd be merging into
+ * without leaving the page. All three are `null` when the candidate
+ * channel could not be resolved — most commonly because it was deleted
+ * in Dispatcharr since the row was queued — in which case the UI should
+ * render an explicit "channel no longer exists" fallback using
+ * `candidate_channel_id`.
  */
 export interface PendingMergeRecord {
   id: number;
   stream_name: string;
   group_id: number | null;
   candidate_channel_id: string;
+  candidate_channel_name: string | null;
+  candidate_channel_number: number | null;
+  candidate_channel_group_name: string | null;
   confidence: number;
   status: 'pending' | 'merged' | 'dismissed';
   created_at: number;

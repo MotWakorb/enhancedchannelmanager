@@ -175,9 +175,36 @@ export function PendingMergesPage() {
                   <div className="pending-merges-candidate">
                     <label className="pending-merges-label">Candidate channel</label>
                     <span className="pending-merges-candidate-row">
-                      <span className="pending-merges-candidate-id">
-                        {row.candidate_channel_id}
-                      </span>
+                      {row.candidate_channel_name ? (
+                        <span className="pending-merges-candidate-identity">
+                          <span
+                            className="pending-merges-candidate-name"
+                            data-testid="pending-merges-candidate-name"
+                          >
+                            {row.candidate_channel_number != null &&
+                              `#${row.candidate_channel_number} `}
+                            {row.candidate_channel_name}
+                          </span>
+                          {row.candidate_channel_group_name && (
+                            <span className="pending-merges-candidate-group">
+                              {row.candidate_channel_group_name}
+                            </span>
+                          )}
+                          <span
+                            className="pending-merges-candidate-id"
+                            title={`Dispatcharr channel id ${row.candidate_channel_id}`}
+                          >
+                            id {row.candidate_channel_id}
+                          </span>
+                        </span>
+                      ) : (
+                        <span
+                          className="pending-merges-candidate-missing"
+                          role="status"
+                        >
+                          Channel no longer exists (id {row.candidate_channel_id})
+                        </span>
+                      )}
                       {isExact ? (
                         <span
                           className="confidence-badge pending-merges-exact-badge"

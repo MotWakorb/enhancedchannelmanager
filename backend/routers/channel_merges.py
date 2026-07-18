@@ -167,16 +167,30 @@ class CandidatesResponse(BaseModel):
 class PendingMergeRecord(BaseModel):
     """Single pending_merges row, shaped for the list endpoint.
 
-    Field set matches ADR-008 §D1's response contract:
+    Base field set matches ADR-008 §D1's response contract:
     ``{id, stream_name, group_id, candidate_channel_id, confidence,
        status, created_at, resolved_at?, resolution_source?,
        trigger_context}``.
+
+    ``candidate_channel_name`` / ``candidate_channel_number`` /
+    ``candidate_channel_group_name`` are additive fields (bead
+    enhancedchannelmanager-09x38.14) resolved from Dispatcharr at list
+    time so the operator can see what they'd be merging into without
+    leaving the page — previously only the bare ``candidate_channel_id``
+    was available. All three are ``None`` when the candidate channel
+    could not be resolved (deleted since queuing, or Dispatcharr was
+    unreachable at list time) — the frontend renders an explicit
+    "channel no longer exists" fallback using the id in that case.
+    Additive-only: no existing field was removed or renamed.
     """
 
     id: int
     stream_name: str
     group_id: Optional[int] = None
     candidate_channel_id: str
+    candidate_channel_name: Optional[str] = None
+    candidate_channel_number: Optional[float] = None
+    candidate_channel_group_name: Optional[str] = None
     confidence: float
     status: str
     created_at: int
@@ -446,6 +460,52 @@ def _write_journal(
     db.add(entry)
     db.flush()  # populate entry.id without committing yet
     return entry
+
+
+async def _resolve_candidate_channels(candidate_ids: set) -> dict:
+    """Resolve ``candidate_channel_id`` -> Dispatcharr channel dict for a page.
+
+    Join-cost note (bead enhancedchannelmanager-09x38.14): this issues
+    exactly ONE Dispatcharr call — ``get_channels(page_size=1000)`` — for
+    the whole list page, mirroring the "candidate pool" convention already
+    used by ``GET /candidates`` and the enqueue endpoint above. Resolving
+    per-row (one ``get_channel(id)`` per pending_merges row) would scale
+    with queue depth — up to ``MAX_PAGE_SIZE`` (200) Dispatcharr round-
+    trips for a single page load — and was rejected as an N+1 explosion.
+    The batch approach costs O(1) regardless of how many rows are on the
+    page; the accepted trade-off is the same 1000-channel ceiling already
+    baked into the other two endpoints in this file — an install with
+    more than 1000 Dispatcharr channels could have a legitimate candidate
+    beyond the first page render as unresolved rather than a confirmed
+    delete. That is judged acceptable here: it degrades to the same
+    "channel no longer exists" UI fallback the deleted-candidate case
+    already needs, it never fails the request, and fixing it properly
+    would require a bulk id-filter query param Dispatcharr does not
+    expose today.
+
+    Returns ``{}`` (every candidate unresolved) when ``candidate_ids`` is
+    empty (skips the Dispatcharr call entirely) or when the Dispatcharr
+    fetch itself fails — a name-resolution problem must never turn into
+    a 500 for the whole pending-merges queue view.
+    """
+    if not candidate_ids:
+        return {}
+    try:
+        client = get_client()
+        channels_data = await client.get_channels(page=1, page_size=1000)
+    except Exception as e:
+        logger.warning(
+            "[CHANNEL-MERGES] Failed to fetch channels from Dispatcharr for "
+            "pending-merges name resolution: %s", e,
+        )
+        return {}
+
+    results = channels_data.get("results", [])
+    return {
+        str(ch["id"]): ch
+        for ch in results
+        if ch.get("id") is not None and str(ch["id"]) in candidate_ids
+    }
 
 
 def _bump_metric(status: str) -> None:
@@ -798,8 +858,26 @@ async def list_pending_merges(
 
     total_pages = (total + page_size - 1) // page_size if total else 0
 
+    # Resolve candidate channel name/number/group in a single batched
+    # Dispatcharr call — see ``_resolve_candidate_channels`` docstring for
+    # the join-cost analysis (bead enhancedchannelmanager-09x38.14).
+    candidate_ids = {r.candidate_channel_id for r in rows}
+    channel_lookup = await _resolve_candidate_channels(candidate_ids)
+
+    merges: list[PendingMergeRecord] = []
+    for r in rows:
+        record_dict = _record_to_dict(r)
+        channel = channel_lookup.get(r.candidate_channel_id)
+        if channel is not None:
+            record_dict["candidate_channel_name"] = channel.get("name")
+            record_dict["candidate_channel_number"] = channel.get("channel_number")
+            record_dict["candidate_channel_group_name"] = channel.get(
+                "channel_group_name"
+            )
+        merges.append(PendingMergeRecord(**record_dict))
+
     return PendingMergesListResponse(
-        merges=[PendingMergeRecord(**_record_to_dict(r)) for r in rows],
+        merges=merges,
         total=total,
         page=page,
         page_size=page_size,
