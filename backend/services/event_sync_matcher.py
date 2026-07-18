@@ -88,6 +88,7 @@ __all__ = [
     "REJECT_OUTSIDE_TIME_WINDOW",
     "REJECT_PARSE_FAILURE",
     "REJECT_TEAM_TOKEN_CONFLICT",
+    "SYNTHESIZED_DATE_PATTERN_NAMES",
     "TEAM_VERDICT_ABSENT",
     "TEAM_VERDICT_AGREE",
     "TEAM_VERDICT_CONFLICT",
@@ -389,6 +390,18 @@ _ASSUME_DATE_PATTERNS: tuple[dict, ...] = (
             r"\s*(?P<ampm>[AaPp])\.?[Mm]?\.?"
         ),
     },
+)
+
+# Pattern names whose parsed START carries a SYNTHESIZED date (fabricated
+# from ``now`` above) rather than one read from the provider name. These are
+# EXACTLY the _ASSUME_DATE_PATTERNS variants — the only code path that ever
+# fills a date the name did not carry (custom operator patterns without a
+# full date never set ``start`` at all; see parse_event_name's fallback).
+# Consumed by ``services.event_sync_review.master_event_key`` (bead t6bin):
+# a fingerprint that embedded the fabricated date churned at midnight, so
+# review decisions for recurring dateless slots never carried forward.
+SYNTHESIZED_DATE_PATTERN_NAMES: frozenset[str] = frozenset(
+    variant["name"] for variant in _ASSUME_DATE_PATTERNS
 )
 
 # ---------------------------------------------------------------------------

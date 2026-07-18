@@ -12,6 +12,7 @@ raises AttributeError and fails the test.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,8 +21,11 @@ from services.event_sync_preflight import (
     CHECK_GROUP_SETTINGS_FOUND,
     CHECK_MASTER_AUTO_SYNC_ON,
     CHECK_SECONDARY_AUTO_SYNC_OFF,
+    CHECK_STALENESS_RAIL_SNAPSHOTS,
     build_event_sync_master_rule_lookup,
+    build_staleness_rail_warning,
     check_event_sync_group_settings,
+    count_snapshot_covered_streams,
     resolve_effective_master_group_id,
 )
 
@@ -55,7 +59,7 @@ class TestPreflightPasses:
             30: _group(auto_sync=False),
         })
         result = await check_event_sync_group_settings(client, _config())
-        assert result == {"ok": True, "failures": []}
+        assert result == {"ok": True, "failures": [], "warnings": []}
 
     async def test_only_the_read_method_is_called(self):
         client = _ReadOnlyClient({
@@ -191,7 +195,7 @@ class TestChannelGroupOverride:
         result = await check_event_sync_group_settings(
             client, _config(master=420, secondaries=(20,))
         )
-        assert result == {"ok": True, "failures": []}
+        assert result == {"ok": True, "failures": [], "warnings": []}
 
     async def test_master_target_with_source_auto_sync_off_fails(self):
         client = _ReadOnlyClient({
@@ -216,7 +220,7 @@ class TestChannelGroupOverride:
         result = await check_event_sync_group_settings(
             client, _config(master=95, secondaries=(20,))
         )
-        assert result == {"ok": True, "failures": []}
+        assert result == {"ok": True, "failures": [], "warnings": []}
 
     async def test_prefetched_settings_avoid_a_second_fetch(self):
         settings = {
@@ -267,7 +271,7 @@ class TestProviderScopedPreflight:
         result = await check_event_sync_group_settings(
             client, self._shared_group_config()
         )
-        assert result == {"ok": True, "failures": []}
+        assert result == {"ok": True, "failures": [], "warnings": []}
 
     async def test_secondary_providers_row_auto_sync_on_fails(self):
         client = _ProviderScopedClient(
@@ -422,3 +426,98 @@ class TestCrossRuleSecondaryConflict:
         assert set(failure) == {
             "group_id", "role", "check", "expected", "got", "message",
         }
+
+
+class TestStalenessRailWarning:
+    """bead 2ey2y: the inert-rail warning — assume_current_date +
+    demote_stale_dateless with ZERO snapshot coverage must surface as an
+    explicit pre-flight WARNING; every other combination stays silent."""
+
+    def _rail_config(self, **overrides) -> dict:
+        config = {"assume_current_date": True}
+        config.update(overrides)
+        return config
+
+    def test_fires_when_rail_on_and_nothing_covered(self):
+        warning = build_staleness_rail_warning(
+            self._rail_config(),
+            secondary_stream_count=7,
+            snapshot_covered_count=0,
+        )
+        assert warning is not None
+        assert warning["check"] == CHECK_STALENESS_RAIL_SNAPSHOTS
+        assert "7 secondary stream(s)" in warning["got"]
+        assert "fails open" in warning["message"]
+        # Rule-level entry: teaching shape WITHOUT the per-group fields.
+        assert set(warning) == {"check", "expected", "got", "message"}
+
+    def test_absent_demote_key_reads_true_and_fires(self):
+        # demote_stale_dateless defaults ON (absent-key default-fill, jqwfq)
+        # — a stored config without the key still relies on the rail.
+        config = self._rail_config()
+        assert "demote_stale_dateless" not in config
+        assert build_staleness_rail_warning(
+            config, secondary_stream_count=1, snapshot_covered_count=0,
+        ) is not None
+
+    def test_silent_when_assume_current_date_off(self):
+        assert build_staleness_rail_warning(
+            {"demote_stale_dateless": True},
+            secondary_stream_count=7,
+            snapshot_covered_count=0,
+        ) is None
+
+    def test_silent_when_demote_rail_disabled(self):
+        assert build_staleness_rail_warning(
+            self._rail_config(demote_stale_dateless=False),
+            secondary_stream_count=7,
+            snapshot_covered_count=0,
+        ) is None
+
+    def test_silent_when_any_stream_is_covered(self):
+        assert build_staleness_rail_warning(
+            self._rail_config(),
+            secondary_stream_count=7,
+            snapshot_covered_count=1,
+        ) is None
+
+    def test_silent_when_no_streams_fetched(self):
+        # An empty fetch has louder problems than rail coverage — the
+        # preview already screams "no secondary streams found".
+        assert build_staleness_rail_warning(
+            self._rail_config(),
+            secondary_stream_count=0,
+            snapshot_covered_count=0,
+        ) is None
+
+
+class TestCountSnapshotCoveredStreams:
+    """bead 2ey2y: coverage = the stream's (provider, group NAME) pair is
+    present in the previous-day lookup. Coverage is not a staleness verdict
+    — it means the rail HAS data for that stream."""
+
+    def _resolved(self, provider_id, group_id):
+        stream = SimpleNamespace(provider_id=provider_id, group_id=group_id)
+        return SimpleNamespace(stream=stream)
+
+    def test_counts_only_streams_whose_group_is_captured(self):
+        lookup = {1: {"Fubo Events": frozenset({"A", "B"})}}
+        group_names = {34: "Fubo Events", 56: "Dazn Events"}
+        resolved = [
+            self._resolved(1, 34),   # covered: account 1 captured the group
+            self._resolved(1, 56),   # not covered: group absent from lookup
+            self._resolved(2, 34),   # not covered: account 2 has no snapshot
+            self._resolved(None, 34),  # not covered: unknown provider
+        ]
+        assert count_snapshot_covered_streams(
+            resolved, group_names, lookup) == 1
+
+    def test_unresolvable_group_name_is_uncovered(self):
+        lookup = {1: {"Fubo Events": frozenset({"A"})}}
+        resolved = [self._resolved(1, 99)]  # 99 missing from group_names
+        assert count_snapshot_covered_streams(resolved, {}, lookup) == 0
+
+    def test_empty_lookup_covers_nothing(self):
+        resolved = [self._resolved(1, 34), self._resolved(2, 34)]
+        assert count_snapshot_covered_streams(
+            resolved, {34: "Fubo Events"}, {}) == 0

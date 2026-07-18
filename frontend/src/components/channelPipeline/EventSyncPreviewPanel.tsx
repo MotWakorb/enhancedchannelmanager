@@ -89,6 +89,19 @@ function summaryLine(summary: EventSyncPreviewResponse['summary']): string {
       summary.candidates_pending_review === 1 ? '' : 's'
     } pending review`;
   }
+  // bead 2ey2y: staleness-signal counts (jqwfq Stage 1) belong in the stats
+  // line — a stale-suspect or unknown-freshness population the operator
+  // cannot see is exactly the silent-rail problem this surfaces.
+  const staleSuspect = summary.stale_suspect_streams ?? 0;
+  const freshnessUnknown = summary.freshness_unknown_streams ?? 0;
+  if (staleSuspect > 0) {
+    line += ` · ${staleSuspect} stale-suspect name${staleSuspect === 1 ? '' : 's'}`;
+  }
+  if (freshnessUnknown > 0) {
+    line += ` · ${freshnessUnknown} name${
+      freshnessUnknown === 1 ? '' : 's'
+    } of unknown freshness`;
+  }
   return line;
 }
 
@@ -307,8 +320,10 @@ export function EventSyncPreviewPanel({
             stale ? ' event-sync-preview-results--stale' : ''
           }`}
         >
-          {/* Pre-flight failures never block the preview — surface them loudly */}
-          {!preview.preflight.ok && (
+          {/* Pre-flight failures never block the preview — surface them loudly.
+              Warnings (bead 2ey2y) are advisory: rendered in the same block,
+              same teaching shape, without flipping ok. */}
+          {(!preview.preflight.ok || (preview.preflight.warnings ?? []).length > 0) && (
             <div className="event-sync-preflight" data-testid="event-sync-preflight">
               {preview.preflight.failures.map(failure => (
                 <div key={`${failure.group_id}-${failure.check}`} className="warning-message" role="alert">
@@ -319,6 +334,15 @@ export function EventSyncPreviewPanel({
                     </strong>{' '}
                     {failure.message}{' '}
                     <em>Expected {failure.expected}; got {failure.got}.</em>
+                  </span>
+                </div>
+              ))}
+              {(preview.preflight.warnings ?? []).map(warning => (
+                <div key={warning.check} className="warning-message" role="alert">
+                  <span className="material-icons">warning</span>
+                  <span>
+                    <strong>Pre-flight warning:</strong> {warning.message}{' '}
+                    <em>Expected {warning.expected}; got {warning.got}.</em>
                   </span>
                 </div>
               ))}

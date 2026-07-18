@@ -2792,6 +2792,11 @@ async def _fetch_and_resolve_event_sync(
         "master_channels": master_channels,
         "group_names": group_names,
         "truncated": truncated,
+        # bead 2ey2y: the previous-day snapshot lookup, exposed so callers can
+        # compute snapshot COVERAGE over the resolved rows (inert-rail
+        # warning) — empty dict when no account had a qualifying snapshot or
+        # the lookup itself failed (fail-open).
+        "stale_lookup": stale_lookup,
     }
 
 
@@ -2822,7 +2827,9 @@ async def preview_event_sync(
     """
     from services.event_sync_preflight import (
         build_event_sync_master_rule_lookup,
+        build_staleness_rail_warning,
         check_event_sync_group_settings,
+        count_snapshot_covered_streams,
         resolve_effective_master_group_id,
     )
     from services.event_sync_resolver import (
@@ -2934,6 +2941,22 @@ async def preview_event_sync(
     group_names = fetched["group_names"]
     master_channels = fetched["master_channels"]
     truncated = fetched["truncated"]
+
+    # bead 2ey2y: inert-rail warning — when assume_current_date +
+    # demote_stale_dateless are both on but NO previous-day snapshot covers
+    # any resolved secondary stream, the stale-dateless guard fails open
+    # silently. Surface that as an explicit pre-flight WARNING (never a
+    # failure — nothing is misconfigured; the rail just has no data yet).
+    snapshot_covered = count_snapshot_covered_streams(
+        resolution.resolved, group_names, fetched["stale_lookup"]
+    )
+    staleness_warning = build_staleness_rail_warning(
+        config,
+        secondary_stream_count=len(resolution.resolved),
+        snapshot_covered_count=snapshot_covered,
+    )
+    if staleness_warning is not None:
+        preflight["warnings"].append(staleness_warning)
 
     # --- Build detail rows; counts derive from the SAME iteration so they
     # reconcile with the rows by construction. --------------------------
@@ -3096,11 +3119,13 @@ async def preview_event_sync(
     logger.info(
         "[EVENT-SYNC] preview master_group=%s secondaries=%s masters=%d "
         "streams=%d would_attach=%d ambiguous=%d unmatched=%d parse_failed=%d "
-        "preflight_ok=%s truncated=%s",
+        "preflight_ok=%s truncated=%s stale_suspect=%d freshness_unknown=%d "
+        "snapshot_covered=%d",
         master_group_id, secondary_group_ids, len(master_channels),
         len(resolution.resolved), counts[DISPOSITION_WOULD_ATTACH],
         counts[DISPOSITION_AMBIGUOUS], counts[DISPOSITION_UNMATCHED],
         counts[DISPOSITION_PARSE_FAILED], preflight["ok"], truncated,
+        stale_suspect_streams, freshness_unknown_streams, snapshot_covered,
     )
 
     return {
@@ -3637,7 +3662,9 @@ async def _build_event_sync_matching_section(client) -> dict:
     from models import ChannelPipelineRule
     from services.event_sync_preflight import (
         build_event_sync_master_rule_lookup,
+        build_staleness_rail_warning,
         check_event_sync_group_settings,
+        count_snapshot_covered_streams,
         resolve_effective_master_group_id,
     )
     from services.event_sync_resolver import (
@@ -3763,6 +3790,23 @@ async def _build_event_sync_matching_section(client) -> dict:
                     freshness_unknown += 1
                 streams_out.append(
                     _event_sync_matching_stream_row(r, name_to_id))
+
+            # bead 2ey2y: inert-rail warning (same computation as the preview
+            # endpoint) — appended to the pre-flight's warnings list so the
+            # bundle shows WHY the stale-dateless guard did nothing.
+            # setdefault: the pre-flight above may have failed into the
+            # {"error": ...} shape and still deserves the warning.
+            staleness_warning = build_staleness_rail_warning(
+                config,
+                secondary_stream_count=len(resolution.resolved),
+                snapshot_covered_count=count_snapshot_covered_streams(
+                    resolution.resolved, fetched["group_names"],
+                    fetched["stale_lookup"],
+                ),
+            )
+            if staleness_warning is not None:
+                rule_entry["preflight"].setdefault(
+                    "warnings", []).append(staleness_warning)
 
             rule_entry.update({
                 "master_group_id": master_group_id,

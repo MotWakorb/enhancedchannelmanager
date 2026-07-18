@@ -125,7 +125,7 @@ class TestHappyPath:
         data = resp.json()
 
         # Pre-flight passed and is included.
-        assert data["preflight"] == {"ok": True, "failures": []}
+        assert data["preflight"] == {"ok": True, "failures": [], "warnings": []}
 
         # Summary counts.
         assert data["summary"]["secondary_streams"] == 4
@@ -652,3 +652,76 @@ class TestStaleDatelessSignal:
         assert row["name_seen_before_today"] is True
         assert row["disposition"] == "would_attach"
         assert data["summary"]["stale_suspect_streams"] == 1
+
+
+class TestStalenessRailInertWarning:
+    """bead 2ey2y: the silently-inert-rail warning. assume_current_date +
+    demote_stale_dateless with NO usable snapshot must surface an explicit
+    pre-flight WARNING (never a failure — ``ok`` is untouched); any usable
+    snapshot, or either flag off, keeps warnings empty."""
+
+    DATELESS_MASTER = TestStaleDatelessSignal.DATELESS_MASTER
+    DATELESS_STREAM = TestStaleDatelessSignal.DATELESS_STREAM
+
+    _fixtures = TestStaleDatelessSignal._fixtures
+    _seed_snapshot = TestStaleDatelessSignal._seed_snapshot
+
+    async def _rail_preview(self, async_client, **config_overrides):
+        master_channels, secondary_streams = self._fixtures()
+        client = _mock_client(
+            master_channels=master_channels,
+            secondary_streams=secondary_streams,
+        )
+        overrides = {
+            "secondary_group_ids": [SECONDARY_A],
+            "assume_current_date": True,
+        }
+        overrides.update(config_overrides)
+        resp = await _preview(async_client, client, {
+            "event_sync_config": _config(**overrides),
+        })
+        assert resp.status_code == 200
+        return resp.json()
+
+    @pytest.mark.asyncio
+    async def test_rail_on_no_snapshot_warns_without_flipping_ok(
+        self, async_client, test_session
+    ):
+        data = await self._rail_preview(async_client)
+        assert data["preflight"]["ok"] is True
+        assert data["preflight"]["failures"] == []
+        (warning,) = data["preflight"]["warnings"]
+        assert warning["check"] == "staleness_rail_snapshots"
+        assert "fails open" in warning["message"]
+        # The unknown-freshness count reconciles with the warning.
+        assert data["summary"]["freshness_unknown_streams"] == 1
+
+    @pytest.mark.asyncio
+    async def test_rail_on_with_usable_snapshot_stays_silent(
+        self, async_client, test_session
+    ):
+        # ANY qualifying snapshot covering the group silences the warning —
+        # even one that lists none of today's names (coverage, not verdict).
+        self._seed_snapshot(test_session, ["Some Other Slot 9PM"])
+        data = await self._rail_preview(async_client)
+        assert data["preflight"]["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_demote_rail_off_stays_silent(
+        self, async_client, test_session
+    ):
+        data = await self._rail_preview(
+            async_client, demote_stale_dateless=False,
+        )
+        assert data["preflight"]["warnings"] == []
+        # The freshness signal itself still reports unknown.
+        assert data["summary"]["freshness_unknown_streams"] == 1
+
+    @pytest.mark.asyncio
+    async def test_assume_current_date_off_stays_silent(
+        self, async_client, test_session
+    ):
+        data = await self._rail_preview(
+            async_client, assume_current_date=False,
+        )
+        assert data["preflight"]["warnings"] == []

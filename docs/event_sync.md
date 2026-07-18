@@ -497,6 +497,34 @@ an alphabetical tie-break winner would be wrong half the time. Skip +
 count, never attach. The preview surfaces the reason per stream
 (`ambiguous_reason`).
 
+**Venue-conflict rail (bead yjchp)**: a candidate that clears the attach
+band and has no team-token conflict can still be lexically
+indistinguishable from a *different* real-world event when the title
+never splits into teams (racing/PPV shapes) — `token_set_ratio` scores
+the shared run of words and is blind to two conflicting leftovers.
+`Lucas Oil Late Models Adams County` vs. `Lucas Oil Late Models at Shelby
+County` scores 0.9032 and used to auto-attach across two different
+venues. Now: when a pair is admitted **without positive team-token
+agreement** and, after the same clean/hyphen-bridge/initialism pipeline
+the score itself uses, **both** titles still carry at least one identity
+token with no counterpart on the other side (a place name — not a stop
+word, a team qualifier, or a lone number/year), the pair is demoted to
+**ambiguous** with reason `venue_token_conflict` (surfaced per stream as
+`ambiguous_reason`, the same channel as the contested rail above). It is
+a **demotion, never a hard reject** — a one-sided leftover (a longer
+master title carrying extra sponsor/series dressing, e.g. `HLR Joker's
+Jackpot at Eldora Speedway` against `Eldora Speedway`) must still be free
+to attach, so only a *mutual* conflict trips the rail, and a true match
+that does trip it stays rescuable from the [review
+queue](#reviewing-ambiguous-matches-phase-2-review-queue) instead of
+being lost. Two things bypass the rail entirely: a **team-token AGREE**
+verdict (aligned teams at the same kickoff already establish identity),
+and an **operator-lowered threshold below the 0.80 default** — dropping
+below the default floor is deliberate manual-control territory (see
+[Lowering the threshold](#lowering-the-threshold-operator-authoritative)
+below), and this rail silently overriding that choice would defeat the
+point of lowering it.
+
 The "effective threshold" is not always the value you set: without
 positive team-token agreement (the team-token check found no team pair on
 one side, or the pairs were inconclusive), the bar rises to 0.90 — lexical
@@ -761,6 +789,21 @@ as another account's auto-synced group, they share a group ID, and the
 pre-flight secondary check will fail for it (correctly — Dispatcharr is
 auto-syncing that group ID). Real event groups are provider-distinct-named
 in practice.
+
+**Cross-rule advice (bead yjchp)**: a `secondary_auto_sync_off` failure
+normally tells you to disable `auto_channel_sync` for that group. But if
+the failing group is itself the **master** of a *different*, enabled
+event_sync rule, disabling its auto-sync would break that other rule —
+masters require `auto_channel_sync` **ON**. The pre-flight detects this
+case and swaps the advice: the failure message names the conflicting
+rule by name and tells you to restructure instead — remove the group
+from this rule's secondaries, or point the other rule at a different
+master group. The failure carries a `conflicting_rule` field (the other
+rule's name) whenever this applies; the machine-readable `check` id
+(`secondary_auto_sync_off`) is unchanged, so anything keying off it
+still works. This cross-rule check runs against **every** enabled
+event_sync rule, not just the ones opted into `auto_run` — a conflicting
+rule that only runs manually still counts.
 
 ## Guided setup: the confirmed auto-sync fix
 
@@ -1205,6 +1248,36 @@ queue-driven attach is journaled with `attach_source: "review_queue"` —
 distinguishable from threshold attaches (`attach_source: "threshold"`) in
 the journal's match provenance.
 
+### Decisions on dateless slots survive midnight too
+
+For rules using **Assume current date** (dateless live listings), the
+master's parsed start time carries a date the parser *synthesized* from
+"today" — it is not part of the event's real identity. Decision
+fingerprints for these parses therefore key on the **clock time only**
+(`<title>|dateless|<HH:MM±offset>`, offset being the rule timezone's
+standard offset), never the synthesized date. A recurring dateless slot
+("PPV 01: FURY vs HALL 6PM" listed every day) mints the *same*
+fingerprint every day, so:
+
+* an accept keeps auto-attaching that slot on every following day
+  (including overriding the stale-dateless demote rail — your answer
+  outranks the heuristic);
+* a reject keeps suppressing it — the queue does not re-ask the same
+  slot question every morning;
+* the same title at a *different* clock time is a different slot and is
+  asked separately, and the key does not shift at DST transitions.
+
+Dated events are unaffected — their fingerprints still embed the full
+parsed start.
+
+**One-time re-ask after upgrading**: review decisions made on dateless
+slots *before* this keying existed were stored with the synthesized date
+baked in, and whether a stored key's date was synthesized is not
+recoverable, so those old rows cannot be migrated. Each affected dateless
+slot will appear in the review queue **once** more after the upgrade;
+answer it once and the decision carries forward daily from then on. Dated
+events do not re-ask.
+
 ## Testing & pre-release verification
 
 ### What the automated E2E covers (and what it honestly cannot)
@@ -1466,6 +1539,44 @@ not the corpus edited to match the new (possibly wrong) behavior. This is
 the same trust-but-verify posture as the 1,341-incident history above:
 the corpus is the evidence base that a future change hasn't quietly
 reopened a previously-fixed false-positive class.
+
+### Debug bundle: `event_sync_matching.json` (bead 03nji, extended by yjchp)
+
+The Channel Pipeline [debug bundle](user_guide/channel-pipeline/debugging-rules.md#2-upload-a-debug-bundle-from-bundle-mode)
+(`POST /api/channel-pipeline/debug-bundle`, then poll `GET
+/api/channel-pipeline/debug-bundle/{job_id}`) carries an
+`event_sync_matching.json` entry: one object per **enabled** event_sync
+rule, built by resolving the rule through the exact same zero-write
+resolver the preview endpoint uses (`_build_event_sync_matching_section`
+in `backend/routers/channel_pipeline.py`), so the bundle can never fork
+from what the preview would show. Each rule entry carries the resolved
+group ids, every secondary stream's match evidence, summary counts, and:
+
+* **`matching_controls`** — the rule's effective knobs as a flat object:
+  `attach_threshold`, `enforce_time_window`, `time_window_minutes`,
+  `assume_current_date`, `demote_stale_dateless`,
+  `parse_master_from_stream`, `include_master_group_streams`, and (bead
+  yjchp) **`auto_run`** — the [Phase 2 opt-in](#automatic-runs-after-refresh-phase-2-opt-in)
+  that gates whether the rule fires unattended after an M3U refresh at
+  all. Before this field existed, "why didn't this rule run on refresh"
+  was undiagnosable from a bundle alone — a rule with everything else
+  configured correctly but `auto_run: false` looks identical to a
+  correctly-firing rule in every other field. Reading `auto_run` off the
+  bundle is now the first check.
+* **`preflight`** (bead yjchp) — the same pre-flight result a live
+  preview would produce for that rule (`{"ok": bool, "failures": [...]}`,
+  see [Pre-flight checks](#pre-flight-checks) above), including the
+  [cross-rule `conflicting_rule` advice](#pre-flight-checks) when
+  applicable. Captured **before** the rest of the rule's resolution runs,
+  so it survives a later failure in that rule's own entry. If the
+  pre-flight check itself throws, the field degrades to
+  `{"error": "<exception>"}` and the rest of the bundle still builds —
+  a broken pre-flight fetch never sinks the whole bundle.
+
+Both fields are the reason a support helper (another operator, or an AI
+assistant working from an uploaded bundle) can diagnose "the rule looks
+right but never runs unattended" or "the pre-flight is failing and here's
+exactly why" without needing live access to the installation.
 
 ### Explicitly NOT written (home-lab tier)
 

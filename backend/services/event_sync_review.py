@@ -40,6 +40,11 @@ forbids). The four components:
   identity only (the epic's stateless-recompute contract); the key survives
   master-channel recreation and name dressing, and two sessions of the same
   fixture (main card vs. prelims) stay distinct via title and/or start.
+  EXCEPTION (bead t6bin): when the parse SYNTHESIZED the date from "now"
+  (the assume_current_date dateless variants), the key carries the literal
+  ``dateless`` marker plus the LOCAL clock time instead of the fabricated
+  date — a recurring dateless slot mints the SAME key every day, so
+  accepts/rejects carry forward across midnight instead of re-asking.
 
 **Decisions are an input to the ONE resolver, not a second scorer.**
 :class:`ReviewDecisions` is consumed by
@@ -61,13 +66,18 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 import pytz
 
 from services.dedup_matcher import NameCleanMode, clean_name
-from services.event_sync_matcher import ParsedEvent
+from services.event_sync_matcher import (
+    SYNTHESIZED_DATE_PATTERN_NAMES,
+    ParsedEvent,
+)
 
 _UTC = pytz.utc
+_ZERO = timedelta(0)
 
 __all__ = [
     "ATTACH_SOURCE_REVIEW_QUEUE",
@@ -154,6 +164,28 @@ def stream_name_hash(name: str) -> str:
     return hashlib.sha256(normalize_stream_name(name).encode("utf-8")).hexdigest()
 
 
+def _dateless_clock_token(start: datetime) -> str:
+    """``HH:MM±HH:MM`` — LOCAL clock time + STANDARD offset of the parse tz.
+
+    ``start`` is localized in the rule's event timezone by the parser, so
+    ``strftime`` reads the clock time the provider name literally carried
+    ("6PM" → ``18:00``) — stable across DST. The offset is the timezone's
+    STANDARD (non-DST) offset, ``utcoffset - dst``: the datetime's ACTUAL
+    offset shifts twice a year (EDT −04:00 vs EST −05:00) and would re-open
+    every dateless slot at each DST transition; the standard offset is a
+    season-independent identifier of the parse timezone. NOT UTC
+    time-of-day, for the same DST reason.
+    """
+    offset = (start.utcoffset() or _ZERO) - (start.dst() or _ZERO)
+    total_minutes = int(offset.total_seconds()) // 60
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    return (
+        f"{start.strftime('%H:%M')}"
+        f"{sign}{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+    )
+
+
 def master_event_key(parsed: ParsedEvent) -> str | None:
     """Normalized event identity of one parsed MASTER channel name.
 
@@ -165,12 +197,29 @@ def master_event_key(parsed: ParsedEvent) -> str | None:
     rule's display timezone; the title is cleaned with the same shared
     cleaner the fuzzy scorer uses (see :func:`normalize_stream_name` for
     the empty-clean fallback rationale).
+
+    SYNTHESIZED-DATE EXCEPTION (bead t6bin): when ``matched_pattern`` is
+    one of the assume_current_date dateless variants
+    (:data:`~services.event_sync_matcher.SYNTHESIZED_DATE_PATTERN_NAMES`)
+    the date component of ``start`` was fabricated from "now" — embedding
+    it would mint a NEW key at every midnight, so operator decisions on a
+    recurring dateless slot could never carry forward (the jqwfq rail
+    would re-demote the same slot daily). Such parses key on
+
+        ``<cleaned title>|dateless|<LOCAL clock HH:MM><standard tz offset>``
+
+    instead (see :func:`_dateless_clock_token`). Dated parses are
+    byte-identical to the pre-t6bin format — stored rows for dated events
+    need no migration. Pre-upgrade rows for DATELESS slots re-ask once
+    (synthesized-ness is not recoverable from a stored key).
     """
     if parsed.title is None or parsed.start is None:
         return None
     cleaned = clean_name(parsed.title, mode=NameCleanMode.LOCALS)
     if not cleaned:
         cleaned = " ".join(parsed.title.lower().split())
+    if parsed.matched_pattern in SYNTHESIZED_DATE_PATTERN_NAMES:
+        return f"{cleaned}|dateless|{_dateless_clock_token(parsed.start)}"
     return f"{cleaned}|{parsed.start.astimezone(_UTC).isoformat()}"
 
 
