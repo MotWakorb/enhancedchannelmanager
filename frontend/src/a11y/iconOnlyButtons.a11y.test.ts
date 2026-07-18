@@ -186,23 +186,35 @@ function findViolationsInFile(file: string): Violation[] {
 }
 
 describe('icon-only buttons have an accessible name (WCAG 4.1.2)', () => {
-  it('every button whose only content is a material-icons span has aria-label or aria-labelledby', () => {
-    const files: string[] = [];
-    walkTsxFiles(SRC_DIR, files);
+  it(
+    'every button whose only content is a material-icons span has aria-label or aria-labelledby',
+    () => {
+      const files: string[] = [];
+      walkTsxFiles(SRC_DIR, files);
 
-    const violations = files.flatMap(findViolationsInFile);
+      const violations = files.flatMap(findViolationsInFile);
 
-    if (violations.length > 0) {
-      const report = violations
-        .map((v) => `  ${v.file}:${v.line}  class="${v.className}"  icon(s)=[${v.icons.join(', ')}]`)
-        .join('\n');
-      throw new Error(
-        `${violations.length} icon-only button(s) expose the Material icon ligature as their only ` +
-          `accessible name. Add aria-label (describing the ACTION, e.g. "Delete channel" not "delete") ` +
-          `and aria-hidden="true" on the icon span:\n${report}`
-      );
-    }
+      if (violations.length > 0) {
+        const report = violations
+          .map((v) => `  ${v.file}:${v.line}  class="${v.className}"  icon(s)=[${v.icons.join(', ')}]`)
+          .join('\n');
+        throw new Error(
+          `${violations.length} icon-only button(s) expose the Material icon ligature as their only ` +
+            `accessible name. Add aria-label (describing the ACTION, e.g. "Delete channel" not "delete") ` +
+            `and aria-hidden="true" on the icon span:\n${report}`
+        );
+      }
 
-    expect(violations).toEqual([]);
-  });
+      expect(violations).toEqual([]);
+    },
+    // This is a static-analysis file walk (parse every .tsx under src/ with
+    // the TypeScript compiler API) -- I/O + CPU bound on file count and
+    // machine speed, not a hang risk. The default 5000ms vitest timeout
+    // flaked twice on busy CI runners (PR #698 run 29650141697, PR #701 run
+    // 29657847429) with zero frontend source touched by either PR -- a
+    // wall-clock budget mismatch, not a real regression. 60s gives generous
+    // headroom over the ~150-300ms this takes even on a loaded runner; if it
+    // ever legitimately takes that long, something is actually wrong.
+    60_000
+  );
 });
