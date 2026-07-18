@@ -532,6 +532,50 @@ class TestUpdateDigestSettings:
         data = response.json()
         assert data["email_recipients"] == ["user@example.com", "admin@test.org"]
 
+    @pytest.mark.asyncio
+    async def test_persists_account_ids(self, async_client, test_session):
+        """PUT with account_ids persists and round-trips via GET (GH #496)."""
+        _create_digest_settings(test_session)
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "account_ids": [1, 3, 7],
+            })
+
+        assert response.status_code == 200
+        assert response.json()["account_ids"] == [1, 3, 7]
+
+        get_response = await async_client.get("/api/m3u/digest/settings")
+        assert get_response.json()["account_ids"] == [1, 3, 7]
+
+    @pytest.mark.asyncio
+    async def test_empty_account_ids_clears_selection(self, async_client, test_session):
+        """PUT with an empty account_ids list clears back to 'all accounts'."""
+        _create_digest_settings(test_session, account_ids=json.dumps([1, 2]))
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "account_ids": [],
+            })
+
+        assert response.status_code == 200
+        assert response.json()["account_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_omitted_account_ids_leaves_existing_selection_unchanged(self, async_client, test_session):
+        """Omitting account_ids from the PUT body (None, not []) must not
+        clobber a previously-saved selection — matches the Optional[...] =
+        None / `is not None` guard pattern used by every other field here."""
+        _create_digest_settings(test_session, account_ids=json.dumps([5]))
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "frequency": "hourly",
+            })
+
+        assert response.status_code == 200
+        assert response.json()["account_ids"] == [5]
+
 
 class TestSendTestDigest:
     """Tests for POST /api/m3u/digest/test."""

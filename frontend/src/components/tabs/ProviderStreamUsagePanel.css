@@ -1,0 +1,134 @@
+/* ProviderStreamUsagePanel — GH-482 / bd-n5cwp.
+ *
+ * Sibling-panel visual conventions inherited from UserStatsPanel.css /
+ * ProvidersPanel.css. Text uses theme tokens that already pass WCAG AA
+ * 4.5:1 contrast (audited at index.css level).
+ */
+
+.provider-stream-usage-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+  color: var(--text-primary);
+}
+
+.provider-stream-usage-panel .panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.provider-stream-usage-panel .section-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.provider-stream-usage-panel .panel-description {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Table --------------------------------------------------------------- */
+
+.provider-stream-usage-panel .provider-stream-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.provider-stream-usage-panel .provider-stream-usage-table th,
+.provider-stream-usage-panel .provider-stream-usage-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-primary);
+  text-align: left;
+}
+
+.provider-stream-usage-panel .provider-stream-usage-table thead th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  padding: 0;
+}
+
+.provider-stream-usage-panel .provider-stream-usage-table th.col-right,
+.provider-stream-usage-panel .provider-stream-usage-table td.col-right {
+  text-align: right;
+}
+
+.provider-stream-usage-panel .sort-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 8px 10px;
+  text-align: inherit;
+}
+
+.provider-stream-usage-panel .provider-stream-usage-table th.col-right .sort-header-btn {
+  justify-content: flex-end;
+}
+
+.provider-stream-usage-panel .sort-header-btn:hover,
+.provider-stream-usage-panel .sort-header-btn:focus-visible {
+  color: var(--accent-primary);
+}
+
+.provider-stream-usage-panel .sort-icon {
+  font-size: 14px;
+}
+
+.provider-stream-usage-panel tbody tr.unknown-bucket td {
+  color: var(--accent-warning, #f59e0b);
+}
+
+/* States ---------------------------------------------------------------- */
+
+.provider-stream-usage-panel .loading-state,
+.provider-stream-usage-panel .empty-state {
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+}
+
+.provider-stream-usage-panel .error-state {
+  padding: 12px;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-text);
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+/* WCAG-compliant visually-hidden utility — visible to screen readers,
+ * removed from visual flow. Same recipe as sibling panels (each panel
+ * scopes its own copy — no shared global class in this codebase). */
+.provider-stream-usage-panel .visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}

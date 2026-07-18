@@ -1795,6 +1795,14 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_executions "
                     "ADD COLUMN is_event_sync BOOLEAN NOT NULL DEFAULT 0"
                 ))
+                # 0035 (GH #496 / bead enhancedchannelmanager-wwovg): digest
+                # notification account scoping on the pre-0005 (baseline 0001)
+                # m3u_digest_settings table — same create_all() limitation,
+                # add the nullable column by hand.
+                conn.execute(text(
+                    "ALTER TABLE m3u_digest_settings "
+                    "ADD COLUMN account_ids TEXT"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.

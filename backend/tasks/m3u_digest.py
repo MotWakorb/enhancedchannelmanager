@@ -231,6 +231,8 @@ class M3UDigestTask(TaskScheduler):
                 settings.include_stream_changes = config["include_stream_changes"]
             if "min_changes_threshold" in config:
                 settings.min_changes_threshold = config["min_changes_threshold"]
+            if "account_ids" in config:
+                settings.set_account_ids(config["account_ids"])
 
             db.commit()
         finally:
@@ -423,7 +425,17 @@ class M3UDigestTask(TaskScheduler):
             # pure memory risk with no effect on the rendered digest (GH #473).
             query = db.query(M3UChangeLog).filter(M3UChangeLog.change_time >= since)
             if m3u_account_id:
+                # Single-account request (test send, immediate digest for one
+                # account) — takes precedence over the account_ids scope below.
                 query = query.filter(M3UChangeLog.m3u_account_id == m3u_account_id)
+            else:
+                # GH #496: scope the scheduled digest to the operator-selected
+                # accounts. Empty/unset account_ids means "all accounts" (the
+                # pre-existing behavior) — DB logging in M3UChangeLog is never
+                # filtered, only what gets built into the notification here.
+                account_ids = settings.get_account_ids()
+                if account_ids:
+                    query = query.filter(M3UChangeLog.m3u_account_id.in_(account_ids))
 
             total_changes = query.count()
             if total_changes > MAX_DIGEST_CHANGES:
@@ -845,6 +857,26 @@ async def send_immediate_digest(m3u_account_id: int) -> TaskResult:
             return TaskResult(
                 success=True,
                 message="Immediate digest not enabled",
+                started_at=datetime.utcnow(),
+                completed_at=datetime.utcnow(),
+            )
+
+        # GH #496: an immediate digest fires for exactly one M3U account (the
+        # one that was just refreshed). If the operator has scoped digest
+        # notifications to a subset of accounts and this account isn't in it,
+        # skip sending — the operator deliberately excluded this account's
+        # notifications (its changes are still logged to M3UChangeLog by the
+        # refresh path regardless of this decision).
+        account_ids = settings.get_account_ids()
+        if account_ids and m3u_account_id not in account_ids:
+            logger.info(
+                "[M3U-DIGEST] Skipping immediate digest for m3u_account_id=%s: "
+                "not in selected digest accounts %s",
+                m3u_account_id, account_ids,
+            )
+            return TaskResult(
+                success=True,
+                message=f"Immediate digest skipped: account {m3u_account_id} not in selected digest accounts",
                 started_at=datetime.utcnow(),
                 completed_at=datetime.utcnow(),
             )

@@ -176,6 +176,14 @@ beforeEach(() => {
   vi.mocked(api.getTopWatchedChannels).mockResolvedValue(baseTopWatched);
   vi.mocked(api.getEPGGrid).mockResolvedValue([]);
   vi.mocked(api.getEPGData).mockResolvedValue([]);
+  // ProviderStreamUsagePanel (bd-n5cwp) — always-mounted sibling of
+  // ProvidersPanel; default to an empty response so its fetch doesn't
+  // reject with an unmocked-call error in tests that don't care about it.
+  vi.mocked(api.getProviderStreamUsage).mockResolvedValue({
+    data: [],
+    meta: { total_rows: 0 },
+    pagination: null,
+  });
 });
 
 afterEach(() => {
@@ -1797,5 +1805,103 @@ describe('StatsTab — Currently Showing EPG row (hoj54)', () => {
       expect(container.querySelector('.channel-card')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('channel-now-playing')).toBeNull();
+  });
+});
+
+// bd-49obj / GH-481: Live Stats condensed provider table. With more than
+// LIVE_STATS_CONDENSED_THRESHOLD (6) providers, the tile badges are
+// replaced by a dense table so every provider stays visible instead of
+// wrapping out of view. At/below the threshold, the existing tile
+// presentation is unchanged.
+describe('StatsTab — condensed Live Stats provider table (bd-49obj)', () => {
+  function makeAccounts(count: number) {
+    return Array.from({ length: count }, (_, i) => ({
+      id: i + 1,
+      name: `Provider ${i + 1}`,
+      profiles: [],
+      is_active: true,
+      max_streams: 10,
+    })) as unknown as Awaited<ReturnType<typeof api.getM3UAccounts>>;
+  }
+
+  function makeChannels(providerIds: number[]) {
+    return providerIds.map((pid, i) => ({
+      ...baseChannel,
+      channel_id: `uuid-${i}`,
+      m3u_account_id: pid,
+    }));
+  }
+
+  it('renders the tile badges (not the table) at or below the threshold', async () => {
+    const accounts = makeAccounts(6);
+    vi.mocked(api.getM3UAccounts).mockResolvedValue(accounts);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 6,
+      channels: makeChannels([1, 2, 3, 4, 5, 6]),
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('.summary-stat').length).toBeGreaterThan(2);
+    });
+    expect(container.querySelector('[data-testid="provider-live-table-wrapper"]')).toBeNull();
+  });
+
+  it('renders every provider in a condensed table above the threshold (11 providers, GH-481 reporter count)', async () => {
+    const accounts = makeAccounts(11);
+    vi.mocked(api.getM3UAccounts).mockResolvedValue(accounts);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 11,
+      channels: makeChannels([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    const table = await waitFor(() => {
+      const el = container.querySelector('[data-testid="provider-live-table-wrapper"]');
+      expect(el).toBeInTheDocument();
+      return el as HTMLElement;
+    });
+
+    // All 11 providers present as table rows — none wrapped out of view.
+    for (let i = 1; i <= 11; i++) {
+      expect(table).toHaveTextContent(`Provider ${i}`);
+    }
+    // Tile badges for individual providers are NOT rendered in this mode
+    // (Active Channels / Connected Clients tiles still are — those aren't
+    // providers).
+    const providerTiles = Array.from(container.querySelectorAll('.summary-stat')).filter(
+      (el) => !['Active Channels', 'Connected Clients'].includes(
+        el.querySelector('.stat-label')?.textContent?.trim() ?? '',
+      ),
+    );
+    expect(providerTiles).toHaveLength(0);
+
+    // Each provider shows its current/max connection count in the table.
+    expect(table).toHaveTextContent('1/10');
+  });
+
+  it('surfaces the Unknown bucket as a table row when providers exceed the threshold', async () => {
+    const accounts = makeAccounts(7);
+    vi.mocked(api.getM3UAccounts).mockResolvedValue(accounts);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 8,
+      channels: [
+        ...makeChannels([1, 2, 3, 4, 5, 6, 7]),
+        { ...baseChannel, channel_id: 'uuid-unattributed', m3u_account_id: null },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    const table = await waitFor(() => {
+      const el = container.querySelector('[data-testid="provider-live-table-wrapper"]');
+      expect(el).toBeInTheDocument();
+      return el as HTMLElement;
+    });
+
+    expect(table).toHaveTextContent('Unknown');
+    expect(container.querySelector('.provider-live-table tr.unknown-bucket')).toBeInTheDocument();
   });
 });

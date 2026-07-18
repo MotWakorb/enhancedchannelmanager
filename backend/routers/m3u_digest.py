@@ -36,6 +36,7 @@ class M3UDigestSettingsUpdate(BaseModel):
     send_to_discord: Optional[bool] = None  # Send digest to Discord (uses shared webhook)
     exclude_group_patterns: Optional[List[str]] = None  # Regex patterns to exclude groups
     exclude_stream_patterns: Optional[List[str]] = None  # Regex patterns to exclude streams
+    account_ids: Optional[List[int]] = None  # M3U accounts to include in digest notifications; empty = all
 
 
 # -------------------------------------------------------------------------
@@ -340,6 +341,9 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
                         detail=f"Invalid stream exclude regex '{pattern}': {e}"
                     )
             settings.set_exclude_stream_patterns(request.exclude_stream_patterns)
+
+        if request.account_ids is not None:
+            settings.set_account_ids(request.account_ids)
 
         db.commit()
         db.refresh(settings)
