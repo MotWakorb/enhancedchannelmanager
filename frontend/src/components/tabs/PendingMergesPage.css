@@ -95,6 +95,45 @@
 }
 
 /*
+ * Candidate identity block (bead 09x38.14) — name is now the primary
+ * label; the raw Dispatcharr id is kept as secondary/tooltip text so an
+ * operator debugging a merge can still find it without it dominating
+ * the row.
+ */
+.pending-merges-candidate-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pending-merges-candidate-name {
+  color: var(--text-primary, #fff);
+  font-size: 0.95rem;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.pending-merges-candidate-group {
+  color: var(--text-secondary, #aaa);
+  font-size: 0.8rem;
+}
+
+.pending-merges-candidate-id {
+  color: var(--text-muted, #888);
+  font-size: 0.75rem;
+}
+
+/* Deleted-since-queuing state (bead 09x38.14) — the candidate channel no
+ * longer resolves in Dispatcharr. Uses the same warning tone as other
+ * ECM "stale reference" states rather than a blank cell. */
+.pending-merges-candidate-missing {
+  color: var(--warning, #f0ad4e);
+  font-size: 0.9rem;
+  font-style: italic;
+}
+
+/*
  * Confidence badge — scoped clone of StreamDedupModal.css's `.confidence-badge`.
  * See header note: if a third consumer lands, promote to common.css.
  */

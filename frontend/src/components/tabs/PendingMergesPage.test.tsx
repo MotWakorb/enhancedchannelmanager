@@ -44,6 +44,9 @@ function makeRecord(overrides: Partial<PendingMergeRecord> = {}): PendingMergeRe
     stream_name: 'ESPN HD',
     group_id: 7,
     candidate_channel_id: 'channel-uuid-abc',
+    candidate_channel_name: 'ESPN HD (Existing)',
+    candidate_channel_number: 101,
+    candidate_channel_group_name: 'Sports',
     confidence: 0.92,
     status: 'pending',
     created_at: 1_715_817_600_000,
@@ -101,6 +104,56 @@ describe('PendingMergesPage — list rendering (BD-J / bd-gfxrz)', () => {
     // PO-ratified nudge text from epic bd-1v4ht UX section.
     expect(
       screen.getByText(/M3U refresh detects potential duplicates/i),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the candidate channel name, number, and group when resolved (bead 09x38.14)', async () => {
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: [
+        makeRecord({
+          id: 1,
+          candidate_channel_id: '501',
+          candidate_channel_name: 'ESPN HD',
+          candidate_channel_number: 101,
+          candidate_channel_group_name: 'Sports',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    });
+
+    render(<PendingMergesPage />);
+
+    const nameEl = await screen.findByTestId('pending-merges-candidate-name');
+    expect(nameEl).toHaveTextContent('#101 ESPN HD');
+    expect(screen.getByText('Sports')).toBeInTheDocument();
+    // The raw id stays visible as secondary text.
+    expect(screen.getByText('id 501')).toBeInTheDocument();
+  });
+
+  it('renders an explicit "no longer exists" state when the candidate channel is unresolved (bead 09x38.14)', async () => {
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: [
+        makeRecord({
+          id: 1,
+          candidate_channel_id: '999',
+          candidate_channel_name: null,
+          candidate_channel_number: null,
+          candidate_channel_group_name: null,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    });
+
+    render(<PendingMergesPage />);
+
+    expect(
+      await screen.findByText(/Channel no longer exists \(id 999\)/i),
     ).toBeInTheDocument();
   });
 
