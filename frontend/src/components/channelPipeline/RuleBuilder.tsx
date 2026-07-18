@@ -55,11 +55,23 @@ interface ValidationErrors {
 /** Debounce for the advisory analyzer call (home-lab: 250-500ms is plenty). */
 const ANALYZE_DEBOUNCE_MS = 400;
 
-const PHASES = [
-  { id: 'logic', num: 1, label: 'Logic' },
-  { id: 'targeting', num: 2, label: 'Targeting' },
-  { id: 'output', num: 3, label: 'Output & Run' },
-] as const;
+/**
+ * The three wizard steps (bead 09x38.10). The Standard editor is now a true
+ * step-at-a-time wizard mirroring the Event Sync editor: one step renders at a
+ * time, Back/Next drive `currentStep`, and the numbered pills reuse the shared
+ * `.modal-stepper` strip. No Review step — unlike Event Sync (whose step 4
+ * gates a Preview before any write), the Standard rule has no preview/write
+ * gate, and the persistent rail already synthesizes the whole rule (intent /
+ * analyzer / save hint) continuously, so a dedicated Review step would only
+ * duplicate the rail.
+ */
+type WizardStep = 1 | 2 | 3;
+const WIZARD_STEPS: { n: WizardStep; label: string }[] = [
+  { n: 1, label: 'Logic' },
+  { n: 2, label: 'Targeting' },
+  { n: 3, label: 'Output & Run' },
+];
+const LAST_STEP: WizardStep = 3;
 
 const ACTION_LABELS: Record<string, string> = {
   create_channel: 'create a channel',
@@ -164,18 +176,20 @@ export function RuleBuilder({
   const [saving, setSaving] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [analyzerFindings, setAnalyzerFindings] = useState<RuleAnalyzerFinding[]>([]);
-  const [activePhase, setActivePhase] = useState<string>('logic');
 
-  // Scroll-spy phase spine (NOT a wizard): all phases stay visible; the spine
-  // tracks which one is in view and its pills scroll the main column.
-  const contentRef = useRef<HTMLDivElement>(null);
-  const logicRef = useRef<HTMLElement>(null);
-  const targetingRef = useRef<HTMLElement>(null);
-  const outputRef = useRef<HTMLElement>(null);
-  const phaseRefs = useMemo(
-    () => ({ logic: logicRef, targeting: targetingRef, output: outputRef }),
-    [],
-  );
+  // True step-at-a-time wizard (bead 09x38.10): exactly one step renders at a
+  // time; Back/Next and the numbered pills drive `currentStep`. The persistent
+  // rail (intent / analyzer / save hint) reads full form state and stays
+  // visible across every step.
+  const [currentStep, setCurrentStep] = useState<WizardStep>(1);
+
+  // Per-step heading refs — focus the active step's heading on step change so
+  // keyboard/AT users land in the newly revealed step. Skips the initial mount
+  // so opening the editor does not steal focus from the name field.
+  const logicHeadingRef = useRef<HTMLHeadingElement>(null);
+  const targetingHeadingRef = useRef<HTMLHeadingElement>(null);
+  const outputHeadingRef = useRef<HTMLHeadingElement>(null);
+  const didInitStep = useRef(false);
 
   // Load available normalization groups
   useEffect(() => {
@@ -191,28 +205,20 @@ export function RuleBuilder({
     }).catch(() => {});
   }, []);
 
-  // Scroll-spy: highlight the phase pill for the section most in view. In test
-  // environments IntersectionObserver is a no-op mock, so the spine simply
-  // stays on the first phase — harmless.
+  // Focus the active step's heading when the step changes (not on first mount).
   useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined') return;
-    const sections = [logicRef.current, targetingRef.current, outputRef.current].filter(
-      (el): el is HTMLElement => el != null,
-    );
-    if (sections.length === 0) return;
-    const observer = new IntersectionObserver(
-      entries => {
-        const visible = entries
-          .filter(e => e.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-        const phase = visible[0]?.target.getAttribute('data-phase');
-        if (phase) setActivePhase(phase);
-      },
-      { root: contentRef.current, threshold: [0.15, 0.5], rootMargin: '-10% 0px -55% 0px' },
-    );
-    sections.forEach(el => observer.observe(el));
-    return () => observer.disconnect();
-  }, []);
+    if (!didInitStep.current) {
+      didInitStep.current = true;
+      return;
+    }
+    const headingRef =
+      currentStep === 1
+        ? logicHeadingRef
+        : currentStep === 2
+          ? targetingHeadingRef
+          : outputHeadingRef;
+    headingRef.current?.focus();
+  }, [currentStep]);
 
   const handleReorderCondition = (fromIndex: number, newPosition: number) => {
     const toIndex = newPosition - 1;
@@ -362,7 +368,12 @@ export function RuleBuilder({
   const handleSave = async () => {
     const validationErrors = validate();
     if (validationErrors) {
-      // Focus first error field
+      // Per-step validation display routing (bead 09x38.10): every validation
+      // error surfaces on Step 1 — the name (in the always-visible header) plus
+      // the conditions and actions in the Logic step — so route there so the
+      // error is visible from whichever step Save was pressed, then focus the
+      // first offending field.
+      setCurrentStep(1);
       if (validationErrors.name) {
         document.getElementById(`${id}-name`)?.focus();
       }
@@ -440,13 +451,9 @@ export function RuleBuilder({
     }
   };
 
-  const goToPhase = (phaseId: string) => {
-    setActivePhase(phaseId);
-    phaseRefs[phaseId as keyof typeof phaseRefs]?.current?.scrollIntoView?.({
-      behavior: 'smooth',
-      block: 'start',
-    });
-  };
+  // Plain step change (Back / Next / step pill). Never routes through the dirty
+  // guard — only Cancel / Escape / × do (mirrors the Event Sync editor).
+  const goToStep = (step: WizardStep) => setCurrentStep(step);
 
   // GH #298: an effective scope group resolves for create_channel when a
   // Create Channel action carries a target group, OR a Create Group action
@@ -533,7 +540,7 @@ export function RuleBuilder({
         </div>
       )}
 
-      <div className="rule-builder-content" ref={contentRef}>
+      <div className="rule-builder-content">
         {/* Compact always-visible header: name*, enabled, description. */}
         <div className="rule-builder-headerbar">
           <div className="rule-builder-headerbar-row">
@@ -582,33 +589,39 @@ export function RuleBuilder({
           </div>
         </div>
 
-        {/* Scroll-spy phase spine — logic FIRST. Pills scroll the main column;
-            the rail is persistent across phases. This is NOT a wizard. */}
-        <nav className="modal-stepper" aria-label="Rule sections">
-          {PHASES.map(phase => (
+        {/* True step wizard strip (bead 09x38.10) — pills drive the single
+            rendered step; the rail is persistent across steps. Free non-linear
+            nav: any pill is clickable at any time (mirrors the Event Sync
+            editor). */}
+        <nav className="modal-stepper" aria-label="Rule steps">
+          {WIZARD_STEPS.map(({ n, label }) => (
             <button
-              key={phase.id}
+              key={n}
               type="button"
               className="modal-stepper-item"
-              aria-current={activePhase === phase.id ? 'step' : undefined}
-              onClick={() => goToPhase(phase.id)}
-              data-testid={`rule-phase-pill-${phase.id}`}
+              aria-current={currentStep === n ? 'step' : undefined}
+              onClick={() => goToStep(n)}
+              data-testid={`rule-step-${n}`}
             >
-              <span className="modal-stepper-num">{phase.num}</span> {phase.label}
+              <span className="modal-stepper-num">{n}</span> {label}
             </button>
           ))}
         </nav>
 
         <div className="modal-twopane">
           <div className="modal-main">
-            {/* ── Phase 1: LOGIC (conditions -> actions) — the star ───────── */}
+            {/* ── Step 1: LOGIC (conditions -> actions) — the star ────────── */}
             <section
-              ref={logicRef}
-              data-phase="logic"
+              hidden={currentStep !== 1}
               className="rule-phase"
               aria-labelledby={`${id}-logic-title`}
             >
-              <h2 className="rule-phase-title" id={`${id}-logic-title`}>
+              <h2
+                className="rule-phase-title"
+                id={`${id}-logic-title`}
+                ref={logicHeadingRef}
+                tabIndex={-1}
+              >
                 <span className="rule-phase-num">1</span> Logic
               </h2>
 
@@ -706,14 +719,18 @@ export function RuleBuilder({
               </div>
             </section>
 
-            {/* ── Phase 2: TARGETING ──────────────────────────────────────── */}
+            {/* ── Step 2: TARGETING ───────────────────────────────────────── */}
             <section
-              ref={targetingRef}
-              data-phase="targeting"
+              hidden={currentStep !== 2}
               className="rule-phase"
               aria-labelledby={`${id}-targeting-title`}
             >
-              <h2 className="rule-phase-title" id={`${id}-targeting-title`}>
+              <h2
+                className="rule-phase-title"
+                id={`${id}-targeting-title`}
+                ref={targetingHeadingRef}
+                tabIndex={-1}
+              >
                 <span className="rule-phase-num">2</span> Targeting
               </h2>
 
@@ -888,14 +905,18 @@ export function RuleBuilder({
               </div>
             </section>
 
-            {/* ── Phase 3: OUTPUT & RUN ───────────────────────────────────── */}
+            {/* ── Step 3: OUTPUT & RUN ────────────────────────────────────── */}
             <section
-              ref={outputRef}
-              data-phase="output"
+              hidden={currentStep !== 3}
               className="rule-phase"
               aria-labelledby={`${id}-output-title`}
             >
-              <h2 className="rule-phase-title" id={`${id}-output-title`}>
+              <h2
+                className="rule-phase-title"
+                id={`${id}-output-title`}
+                ref={outputHeadingRef}
+                tabIndex={-1}
+              >
                 <span className="rule-phase-num">3</span> Output &amp; Run
               </h2>
 
@@ -1162,7 +1183,14 @@ export function RuleBuilder({
         </div>
       </div>
 
-      {/* Footer */}
+      {/* Footer (bead 09x38.10): Cancel (dirty-guarded) · Back (hidden on step
+          1) · Save · Next (Next becomes the primary Save on the last step).
+          Back/Next NEVER route through the dirty guard — only Cancel/Escape/×
+          do. Save is exposed on EVERY step (not last-step-only as in the Event
+          Sync wizard): the Standard rule has no Preview/write gate to reach
+          first, and its step-2/3 fields all carry safe defaults, so a valid
+          rule can be saved from any step. This is exactly the Event Sync
+          editor's editing-an-existing-rule footer, applied uniformly. */}
       <div className="rule-builder-footer">
         <button
           type="button"
@@ -1172,14 +1200,50 @@ export function RuleBuilder({
         >
           Cancel
         </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={handleSave}
-          disabled={saving || isLoading}
-        >
-          {saving ? 'Saving...' : 'Save'}
-        </button>
+        <div className="rule-builder-footer-nav">
+          {currentStep > 1 && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => goToStep((currentStep - 1) as WizardStep)}
+              disabled={saving}
+              data-testid="rule-wizard-back"
+            >
+              Back
+            </button>
+          )}
+          {currentStep < LAST_STEP && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleSave}
+              disabled={saving || isLoading}
+              data-testid="rule-wizard-save-early"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          {currentStep < LAST_STEP ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => goToStep((currentStep + 1) as WizardStep)}
+              disabled={saving}
+              data-testid="rule-wizard-next"
+            >
+              Next
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSave}
+              disabled={saving || isLoading}
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Discard confirmation (bead m1s38.3): role=alertdialog. Nested in a
