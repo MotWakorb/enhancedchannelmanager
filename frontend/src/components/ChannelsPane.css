@@ -1349,6 +1349,15 @@
   color: var(--error, #e74c3c);
 }
 
+.channel-streams-count.has-stale {
+  color: var(--warning);
+}
+
+.channel-streams-count .stale-stream-icon {
+  font-size: 0.9rem;
+  color: var(--warning);
+}
+
 .channel-streams-count.has-black-screen {
   color: #a855f7;
 }
@@ -1370,6 +1379,15 @@
 /* Highlight channels without streams */
 .channel-item.no-streams {
   border-left: 3px solid var(--warning);
+}
+
+/* Highlight channels whose assigned streams include a Dispatcharr-stale
+   stream (bead enhancedchannelmanager-po78p / GH #696). Option B: amber
+   left border (mirrors .no-streams above) plus a faint background tint so
+   the row reads as "needs attention" at a glance in a dense list. */
+.channel-item.has-stale-streams {
+  border-left: 3px solid var(--warning);
+  background-color: var(--warning-bg);
 }
 
 /* Channel three-dot menu */
@@ -1876,6 +1894,20 @@
 
 .meta-tag.probe-failed .material-icons,
 .meta-tag.probe-timeout .material-icons {
+  font-size: 12px;
+}
+
+.meta-tag.stream-stale {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 5px;
+}
+
+.meta-tag.stream-stale .material-icons {
   font-size: 12px;
 }
 

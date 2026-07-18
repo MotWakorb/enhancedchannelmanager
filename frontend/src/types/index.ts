@@ -175,6 +175,22 @@ export interface Stream {
   channel_group_name: string | null;
   is_custom: boolean;
   custom_properties?: Record<string, unknown> | null;  // Extra M3U attributes like tvc-guide-stationid
+  // Dispatcharr stale-stream flags (bead enhancedchannelmanager-po78p / GH
+  // #696) — passed through verbatim by /api/channels/{id}/streams and
+  // /api/streams/by-ids. `is_stale` is truthy when Dispatcharr's own M3U
+  // refresh no longer re-matched this stream in the source playlist.
+  is_stale?: boolean;
+  last_seen?: string | null;
+}
+
+// Response shape for GET /api/streams/stale-ids — the cached, paged-scan
+// set of Dispatcharr-stale stream ids used as the single source of truth
+// for stale-stream decoration across the Channels/Streams panes (bead
+// enhancedchannelmanager-po78p / GH #696).
+export interface StaleStreamIdsResponse {
+  stale_stream_ids: number[];
+  last_seen: Record<string, string | null>;
+  count: number;
 }
 
 // Stream group with count (returned by /api/stream-groups)

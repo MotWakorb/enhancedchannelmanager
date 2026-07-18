@@ -91,6 +91,7 @@ import type {
   DummyEPGPreviewResult,
   DummyEPGBatchPreviewRequest,
   DummyEPGChannelAssignment,
+  StaleStreamIdsResponse,
 } from '../types';
 import type {
   AcceptEventSyncReviewOutcome,
@@ -2531,6 +2532,16 @@ export interface StaleStreamsResponse {
 
 export async function getStaleStreams(days = 7): Promise<StaleStreamsResponse> {
   return fetchJson(`${API_BASE}/stream-stats/stale?days=${days}`);
+}
+
+// Provider-stale stream ids (bead enhancedchannelmanager-po78p / GH #696).
+//
+// Distinct from getStaleStreams above: this is the raw Dispatcharr `is_stale`
+// set (cached, cheap paged scan), used as the single source of truth for
+// stale-stream decoration in the Channels/Streams panes — not the richer
+// probe-staleness report that endpoint returns.
+export async function getStaleStreamIds(bypassCache = false): Promise<StaleStreamIdsResponse> {
+  return fetchJson(`${API_BASE}/streams/stale-ids${bypassCache ? '?bypass_cache=true' : ''}`);
 }
 
 export interface SortConfig {

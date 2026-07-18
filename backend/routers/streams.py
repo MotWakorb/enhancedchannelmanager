@@ -33,6 +33,15 @@ router = APIRouter(tags=["Streams"])
 ASSIGNMENT_INDEX_CACHE_KEY = "stream_channel_assignment_index"
 ASSIGNMENT_INDEX_TTL_SECONDS = 45
 
+# Cache key + TTL for the provider-stale stream id set (bead
+# enhancedchannelmanager-po78p / GH #696). Dispatcharr flags a stream
+# `is_stale` when its own M3U refresh no longer re-matches it in the source
+# playlist; this endpoint pages through client.get_streams() to collect that
+# set cheaply for the Channels/Streams pane decorations. A 300s TTL keeps
+# repeated pane loads/refreshes from re-scanning every stream on each render.
+PROVIDER_STALE_IDS_CACHE_KEY = "provider_stale_stream_ids"
+PROVIDER_STALE_IDS_TTL_SECONDS = 300
+
 
 class StreamSortOrder(str, Enum):
     """Available server-side sort orders for streams."""
@@ -311,6 +320,66 @@ async def get_streams_by_ids(request: BulkStreamIdsRequest):
         return result
     except Exception as e:
         logger.exception("[STREAMS] Failed to get streams by IDs: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/api/streams/stale-ids")
+async def get_stale_stream_ids(bypass_cache: bool = False):
+    """Return the set of Dispatcharr stream IDs currently flagged ``is_stale``.
+
+    Dispatcharr flags a stream stale (+ ``last_seen``) when its own M3U
+    refresh no longer re-matches it in the source playlist. This endpoint
+    pages through ``client.get_streams()`` (same paged-scan shape as
+    ``stream_stats.get_stale_streams``, see
+    backend/routers/stream_stats.py:263-274) and returns just the stale id
+    set + last-seen timestamps, cheaply enough for the Channels/Streams pane
+    to decorate rows without an N+1 against Dispatcharr. Cached for
+    PROVIDER_STALE_IDS_TTL_SECONDS; pass ``bypass_cache=True`` to force a
+    fresh scan.
+    """
+    logger.debug("[STREAMS] GET /api/streams/stale-ids bypass_cache=%s", bypass_cache)
+    cache = get_cache()
+
+    if not bypass_cache:
+        cached = cache.get(PROVIDER_STALE_IDS_CACHE_KEY, ttl=PROVIDER_STALE_IDS_TTL_SECONDS)
+        if cached is not None:
+            logger.debug("[STREAMS] Cache HIT for stale-ids (%d stale)", cached.get("count", 0))
+            return cached
+
+    client = get_client()
+    try:
+        start = time.time()
+        stale_ids: list[int] = []
+        last_seen: dict[int, Optional[str]] = {}
+        fetched = 0
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=1000)
+            page_streams = result.get("results", [])
+            fetched += len(page_streams)
+            for s in page_streams:
+                if s.get("is_stale"):
+                    sid = s["id"]
+                    stale_ids.append(sid)
+                    last_seen[sid] = s.get("last_seen")
+            if fetched >= result.get("count", 0) or not page_streams:
+                break
+            page += 1
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug(
+            "[STREAMS] Scanned %d provider streams (%d stale) in %.1fms",
+            fetched, len(stale_ids), elapsed_ms,
+        )
+
+        response = {
+            "stale_stream_ids": stale_ids,
+            "last_seen": last_seen,
+            "count": len(stale_ids),
+        }
+        cache.set(PROVIDER_STALE_IDS_CACHE_KEY, response)
+        return response
+    except Exception as e:
+        logger.exception("[STREAMS] Failed to fetch stale stream ids: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

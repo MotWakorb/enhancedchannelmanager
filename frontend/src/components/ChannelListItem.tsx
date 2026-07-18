@@ -44,6 +44,22 @@ export interface ChannelListItemProps {
   hasFailedStreams?: boolean;
   hasBlackScreenStreams?: boolean;
   hasLowFpsStreams?: boolean;
+  /**
+   * bead enhancedchannelmanager-po78p / GH #696 — true when one or more of
+   * the channel's assigned streams are flagged `is_stale` by Dispatcharr
+   * (its own M3U refresh no longer re-matched the stream in the source
+   * playlist). Precedence: rendered after has-failed, before
+   * black-screen/low-fps — a stale-but-otherwise-healthy stream is a softer
+   * signal than a probe failure but still worth surfacing over cosmetic
+   * quality indicators.
+   */
+  hasStaleStreams?: boolean;
+  /**
+   * Count of the channel's assigned streams flagged stale, for the specific
+   * tooltip text ("2 streams no longer listed by provider (stale)"). Purely
+   * cosmetic — `hasStaleStreams` alone gates the icon/row styling.
+   */
+  staleStreamCount?: number;
   onPreviewChannel?: () => void;
   /**
    * bd-eio04.13 — proposed normalized name if the current channel name
@@ -261,6 +277,8 @@ export const ChannelListItem = memo(function ChannelListItem({
   hasFailedStreams = false,
   hasBlackScreenStreams = false,
   hasLowFpsStreams = false,
+  hasStaleStreams = false,
+  staleStreamCount = 0,
   onPreviewChannel,
   proposedNormalizedName,
   onShowNormalizePreview,
@@ -309,13 +327,13 @@ export const ChannelListItem = memo(function ChannelListItem({
   // Healthy channels (streams present, no probe problem) show a neutral
   // sources icon; problem states keep their existing status icon below.
   const showNeutralStreamsIcon =
-    streamCount > 0 && !hasFailedStreams && !hasBlackScreenStreams && !hasLowFpsStreams;
+    streamCount > 0 && !hasFailedStreams && !hasBlackScreenStreams && !hasLowFpsStreams && !hasStaleStreams;
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''}`}
+      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasStaleStreams ? 'has-stale-streams' : ''}`}
       onClick={onClick}
       onContextMenu={onContextMenu}
       onDragOver={onStreamDragOver}
@@ -474,17 +492,25 @@ export const ChannelListItem = memo(function ChannelListItem({
         )}
       </div>
       <span
-        className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : hasBlackScreenStreams ? 'has-black-screen' : hasLowFpsStreams ? 'has-low-fps' : ''}`}
+        className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : hasStaleStreams ? 'has-stale' : hasBlackScreenStreams ? 'has-black-screen' : hasLowFpsStreams ? 'has-low-fps' : ''}`}
         title={streamCountLabel}
       >
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {hasFailedStreams && channel.streams.length > 0 && (
           <span className="material-icons failed-stream-icon" title="One or more streams failed probe">error</span>
         )}
-        {!hasFailedStreams && hasBlackScreenStreams && channel.streams.length > 0 && (
+        {!hasFailedStreams && hasStaleStreams && channel.streams.length > 0 && (
+          <span
+            className="material-icons stale-stream-icon"
+            title={`${staleStreamCount > 0 ? staleStreamCount : 'One or more'} stream${staleStreamCount === 1 ? '' : 's'} no longer listed by provider (stale)`}
+          >
+            history
+          </span>
+        )}
+        {!hasFailedStreams && !hasStaleStreams && hasBlackScreenStreams && channel.streams.length > 0 && (
           <span className="material-icons black-screen-icon" title="One or more streams detected as black screen">videocam_off</span>
         )}
-        {!hasFailedStreams && !hasBlackScreenStreams && hasLowFpsStreams && channel.streams.length > 0 && (
+        {!hasFailedStreams && !hasStaleStreams && !hasBlackScreenStreams && hasLowFpsStreams && channel.streams.length > 0 && (
           <span className="material-icons low-fps-icon" title="One or more streams have low FPS">slow_motion_video</span>
         )}
         {showNeutralStreamsIcon && (

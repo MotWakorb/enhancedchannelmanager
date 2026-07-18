@@ -17,6 +17,8 @@ import {
   computeSort,
   // Stale streams (enhancedchannelmanager-n4g7g)
   getStaleStreams,
+  // Provider-stale stream ids (enhancedchannelmanager-po78p / GH #696)
+  getStaleStreamIds,
   // Enhanced stats (v0.11.0)
   getBandwidthStats,
   getUniqueViewersSummary,
@@ -1089,6 +1091,53 @@ describe('API Service', () => {
       );
 
       await expect(getStaleStreams()).rejects.toThrow();
+    });
+  });
+
+  describe('getStaleStreamIds', () => {
+    it('fetches without bypass_cache by default', async () => {
+      let requestUrl: URL | undefined;
+      server.use(
+        http.get('/api/streams/stale-ids', ({ request }) => {
+          requestUrl = new URL(request.url);
+          return HttpResponse.json({
+            stale_stream_ids: [1, 3],
+            last_seen: { '1': '2026-07-01T00:00:00Z', '3': null },
+            count: 2,
+          });
+        })
+      );
+
+      const result = await getStaleStreamIds();
+
+      expect(requestUrl?.searchParams.has('bypass_cache')).toBe(false);
+      expect(result.stale_stream_ids).toEqual([1, 3]);
+      expect(result.count).toBe(2);
+      expect(result.last_seen['1']).toBe('2026-07-01T00:00:00Z');
+    });
+
+    it('passes bypass_cache=true when requested', async () => {
+      let requestUrl: URL | undefined;
+      server.use(
+        http.get('/api/streams/stale-ids', ({ request }) => {
+          requestUrl = new URL(request.url);
+          return HttpResponse.json({ stale_stream_ids: [], last_seen: {}, count: 0 });
+        })
+      );
+
+      await getStaleStreamIds(true);
+
+      expect(requestUrl?.searchParams.get('bypass_cache')).toBe('true');
+    });
+
+    it('handles network error', async () => {
+      server.use(
+        http.get('/api/streams/stale-ids', () => {
+          return HttpResponse.error();
+        })
+      );
+
+      await expect(getStaleStreamIds()).rejects.toThrow();
     });
   });
 

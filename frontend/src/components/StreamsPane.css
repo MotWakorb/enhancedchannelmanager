@@ -395,6 +395,25 @@ button.group-selection-checkbox {
   border-radius: var(--radius-2xl);
 }
 
+/* Group-level stale-count pill (bead enhancedchannelmanager-po78p / GH
+   #696) — only rendered when the group contains at least one Dispatcharr-
+   stale stream, so groups with none are visually unchanged. */
+.group-stale-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--warning-text);
+  background-color: var(--warning-bg);
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-2xl);
+  cursor: help;
+}
+
+.group-stale-count .material-icons {
+  font-size: 0.875rem;
+}
+
 .stream-group-items {
   display: flex;
   flex-direction: column;
@@ -422,6 +441,18 @@ button.group-selection-checkbox {
 .stream-item.selected {
   background-color: var(--accent-primary)22;
   border: 1px solid var(--accent-primary);
+}
+
+/* Dispatcharr-stale row treatment (bead enhancedchannelmanager-po78p / GH
+   #696), Option B — amber left border + faint tint, mirroring
+   ChannelsPane's `.channel-item.has-stale-streams`/`.no-streams` pattern.
+   The `.meta-tag.stream-stale` STALE badge class it pairs with is defined
+   in ChannelsPane.css — both files always load together on the Channel
+   Manager tab (ChannelsPane + StreamsPane render side by side), so it's
+   reused here rather than duplicated. */
+.stream-item.is-stale {
+  border-left: 3px solid var(--warning);
+  background-color: var(--warning-bg);
 }
 
 /* Drag handle - only visible in edit mode, positioned first */

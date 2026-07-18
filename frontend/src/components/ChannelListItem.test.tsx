@@ -234,3 +234,75 @@ describe('ChannelListItem — resolution capability pills', () => {
     expect(screen.getByTestId('channel-capabilities-42')).toBeInTheDocument();
   });
 });
+
+describe('ChannelListItem — stale-stream indicator (bead enhancedchannelmanager-po78p / GH #696)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function renderWithStreams(overrides: Partial<React.ComponentProps<typeof ChannelListItem>> = {}) {
+    return renderRow({
+      channel: {
+        id: 42,
+        channel_number: 7,
+        name: 'ESPN HD',
+        channel_group_id: null,
+        tvg_id: null,
+        tvc_guide_stationid: null,
+        epg_data_id: null,
+        streams: [1, 2],
+        stream_profile_id: null,
+        uuid: 'u-42',
+        logo_id: null,
+        auto_created: false,
+        auto_created_by: null,
+        auto_created_by_name: null,
+      },
+      ...overrides,
+    });
+  }
+
+  it('does not render the stale row class or icon when hasStaleStreams is false', () => {
+    renderWithStreams();
+    expect(document.querySelector('.channel-item')).not.toHaveClass('has-stale-streams');
+    expect(document.querySelector('.stale-stream-icon')).not.toBeInTheDocument();
+  });
+
+  it('adds has-stale-streams to the row and renders the stale icon when hasStaleStreams is true', () => {
+    renderWithStreams({ hasStaleStreams: true, staleStreamCount: 2 });
+    expect(document.querySelector('.channel-item')).toHaveClass('has-stale-streams');
+    expect(document.querySelector('.stale-stream-icon')).toBeInTheDocument();
+  });
+
+  it('applies the has-stale class to the streams-count area, with a count-specific tooltip', () => {
+    renderWithStreams({ hasStaleStreams: true, staleStreamCount: 2 });
+    const countEl = document.querySelector('.channel-streams-count');
+    expect(countEl).toHaveClass('has-stale');
+    const icon = document.querySelector('.stale-stream-icon');
+    expect(icon).toHaveAttribute('title', '2 streams no longer listed by provider (stale)');
+  });
+
+  it('takes precedence over black-screen/low-fps but defers to has-failed', () => {
+    // Stale + black-screen: stale wins (comes first in precedence order).
+    renderWithStreams({ hasStaleStreams: true, hasBlackScreenStreams: true, staleStreamCount: 1 });
+    const countEl = document.querySelector('.channel-streams-count');
+    expect(countEl).toHaveClass('has-stale');
+    expect(countEl).not.toHaveClass('has-black-screen');
+    expect(document.querySelector('.stale-stream-icon')).toBeInTheDocument();
+    expect(document.querySelector('.black-screen-icon')).not.toBeInTheDocument();
+  });
+
+  it('yields to has-failed when both a failed and a stale stream are present', () => {
+    renderWithStreams({ hasStaleStreams: true, hasFailedStreams: true, staleStreamCount: 1 });
+    const countEl = document.querySelector('.channel-streams-count');
+    expect(countEl).toHaveClass('has-failed');
+    expect(countEl).not.toHaveClass('has-stale');
+    expect(document.querySelector('.failed-stream-icon')).toBeInTheDocument();
+    expect(document.querySelector('.stale-stream-icon')).not.toBeInTheDocument();
+  });
+
+  it('does not show the neutral streams icon when hasStaleStreams is true', () => {
+    renderWithStreams({ hasStaleStreams: true, staleStreamCount: 1 });
+    expect(document.querySelector('.streams-count-icon')).not.toBeInTheDocument();
+  });
+});
