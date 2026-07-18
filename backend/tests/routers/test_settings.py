@@ -881,45 +881,72 @@ class TestUpdateSettingsRebuildsBackgroundServices:
         availability check — it must be scheduled via asyncio.create_task(),
         not awaited inline, so a slow/unreachable Dispatcharr host during a
         credential rotation can't hang the settings-save HTTP response.
-        Mocks ``_restart_background_services`` to take noticeably longer
-        than the response should, and asserts the response returns well
-        within that window (if it were awaited inline, this would take at
-        least as long as the mocked rebuild)."""
-        import time
+
+        bd-z6trk: this used to mock ``_restart_background_services`` with a
+        fixed ``asyncio.sleep(0.3)`` and assert the response returned in
+        ``<0.2s`` wall-clock. That flaked on busy CI runners (observed on run
+        29630277919: the response itself took 0.424s — fire-and-forget was
+        working, the "Rebuilt background services" log landed ~300ms AFTER
+        the response, but the request just took longer than the hard-coded
+        budget on a loaded shared runner). Any wall-clock threshold flakes
+        under load, so this version has none: the mocked rebuild is gated on
+        an ``asyncio.Event`` the test controls instead of a timed sleep. The
+        gate stays closed for the whole POST, so if the rebuild were awaited
+        inline the response could never arrive — the response arriving at
+        all, under a generous ``wait_for`` timeout, is the proof, and it
+        holds regardless of runner speed. Releasing the gate afterward and
+        waiting on a second Event both lets the detached task run to
+        completion inside the mocks (matching the old sleep's intent) and
+        confirms the rebuild actually executes.
+        """
         current = _mock_settings(auth_method="password", password="old-secret")
 
-        async def slow_rebuild(settings):
-            await asyncio.sleep(0.3)
+        release_rebuild = asyncio.Event()
+        rebuild_finished = asyncio.Event()
+
+        async def gated_rebuild(settings):
+            await release_rebuild.wait()
+            rebuild_finished.set()
             return {"success": True, "message": "restarted"}
 
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings"), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
-             patch("routers.settings._restart_background_services", side_effect=slow_rebuild), \
+             patch("routers.settings._restart_background_services", side_effect=gated_rebuild), \
              patch("routers.settings.get_prober", return_value=None), \
              patch("routers.settings.get_cache") as mock_cache:
             mock_cache.return_value = MagicMock()
 
-            start = time.monotonic()
-            response = await async_client.post("/api/settings", json={
-                "url": current.url,
-                "auth_method": "password",
-                "username": current.username,
-                "password": "new-secret",
-            })
-            elapsed = time.monotonic() - start
-            # Let the detached rebuild task run to completion inside its own
-            # mocked delay before the mocks above are torn down on exit.
-            await asyncio.sleep(0.35)
+            try:
+                response = await asyncio.wait_for(
+                    async_client.post("/api/settings", json={
+                        "url": current.url,
+                        "auth_method": "password",
+                        "username": current.username,
+                        "password": "new-secret",
+                    }),
+                    timeout=10,
+                )
+            except asyncio.TimeoutError:
+                pytest.fail(
+                    "settings save never returned while the rebuild was "
+                    "gated — rebuild is being awaited inline instead of "
+                    "fire-and-forget"
+                )
+
+            # The response arrived while the gate is still closed — proof
+            # the rebuild wasn't awaited inline.
+            assert not rebuild_finished.is_set()
+
+            # Release the gate and let the detached task run to completion
+            # inside the mocks before they're torn down on exit — this also
+            # verifies the rebuild actually runs.
+            release_rebuild.set()
+            await asyncio.wait_for(rebuild_finished.wait(), timeout=5)
 
         assert response.status_code == 200, response.json()
         assert response.json()["status"] == "saved"
-        assert elapsed < 0.2, (
-            f"settings save took {elapsed:.3f}s — the background-service "
-            "rebuild looks like it's being awaited inline instead of "
-            "fire-and-forget"
-        )
 
     @pytest.mark.asyncio
     async def test_rebuild_reported_failure_logs_warning_not_info(self, async_client, caplog):
