@@ -172,3 +172,77 @@ describe('StreamsPane category headers', () => {
     expect(screen.queryByRole('button', { name: /^US/ })).not.toBeInTheDocument();
   });
 });
+
+describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696)', () => {
+  const STALE_STREAMS: Stream[] = [
+    makeStream({ id: 101, name: 'Stale Stream', channel_group_name: 'UK | Sports', is_stale: true, last_seen: '2026-07-01T00:00:00Z' }),
+    makeStream({ id: 102, name: 'Fresh Stream', channel_group_name: 'UK | Sports', is_stale: false }),
+    makeStream({ id: 103, name: 'Healthy Group Stream', channel_group_name: 'US | News', is_stale: false }),
+  ];
+  const STALE_STREAM_GROUPS: StreamGroupInfo[] = [
+    { name: 'UK | Sports', count: 2 },
+    { name: 'US | News', count: 1 },
+  ];
+
+  function renderStalePane(overrides: Partial<React.ComponentProps<typeof StreamsPane>> = {}) {
+    return renderPane({
+      streams: STALE_STREAMS,
+      streamGroups: STALE_STREAM_GROUPS,
+      ...overrides,
+    });
+  }
+
+  it('does not render a stale-count pill on a group header with no stale streams', async () => {
+    const user = userEvent.setup();
+    renderStalePane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const usHeader = screen.getByText('US | News').closest('.stream-group-header');
+    expect(usHeader).not.toBeNull();
+    expect((usHeader as HTMLElement).querySelector('.group-stale-count')).not.toBeInTheDocument();
+  });
+
+  it('renders a stale-count pill on a group header containing a stale stream', async () => {
+    const user = userEvent.setup();
+    renderStalePane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const ukHeader = screen.getByText('UK | Sports').closest('.stream-group-header');
+    expect(ukHeader).not.toBeNull();
+    const pill = within(ukHeader as HTMLElement).getByTitle(/1 stream.*no longer listed by provider \(stale\)/i);
+    expect(pill).toHaveTextContent('1');
+  });
+
+  it('renders a STALE badge on a stale stream row but not on a fresh row', async () => {
+    const user = userEvent.setup();
+    renderStalePane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const staleRow = screen.getByText('Stale Stream').closest('.stream-item');
+    const freshRow = screen.getByText('Fresh Stream').closest('.stream-item');
+    expect(staleRow).not.toBeNull();
+    expect(freshRow).not.toBeNull();
+    expect(within(staleRow as HTMLElement).getByText('STALE')).toBeInTheDocument();
+    expect(within(freshRow as HTMLElement).queryByText('STALE')).not.toBeInTheDocument();
+  });
+
+  it('applies the is-stale row class only to the stale stream row', async () => {
+    const user = userEvent.setup();
+    renderStalePane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const staleRow = screen.getByText('Stale Stream').closest('.stream-item');
+    const freshRow = screen.getByText('Fresh Stream').closest('.stream-item');
+    expect(staleRow).toHaveClass('is-stale');
+    expect(freshRow).not.toHaveClass('is-stale');
+  });
+
+  it('includes the last-seen timestamp in the stale badge tooltip when available', async () => {
+    const user = userEvent.setup();
+    renderStalePane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const badge = screen.getByText('STALE');
+    expect(badge.closest('.meta-tag')).toHaveAttribute('title', expect.stringContaining('2026-07-01T00:00:00Z'));
+  });
+});

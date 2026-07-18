@@ -335,3 +335,157 @@ class TestGetStreamsByIds:
             )
 
         assert response.status_code == 500
+
+
+def _paged_get_streams(pages):
+    """Build an AsyncMock get_streams side_effect that serves `pages` in order.
+
+    Each entry in `pages` is a list of stream dicts for that page. `count` is
+    derived from the total across all pages, mirroring how Dispatcharr reports
+    pagination totals.
+    """
+    total = sum(len(p) for p in pages)
+
+    async def _get_streams(page=1, page_size=1000, **_kwargs):
+        idx = page - 1
+        results = pages[idx] if idx < len(pages) else []
+        return {"results": results, "count": total}
+
+    return _get_streams
+
+
+class TestGetStaleStreamIds:
+    """Tests for GET /api/streams/stale-ids."""
+
+    @pytest.mark.asyncio
+    async def test_returns_only_stale_stream_ids(self, async_client):
+        """Filters to streams with is_stale truthy, carrying last_seen."""
+        mock_client = AsyncMock()
+        mock_client.get_streams.side_effect = _paged_get_streams([
+            [
+                {"id": 1, "name": "A", "is_stale": True, "last_seen": "2026-07-01T00:00:00Z"},
+                {"id": 2, "name": "B", "is_stale": False, "last_seen": None},
+                {"id": 3, "name": "C", "is_stale": True, "last_seen": None},
+            ],
+        ])
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None
+
+        with patch("routers.streams.get_client", return_value=mock_client), \
+             patch("routers.streams.get_cache", return_value=mock_cache):
+            response = await async_client.get("/api/streams/stale-ids")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert sorted(data["stale_stream_ids"]) == [1, 3]
+        assert data["count"] == 2
+        assert data["last_seen"]["1"] == "2026-07-01T00:00:00Z"
+        assert data["last_seen"]["3"] is None
+        assert "2" not in data["last_seen"]
+
+    @pytest.mark.asyncio
+    async def test_paginates_past_1000(self, async_client):
+        """Scans every page until the reported count is reached."""
+        page1 = [{"id": i, "name": f"S{i}", "is_stale": False} for i in range(1000)]
+        page2 = [
+            {"id": 1000, "name": "Stale One", "is_stale": True, "last_seen": "2026-06-01T00:00:00Z"},
+            {"id": 1001, "name": "Not Stale", "is_stale": False},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get_streams.side_effect = _paged_get_streams([page1, page2])
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None
+
+        with patch("routers.streams.get_client", return_value=mock_client), \
+             patch("routers.streams.get_cache", return_value=mock_cache):
+            response = await async_client.get("/api/streams/stale-ids")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["stale_stream_ids"] == [1000]
+        assert data["count"] == 1
+        assert mock_client.get_streams.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_caches_result_second_call_no_client_hit(self, async_client):
+        """A second call within TTL is served from cache, not the client."""
+        mock_client = AsyncMock()
+        mock_client.get_streams.side_effect = _paged_get_streams([
+            [{"id": 1, "name": "A", "is_stale": True, "last_seen": None}],
+        ])
+        real_cache = {}
+
+        class FakeCache:
+            def get(self, key, ttl=None):
+                return real_cache.get(key)
+
+            def set(self, key, value):
+                real_cache[key] = value
+
+        with patch("routers.streams.get_client", return_value=mock_client), \
+             patch("routers.streams.get_cache", return_value=FakeCache()):
+            first = await async_client.get("/api/streams/stale-ids")
+            second = await async_client.get("/api/streams/stale-ids")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json() == second.json()
+        # Only the first call should have hit the upstream client.
+        assert mock_client.get_streams.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_bypass_cache_refetches(self, async_client):
+        """bypass_cache=True skips the cache and re-scans the client."""
+        mock_client = AsyncMock()
+        mock_client.get_streams.side_effect = _paged_get_streams([
+            [{"id": 1, "name": "A", "is_stale": True, "last_seen": None}],
+        ])
+        real_cache = {}
+
+        class FakeCache:
+            def get(self, key, ttl=None):
+                return real_cache.get(key)
+
+            def set(self, key, value):
+                real_cache[key] = value
+
+        with patch("routers.streams.get_client", return_value=mock_client), \
+             patch("routers.streams.get_cache", return_value=FakeCache()):
+            await async_client.get("/api/streams/stale-ids")
+            response = await async_client.get("/api/streams/stale-ids?bypass_cache=true")
+
+        assert response.status_code == 200
+        assert mock_client.get_streams.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_no_stale_streams_returns_empty(self, async_client):
+        """Empty-state: no provider-stale streams returns an empty list, not an error."""
+        mock_client = AsyncMock()
+        mock_client.get_streams.side_effect = _paged_get_streams([
+            [{"id": 1, "name": "A", "is_stale": False}],
+        ])
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None
+
+        with patch("routers.streams.get_client", return_value=mock_client), \
+             patch("routers.streams.get_cache", return_value=mock_cache):
+            response = await async_client.get("/api/streams/stale-ids")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["stale_stream_ids"] == []
+        assert data["count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_client_error_returns_500(self, async_client):
+        """Upstream failure surfaces as a 500, not a silent empty result."""
+        mock_client = AsyncMock()
+        mock_client.get_streams.side_effect = Exception("Dispatcharr unreachable")
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None
+
+        with patch("routers.streams.get_client", return_value=mock_client), \
+             patch("routers.streams.get_cache", return_value=mock_cache):
+            response = await async_client.get("/api/streams/stale-ids")
+
+        assert response.status_code == 500

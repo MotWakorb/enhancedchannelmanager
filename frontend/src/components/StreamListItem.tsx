@@ -16,6 +16,14 @@ export interface StreamListItemProps {
   showStreamUrls?: boolean;
   streamStats?: StreamStats | null;
   strikeThreshold?: number;
+  /**
+   * bead enhancedchannelmanager-po78p / GH #696 — true when the stream is
+   * flagged `is_stale` by Dispatcharr (its own M3U refresh no longer
+   * re-matched it in the source playlist). The caller resolves this against
+   * a single source of truth (the `/api/streams/stale-ids` set) rather than
+   * trusting `stream.is_stale`, which may lag that cache.
+   */
+  isStale?: boolean;
 }
 
 export const StreamListItem = memo(function StreamListItem({
@@ -28,7 +36,8 @@ export const StreamListItem = memo(function StreamListItem({
   onPreview,
   showStreamUrls = true,
   streamStats,
-  strikeThreshold = 0
+  strikeThreshold = 0,
+  isStale = false
 }: StreamListItemProps) {
   const {
     attributes,
@@ -135,6 +144,19 @@ export const StreamListItem = memo(function StreamListItem({
                 {formatAudioChannels(streamStats.audio_channels)}
               </span>
             )}
+          </span>
+        )}
+        {/* Provider-stale indicator: Dispatcharr no longer lists this stream
+            in the source playlist (bead enhancedchannelmanager-po78p / GH
+            #696). Distinct from probe status below — a stale stream may
+            still pass every probe it gets. */}
+        {isStale && (
+          <span
+            className="meta-tag stream-stale"
+            title={stream.last_seen ? `No longer listed by provider — last seen ${stream.last_seen}` : 'No longer listed by provider (stale)'}
+          >
+            <span className="material-icons">history</span>
+            STALE
           </span>
         )}
         {/* Probe status indicator for failed/timeout */}

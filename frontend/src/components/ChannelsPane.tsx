@@ -1424,6 +1424,11 @@ export function ChannelsPane({
 
   // Stream stats state for displaying probe metadata
   const [streamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
+  // Dispatcharr-stale stream ids (bead enhancedchannelmanager-po78p / GH
+  // #696) — the single source of truth for stale-stream decoration in this
+  // pane. Populated best-effort by the mount effect below; an empty set
+  // just means no decorations render, not an error state.
+  const [staleStreamIds, setStaleStreamIds] = useState<Set<number>>(new Set());
   const [probingChannels, setProbingChannels] = useState<Set<number>>(new Set());
   const [probingGroups, setProbingGroups] = useState<Set<number | 'ungrouped'>>(new Set());
 
@@ -1792,6 +1797,22 @@ export function ChannelsPane({
     };
     preloadAllStreamStats();
   }, [channels]);
+
+  // Fetch Dispatcharr-stale stream ids once on mount (bead
+  // enhancedchannelmanager-po78p / GH #696). Best-effort decoration — a
+  // failure here just means stale streams render undecorated, same posture
+  // as the stream-stats preload above.
+  useEffect(() => {
+    const loadStaleStreamIds = async () => {
+      try {
+        const response = await api.getStaleStreamIds();
+        setStaleStreamIds(new Set(response.stale_stream_ids));
+      } catch (err) {
+        logger.debug('Failed to load stale stream ids:', err);
+      }
+    };
+    loadStaleStreamIds();
+  }, []);
 
   // Handle probe channel request - probes all streams in a channel
   const handleProbeChannel = useCallback(async (channel: Channel) => {
@@ -5452,6 +5473,8 @@ export function ChannelsPane({
                         const stats = streamStatsMap.get(streamId);
                         return stats && stats.probe_status === 'success' && stats.is_low_fps;
                       })}
+                      hasStaleStreams={channel.streams.some(streamId => staleStreamIds.has(streamId))}
+                      staleStreamCount={channel.streams.filter(streamId => staleStreamIds.has(streamId)).length}
                       onPreviewChannel={() => handlePreviewChannel(channel)}
                       proposedNormalizedName={(() => {
                         const preview = normalizePreviews.get(channel.id);
@@ -5516,6 +5539,7 @@ export function ChannelsPane({
                                           showStreamUrls={showStreamUrls}
                                           streamStats={streamStatsMap.get(stream.id) ?? null}
                                           strikeThreshold={strikeThreshold}
+                                          isStale={staleStreamIds.has(stream.id)}
                                         />
                                       </div>
                                     ))}
@@ -5538,6 +5562,7 @@ export function ChannelsPane({
                                       showStreamUrls={showStreamUrls}
                                       streamStats={streamStatsMap.get(stream.id) ?? null}
                                       strikeThreshold={strikeThreshold}
+                                      isStale={staleStreamIds.has(stream.id)}
                                     />
                                   </div>
                                 ))}

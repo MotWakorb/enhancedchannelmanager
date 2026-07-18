@@ -1966,6 +1966,24 @@ export function StreamsPane({
                     <span className="expand-icon">{group.expanded ? '▼︎' : '▶︎'}</span>
                     <span className="group-name">{group.name}</span>
                     <span className="group-count">{streamGroupCounts.get(group.name) ?? group.streams.length}</span>
+                    {(() => {
+                      // bead enhancedchannelmanager-po78p / GH #696 — group-level
+                      // stale-count pill. Streams pane rows already carry
+                      // Dispatcharr's own `is_stale` flag verbatim, so no extra
+                      // fetch is needed here (unlike ChannelsPane, which resolves
+                      // against a fetched stale-id set for cross-pane consistency).
+                      const staleCount = group.streams.filter((s) => s.is_stale).length;
+                      if (staleCount === 0) return null;
+                      return (
+                        <span
+                          className="group-stale-count"
+                          title={`${staleCount} stream${staleCount === 1 ? '' : 's'} no longer listed by provider (stale)`}
+                        >
+                          <span className="material-icons" aria-hidden="true">history</span>
+                          {staleCount}
+                        </span>
+                      );
+                    })()}
                     {isEditMode && onBulkCreateFromGroup && (
                       <button
                         className="bulk-create-btn"
@@ -1994,7 +2012,7 @@ export function StreamsPane({
                         <div
                           key={stream.id}
                           data-stream-id={stream.id}
-                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''}`}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''} ${stream.is_stale ? 'is-stale' : ''}`}
                           onClick={(e) => {
                             // In edit mode, clicking the row does nothing (use checkbox to select)
                             // Outside edit mode, clicking the row does nothing either
@@ -2043,6 +2061,15 @@ export function StreamsPane({
                           )}
                           <div className="stream-info">
                             <span className="stream-name">{stream.name}</span>
+                            {stream.is_stale && (
+                              <span
+                                className="meta-tag stream-stale"
+                                title={stream.last_seen ? `No longer listed by provider — last seen ${stream.last_seen}` : 'No longer listed by provider (stale)'}
+                              >
+                                <span className="material-icons">history</span>
+                                STALE
+                              </span>
+                            )}
                             {showStreamUrls && stream.url && (
                               <span className="stream-url" title={stream.url}>
                                 {stream.url}
