@@ -9,10 +9,10 @@ import re
 import logging
 from typing import Optional
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 import safe_regex
 from channel_pipeline_schema import Condition, ConditionType
+from date_placeholders import expand_date_placeholders
 
 
 logger = logging.getLogger(__name__)
@@ -187,96 +187,17 @@ class ConditionEvaluator:
             self._all_channel_names.update(names_set)
 
     def _expand_date_placeholders(self, text: str, allow_ranges: bool = True) -> str:
+        """Expand {date...} / {today...} placeholders in text.
+
+        Thin delegate to :func:`date_placeholders.expand_date_placeholders`
+        — the single source of truth for this token grammar, also consumed
+        by the write-time validation gates (``regex_lint``,
+        ``channel_pipeline_schema.Condition.validate``) so a rule that
+        saves is guaranteed to expand identically at run time
+        (bead enhancedchannelmanager-qa43j). See that module's docstring
+        for the full supported-format list and routing rationale.
         """
-        Expand {date...} or {today...} placeholders in text.
-
-        Args:
-            text: Text with potential placeholders
-            allow_ranges: If True, expansions like {date+3} return a regex group (d1|d2|d3).
-                         If False, only single-date placeholders are expanded.
-
-        Supported formats:
-        - {date} or {today} -> YYYY-MM-DD (today)
-        - {date+N} -> today + N days (range: today to today+N)
-        - {date-N} -> today - N days (range: today to today-N)
-        - {date+Nd} -> today + N days (range: today to today+N)
-        - {date+Nw} -> today + N weeks (range: today to today+N*7)
-        - {date:FORMAT} -> today formatted (e.g., {date:%d %b})
-        """
-        if not text or not isinstance(text, str) or "{" not in text:
-            return text
-
-        pattern = r"\{(?:date|today)([+-]\d+[dw]?)?(:[^}]+)?\}"
-
-        def replace_match(match):
-            offset_str = match.group(1)
-            format_str = match.group(2)
-
-            base_date = datetime.now()
-
-            # Default unit is days
-            unit = "d"
-            val_str = None
-            val = 0
-
-            if offset_str:
-                if not allow_ranges:
-                    return match.group(0)  # Don't expand ranges if not allowed
-
-                val_str = offset_str
-                # Check if specific unit provided (d=days, w=weeks)
-                if offset_str[-1].lower() in ("d", "w"):
-                    unit = offset_str[-1].lower()
-                    val_str = offset_str[:-1]
-
-                try:
-                    # Parse the numerical offset value
-                    val = int(val_str)
-                except ValueError:
-                    return match.group(0)  # Return original if parsing fails
-
-            # Remove colon from format string if present
-            fmt = "%Y-%m-%d"
-            if format_str:
-                fmt = format_str[1:]  # Skip the ':'
-
-            if val == 0:
-                try:
-                    return base_date.strftime(fmt)
-                except ValueError:
-                    return match.group(0)
-
-            # Range calculation
-            days_to_add = val
-            if unit == "w":
-                days_to_add = val * 7
-
-            max_days = 90
-            # Cap the range at 90 days to prevent huge regex generation
-            if days_to_add > max_days:
-                days_to_add = max_days
-            elif days_to_add < -max_days:
-                days_to_add = -max_days
-
-            dates = []
-            # range is exclusive at end, so we need +1 or -1 to include the target date
-            step = 1 if days_to_add > 0 else -1
-            end = days_to_add + step
-
-            try:
-                for i in range(0, end, step):
-                    d = base_date + timedelta(days=i)
-                    dates.append(d.strftime(fmt))
-                return f"({'|'.join(dates)})"
-            except ValueError:
-                return match.group(0)
-        # bd-eio04.15: route through safe_regex for ReDoS protection. The
-        # pattern here is a module-literal; the wrapped call still provides
-        # defense-in-depth because 'text' is user-supplied (rule condition
-        # strings). On timeout, safe_regex.sub returns 'text' unchanged,
-        # which means placeholders simply aren't expanded — an acceptable
-        # degradation that preserves the caller's downstream flow.
-        return safe_regex.sub(pattern, replace_match, text)
+        return expand_date_placeholders(text, allow_ranges=allow_ranges)
 
     def evaluate(self, condition: Condition | dict, context: StreamContext) -> EvaluationResult:
         """

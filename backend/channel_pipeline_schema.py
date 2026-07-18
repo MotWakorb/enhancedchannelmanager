@@ -13,6 +13,7 @@ import json
 
 import safe_regex
 from regex_lint import lint_replacement_group_refs
+from date_placeholders import expand_date_placeholders
 
 logger = logging.getLogger(__name__)
 
@@ -170,8 +171,14 @@ class Condition:
                 # PatternTooLongError (length cap) and wrapped regex
                 # syntax errors, mirroring the runtime path used by
                 # channel_pipeline_evaluator (bd-eio04.15).
+                #
+                # enhancedchannelmanager-qa43j: expand {date...}/{today...}
+                # tokens the SAME way channel_pipeline_evaluator does
+                # before it compiles this value at run time — otherwise a
+                # documented, runtime-supported token like {date+3d} fails
+                # here as invalid raw regex even though it evaluates fine.
                 try:
-                    safe_regex.compile(self.value)
+                    safe_regex.compile(expand_date_placeholders(self.value))
                 except safe_regex.SafeRegexError as e:
                     errors.append(f"Invalid regex pattern for {self.type}: {e}")
 

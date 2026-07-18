@@ -429,6 +429,117 @@ class TestBulkHelpers:
 
 
 # =========================================================================
+# Date-token expansion before compile (enhancedchannelmanager-qa43j).
+#
+# {date}/{today}/{date+Nd}/{date-N}/{date:FORMAT} are a documented,
+# runtime-supported feature of channel_pipeline_evaluator — the evaluator
+# expands them BEFORE compiling a condition's regex value. Prior to this
+# fix, lint_conditions_json compiled the RAW value, so these tokens were
+# rejected as invalid regex ({...} = quantifier syntax) even though the
+# rule would have worked fine at run time. The four auto-creation regex
+# condition types must now mirror the evaluator's expansion; normalization's
+# ``regex`` type must NOT (it has no date-expansion feature at run time).
+# =========================================================================
+
+
+class TestDateTokenExpansionBeforeCompile:
+    @pytest.mark.parametrize("ctype", [
+        "stream_name_matches",
+        "stream_group_matches",
+        "tvg_id_matches",
+        "channel_exists_matching",
+    ])
+    @pytest.mark.parametrize("value", [
+        "{date}",
+        "{date+3d}",
+        "{date+2w}",
+        "{date-1}",
+        "{date:%Y-%m-%d}",
+        "ESPN-{date+3d}-HD",  # token embedded in a larger pattern
+    ])
+    def test_date_tokens_accepted_for_regex_condition_types(self, ctype, value):
+        """Every auto-creation regex condition type accepts every
+        documented date-token shape — routing matches the evaluator."""
+        viols = lint_conditions_json([{"type": ctype, "value": value}])
+        assert viols == [], f"{ctype!r}/{value!r} unexpectedly rejected: {viols}"
+
+    def test_normalization_regex_type_does_not_expand_date_tokens(self):
+        """Normalization's ``regex`` condition type has no runtime date
+        expansion — a raw {date+3d} there is genuinely invalid regex and
+        must still be rejected."""
+        viols = lint_conditions_json([{"type": "regex", "value": "{date+3d}"}])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_COMPILE_ERROR"
+
+    def test_still_rejects_genuinely_invalid_regex(self):
+        """A date token expanding successfully must not mask an
+        unrelated, genuinely broken pattern elsewhere in the value."""
+        viols = lint_conditions_json([
+            {"type": "stream_name_matches", "value": "{date+3d}(unbalanced"}
+        ])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_COMPILE_ERROR"
+
+    @pytest.mark.parametrize("value", ["{date+}", "{dat}", "{da}"])
+    def test_malformed_tokens_still_rejected(self, value):
+        """Malformed tokens (bad offset syntax, misspelled keyword) don't
+        match the expansion regex, so they pass through unexpanded — same
+        as at runtime — and correctly fail compile, matching the
+        evaluator's silent-never-match runtime behavior for the same
+        input (safe_regex.search returns None on a compile error)."""
+        viols = lint_conditions_json([
+            {"type": "stream_name_matches", "value": value}
+        ])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_COMPILE_ERROR"
+
+    def test_date_range_recurses_into_logical_operators(self):
+        """Date tokens inside AND/OR/NOT sub-conditions are expanded too —
+        the recursive walk must apply the same per-type routing at every
+        depth."""
+        viols = lint_conditions_json([
+            {
+                "type": "and",
+                "conditions": [
+                    {"type": "stream_name_matches", "value": "{date+3d}"},
+                ],
+            }
+        ])
+        assert viols == []
+
+    def test_oversize_expansion_of_large_date_range_is_rejected(self):
+        """A date range near the 90-day cap can expand past the 500-char
+        pattern-length cap. safe_regex.search enforces the SAME cap at
+        run time (returns None, never matches) — so rejecting this at
+        save time is correct, not a regression: the rule would silently
+        never fire if saved."""
+        viols = lint_conditions_json([
+            {"type": "stream_name_matches", "value": "{date+90d}"}
+        ])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_TOO_LONG"
+
+    def test_contains_condition_types_are_not_regex_linted(self):
+        """stream_name_contains / stream_group_contains never go through
+        lint_pattern at all (they're substring compares, not regex) — a
+        date token there is a no-op either way. Documents the existing,
+        unchanged behavior so a future change to the routing table
+        notices if this assumption breaks."""
+        viols = lint_conditions_json([
+            {"type": "stream_name_contains", "value": "{date+3d}"},
+        ])
+        assert viols == []
+
+    def test_advisory_path_routes_date_tokens_identically(self):
+        """lint_conditions_json_advisory must not emit a false advisory
+        for a date token it failed to expand."""
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_name_matches", "value": "{date+3d}"},
+        ])
+        assert viols == []
+
+
+# =========================================================================
 # Replacement group references (enhancedchannelmanager-2uwi3).
 # =========================================================================
 

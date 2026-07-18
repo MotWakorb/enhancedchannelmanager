@@ -741,6 +741,8 @@ The **Global** variant checks against all channel groups at once, while the **No
 
 Regex conditions support date patterns that automatically expand to match current dates. For example, a pattern like `{date:YYYY-MM-DD}` in a regex condition will expand to match today's date. This is useful for matching streams that include dates in their names (e.g., PPV events). Date expansion supports patterns up to 90 days out to prevent regex overload. Contributed by @lpukatch.
 
+Saving a rule validates the *expanded* pattern, so a date token like `{date+3d}` saves without a regex-validation error — the same expansion the pipeline applies when the rule actually runs.
+
 ### Actions
 
 Define what happens when conditions match:
