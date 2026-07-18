@@ -27,10 +27,19 @@ bd update <id> --description "Detailed description of changes made"
 
 ### 3. Increment the Version
 
-Edit `frontend/package.json` version using bug fix build number format (e.g., `0.12.0-0014`).
+The version literal is hand-edited in **three** files, and all three must move in lockstep — see [`docs/versioning.md`](versioning.md#touchpoints) → Touchpoints for the canonical list. CI enforces this via the `version-consistency` job (`scripts/check_version_consistency.py`) and fails the PR on divergence.
 
-Re-run build to verify:
+| File | Identifier to change |
+| --- | --- |
+| `frontend/package.json` | `"version"` (canonical source) |
+| `backend/routers/backup.py` | `APP_VERSION` |
+| `backend/main.py` | `version=` kwarg to `FastAPI(...)` |
+
+Bump all three to the same string, using bug fix build number format (e.g., `0.12.0-0014`).
+
+Verify locally before pushing — run both checks, and both must pass:
 ```bash
+python scripts/check_version_consistency.py   # must report all 3 agree
 cd frontend && npm run build
 ```
 
