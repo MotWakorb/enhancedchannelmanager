@@ -362,6 +362,19 @@ Three layers defend against ReDoS, each at a different lifecycle stage:
    Rejects return HTTP 422 with a structured error envelope pointing back to
    this style-guide section.
 
+   **Channel Pipeline date tokens are expanded before this lint compiles
+   the pattern** (`backend/date_placeholders.py`, enhancedchannelmanager-qa43j).
+   `{date}`, `{date+3d}`, `{date:FORMAT}`, etc. are a documented runtime
+   feature (USER_GUIDE.md § "Date Expansion in Regex") that
+   `channel_pipeline_evaluator` expands before compiling a condition's
+   pattern — the write-time gate must expand the same tokens the same way
+   before compiling, or a valid, runtime-supported pattern is rejected as
+   invalid raw regex. This expansion applies only to the four Channel
+   Pipeline regex condition types (`stream_name_matches`,
+   `stream_group_matches`, `tvg_id_matches`, `channel_exists_matching`);
+   normalization's `regex` condition type has no date-expansion feature at
+   run time and is intentionally excluded.
+
 2. **Runtime timeout at call (bd-eio04.5 — `backend/safe_regex.py`).**
    Every regex evaluated against user data at serve time goes through
    `safe_regex`. Even if a pattern slips past the write-time lint (older rows,

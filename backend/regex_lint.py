@@ -33,6 +33,7 @@ from dataclasses import dataclass, field as _dc_field
 from typing import Any, Iterable, Literal
 
 import safe_regex
+from date_placeholders import expand_date_placeholders
 
 logger = logging.getLogger(__name__)
 
@@ -580,6 +581,36 @@ def lint_pattern_fields(fields: Iterable[tuple[str, str | None]]) -> list[LintVi
     return out
 
 
+# Auto-creation (Channel Pipeline) condition types whose value is
+# date-token-expanded by channel_pipeline_evaluator BEFORE the pattern is
+# compiled at run time (bd-eio04.15 / enhancedchannelmanager-qa43j) — see
+# ``date_placeholders`` module docstring for the full rationale. The
+# write-time gates below must expand the same way before compiling, or a
+# documented, runtime-supported token like ``{date+3d}`` gets rejected as
+# invalid raw regex even though it would evaluate correctly.
+#
+# Deliberately excludes normalization's ``regex`` condition type —
+# normalization has no date-expansion feature at runtime, so a raw
+# ``{date+3d}`` there is genuinely invalid regex on both sides of the gate.
+_DATE_TOKEN_CONDITION_TYPES = frozenset({
+    "stream_name_matches",
+    "stream_group_matches",
+    "tvg_id_matches",
+    "channel_exists_matching",
+})
+
+
+def _maybe_expand_date_tokens(ctype: str, value: Any) -> Any:
+    """Expand ``{date...}``/``{today...}`` tokens for the condition types
+    that the evaluator expands at run time; pass everything else through
+    unchanged. Non-string values (e.g. a stray int) are returned as-is —
+    :func:`lint_pattern` already handles non-string patterns.
+    """
+    if ctype in _DATE_TOKEN_CONDITION_TYPES and isinstance(value, str):
+        return expand_date_placeholders(value)
+    return value
+
+
 def lint_conditions_json(conditions: list | None, prefix: str = "conditions") -> list[LintViolation]:
     """Walk a list of condition objects; lint any pattern-bearing values.
 
@@ -590,6 +621,12 @@ def lint_conditions_json(conditions: list | None, prefix: str = "conditions") ->
     types that take regex: ``stream_name_matches``, ``stream_group_matches``,
     ``tvg_id_matches``, ``channel_exists_matching``. Normalization
     rule condition type ``regex`` also has a regex value.
+
+    For the four auto-creation regex types (not normalization's ``regex``),
+    the value is date-token-expanded via :func:`_maybe_expand_date_tokens`
+    before linting — mirroring the expansion
+    ``channel_pipeline_evaluator`` applies before compiling the same
+    pattern at run time (enhancedchannelmanager-qa43j).
     """
     if not conditions:
         return []
@@ -617,7 +654,7 @@ def lint_conditions_json(conditions: list | None, prefix: str = "conditions") ->
                 )
             continue
         if ctype in regex_condition_types:
-            value = cond.get("value")
+            value = _maybe_expand_date_tokens(ctype, cond.get("value"))
             out.extend(lint_pattern(value, field=f"{prefix}[{idx}].value"))
     return out
 
@@ -678,9 +715,10 @@ def lint_conditions_json_advisory(
             continue
 
         if ctype in _REGEX_CONDITION_TYPES:
+            value = _maybe_expand_date_tokens(ctype, cond.get("value"))
             out.extend(
                 lint_pattern_advisory(
-                    cond.get("value"), field=f"{prefix}[{idx}].value"
+                    value, field=f"{prefix}[{idx}].value"
                 )
             )
         elif ctype in _CONTAINS_CONDITION_TYPES:

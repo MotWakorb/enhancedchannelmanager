@@ -1256,6 +1256,50 @@ class TestSafeRegexMigrationWriteTimeValidation:
         assert errors == []
 
 
+class TestDateTokenExpansionInConditionValidate:
+    """Condition.validate() is a SECOND write-time gate (independent of
+    regex_lint.lint_conditions_json — see routers/channel_pipeline.py's
+    create/update handlers, which run both). It must expand
+    {date...}/{today...} tokens identically before compiling, or a rule
+    can clear the lint gate and still 400 here (enhancedchannelmanager-qa43j).
+    """
+
+    @pytest.mark.parametrize("ctype", [
+        "stream_name_matches",
+        "stream_group_matches",
+        "tvg_id_matches",
+        "channel_exists_matching",
+    ])
+    @pytest.mark.parametrize("value", [
+        "{date}",
+        "{date+3d}",
+        "{date+2w}",
+        "{date-1}",
+        "{date:%Y-%m-%d}",
+        "ESPN-{date+3d}-HD",
+    ])
+    def test_date_tokens_accepted(self, ctype, value):
+        cond = Condition(type=ctype, value=value)
+        errors = cond.validate()
+        assert errors == [], f"{ctype!r}/{value!r} unexpectedly rejected: {errors}"
+
+    def test_still_rejects_genuinely_invalid_regex_alongside_a_date_token(self):
+        cond = Condition(type="stream_name_matches", value="{date+3d}(unbalanced")
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    @pytest.mark.parametrize("value", ["{date+}", "{dat}", "{da}"])
+    def test_malformed_tokens_still_rejected(self, value):
+        """Unexpandable tokens pass through unchanged (same as at run
+        time) and correctly fail compile — matching the evaluator's
+        silent-never-match behavior for the same malformed input."""
+        cond = Condition(type="stream_name_matches", value=value)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+
 class TestScoredFuzzyMergeStreams:
     """enhancedchannelmanager-jnzst Component A — scored-fuzzy validation.
 
