@@ -2450,7 +2450,7 @@ class TestDebugBundleEventSyncMatching:
 
         # bead yjchp: per-rule pre-flight status (the unattended run gates
         # on exactly this check). The fixture settings are all correct.
-        assert entry["preflight"] == {"ok": True, "failures": []}
+        assert entry["preflight"] == {"ok": True, "failures": [], "warnings": []}
 
         summary = entry["summary"]
         for key in (

@@ -187,6 +187,87 @@ describe('EventSyncPreviewPanel', () => {
     expect(screen.getByTestId('event-sync-summary')).toBeInTheDocument();
   });
 
+  it('surfaces the inert staleness-rail warning without a failure (bead 2ey2y)', () => {
+    render(
+      <EventSyncPreviewPanel
+        preview={buildPreview({
+          preflight: {
+            ok: true,
+            failures: [],
+            warnings: [
+              {
+                check: 'staleness_rail_snapshots',
+                expected: 'a previous-day M3U snapshot covering at least one secondary stream',
+                got: 'no snapshot coverage for any of 54 secondary stream(s)',
+                message: 'The stale-dateless guard is enabled but currently INERT: the guard fails open.',
+              },
+            ],
+          },
+        })}
+        loading={false}
+        error={null}
+        onRunPreview={vi.fn()}
+      />
+    );
+
+    const preflight = screen.getByTestId('event-sync-preflight');
+    expect(preflight).toHaveTextContent('Pre-flight warning:');
+    expect(preflight).toHaveTextContent('the guard fails open');
+    expect(preflight).toHaveTextContent(
+      'got no snapshot coverage for any of 54 secondary stream(s).'
+    );
+    // Advisory only — the results still render alongside the warning.
+    expect(screen.getByTestId('event-sync-summary')).toBeInTheDocument();
+  });
+
+  it('renders no pre-flight block when checks pass and warnings are empty', () => {
+    render(
+      <EventSyncPreviewPanel
+        preview={buildPreview()}
+        loading={false}
+        error={null}
+        onRunPreview={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId('event-sync-preflight')).not.toBeInTheDocument();
+  });
+
+  it('includes the staleness counts in the summary line only when non-zero (bead 2ey2y)', () => {
+    const base = buildPreview();
+    const { rerender } = render(
+      <EventSyncPreviewPanel
+        preview={{
+          ...base,
+          summary: {
+            ...base.summary,
+            stale_suspect_streams: 3,
+            freshness_unknown_streams: 1,
+          },
+        }}
+        loading={false}
+        error={null}
+        onRunPreview={vi.fn()}
+      />
+    );
+
+    const summary = screen.getByTestId('event-sync-summary');
+    expect(summary).toHaveTextContent('3 stale-suspect names');
+    expect(summary).toHaveTextContent('1 name of unknown freshness');
+
+    // Zero (or absent, on older payloads) counts add nothing.
+    rerender(
+      <EventSyncPreviewPanel
+        preview={base}
+        loading={false}
+        error={null}
+        onRunPreview={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId('event-sync-summary')).not.toHaveTextContent('stale-suspect');
+    expect(screen.getByTestId('event-sync-summary')).not.toHaveTextContent('unknown freshness');
+  });
+
   it('renders distinct unmatched and parse-failure panels', () => {
     render(
       <EventSyncPreviewPanel

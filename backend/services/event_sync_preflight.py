@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 CHECK_MASTER_AUTO_SYNC_ON = "master_auto_sync_on"
 CHECK_SECONDARY_AUTO_SYNC_OFF = "secondary_auto_sync_off"
 CHECK_GROUP_SETTINGS_FOUND = "group_settings_found"
+# bead 2ey2y: rule-level WARNING id (surfaced in ``warnings``, never flips
+# ``ok``) — the stale-dateless demote rail is enabled but has no snapshot
+# data to act on, so it silently fails open.
+CHECK_STALENESS_RAIL_SNAPSHOTS = "staleness_rail_snapshots"
 
 
 def _build_override_maps(all_settings: dict) -> tuple[dict, dict]:
@@ -152,6 +156,104 @@ def build_event_sync_master_rule_lookup(
     return lookup
 
 
+def count_snapshot_covered_streams(
+    resolved_streams, group_names: dict, stale_lookup: dict
+) -> int:
+    """How many resolved secondary streams have snapshot COVERAGE (bead 2ey2y).
+
+    A stream is *covered* when its (provider, group-name) pair was captured
+    in the previous-day staleness lookup
+    (:func:`services.event_sync_staleness.previous_day_names`) — i.e. the
+    stale-dateless demote rail has data it can act on for that stream.
+    Coverage is NOT a staleness verdict: a group captured AT the snapshot
+    cap still counts as covered, because positive membership (the only
+    demote trigger) remains detectable for capped groups.
+
+    ``resolved_streams`` is any iterable of resolver ``ResolvedStream``-shaped
+    objects (``.stream.provider_id`` / ``.stream.group_id``); ``group_names``
+    maps group id -> channel-group NAME (snapshot groups are keyed by name).
+    """
+    covered = 0
+    for r in resolved_streams:
+        stream = r.stream
+        gname = group_names.get(stream.group_id)
+        if (
+            stream.provider_id is not None
+            and gname
+            and gname in stale_lookup.get(stream.provider_id, {})
+        ):
+            covered += 1
+    return covered
+
+
+def build_staleness_rail_warning(
+    config: dict,
+    *,
+    secondary_stream_count: int,
+    snapshot_covered_count: int,
+) -> dict | None:
+    """Rule-level pre-flight WARNING: the stale-dateless rail is inert (2ey2y).
+
+    The jqwfq demote rail (``assume_current_date`` + ``demote_stale_dateless``)
+    FAILS OPEN when no qualifying M3USnapshot covers the rule's secondary
+    streams — correct behavior, but silently inert: the operator believes the
+    rail protects them when it cannot. This surfaces that state as an explicit
+    warning in the pre-flight result's ``warnings`` list (never a failure —
+    ``ok`` is untouched, nothing is misconfigured on the Dispatcharr side).
+
+    Fires only when ALL of:
+
+    * ``assume_current_date`` is on (the rail is otherwise irrelevant);
+    * ``demote_stale_dateless`` is on (absent key reads TRUE — the backend
+      default, matching the engine/schema default-fill);
+    * at least one secondary stream was fetched (an empty fetch has louder
+      problems than rail coverage);
+    * ZERO fetched streams are snapshot-covered
+      (:func:`count_snapshot_covered_streams`).
+
+    Returns the warning entry dict, or ``None`` when the rail is off or has
+    usable data. Entry shape mirrors the failure teaching shape minus the
+    group fields (``check`` / ``expected`` / ``got`` / ``message``) — this is
+    a rule-level condition, not a per-group one.
+    """
+    if not config.get("assume_current_date"):
+        return None
+    if not config.get("demote_stale_dateless", True):
+        return None
+    if secondary_stream_count <= 0 or snapshot_covered_count > 0:
+        return None
+    logger.warning(
+        "[EVENT-SYNC] staleness rail inert: assume_current_date + "
+        "demote_stale_dateless are ON but no previous-day M3U snapshot "
+        "covers any of the %d secondary stream(s) — the stale-dateless "
+        "guard fails open for this rule",
+        secondary_stream_count,
+    )
+    return {
+        "check": CHECK_STALENESS_RAIL_SNAPSHOTS,
+        "expected": (
+            "a previous-day M3U snapshot covering at least one secondary "
+            "stream's provider + group"
+        ),
+        "got": (
+            f"no snapshot coverage for any of {secondary_stream_count} "
+            f"secondary stream(s)"
+        ),
+        "message": (
+            "The stale-dateless guard is enabled (assume current date + "
+            "demote stale dateless) but currently INERT: no previous-day "
+            "M3U snapshot covers this rule's secondary streams, so no "
+            "dateless name can be recognized as yesterday's leftover and "
+            "every match is treated as fresh (the guard fails open). "
+            "Snapshots are captured by the M3U change monitor (~2x daily) "
+            "for enabled groups only — a young deployment, a disabled "
+            "change monitor, or groups not enabled for capture all leave "
+            "the guard without data. It starts protecting automatically "
+            "once a qualifying snapshot exists."
+        ),
+    }
+
+
 async def check_event_sync_group_settings(
     client, config: dict, all_settings: dict | None = None,
     other_master_rules: dict[int, str] | None = None,
@@ -180,12 +282,17 @@ async def check_event_sync_group_settings(
             message byte-identical to prior behavior.
 
     Returns:
-        ``{"ok": bool, "failures": [ ... ]}`` where each failure carries
-        ``group_id`` / ``role`` / ``check`` / ``expected`` / ``got`` /
-        ``message``. ``ok`` is True only when every check passed. A group
-        absent from every account's settings fails
+        ``{"ok": bool, "failures": [ ... ], "warnings": []}`` where each
+        failure carries ``group_id`` / ``role`` / ``check`` / ``expected`` /
+        ``got`` / ``message``. ``ok`` is True only when every check passed. A
+        group absent from every account's settings fails
         ``group_settings_found`` — scoping to a group no provider carries
         is a stale config worth surfacing, not a silent no-op.
+        ``warnings`` (bead 2ey2y) is always an EMPTY list here — advisory
+        rule-level entries (e.g. :func:`build_staleness_rail_warning`) are
+        appended by the preview/bundle callers AFTER the stream fetch, since
+        they need data this settings-only check does not have. Warnings
+        never flip ``ok``.
     """
     # bead jiscc: read the provider-scoped nested shape (P1 keeps it in sync
     # with the flat keys; fall back to whole-group scopes for a bare config).
@@ -328,4 +435,4 @@ async def check_event_sync_group_settings(
             [_scope_label(s) for s in secondary_scopes],
             [(f["group_id"], f["check"]) for f in failures],
         )
-    return {"ok": not failures, "failures": failures}
+    return {"ok": not failures, "failures": failures, "warnings": []}

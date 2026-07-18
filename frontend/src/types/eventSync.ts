@@ -160,9 +160,25 @@ export interface EventSyncPreflightFailure {
   message: string;
 }
 
+/**
+ * bead 2ey2y: rule-level pre-flight WARNING — advisory, never flips `ok`.
+ * Same teaching shape as a failure minus the per-group fields. Known
+ * backend `check` values: `staleness_rail_snapshots` (the stale-dateless
+ * demote rail is enabled but no previous-day M3U snapshot covers any
+ * secondary stream, so it silently fails open).
+ */
+export interface EventSyncPreflightWarning {
+  check: string;
+  expected: string;
+  got: string;
+  message: string;
+}
+
 export interface EventSyncPreflight {
   ok: boolean;
   failures: EventSyncPreflightFailure[];
+  /** bead 2ey2y: advisory warnings. Absent on older payloads → treat as empty. */
+  warnings?: EventSyncPreflightWarning[];
 }
 
 export interface EventSyncPreviewSummary {
