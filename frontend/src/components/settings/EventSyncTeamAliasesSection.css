@@ -1,0 +1,55 @@
+/* EventSyncTeamAliasesSection (bead ti939.4.2)
+ *
+ * Alias-group cards reuse the shared email-recipients tag-list pattern
+ * (email-recipients-list / email-recipient-tag / add-email-row — see
+ * SettingsTab.css) for the term chips; only the group-card framing and
+ * the note/action rows are styled here.
+ */
+
+.team-alias-group {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-secondary);
+}
+
+.team-alias-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.team-alias-group-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.team-alias-remove-group {
+  color: var(--error-color, #e57373);
+}
+
+.team-alias-note-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.team-aliases-empty {
+  color: var(--text-secondary);
+  font-style: italic;
+  margin: 12px 0;
+}
+
+.team-aliases-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}

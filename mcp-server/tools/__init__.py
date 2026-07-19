@@ -22,6 +22,9 @@ from . import (
     tags,
     sync_targets,
     channels_csv,
+    # ti939.4.2 — appended at the END (not beside channel_pipeline) to stay
+    # clear of the in-flight exclusions PR's insertion point.
+    event_sync_aliases,
 )
 
 _MODULES = [
@@ -45,6 +48,7 @@ _MODULES = [
     tags,
     sync_targets,
     channels_csv,
+    event_sync_aliases,
 ]
 
 

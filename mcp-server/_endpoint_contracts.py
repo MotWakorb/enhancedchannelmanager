@@ -1444,4 +1444,25 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/emby/clear-logos",
         request_fields=frozenset({"logo_types", "channel_ids"}),
     ),
+    # -- event_sync team-alias dictionary (bead ti939.4.2) ------------------
+    # Deliberately placed at the very END of the registry, away from the
+    # exclusion-domain (~line 405) and digest/stats insertion points of the
+    # in-flight PRs #705/#706, to avoid textual merge overlap.
+    # Operator known-equivalence groups ("Man Utd" == "Manchester United"
+    # == "MUFC") consulted by the event matcher's team-token layer on BOTH
+    # the hard-reject and boost paths. Full-replace PUT; backend validates
+    # against the matcher's own term normalization and journals the change.
+    "es_get_team_aliases": Endpoint(
+        name="es_get_team_aliases",
+        method="GET",
+        path="/api/event-sync/team-aliases",
+        response_fields=frozenset({"groups"}),
+    ),
+    "es_update_team_aliases": Endpoint(
+        name="es_update_team_aliases",
+        method="PUT",
+        path="/api/event-sync/team-aliases",
+        request_fields=frozenset({"groups"}),  # TeamAliasesUpdateRequest
+        response_fields=frozenset({"groups"}),
+    ),
 }

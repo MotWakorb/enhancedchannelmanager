@@ -1107,6 +1107,13 @@ async def update_settings(
         # — rebuilding the model would otherwise reset an operator's public-only
         # choice back to the lan_friendly default on the next UI settings-save.
         ssrf_outbound_mode=current_settings.ssrf_outbound_mode,
+        # ti939.4.2: the Event Sync team-alias dictionary is written ONLY
+        # through the dedicated PUT /api/event-sync/team-aliases endpoint
+        # (validated + journaled there), never by the general settings form.
+        # It MUST be preserved from current settings here — rebuilding the
+        # model would otherwise wipe the operator's dictionary on every
+        # ordinary settings save.
+        event_sync_team_aliases=current_settings.event_sync_team_aliases,
     )
     save_settings(new_settings)
     clear_settings_cache()
