@@ -105,6 +105,8 @@ export const DISPOSITION_META: Record<EventSyncDisposition, { label: string; ico
   ambiguous: { label: 'Ambiguous (skipped)', icon: 'help' },
   unmatched: { label: 'Unmatched', icon: 'search_off' },
   parse_failed: { label: 'Parse failure', icon: 'error_outline' },
+  // ti939.3.5: the operator's standing never-attach order.
+  excluded_by_operator: { label: 'Excluded by operator', icon: 'block' },
 };
 
 export const TEAM_VERDICT_META: Record<EventSyncTeamVerdict, { label: string; icon: string }> = {

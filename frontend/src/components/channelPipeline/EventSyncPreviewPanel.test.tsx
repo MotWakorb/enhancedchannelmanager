@@ -410,3 +410,69 @@ describe('EventSyncPreviewPanel', () => {
     });
   });
 });
+
+describe('operator exclusions (bead ti939.3.5)', () => {
+  const noop = vi.fn();
+
+  it('renders the excluded disposition, summary count, and candidate marker', () => {
+    const preview = buildPreview();
+    preview.summary = {
+      ...preview.summary,
+      would_attach: 41,
+      excluded_by_operator: 1,
+    };
+    preview.streams = [
+      {
+        ...preview.streams[0],
+        disposition: 'excluded_by_operator',
+        attach_source: null,
+        would_attach_master: null,
+        excluded_masters: [
+          'Peacock 14: Yankees v Red Sox @ 11 Jul 06:00 PM ET',
+        ],
+        candidates: [
+          {
+            ...preview.streams[0].candidates[0],
+            excluded: true,
+          },
+        ],
+      },
+    ];
+    render(
+      <EventSyncPreviewPanel
+        preview={preview}
+        loading={false}
+        error={null}
+        onRunPreview={noop}
+      />,
+    );
+
+    // Summary line carries the fifth count.
+    expect(screen.getByTestId('event-sync-summary')).toHaveTextContent(
+      '1 excluded by operator',
+    );
+    // The card badge is the distinct disposition (text + icon).
+    expect(screen.getByText('Excluded by operator')).toBeInTheDocument();
+    // The row says WHICH master is excluded...
+    expect(
+      screen.getByText(/Never attaches to: Peacock 14: Yankees v Red Sox/),
+    ).toBeInTheDocument();
+    // ...and the candidate entry carries the never-attach marker.
+    expect(screen.getByText('Excluded (never attaches)')).toBeInTheDocument();
+  });
+
+  it('omits exclusion chrome when nothing is excluded', () => {
+    render(
+      <EventSyncPreviewPanel
+        preview={buildPreview()}
+        loading={false}
+        error={null}
+        onRunPreview={noop}
+      />,
+    );
+    expect(screen.getByTestId('event-sync-summary')).not.toHaveTextContent(
+      'excluded by operator',
+    );
+    expect(screen.queryByText(/Never attaches to:/)).not.toBeInTheDocument();
+  });
+});

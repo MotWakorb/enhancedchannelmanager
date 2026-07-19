@@ -30,8 +30,21 @@ accepts/rejects keyed on content fingerprints
   matcher's hard rejects (team conflict, time window, below the ambiguous
   floor).
 
+**Operator exclusions (bead ti939.3.5)** are a second optional INPUT:
+``exclusions`` carries the rule's "never attach this pairing" fingerprints
+(``models.EventSyncExclusion``, loaded by
+``services.event_sync_exclusion_store``). An EXCLUDED pairing's master is
+removed from the stream's candidate set BEFORE classification — before the
+attach band is honored and before the accept-upgrade step, so an exclusion
+OUTRANKS a prior review-queue accept for the same fingerprint (the two can
+never both apply). A stream whose surviving candidates classify as
+``unmatched`` while at least one pairing was exclusion-suppressed reports
+the distinct ``excluded_by_operator`` disposition — visibly an operator
+"never", not an inexplicable unmatch.
+
 Because preview and attach both call THIS function with the same decisions
-object, decision application inherits the dry-run-parity guarantee.
+and exclusions objects, their application inherits the dry-run-parity
+guarantee.
 * ``unmatched`` — parses fine but no candidate survives (master-as-ceiling
   hedge: this list is the evidence base for any Phase 3 promotion feature).
 * ``parse_failed`` — no complete parsed identity (title or start time
@@ -88,6 +101,7 @@ __all__ = [
     "CONTESTED_SCORE_EPSILON",
     "DEFAULT_MAX_ATTACH_PER_RUN",
     "DISPOSITION_AMBIGUOUS",
+    "DISPOSITION_EXCLUDED",
     "DISPOSITION_PARSE_FAILED",
     "DISPOSITION_UNMATCHED",
     "DISPOSITION_WOULD_ATTACH",
@@ -103,6 +117,11 @@ DISPOSITION_WOULD_ATTACH = "would_attach"
 DISPOSITION_AMBIGUOUS = "ambiguous"
 DISPOSITION_UNMATCHED = "unmatched"
 DISPOSITION_PARSE_FAILED = "parse_failed"
+# Operator exclusion (bead ti939.3.5): the stream's only viable pairing(s)
+# were suppressed by an explicit operator "never attach" — distinct from
+# ``unmatched`` (nothing scored) and from ``ambiguous`` (open question), so
+# preview rows and run counts visibly attribute the outcome to the operator.
+DISPOSITION_EXCLUDED = "excluded_by_operator"
 
 # Machine-readable reasons for an AMBIGUOUS disposition (preview response +
 # journal contract, bead ti939.2.1).
@@ -216,6 +235,13 @@ class ResolvedStream:
       ``MAX_REVIEW_CANDIDATES_PER_STREAM``. Empty otherwise.
     * ``rejected_suppressed`` — how many of this stream's candidates were
       removed because the operator previously REJECTED that pairing.
+
+    Operator-exclusion fields (bead ti939.3.5):
+
+    * ``excluded_suppressed`` — how many of this stream's candidates were
+      removed because an exclusion row forbids that exact pairing.
+    * ``excluded_masters`` — the master names of those removed candidates
+      (display: the preview says WHICH pairing the operator excluded).
     * ``matched_via`` — S5 (bead sf8dj) diagnostic provenance: for a
       ``would_attach`` row, the (machine_key, human_label) pairs of the
       optional relaxations that admitted it (assume_current_date,
@@ -233,6 +259,8 @@ class ResolvedStream:
     review_candidates: tuple[MasterCandidate, ...] = ()
     rejected_suppressed: int = 0
     matched_via: tuple[tuple[str, str], ...] = ()
+    excluded_suppressed: int = 0
+    excluded_masters: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -397,14 +425,23 @@ def _resolve_stream(
     result: StreamMatchResult,
     decisions: ReviewDecisions | None,
     *,
+    exclusions: frozenset[tuple[int, str, str]] | None = None,
     demote_stale_dateless: bool = False,
     patterns: list[dict] | None = None,
     now: datetime | None = None,
 ) -> ResolvedStream:
-    """Classify one stream, applying review-queue decisions (ti939.3.2).
+    """Classify one stream, applying review-queue decisions (ti939.3.2)
+    and operator exclusions (ti939.3.5).
 
     Decision application order (see the module docstring's contract):
 
+    0. EXCLUDED pairings (operator "never attach", bead ti939.3.5) are
+       removed from the candidate set FIRST — before the attach band is
+       honored and before every other step, so an exclusion suppresses
+       threshold attaches, review-queue accept upgrades (exclusion
+       OUTRANKS an accept for the same fingerprint — checked before the
+       reject filter too, so a doubly-marked pairing counts as excluded)
+       and re-enqueueing alike.
     1. REJECTED pairings are removed from the candidate set — an explicit
        operator "no" suppresses both threshold attaches and re-enqueueing
        for that exact pairing. Removal happens BEFORE classification, so
@@ -431,15 +468,24 @@ def _resolve_stream(
        deterministically.
     4. A still-ambiguous stream exposes its enqueue-eligible pairings via
        ``review_candidates`` (attach/ambiguous band, best-first, capped).
+    5. A stream whose FILTERED candidates classify as ``unmatched`` while
+       at least one pairing was exclusion-suppressed reports the distinct
+       ``excluded_by_operator`` disposition — the operator's "never" must
+       be visible in preview/run counts, never disguised as an ordinary
+       unmatch. (Rejects deliberately do NOT get this treatment — a
+       reject answers a queue question; an exclusion is a standing order.)
     """
     candidates = result.candidates
     rejected_suppressed = 0
+    excluded_suppressed = 0
+    excluded_masters: list[str] = []
     keyed: dict[str, tuple[int, str, str]] = {}
 
     has_decisions = decisions is not None and (
         decisions.accepted or decisions.rejected
     )
-    if has_decisions and candidates:
+    has_exclusions = bool(exclusions)
+    if (has_decisions or has_exclusions) and candidates:
         provider = (
             stream.provider_id if stream.provider_id is not None
             else PROVIDER_ID_UNKNOWN
@@ -453,7 +499,12 @@ def _resolve_stream(
                 continue
             key = (provider, shash, event_key)
             keyed[c.master_name] = key
-            if decisions.is_rejected(key):
+            if has_exclusions and key in exclusions:
+                # Step 0 — operator exclusion wins over everything,
+                # including a prior accept for the same fingerprint.
+                excluded_suppressed += 1
+                excluded_masters.append(c.master_name)
+            elif has_decisions and decisions.is_rejected(key):
                 rejected_suppressed += 1
             else:
                 kept.append(c)
@@ -509,6 +560,19 @@ def _resolve_stream(
         if disposition == DISPOSITION_AMBIGUOUS:
             review_candidates = eligible[:MAX_REVIEW_CANDIDATES_PER_STREAM]
 
+    # Step 5 — the forced-out disposition (bead ti939.3.5): nothing left to
+    # attach or review AND at least one pairing was operator-excluded. The
+    # outcome is the operator's standing order, and the preview/run must
+    # say so. When OTHER candidates survive, their disposition stands and
+    # the suppression is reported via the counters instead.
+    if disposition == DISPOSITION_UNMATCHED and excluded_suppressed:
+        logger.info(
+            "[EVENT-SYNC] stream %r: %d pairing(s) EXCLUDED by operator "
+            "(never-attach) — reporting excluded_by_operator",
+            stream.name, excluded_suppressed,
+        )
+        disposition = DISPOSITION_EXCLUDED
+
     return ResolvedStream(
         stream=stream,
         result=result,
@@ -518,6 +582,8 @@ def _resolve_stream(
         attach_source=attach_source,
         review_candidates=review_candidates,
         rejected_suppressed=rejected_suppressed,
+        excluded_suppressed=excluded_suppressed,
+        excluded_masters=tuple(excluded_masters),
     )
 
 
@@ -632,6 +698,7 @@ def resolve_event_sync(
     *,
     now: datetime | None = None,
     decisions: ReviewDecisions | None = None,
+    exclusions: frozenset[tuple[int, str, str]] | None = None,
     attached_stream_ids: set[int] | frozenset[int] | None = None,
 ) -> EventSyncResolution:
     """Resolve every secondary stream against the master channel names.
@@ -655,6 +722,12 @@ def resolve_event_sync(
             (bead ti939.3.2), fingerprint-keyed — see the module docstring
             and :func:`_resolve_stream` for the application contract.
             ``None`` (or empty) preserves pre-queue behavior exactly.
+        exclusions: Operator "never attach" fingerprints for THIS rule
+            (bead ti939.3.5), the same ``(provider_id, stream_name_hash,
+            event_key)`` shape as decision keys. Consulted BEFORE the
+            attach band is honored and before accept upgrades — an
+            exclusion outranks an accept for the same pairing. ``None``
+            (or empty) filters nothing.
         attached_stream_ids: Stream ids already attached to a master
             channel (bead 6xxmp). Master-group streams (group_id ==
             master_group_id, present only when
@@ -770,6 +843,7 @@ def resolve_event_sync(
         for stream, result in zip(streams, results):
             rs = _resolve_stream(
                 stream, result, decisions,
+                exclusions=exclusions,
                 demote_stale_dateless=demote_stale_dateless,
                 patterns=patterns, now=now,
             )

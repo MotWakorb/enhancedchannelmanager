@@ -1278,6 +1278,108 @@ slot will appear in the review queue **once** more after the upgrade;
 answer it once and the decision carries forward daily from then on. Dated
 events do not re-ask.
 
+## Never-attach exclusions (standing operator orders)
+
+An exclusion is a stronger, more durable relative of a review-queue
+reject: a standing **"never attach this exact pairing"** order (bead
+ti939.3.5) that the shared resolver
+(`backend/services/event_sync_resolver.py`) filters out on **every**
+future run and preview, before the attach band is even honored. It exists
+to close the exact loop the epic predicted: because matching is a
+stateless recompute with no memory of past decisions, a false-positive
+attach you manually detach in Dispatcharr gets re-attached again on the
+very next run — forever, until you fix the pattern or threshold. An
+exclusion is the durable "no" that a stateless system otherwise can't
+express.
+
+**Fingerprint semantics — survives refreshes and stream-ID churn.** Like
+review decisions, an exclusion is keyed on the content fingerprint
+`(rule_id, provider_id, stream_name_hash, event_key)` — the secondary
+stream's provider account, a SHA-256 hash of its LOCALS-cleaned raw name,
+and the master's parsed event identity (title + start time) — **never**
+on channel or stream IDs. Provider streams get new Dispatcharr stream IDs
+on every refresh and event channels only live as long as the event, so an
+ID-keyed exclusion would silently stop matching the moment either churned.
+Keyed on content identity instead, the same exclusion keeps suppressing
+the same real-world pairing indefinitely, exactly as a review decision
+does. See [Review queue keying](#review-queue-keying-ti93932--fingerprint-reference)
+below for the full fingerprint definition.
+
+### Creating an exclusion
+
+Two ways in, both producing the same durable row:
+
+1. **The review queue's "Never attach" button** — Channel Pipeline →
+   Event Sync Review, on any pending card. One click does two things:
+   creates the exclusion, then closes the open question as rejected (so
+   it also leaves the queue immediately). These are two separate calls;
+   if the reject half fails after the exclusion succeeds, the pairing is
+   still suppressed — the resolver already honors the exclusion row — and
+   the card shows an error you can retry.
+2. **Directly via API or MCP**, for exclusions that never went through the
+   review queue at all — copy the four fingerprint components from a
+   review row's fields or a preview candidate's context. See
+   `POST /api/event-sync-exclusions` in [`docs/api.md`](api.md) and the
+   MCP `create_event_sync_exclusion` tool. Create is **idempotent** on
+   the fingerprint: excluding an already-excluded pairing returns the
+   existing row (`already_existed: true`) instead of duplicating it, and
+   refreshes the stored note if you supply a new one.
+
+### How it shows up in the preview
+
+An excluded pairing reports the distinct `excluded_by_operator`
+disposition — visibly attributed to the operator, never confused with an
+inexplicable `unmatched` (nothing scored) or an open `ambiguous` question.
+The summary line adds `N excluded by operator` when the count is nonzero,
+and each affected match card carries a **"Never attaches to: \<master
+name\>"** note naming which excluded master(s) the pairing was blocked
+from — shown even on a stream whose *other* candidates still resolve
+normally, so the operator sees the suppression without losing visibility
+into what else the stream matched.
+
+### Scoping
+
+An exclusion is scoped to one **exact** pairing — one rule, one provider
+account, one stream name (hashed), one event identity — not a blanket ban
+on a stream name everywhere, and not a ban on a master channel from every
+secondary. The same stream name from a *different* provider, or matched
+against a *different* event, is unaffected.
+
+### Precedence: exclusion beats accept
+
+An exclusion **outranks** a prior review-queue accept for the same
+fingerprint — the resolver removes excluded candidates from the
+candidate set before the accept-upgrade step runs, so the two can never
+both apply to one pairing. If you accepted a pairing and later decide it
+was wrong, excluding it (rather than only rejecting a fresh queue
+question) is what actually overrides the earlier accept.
+
+### Removing an exclusion
+
+The **exclusions panel** — Channel Pipeline → Event Sync Review, directly
+below the review queue — lists every standing order: the raw stream and
+master names, the owning rule, the provider, when it was created, and any
+note. **Remove** deletes the row; the pairing becomes matchable again on
+the next run or preview. Nothing is re-attached by the removal itself —
+same as elsewhere in this feature, the idempotent run is the applier, not
+the API call.
+
+### Exclusions survive a config restore
+
+A full config restore (legacy YAML export/import or a DBAS artifact
+restore that includes the `auto_creation_rules` / Channel Pipeline
+category) deletes and recreates every Channel Pipeline rule, which would
+otherwise cascade-delete every exclusion along with the rules it FK's to.
+The restore path (`routers.backup._restore_auto_creation_rules`)
+preserves exclusions across that delete-and-recreate the same way it
+preserves review decisions: captured before the delete, then **re-keyed
+onto the restored rule by name** (rule IDs are regenerated on restore, but
+the fingerprint's other three components — provider, stream-name hash,
+event key — are content-based and need no translation). An exclusion
+whose rule name isn't present in the restored set has nothing to re-key
+onto and is dropped; the restore report's warnings note how many were
+dropped this way.
+
 ## Testing & pre-release verification
 
 ### What the automated E2E covers (and what it honestly cannot)
@@ -1463,15 +1565,17 @@ rules don't create channels.
 
 ### Future-state constraint
 
-Any future state that must survive a Dispatcharr refresh — Phase 3
-exclusion lists, anything an operator would expect to persist — **must
-key on content fingerprints / event identity** (parsed title + start
-time, or similar), **never on channel/stream IDs**. This constraint
-exists because of the same stateless-recompute reasoning above: IDs are
-Dispatcharr's, names/content are the stable identity anchor this feature
-can actually reason about across runs. The Phase 2 review queue (next
-section) is the first consumer of this constraint and the reference
-implementation for the next one.
+Any future state that must survive a Dispatcharr refresh — an exclusion
+list, anything an operator would expect to persist — **must key on
+content fingerprints / event identity** (parsed title + start time, or
+similar), **never on channel/stream IDs**. This constraint exists because
+of the same stateless-recompute reasoning above: IDs are Dispatcharr's,
+names/content are the stable identity anchor this feature can actually
+reason about across runs. The Phase 2 review queue (next section) was the
+first consumer of this constraint and the reference implementation for
+the next one; the [never-attach exclusions](#never-attach-exclusions-standing-operator-orders)
+feature (bead ti939.3.5) is the second, built on the identical fingerprint
+shape.
 
 ### Review queue keying (ti939.3.2) — fingerprint reference
 
@@ -1582,8 +1686,9 @@ exactly why" without needing live access to the installation.
 
 Consistent with this project's effective deployment tier: no ADR file for
 this feature (the rationale lives in this document plus code comments),
-no versioned API reference beyond the `event-sync-preview` entry in
-[`docs/api.md`](api.md), no dedicated performance guide.
+no versioned API reference beyond the `event-sync-preview`, Event Sync
+Reviews, and Event Sync Exclusions entries in [`docs/api.md`](api.md), no
+dedicated performance guide.
 
 ## Related
 
@@ -1592,6 +1697,7 @@ no versioned API reference beyond the `event-sync-preview` entry in
 - `backend/services/event_sync_matcher.py` — the matcher (parse → block → score → admit).
 - `backend/services/event_sync_resolver.py` — the shared preview/attach resolution layer.
 - `backend/services/event_sync_preflight.py` — the read-only Dispatcharr group-settings check.
+- `backend/routers/event_sync_exclusions.py` / `backend/services/event_sync_exclusion_store.py` — the [never-attach exclusions](#never-attach-exclusions-standing-operator-orders) CRUD and resolver-loading halves.
 - `backend/channel_pipeline_schema.py` `validate_event_sync_config` — the config validator (single source of truth for defaults/clamps, imported from the matcher).
 - `backend/tests/fixtures/event_sync/matcher_corpus.jsonl` — the frozen regression corpus.
 - `frontend/src/components/channelPipeline/eventSyncShippedPatterns.json` — the shipped pattern definitions consumed by both the frontend picker and a backend test that pins each pattern's example against the real parser.
