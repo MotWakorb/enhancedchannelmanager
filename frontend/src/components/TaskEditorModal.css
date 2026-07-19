@@ -44,6 +44,29 @@
   margin-bottom: 1.5rem;
 }
 
+/* vkktd.4: "enabled but won't run" live warning — the task is enabled but no
+   child schedule is. Amber (--warning tokens): nothing is broken, but the
+   task will silently never fire until a schedule is enabled. */
+.task-editor-modal .schedule-wont-run-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border-radius: var(--radius-md);
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-left: 4px solid var(--warning);
+  color: var(--warning-text);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.task-editor-modal .schedule-wont-run-warning .material-icons {
+  font-size: 1.125rem;
+  flex-shrink: 0;
+}
+
 .task-editor-modal .schedules-header {
   display: flex;
   justify-content: space-between;

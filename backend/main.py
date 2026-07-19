@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0139",
+    version="0.17.6-0140",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -635,8 +635,19 @@ async def actor_source_middleware(request: Request, call_next):
     """
     source_token = None
     batch_token = None
+    automated_token = None
     if request.url.path.startswith("/api/"):
         try:
+            # Automation marker (uliyr follow-up): a client that sends a
+            # non-empty X-ECM-Automated-Client header self-declares as an
+            # automated test client (the backend E2E harness); every other
+            # /api/* request is an operator (real UI / MCP). Captured FIRST —
+            # before the token decode below — so a principal-resolution
+            # failure can never leave an operator row unmarked (NULL is the
+            # purgeable legacy classification).
+            automated_token = _journal.set_automated_client(
+                bool(request.headers.get("X-ECM-Automated-Client"))
+            )
             source_token = _journal.set_mutation_source(
                 _resolve_request_mutation_source(request)
             )
@@ -656,6 +667,8 @@ async def actor_source_middleware(request: Request, call_next):
             _journal.reset_request_batch_id(batch_token)
         if source_token is not None:
             _journal.reset_mutation_source(source_token)
+        if automated_token is not None:
+            _journal.reset_automated_client(automated_token)
 
 
 # Include auth router

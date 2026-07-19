@@ -2731,6 +2731,13 @@ export interface TaskStatus {
   task_description: string;
   status: 'idle' | 'scheduled' | 'running' | 'paused' | 'cancelled' | 'completed' | 'failed';
   enabled: boolean;
+  /**
+   * True firing gate (vkktd.3/vkktd.4): parent `enabled` AND >=1 enabled child
+   * schedule. A task can read `enabled: true` yet never fire when all its
+   * child schedules are disabled — bind UI state to this, never bare `enabled`.
+   * Optional because older backends (< build 0091) don't send it.
+   */
+  effective_enabled?: boolean;
   progress: TaskProgress;
   schedule: TaskScheduleConfig;  // Legacy schedule config
   schedules: TaskSchedule[];  // New multi-schedule support

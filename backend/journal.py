@@ -53,6 +53,42 @@ _batch_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 )
 
 
+# Automation marker (enhancedchannelmanager-uliyr follow-up). Request-scoped
+# tri-state for ``JournalEntry.automated_client``:
+#   True  — the request self-declared as an automated client via the
+#           ``X-ECM-Automated-Client`` header (the backend E2E harness).
+#   False — an /api/* request WITHOUT the header — a real UI/MCP operator.
+#           An operator can NEVER be classified automated: classification
+#           requires the client itself to send the header.
+#   None  — outside any HTTP request (scheduler, pipelines, bandwidth
+#           tracker) → the row's column stays NULL.
+# Header-declared rather than principal-based (unlike ``mutation_source``)
+# because the E2E harness deliberately authenticates as a real user — the
+# bearer credential cannot distinguish it. The failure direction is safe:
+# a forgotten header classifies rows as operator (kept), never as
+# purgeable.
+_automated_client_var: contextvars.ContextVar[Optional[bool]] = contextvars.ContextVar(
+    "ecm_journal_automated_client", default=None
+)
+
+
+def set_automated_client(value: Optional[bool]) -> contextvars.Token:
+    """Set the request-scoped automation marker. Returns a reset token."""
+    return _automated_client_var.set(value)
+
+
+def reset_automated_client(token: contextvars.Token) -> None:
+    """Reset the automation marker using a token from :func:`set_automated_client`."""
+    _automated_client_var.reset(token)
+
+
+def _resolve_automated_client(explicit: Optional[bool]) -> Optional[bool]:
+    """Pick the automation marker to persist: explicit wins, else the request var."""
+    if explicit is not None:
+        return explicit
+    return _automated_client_var.get()
+
+
 def get_request_batch_id() -> Optional[str]:
     """Return the current request's correlation batch id, or ``None``."""
     return _batch_id_var.get()
@@ -114,6 +150,7 @@ def _build_journal_entry(
     user_initiated: bool = True,
     batch_id: Optional[str] = None,
     mutation_source: Optional[str] = None,
+    automated_client: Optional[bool] = None,
 ) -> JournalEntry:
     return JournalEntry(
         timestamp=datetime.utcnow(),
@@ -127,6 +164,7 @@ def _build_journal_entry(
         user_initiated=user_initiated,
         batch_id=_resolve_batch_id(batch_id),
         mutation_source=_resolve_mutation_source(mutation_source),
+        automated_client=_resolve_automated_client(automated_client),
     )
 
 
@@ -367,6 +405,118 @@ def get_stats() -> dict[str, Any]:
         }
     except Exception as e:
         logger.exception("[JOURNAL] Failed to calculate journal stats: %s", e)
+        raise
+    finally:
+        session.close()
+
+
+# =========================================================================
+# Automated-noise purge (enhancedchannelmanager-uliyr)
+# =========================================================================
+# PO policy decision 2026-07-17: auto-purge entries older than 3 days for
+# exactly TWO automated-noise buckets. Everything else is untouched — the
+# manual Purge control (``purge_old_entries`` via DELETE /api/journal/purge)
+# remains the tool for all other categories.
+#
+# Bucket (a) — watch events. ``category="watch"`` is written ONLY by
+# ``bandwidth_tracker`` (watch start / watch stop), always with
+# ``user_initiated=False``. The action-type allowlist plus the
+# ``user_initiated == False`` guard mean any future operator-initiated or
+# unrecognized watch row survives the sweep.
+#
+# Bucket (b) — Channel Pipeline rule create/delete pairs.
+# ``category="auto_creation"`` with ``action_type`` "create"/"delete" is
+# written ONLY by the rule create/delete endpoints in
+# ``routers/channel_pipeline.py``; in practice the bucket is dominated by
+# E2E test-rule churn (e.g. 'E2E event_sync happy path'). PO follow-up
+# decision 2026-07-19: operator-initiated rows are KEPT — the
+# ``automated_client`` marker separates them (the E2E driver authenticates
+# like an operator, so ``mutation_source``/``user_initiated`` cannot).
+# The predicate is ``automated_client IS NOT FALSE``:
+#   True  (self-declared automated harness traffic)      → purged
+#   NULL  (pre-marker legacy rows — the PO's original
+#          measured population; shrinks to zero)          → purged
+#   False (a request without the automation header —
+#          a real UI/MCP operator)                        → KEPT
+# All other auto_creation action types (update, bulk_update, import,
+# run_on_refresh_skipped, rollback, restore_snapshot,
+# circuit_breaker_reset) survive regardless of marker.
+NOISE_RETENTION_DEFAULT_DAYS = 3
+NOISE_WATCH_CATEGORY = "watch"
+NOISE_WATCH_ACTION_TYPES = ("start", "stop")
+NOISE_PIPELINE_CATEGORY = "auto_creation"
+NOISE_PIPELINE_ACTION_TYPES = ("create", "delete")
+
+
+def purge_noise_entries(
+    days: int = NOISE_RETENTION_DEFAULT_DAYS,
+    purge_watch_events: bool = True,
+    purge_pipeline_rule_pairs: bool = True,
+) -> dict[str, int]:
+    """
+    Delete automated-noise journal entries older than ``days`` days.
+
+    Scoped STRICTLY to the two PO-decided noise buckets (see module
+    comment above); every other category/action combination survives.
+    Cutoff math matches :func:`purge_old_entries`: UTC now minus ``days``,
+    strict ``timestamp < cutoff``.
+
+    Args:
+        days: Retention window in days; must be >= 1 (a scheduled deleter
+            must never be misconfigured into sweeping fresh rows).
+        purge_watch_events: Include the watch start/stop bucket.
+        purge_pipeline_rule_pairs: Include the Channel Pipeline rule
+            create/delete bucket.
+
+    Returns:
+        Per-bucket deleted counts: ``{"watch_events": n, "pipeline_rule_pairs": m}``
+    """
+    if days < 1:
+        raise ValueError(f"Noise purge retention must be >= 1 day, got {days}")
+
+    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    counts = {"watch_events": 0, "pipeline_rule_pairs": 0}
+    logger.debug(
+        "[JOURNAL] Purging noise entries older than %s days (watch=%s pipeline_pairs=%s)",
+        days, purge_watch_events, purge_pipeline_rule_pairs,
+    )
+    session: Session = get_session()
+    try:
+        if purge_watch_events:
+            counts["watch_events"] = (
+                session.query(JournalEntry)
+                .filter(
+                    JournalEntry.category == NOISE_WATCH_CATEGORY,
+                    JournalEntry.action_type.in_(NOISE_WATCH_ACTION_TYPES),
+                    JournalEntry.user_initiated.is_(False),
+                    JournalEntry.timestamp < cutoff_date,
+                )
+                .delete(synchronize_session=False)
+            )
+        if purge_pipeline_rule_pairs:
+            counts["pipeline_rule_pairs"] = (
+                session.query(JournalEntry)
+                .filter(
+                    JournalEntry.category == NOISE_PIPELINE_CATEGORY,
+                    JournalEntry.action_type.in_(NOISE_PIPELINE_ACTION_TYPES),
+                    # Operator-marked rows (False) are kept; automated (True)
+                    # and pre-marker legacy (NULL) rows age out. See the
+                    # bucket (b) comment above.
+                    JournalEntry.automated_client.isnot(False),
+                    JournalEntry.timestamp < cutoff_date,
+                )
+                .delete(synchronize_session=False)
+            )
+        session.commit()
+        logger.info(
+            "[JOURNAL] Noise purge deleted %s watch event and %s pipeline rule "
+            "create/delete entries older than %s days",
+            counts["watch_events"], counts["pipeline_rule_pairs"], days,
+        )
+        return counts
+    except Exception as e:
+        logger.exception("[JOURNAL] Failed to purge noise journal entries: %s", e)
+        session.rollback()
         raise
     finally:
         session.close()

@@ -39,6 +39,22 @@ class JournalEntry(Base):
     # an AI-driven mutation is traceable and recoverable; ``user_initiated`` only
     # answers whether a human clicked a button.
     mutation_source = Column(String(20), nullable=True)
+    # Automation marker (enhancedchannelmanager-uliyr follow-up). Whether the
+    # write came from a self-declared automated client:
+    #   True  — the request carried the ``X-ECM-Automated-Client`` header
+    #           (the backend E2E harness) — eligible for the noise purge.
+    #   False — an /api/* request WITHOUT the header (a real UI/MCP
+    #           operator) — the noise purge must keep these rows.
+    #   NULL  — pre-marker legacy rows and non-HTTP internal writers
+    #           (scheduler, pipelines, bandwidth tracker). Legacy rule
+    #           create/delete rows keep aging out of the noise purge until
+    #           the unmarked set shrinks to zero.
+    # Orthogonal to ``mutation_source`` (WHO: ui/mcp_ai/scheduler/...) —
+    # the E2E harness authenticates as a real user, so both automated and
+    # operator traffic read ``mutation_source="ui"``; only this
+    # self-declaration separates them. No index: the sole consumer is the
+    # noise purge's category/action-narrowed scan (idx_journal_category).
+    automated_client = Column(Boolean, nullable=True)
 
     # Indexes for common queries.
     #
@@ -81,6 +97,7 @@ class JournalEntry(Base):
             "user_initiated": self.user_initiated,
             "batch_id": self.batch_id,
             "mutation_source": self.mutation_source,
+            "automated_client": self.automated_client,
         }
 
     def __repr__(self):

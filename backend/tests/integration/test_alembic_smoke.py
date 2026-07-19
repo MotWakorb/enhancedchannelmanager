@@ -1757,6 +1757,13 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE journal_entries "
                     "ADD COLUMN mutation_source VARCHAR(20)"
                 ))
+                # 0037 (enhancedchannelmanager-uliyr): journal automation
+                # marker on the pre-0005 journal_entries table — same
+                # create_all() limitation, add the nullable column by hand.
+                conn.execute(text(
+                    "ALTER TABLE journal_entries "
+                    "ADD COLUMN automated_client BOOLEAN"
+                ))
                 # 0030 (bd-x67qe): refresh-token rotation grace window on the
                 # pre-0005 user_sessions table — same create_all() limitation,
                 # add both nullable columns by hand.

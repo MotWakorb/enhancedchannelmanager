@@ -131,7 +131,7 @@ Browse, search, upload, and assign logos to channels. Supports URL import and fi
 Live dashboard showing active channels, M3U connection counts, per-channel FFmpeg metrics (speed, FPS, bitrate), and bandwidth charts. Enhanced analytics include unique viewer tracking with Dispatcharr user identification, per-channel bandwidth, popularity scoring with trend analysis, and watch history with user attribution.
 
 ### Journal
-Activity log tracking all changes to channels, EPG, and M3U accounts with filtering by category, action type, and time range.
+Activity log tracking all changes to channels, EPG, and M3U accounts with filtering by category, action type, and time range. A daily Journal Noise Purge task auto-deletes automated-noise entries (watch start/stop telemetry and automated Channel Pipeline rule create/delete churn) older than a configurable retention window (default 3 days); operator-initiated entries and all other categories are kept.
 
 ### Settings
 Comprehensive configuration including Dispatcharr connection, channel defaults, stream name normalization (tag-based and rule-based engines), stream probing, scheduled tasks (EPG/M3U refresh, probing, cleanup), alert methods (Discord, Telegram, email), authentication (local + Dispatcharr SSO), user management, TLS certificates, VLC integration, appearance themes, and backup/restore.
