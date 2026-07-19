@@ -1285,7 +1285,8 @@ class TestEventSyncStreamReorderWiring:
         async def _fake_event_sync(rule_id, rule_name, config,
                                    secondary_streams, exec_ctx,
                                    decisions=None,
-                                   effective_master_group_id=None):
+                                   effective_master_group_id=None,
+                                   exclusions=None):
             for cid in merged_ids:
                 exec_ctx.merged_channel_ids.add(cid)
             return dict(summary_template)

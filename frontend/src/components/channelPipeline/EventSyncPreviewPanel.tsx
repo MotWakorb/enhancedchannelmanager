@@ -79,6 +79,12 @@ function summaryLine(summary: EventSyncPreviewResponse['summary']): string {
     `${summary.ambiguous_skipped} ambiguous (skipped), ` +
     `${summary.unmatched} unmatched, ` +
     `${summary.parse_failed} parse failure${summary.parse_failed === 1 ? '' : 's'}`;
+  // ti939.3.5: operator never-attach exclusions — a suppressed pairing the
+  // operator cannot see is the exact loop this feature closes.
+  const excluded = summary.excluded_by_operator ?? 0;
+  if (excluded > 0) {
+    line += `, ${excluded} excluded by operator`;
+  }
   // ti939.3.2: review-queue context — decision-driven attaches and open
   // questions must be visible in the one-line summary too.
   if (summary.would_attach_via_review > 0) {
@@ -176,6 +182,13 @@ function MatchCard({ stream }: { stream: EventSyncStreamRow }) {
               Reason: {stream.unmatchable_reason}
             </span>
           )}
+          {/* ti939.3.5: say WHICH master(s) the operator excluded — on
+              excluded rows and on rows that still resolve elsewhere. */}
+          {(stream.excluded_masters ?? []).length > 0 && (
+            <span className="event-sync-reject-reason">
+              Never attaches to: {(stream.excluded_masters ?? []).join(', ')}
+            </span>
+          )}
         </div>
         {attachTarget && top && (
           <div className="event-sync-side">
@@ -233,7 +246,14 @@ function MatchCard({ stream }: { stream: EventSyncStreamRow }) {
                   <td>{candidate.time_delta_minutes} min</td>
                   <td>{candidate.reject_reason ?? '—'}</td>
                   <td>
-                    {candidate.review_status ? (
+                    {candidate.excluded ? (
+                      /* ti939.3.5: the standing order outranks queue state —
+                         show it in place of any review marker. */
+                      <span className="event-sync-verdict event-sync-review-marker-excluded">
+                        <span className="material-icons" aria-hidden="true">block</span>
+                        Excluded (never attaches)
+                      </span>
+                    ) : candidate.review_status ? (
                       <span
                         className={`event-sync-verdict event-sync-review-marker-${candidate.review_status}`}
                       >

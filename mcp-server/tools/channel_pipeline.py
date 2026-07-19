@@ -1614,10 +1614,18 @@ def register(mcp: FastMCP):
                 lines.append(f"  WARNING: {w.get('message')}")
 
             s = result.get("summary") or {}
+            # ti939.3.5: the operator never-attach count rides the summary
+            # only when non-zero (older backends omit the field entirely).
+            excluded_count = s.get("excluded_by_operator", 0)
+            excluded_part = (
+                f"{excluded_count} excluded by operator, "
+                if excluded_count else ""
+            )
             lines.append(
                 f"Summary: {s.get('secondary_streams', 0)} secondary streams -> "
                 f"{s.get('would_attach', 0)} would attach, "
                 f"{s.get('ambiguous_skipped', 0)} ambiguous (operator review), "
+                f"{excluded_part}"
                 f"{s.get('unmatched', 0)} unmatched, "
                 f"{s.get('parse_failed', 0)} parse failed | "
                 f"{s.get('master_channels', 0)} master channels "
@@ -1671,6 +1679,16 @@ def register(mcp: FastMCP):
                         f"'{top.get('master_channel_name')}' "
                         f"(score={top.get('score')} — ambiguous, never "
                         f"auto-attached)"
+                    )
+                elif row.get("disposition") == "excluded_by_operator":
+                    # ti939.3.5: an operator standing order suppressed the
+                    # pairing — visibly a "never", not an inexplicable
+                    # unmatch. Manage via list/delete_event_sync_exclusion.
+                    excluded_masters = row.get("excluded_masters") or []
+                    lines.append(
+                        f"  EXCLUDED [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' (operator never-attach: "
+                        f"{', '.join(excluded_masters) or 'excluded pairing'})"
                     )
                 elif row.get("disposition") == "unmatched":
                     lines.append(

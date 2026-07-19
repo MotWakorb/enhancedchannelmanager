@@ -405,6 +405,40 @@ ENDPOINTS: dict[str, Endpoint] = {
             "id", "execution_id", "snapshot_time", "channel_count", "channels",
         }),
     ),
+    # -- event_sync_exclusions (bead ti939.3.5) ----------------------------
+    # Operator "never attach this provider stream to that event" standing
+    # orders. Rows key on content fingerprints (rule_id, provider_id,
+    # stream_name_hash, event_key) — NEVER stream/channel ids (both churn),
+    # so an exclusion survives provider refreshes by construction. The
+    # shared resolver consults these BEFORE the attach band on every run
+    # and preview; an exclusion outranks a prior review-queue accept.
+    "es_list_exclusions": Endpoint(
+        name="es_list_exclusions",
+        method="GET",
+        path="/api/event-sync-exclusions",
+        query_params=frozenset({"rule_id", "page", "page_size"}),
+        response_fields=frozenset({
+            "exclusions", "total", "page", "page_size", "total_pages",
+        }),
+    ),
+    "es_create_exclusion": Endpoint(
+        name="es_create_exclusion",
+        method="POST",
+        path="/api/event-sync-exclusions",
+        request_fields=frozenset({
+            "rule_id", "provider_id", "stream_name_hash", "event_key",
+            "note", "evidence",
+        }),
+        response_fields=frozenset({
+            "id", "rule_id", "provider_id", "stream_name_hash", "event_key",
+            "created_at", "note", "evidence", "already_existed",
+        }),
+    ),
+    "es_delete_exclusion": Endpoint(
+        name="es_delete_exclusion",
+        method="DELETE",
+        path="/api/event-sync-exclusions/{exclusion_id}",
+    ),
     # -- channel_groups domain --------------------------------------------
     "groups_list": Endpoint(
         name="groups_list",

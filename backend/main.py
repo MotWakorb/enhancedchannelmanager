@@ -112,6 +112,7 @@ tags_metadata = [
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
     {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
     {"name": "Event Sync Reviews", "description": "Event Sync ambiguous-match review queue — fingerprint-keyed accept/reject decisions (bead ti939.3.2)"},
+    {"name": "Event Sync Exclusions", "description": "Event Sync operator never-attach exclusions — fingerprint-keyed standing orders consulted before the attach band (bead ti939.3.5)"},
     {"name": "Emby", "description": "Emby actions — clear cached channel logos so Emby re-fetches them (GH #475)"},
     {"name": "Sync Targets", "description": "Cross-instance live-sync destinations (remote Dispatcharr-B) — CRUD for sync targets (epic i39wu)"},
 ]

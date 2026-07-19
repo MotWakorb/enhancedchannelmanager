@@ -2553,6 +2553,7 @@ async def _fetch_and_resolve_event_sync(
     effective_master_group_id: int,
     *,
     decisions=None,
+    exclusions=None,
 ) -> dict:
     """Fetch master channels + secondary streams and resolve them — the ONE
     fetch/resolve path shared by the preview endpoint and the debug-bundle
@@ -2782,7 +2783,8 @@ async def _fetch_and_resolve_event_sync(
     resolution = await run_cpu_bound(
         partial(
             resolve_event_sync, config, master_names, secondary_streams,
-            decisions=decisions, attached_stream_ids=attached_stream_ids,
+            decisions=decisions, exclusions=exclusions,
+            attached_stream_ids=attached_stream_ids,
         )
     )
     return {
@@ -2819,9 +2821,9 @@ async def preview_event_sync(
     channel mutations, and it never toggles Dispatcharr group settings.
 
     Summary counts (would_attach / ambiguous_skipped / unmatched /
-    parse_failed) reconcile exactly with the ``streams`` detail rows: each
-    stream carries exactly one disposition and the four counts sum to
-    ``secondary_streams``. Master channels are re-resolved by name on every
+    parse_failed / excluded_by_operator) reconcile exactly with the
+    ``streams`` detail rows: each stream carries exactly one disposition
+    and the five counts sum to ``secondary_streams``. Master channels are re-resolved by name on every
     call (stateless recompute — duplicate-named masters map to the lowest
     channel id, deterministically).
     """
@@ -2832,8 +2834,10 @@ async def preview_event_sync(
         count_snapshot_covered_streams,
         resolve_effective_master_group_id,
     )
+    from services.event_sync_exclusion_store import load_exclusion_keys
     from services.event_sync_resolver import (
         DISPOSITION_AMBIGUOUS,
+        DISPOSITION_EXCLUDED,
         DISPOSITION_PARSE_FAILED,
         DISPOSITION_UNMATCHED,
         DISPOSITION_WOULD_ATTACH,
@@ -2865,11 +2869,17 @@ async def preview_event_sync(
     # queue state — matching the run they could ever produce.
     decisions = None
     pending_fps: frozenset = frozenset()
+    exclusion_keys: frozenset = frozenset()
     if request.rule_id is not None:
         session = get_session()
         try:
             decisions = load_review_decisions(session, request.rule_id)
             pending_fps = load_pending_fingerprints(session, request.rule_id)
+            # ti939.3.5: operator never-attach exclusions feed the SAME
+            # shared resolver, so the preview predicts exactly what a run
+            # would suppress (excluded pairings report as
+            # excluded_by_operator, never as would_attach).
+            exclusion_keys = load_exclusion_keys(session, request.rule_id)
         except Exception as e:
             logger.warning(
                 "[EVENT-SYNC] preview: failed to load review-queue state "
@@ -2878,6 +2888,7 @@ async def preview_event_sync(
             )
             decisions = None
             pending_fps = frozenset()
+            exclusion_keys = frozenset()
         finally:
             session.close()
 
@@ -2935,6 +2946,7 @@ async def preview_event_sync(
     # serialization below.
     fetched = await _fetch_and_resolve_event_sync(
         config, client, effective_master_group_id, decisions=decisions,
+        exclusions=exclusion_keys,
     )
     resolution = fetched["resolution"]
     name_to_id = fetched["name_to_id"]
@@ -2965,6 +2977,9 @@ async def preview_event_sync(
         DISPOSITION_AMBIGUOUS: 0,
         DISPOSITION_UNMATCHED: 0,
         DISPOSITION_PARSE_FAILED: 0,
+        # ti939.3.5: operator never-attach exclusions — fifth disposition;
+        # the five counts sum to secondary_streams.
+        DISPOSITION_EXCLUDED: 0,
     }
     streams_out: list[dict] = []
     unmatched_out: list[dict] = []
@@ -3003,6 +3018,24 @@ async def preview_event_sync(
         if fp in pending_fps:
             return REVIEW_STATUS_PENDING
         return None
+
+    # ti939.3.5: per-candidate operator-exclusion marker, computed from the
+    # SAME fingerprints the resolver filters on (candidates render from the
+    # UNFILTERED matcher result, so an excluded pairing stays visible in
+    # the table with this marker — transparency, mirroring rejected rows).
+    def _candidate_excluded(resolved, candidate) -> bool:
+        if not exclusion_keys:
+            return False
+        event_key = master_event_key(candidate.parsed)
+        if event_key is None:
+            return False
+        provider = (
+            resolved.stream.provider_id
+            if resolved.stream.provider_id is not None
+            else PROVIDER_ID_UNKNOWN
+        )
+        fp = (provider, stream_name_hash(resolved.stream.name), event_key)
+        return fp in exclusion_keys
 
     for r in resolution.resolved:
         counts[r.disposition] += 1
@@ -3047,6 +3080,10 @@ async def preview_event_sync(
             "matched_via": [
                 {"key": key, "label": label} for key, label in r.matched_via
             ],
+            # ti939.3.5: masters this stream will NEVER attach to (operator
+            # exclusion). Non-empty whenever any pairing was suppressed —
+            # including rows that still attach/queue against OTHER masters.
+            "excluded_masters": list(r.excluded_masters),
             "would_attach_master": (
                 {
                     "channel_id": name_to_id.get(r.best.master_name),
@@ -3072,6 +3109,9 @@ async def preview_event_sync(
                     # ti939.3.2 queue marker: 'pending' | 'accepted' |
                     # 'rejected' | None for this exact pairing fingerprint.
                     "review_status": _candidate_review_status(r, c),
+                    # ti939.3.5: operator never-attach marker for this
+                    # exact pairing fingerprint.
+                    "excluded": _candidate_excluded(r, c),
                 }
                 for c in r.result.candidates[:_EVENT_PREVIEW_MAX_CANDIDATES_PER_STREAM]
             ],
@@ -3119,12 +3159,13 @@ async def preview_event_sync(
     logger.info(
         "[EVENT-SYNC] preview master_group=%s secondaries=%s masters=%d "
         "streams=%d would_attach=%d ambiguous=%d unmatched=%d parse_failed=%d "
-        "preflight_ok=%s truncated=%s stale_suspect=%d freshness_unknown=%d "
-        "snapshot_covered=%d",
+        "excluded_by_operator=%d preflight_ok=%s truncated=%s "
+        "stale_suspect=%d freshness_unknown=%d snapshot_covered=%d",
         master_group_id, secondary_group_ids, len(master_channels),
         len(resolution.resolved), counts[DISPOSITION_WOULD_ATTACH],
         counts[DISPOSITION_AMBIGUOUS], counts[DISPOSITION_UNMATCHED],
-        counts[DISPOSITION_PARSE_FAILED], preflight["ok"], truncated,
+        counts[DISPOSITION_PARSE_FAILED], counts[DISPOSITION_EXCLUDED],
+        preflight["ok"], truncated,
         stale_suspect_streams, freshness_unknown_streams, snapshot_covered,
     )
 
@@ -3136,6 +3177,9 @@ async def preview_event_sync(
             "ambiguous_skipped": counts[DISPOSITION_AMBIGUOUS],
             "unmatched": counts[DISPOSITION_UNMATCHED],
             "parse_failed": counts[DISPOSITION_PARSE_FAILED],
+            # ti939.3.5: streams whose only viable pairing carries an
+            # operator never-attach exclusion (fifth disposition).
+            "excluded_by_operator": counts[DISPOSITION_EXCLUDED],
             "master_channels": len(master_channels),
             "master_channels_unparsed": len(resolution.unparsed_master_names),
             # ti939.3.2: how many would_attach rows come from prior review
@@ -3639,6 +3683,8 @@ def _event_sync_matching_stream_row(r, name_to_id: dict) -> dict:
         "matched_via": [
             {"key": key, "label": label} for key, label in r.matched_via
         ],
+        # ti939.3.5: masters suppressed by an operator never-attach exclusion.
+        "excluded_masters": list(r.excluded_masters),
         "best_candidate": best_out,
     }
 
@@ -3667,8 +3713,10 @@ async def _build_event_sync_matching_section(client) -> dict:
         count_snapshot_covered_streams,
         resolve_effective_master_group_id,
     )
+    from services.event_sync_exclusion_store import load_exclusion_keys
     from services.event_sync_resolver import (
         DISPOSITION_AMBIGUOUS,
+        DISPOSITION_EXCLUDED,
         DISPOSITION_PARSE_FAILED,
         DISPOSITION_UNMATCHED,
         DISPOSITION_WOULD_ATTACH,
@@ -3756,19 +3804,25 @@ async def _build_event_sync_matching_section(client) -> dict:
             # Review-queue decisions feed the resolver so the bundle predicts
             # exactly what a live run would do (mirrors the preview endpoint).
             decisions = None
+            exclusion_keys: frozenset = frozenset()
             dsession = get_session()
             try:
                 decisions = load_review_decisions(dsession, rule.id)
+                # ti939.3.5: exclusions ride along so the bundle predicts
+                # exactly what a live run would suppress.
+                exclusion_keys = load_exclusion_keys(dsession, rule.id)
             except Exception as e:
                 logger.warning(
                     "[EVENT-SYNC] debug bundle: review-queue load failed for "
                     "rule %s (%s) — resolving without it", rule.id, e)
                 decisions = None
+                exclusion_keys = frozenset()
             finally:
                 dsession.close()
 
             fetched = await _fetch_and_resolve_event_sync(
                 config, client, effective_master_group_id, decisions=decisions,
+                exclusions=exclusion_keys,
             )
             resolution = fetched["resolution"]
             name_to_id = fetched["name_to_id"]
@@ -3778,6 +3832,7 @@ async def _build_event_sync_matching_section(client) -> dict:
                 DISPOSITION_AMBIGUOUS: 0,
                 DISPOSITION_UNMATCHED: 0,
                 DISPOSITION_PARSE_FAILED: 0,
+                DISPOSITION_EXCLUDED: 0,
             }
             streams_out = []
             stale_suspect = 0
@@ -3839,6 +3894,8 @@ async def _build_event_sync_matching_section(client) -> dict:
                     "ambiguous_skipped": counts[DISPOSITION_AMBIGUOUS],
                     "unmatched": counts[DISPOSITION_UNMATCHED],
                     "parse_failed": counts[DISPOSITION_PARSE_FAILED],
+                    # ti939.3.5: operator never-attach exclusions.
+                    "excluded_by_operator": counts[DISPOSITION_EXCLUDED],
                     "master_channels": len(fetched["master_channels"]),
                     "master_channels_unparsed": len(
                         resolution.unparsed_master_names),

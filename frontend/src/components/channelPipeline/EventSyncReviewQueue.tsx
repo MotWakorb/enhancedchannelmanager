@@ -23,6 +23,12 @@
  * re-verify its snapshot ids; a deferred attach is surfaced in the info
  * banner and applied by the next pipeline run. Reject: durable suppression
  * — the pairing never attaches and is never asked about again.
+ *
+ * Never attach (bead ti939.3.5): records a standing operator EXCLUSION for
+ * the pairing (visible/removable in the exclusions panel) and closes the
+ * question as rejected. Unlike a plain reject, the exclusion is a
+ * first-class row the operator can list and undo — and it outranks any
+ * later accept for the same fingerprint.
  */
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../../services/api';
@@ -30,6 +36,7 @@ import type { EventSyncReviewRecord } from '../../types/eventSync';
 import { logger } from '../../utils/logger';
 import { getDateLocale } from '../../utils/formatting';
 import { BAND_META, TEAM_VERDICT_META } from './eventSyncDefaults';
+import { EXCLUSIONS_CHANGED_EVENT } from './EventSyncExclusionsPanel';
 import './EventSyncReviewQueue.css';
 
 const PAGE_SIZE = 50;
@@ -119,6 +126,46 @@ export function EventSyncReviewQueue() {
       } catch (err) {
         const detail = err instanceof Error ? err.message : 'Accept failed';
         logger.error('EventSyncReviewQueue: accept failed for row %s', row.id, err);
+        setRowErrors(prev => ({ ...prev, [row.id]: detail }));
+      } finally {
+        setRowBusy(prev => {
+          const next = { ...prev };
+          delete next[row.id];
+          return next;
+        });
+      }
+    },
+    [clearRowError],
+  );
+
+  // ti939.3.5: "Never attach" = create the standing exclusion, then close
+  // the open question as rejected. Two calls; if the reject half fails the
+  // exclusion still stands (the resolver already suppresses the pairing)
+  // and the row surfaces the error for a retry.
+  const handleNeverAttach = useCallback(
+    async (row: EventSyncReviewRecord) => {
+      clearRowError(row.id);
+      setNotice(null);
+      setRowBusy(prev => ({ ...prev, [row.id]: true }));
+      try {
+        await api.createEventSyncExclusion({
+          rule_id: row.rule_id,
+          provider_id: row.provider_id,
+          stream_name_hash: row.stream_name_hash,
+          event_key: row.event_key,
+          evidence: row.evidence,
+        });
+        await api.rejectEventSyncReview(row.id);
+        setRows(prev => prev.filter(r => r.id !== row.id));
+        setTotal(prev => Math.max(0, prev - 1));
+        setNotice(
+          'Never attach recorded — this pairing is excluded on every future run. Manage exclusions below.',
+        );
+        // Tell the exclusions panel to refetch (shared-state-free contract).
+        window.dispatchEvent(new CustomEvent(EXCLUSIONS_CHANGED_EVENT));
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : 'Never attach failed';
+        logger.error('EventSyncReviewQueue: never-attach failed for row %s', row.id, err);
         setRowErrors(prev => ({ ...prev, [row.id]: detail }));
       } finally {
         setRowBusy(prev => {
@@ -306,6 +353,16 @@ export function EventSyncReviewQueue() {
                 )}
 
                 <div className="event-sync-review-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => handleNeverAttach(row)}
+                    disabled={busy}
+                    title="Record a standing exclusion: this pairing never attaches, on any future run, until you remove it from the exclusions list"
+                  >
+                    <span className="material-icons" aria-hidden="true">block</span>
+                    Never attach
+                  </button>
                   <button
                     type="button"
                     className="btn-secondary"

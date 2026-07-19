@@ -3368,21 +3368,29 @@ class ChannelPipelineEngine:
             # (fingerprint-keyed accepts/rejects) — an INPUT to the shared
             # resolver for BOTH live and dry runs, so dry-run classification
             # stays byte-identical to the live run it predicts.
+            from services.event_sync_exclusion_store import (
+                load_exclusion_keys,
+            )
             from services.event_sync_review_store import (
                 load_review_decisions,
             )
             decisions = None
+            exclusions = None
             try:
                 db = get_session()
                 try:
                     decisions = load_review_decisions(db, rule.id)
+                    # ti939.3.5: operator never-attach exclusions ride the
+                    # same load so run and preview consult the same set.
+                    exclusions = load_exclusion_keys(db, rule.id)
                 finally:
                     db.close()
             except Exception as e:
                 logger.warning(
                     "[EVENT-SYNC] Rule '%s' (id=%s): failed to load review "
-                    "decisions (%s) — running without them; accepted "
-                    "pairings will not auto-attach this run",
+                    "decisions/exclusions (%s) — running without them; "
+                    "accepted pairings will not auto-attach and operator "
+                    "exclusions will not suppress this run",
                     rule.name, rule.id, e,
                 )
 
@@ -3394,6 +3402,7 @@ class ChannelPipelineEngine:
                 rule.id, rule.name, config, secondary_streams, exec_ctx,
                 decisions=decisions,
                 effective_master_group_id=effective_master_group_id,
+                exclusions=exclusions,
             )
 
             # ti939.3.2: persist the run's ambiguous pairings as pending
@@ -3637,6 +3646,17 @@ class ChannelPipelineEngine:
                 extras.append(
                     f"{summary['rejected_suppressed']} suppressed by "
                     f"rejected reviews"
+                )
+            # ti939.3.5: operator never-attach exclusions must be visible
+            # in the one-line drift detector too.
+            if summary.get("excluded_by_operator"):
+                extras.append(
+                    f"{summary['excluded_by_operator']} excluded by operator"
+                )
+            elif summary.get("excluded_suppressed"):
+                extras.append(
+                    f"{summary['excluded_suppressed']} pairing(s) "
+                    f"suppressed by operator exclusions"
                 )
             if summary["capped"]:
                 extras.append(

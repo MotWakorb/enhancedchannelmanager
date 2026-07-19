@@ -95,6 +95,9 @@ import type {
 } from '../types';
 import type {
   AcceptEventSyncReviewOutcome,
+  EventSyncExclusionCreateRequest,
+  EventSyncExclusionRecord,
+  EventSyncExclusionsListResponse,
   EventSyncReviewsListResponse,
   RejectEventSyncReviewOutcome,
 } from '../types/eventSync';
@@ -4574,6 +4577,59 @@ export async function rejectEventSyncReview(
 ): Promise<RejectEventSyncReviewOutcome> {
   return fetchJson(`${API_BASE}/event-sync-reviews/${reviewId}/reject`, {
     method: 'POST',
+  });
+}
+
+// -------------------------------------------------------------------------
+// Event Sync operator exclusions (bead ti939.3.5) —
+// /api/event-sync-exclusions.
+//
+// A durable "never attach this provider stream to that event" standing
+// order. Fingerprint-keyed like review decisions (never channel/stream
+// IDs), consulted by the shared resolver BEFORE the attach band — an
+// exclusion outranks a prior accept. List is RequireAuthIfEnabled;
+// create/delete are admin-gated.
+// -------------------------------------------------------------------------
+
+/** List never-attach exclusions, newest first (optionally one rule's). */
+export async function getEventSyncExclusions(params?: {
+  ruleId?: number;
+  page?: number;
+  pageSize?: number;
+}): Promise<EventSyncExclusionsListResponse> {
+  const query = buildQuery({
+    rule_id: params?.ruleId,
+    page: params?.page ?? 1,
+    page_size: params?.pageSize ?? 50,
+  });
+  return fetchJson(`${API_BASE}/event-sync-exclusions${query}`);
+}
+
+/**
+ * Create a never-attach exclusion. Idempotent on the fingerprint: an
+ * already-excluded pairing returns the existing row
+ * (`already_existed: true`), never a duplicate.
+ */
+export async function createEventSyncExclusion(
+  body: EventSyncExclusionCreateRequest,
+): Promise<EventSyncExclusionRecord> {
+  return fetchJson(`${API_BASE}/event-sync-exclusions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Remove a never-attach exclusion — the pairing becomes matchable again on
+ * the next run/preview (nothing is re-attached immediately; the idempotent
+ * run is the applier).
+ */
+export async function deleteEventSyncExclusion(
+  exclusionId: number,
+): Promise<void> {
+  await fetchJson(`${API_BASE}/event-sync-exclusions/${exclusionId}`, {
+    method: 'DELETE',
   });
 }
 

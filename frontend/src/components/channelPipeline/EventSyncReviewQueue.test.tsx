@@ -29,6 +29,7 @@ vi.mock('../../services/api', async () => {
     getEventSyncReviews: vi.fn(),
     acceptEventSyncReview: vi.fn(),
     rejectEventSyncReview: vi.fn(),
+    createEventSyncExclusion: vi.fn(),
   };
 });
 
@@ -265,5 +266,76 @@ describe('EventSyncReviewQueue — reject', () => {
       ).not.toBeInTheDocument();
     });
     expect(screen.getByRole('status')).toHaveTextContent(/never attach/i);
+  });
+});
+
+describe('EventSyncReviewQueue — never attach (bead ti939.3.5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('creates a fingerprint-keyed exclusion, then rejects the row', async () => {
+    const record = makeRecord();
+    mockList([record]);
+    vi.mocked(api.createEventSyncExclusion).mockResolvedValue({
+      id: 11,
+      rule_id: record.rule_id,
+      provider_id: record.provider_id,
+      stream_name_hash: record.stream_name_hash,
+      event_key: record.event_key,
+      created_at: 1_752_800_000_000,
+      note: null,
+      evidence: record.evidence,
+    });
+    vi.mocked(api.rejectEventSyncReview).mockResolvedValue({
+      status: 'rejected',
+    });
+
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /never attach/i }),
+    );
+
+    await waitFor(() => {
+      // Identity is the CONTENT FINGERPRINT from the row — never
+      // channel/stream ids (those ride only inside evidence).
+      expect(api.createEventSyncExclusion).toHaveBeenCalledWith({
+        rule_id: record.rule_id,
+        provider_id: record.provider_id,
+        stream_name_hash: record.stream_name_hash,
+        event_key: record.event_key,
+        evidence: record.evidence,
+      });
+    });
+    await waitFor(() => {
+      expect(api.rejectEventSyncReview).toHaveBeenCalledWith(record.id);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByText('BOX HD: Fury vs. Usyk @ 11 Jul 08:00 PM ET'),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(/excluded on every future run/i);
+  });
+
+  it('surfaces a create failure inline and keeps the card', async () => {
+    mockList([makeRecord()]);
+    vi.mocked(api.createEventSyncExclusion).mockRejectedValue(
+      new Error('boom'),
+    );
+
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /never attach/i }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('boom');
+    });
+    // The card stays for retry; the reject half never fired.
+    expect(
+      screen.getByText('BOX HD: Fury vs. Usyk @ 11 Jul 08:00 PM ET'),
+    ).toBeInTheDocument();
+    expect(api.rejectEventSyncReview).not.toHaveBeenCalled();
   });
 });
