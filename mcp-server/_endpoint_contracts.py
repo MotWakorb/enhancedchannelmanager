@@ -726,6 +726,26 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/m3u/refresh/{account_id}",
     ),
+    # bd-wwovg / fltt3 gap 3: M3U digest email settings (change-tracking
+    # notifications) — backend/routers/m3u_digest.py get/update_m3u_digest_settings.
+    # request_fields mirrors M3UDigestSettingsUpdate (m3u_digest.py:27) verbatim;
+    # account_ids (bd-wwovg) scopes which M3U accounts' changes are notified.
+    "m3u_digest_get_settings": Endpoint(
+        name="m3u_digest_get_settings",
+        method="GET",
+        path="/api/m3u/digest/settings",
+    ),
+    "m3u_digest_update_settings": Endpoint(
+        name="m3u_digest_update_settings",
+        method="PUT",
+        path="/api/m3u/digest/settings",
+        request_fields=frozenset({
+            "enabled", "frequency", "email_recipients",
+            "include_group_changes", "include_stream_changes",
+            "show_detailed_list", "min_changes_threshold", "send_to_discord",
+            "exclude_group_patterns", "exclude_stream_patterns", "account_ids",
+        }),
+    ),
     # -- normalization domain ---------------------------------------------
     "normalization_test_batch": Endpoint(
         name="normalization_test_batch",
@@ -953,6 +973,16 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/stats/providers/bitrate",
         query_params=frozenset({"window", "bucket"}),
     ),
+    # bd-n5cwp / fltt3 gap 2: per-provider stream-assignment usage (config
+    # data, not viewing telemetry — not admin-gated, unlike the four
+    # providers/* endpoints above). See backend/routers/stats.py
+    # get_provider_stream_usage.
+    "stats_providers_stream_usage": Endpoint(
+        name="stats_providers_stream_usage",
+        method="GET",
+        path="/api/stats/providers/stream-usage",
+        query_params=frozenset({"bypass_cache"}),
+    ),
     # -- co5wh.3: per-user watch-time (Stats v2 GH-62, bd-skqln.5) -----------
     # /watch-time: group_by=total|day; response_is_list stays default (untyped).
     # /users/dispatcharr/{user_id} and /users/emby/{emby_user_id}: path-param
@@ -1078,6 +1108,17 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/stream-stats/stale",
         query_params=frozenset({"days"}),
+    ),
+    # enhancedchannelmanager-po78p / fltt3 gap 1: cheap stale-id set (Dispatcharr
+    # is_stale flag only) — distinct from stream_stats_stale above, which is the
+    # heavier ffprobe-age + provider-stale report. See backend/routers/streams.py
+    # get_stale_stream_ids.
+    "streams_stale_ids": Endpoint(
+        name="streams_stale_ids",
+        method="GET",
+        path="/api/streams/stale-ids",
+        query_params=frozenset({"bypass_cache"}),
+        response_fields=frozenset({"stale_stream_ids", "last_seen", "count"}),
     ),
     # -- enhancedchannelmanager-rv5w1: probe lifecycle + circuit breaker ----
     "stream_stats_probe_history": Endpoint(

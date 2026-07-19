@@ -1606,6 +1606,13 @@ def register(mcp: FastMCP):
                         f"{f.get('message')}"
                     )
 
+            # bead 2ey2y: rule-level advisory warnings (e.g. the stale-dateless
+            # rail being inert for lack of snapshot coverage) — never a failure
+            # (preflight.ok is untouched), but silently dropping these left the
+            # operator unaware the rail wasn't actually protecting anything.
+            for w in preflight.get("warnings", []):
+                lines.append(f"  WARNING: {w.get('message')}")
+
             s = result.get("summary") or {}
             lines.append(
                 f"Summary: {s.get('secondary_streams', 0)} secondary streams -> "
@@ -1614,7 +1621,9 @@ def register(mcp: FastMCP):
                 f"{s.get('unmatched', 0)} unmatched, "
                 f"{s.get('parse_failed', 0)} parse failed | "
                 f"{s.get('master_channels', 0)} master channels "
-                f"({s.get('master_channels_unparsed', 0)} unparsable)"
+                f"({s.get('master_channels_unparsed', 0)} unparsable) | "
+                f"{s.get('stale_suspect_streams', 0)} stale-suspect, "
+                f"{s.get('freshness_unknown_streams', 0)} freshness-unknown"
             )
             if result.get("truncated"):
                 lines.append("NOTE: fetch caps hit — results are truncated.")

@@ -347,20 +347,27 @@ def register(mcp: FastMCP):
     ) -> str:
         """Get per-provider statistics from the Stats v2 Providers panel.
 
-        Wraps four backend endpoints selectable via the ``metric`` parameter.
+        Wraps five backend endpoints selectable via the ``metric`` parameter.
 
         Args:
             metric: One of ``buffering`` (channel events time-series),
                     ``watch_time`` (total watch-time per provider),
                     ``channel_heatmap`` (provider × channel byte grid),
-                    or ``bitrate`` (derived bitrate time-series).
+                    ``bitrate`` (derived bitrate time-series), or
+                    ``stream_usage`` (per-provider stream-assignment usage —
+                    CONFIGURATION data, not viewing telemetry: how many of
+                    each provider's streams are actually wired into an ECM
+                    channel; bd-n5cwp).
             window: Time window — ``7d``, ``30d``, or ``90d``. Default ``7d``.
+                    Not used by ``stream_usage`` (a live catalog snapshot).
             bucket: Time bucket for time-series metrics — ``hour`` or ``day``.
                     Applies to ``buffering`` and ``bitrate``. Default ``hour``.
             top_n: For ``channel_heatmap`` — cap at top-N channels by bytes.
                    Default 50.
         """
-        _VALID_METRICS = {"buffering", "watch_time", "channel_heatmap", "bitrate"}
+        _VALID_METRICS = {
+            "buffering", "watch_time", "channel_heatmap", "bitrate", "stream_usage",
+        }
         if metric not in _VALID_METRICS:
             return f"Invalid metric '{metric}'. Choose from: {', '.join(sorted(_VALID_METRICS))}"
 
@@ -450,7 +457,7 @@ def register(mcp: FastMCP):
                     lines.append(f"  ... and {len(data) - 30} more cells")
                 return "\n".join(lines)
 
-            else:  # bitrate
+            elif metric == "bitrate":
                 result = await client.call_endpoint(
                     ENDPOINTS["stats_providers_bitrate"],
                     query={"window": window, "bucket": bucket},
@@ -471,6 +478,29 @@ def register(mcp: FastMCP):
                     lines.append(f"  provider={pid} [{tb}] {mbps:.2f} Mbps")
                 if len(data) > 20:
                     lines.append(f"  ... and {len(data) - 20} more rows")
+                return "\n".join(lines)
+
+            else:  # stream_usage
+                result = await client.call_endpoint(ENDPOINTS["stats_providers_stream_usage"])
+                data = result.get("data", []) if isinstance(result, dict) else result
+                meta = result.get("meta", {}) if isinstance(result, dict) else {}
+                if not data:
+                    return "No provider stream-usage data."
+                lines = [
+                    f"Provider Stream Usage ({meta.get('total_rows', len(data))} providers):"
+                ]
+                for row in data:
+                    pid = row.get("provider_id")
+                    pname = row.get("provider_name") or ("Unknown" if pid is None else f"Provider {pid}")
+                    assigned = row.get("assigned_streams", 0)
+                    total_assign = row.get("total_assignments", 0)
+                    total = row.get("total_streams", 0)
+                    util = row.get("utilization_pct", 0.0)
+                    lines.append(
+                        f"  {pname} (id={pid}): {assigned} assigned streams"
+                        f" of {total} total ({util:.1f}% utilization),"
+                        f" {total_assign} total channel-assignments"
+                    )
                 return "\n".join(lines)
 
         except Exception as e:

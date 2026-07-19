@@ -395,6 +395,12 @@ def register(mcp: FastMCP):
         Distinct from get_struck_out_streams (consecutive probe *failures*):
         a stale stream may be passing every probe it gets.
 
+        This is the HEAVIER of the two stale-stream reports: it re-derives
+        both signals (including a fresh ffprobe-age comparison) and returns
+        channel associations for each stream. For just the cheap
+        Dispatcharr-``is_stale`` id set (no probe-age signal, no channel
+        joins), use get_stale_stream_ids instead.
+
         Args:
             days: Age threshold in days (default 7) for the not_probed_recently
                 signal only. Does not affect provider_stale.
@@ -438,6 +444,48 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] get_stale_streams failed: %s", e)
             return f"Error getting stale streams: {e}"
+
+    @mcp.tool()
+    async def get_stale_stream_ids(bypass_cache: bool = False) -> str:
+        """List the Dispatcharr stream IDs currently flagged ``is_stale``.
+
+        Dispatcharr flags a stream stale when its own M3U refresh no longer
+        re-matches it in the source playlist. This is the CHEAP signal only
+        — a single paged scan of Dispatcharr's ``is_stale`` flag, cached for
+        a short TTL, with no ffprobe-age check and no channel-association
+        joins. For the heavier report (both staleness signals, channel
+        associations, and a configurable probe-age threshold), use
+        get_stale_streams instead.
+
+        Args:
+            bypass_cache: Force a fresh scan instead of using the cached
+                result (default False — the cache TTL is short, so this is
+                rarely needed).
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["streams_stale_ids"], query={"bypass_cache": bypass_cache},
+            )
+
+            stale_ids = result.get("stale_stream_ids", []) if isinstance(result, dict) else []
+            last_seen = result.get("last_seen", {}) if isinstance(result, dict) else {}
+            count = result.get("count", len(stale_ids)) if isinstance(result, dict) else len(stale_ids)
+
+            if not stale_ids:
+                return "No stale stream IDs (Dispatcharr is_stale flag)."
+
+            lines = [f"Stale stream IDs ({count}):"]
+            for sid in stale_ids[:50]:
+                seen = last_seen.get(str(sid), last_seen.get(sid))
+                lines.append(f"  id={sid} — last seen: {seen or 'unknown'}")
+            if count > 50:
+                lines.append(f"  ... and {count - 50} more")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_stale_stream_ids failed: %s", e)
+            return f"Error getting stale stream ids: {e}"
 
     @mcp.tool()
     async def cleanup_struck_out_streams(delete_empty_channels: bool = False) -> str:

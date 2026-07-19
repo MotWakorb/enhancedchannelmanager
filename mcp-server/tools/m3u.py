@@ -513,6 +513,136 @@ def register(mcp: FastMCP):
             return f"Error updating group settings: {e}"
 
     @mcp.tool()
+    async def get_m3u_digest_settings() -> str:
+        """Get M3U digest email/Discord notification settings.
+
+        The digest reports M3U change-tracking events (groups/streams
+        added/removed) on a schedule. Distinct from the per-account M3U
+        settings above — this is one global settings row.
+        """
+        try:
+            client = get_ecm_client()
+            s = await client.call_endpoint(ENDPOINTS["m3u_digest_get_settings"])
+            if not isinstance(s, dict):
+                return "No M3U digest settings available."
+
+            recipients = s.get("email_recipients") or []
+            account_ids = s.get("account_ids") or []
+            lines = [
+                "M3U Digest Settings:",
+                f"  Enabled: {s.get('enabled', False)}",
+                f"  Frequency: {s.get('frequency', 'daily')}",
+                f"  Email recipients: {', '.join(recipients) if recipients else 'none'}",
+                f"  Send to Discord: {s.get('send_to_discord', False)}",
+                f"  Include group changes: {s.get('include_group_changes', True)}",
+                f"  Include stream changes: {s.get('include_stream_changes', True)}",
+                f"  Show detailed list: {s.get('show_detailed_list', True)}",
+                f"  Min changes threshold: {s.get('min_changes_threshold', 1)}",
+                f"  Account filter: {', '.join(str(a) for a in account_ids) if account_ids else 'all accounts'}",
+            ]
+            exclude_groups = s.get("exclude_group_patterns") or []
+            if exclude_groups:
+                lines.append(f"  Exclude group patterns: {', '.join(exclude_groups)}")
+            exclude_streams = s.get("exclude_stream_patterns") or []
+            if exclude_streams:
+                lines.append(f"  Exclude stream patterns: {', '.join(exclude_streams)}")
+            last_digest = s.get("last_digest_at")
+            lines.append(f"  Last digest sent: {last_digest or 'never'}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_m3u_digest_settings failed: %s", e)
+            return f"Error getting M3U digest settings: {e}"
+
+    @mcp.tool()
+    async def update_m3u_digest_settings(
+        enabled: bool | None = None,
+        frequency: str | None = None,
+        email_recipients: list[str] | None = None,
+        include_group_changes: bool | None = None,
+        include_stream_changes: bool | None = None,
+        show_detailed_list: bool | None = None,
+        min_changes_threshold: int | None = None,
+        send_to_discord: bool | None = None,
+        exclude_group_patterns: list[str] | None = None,
+        exclude_stream_patterns: list[str] | None = None,
+        account_ids: list[int] | None = None,
+    ) -> str:
+        """Update M3U digest email/Discord notification settings.
+
+        Only the fields you pass are changed — every parameter left at its
+        default (None) is left untouched server-side (PATCH-like semantics
+        over a PUT endpoint).
+
+        Args:
+            enabled: Turn the digest on/off.
+            frequency: One of "immediate", "hourly", "daily", "weekly".
+            email_recipients: Full replacement list of recipient email
+                addresses (each validated server-side).
+            include_group_changes: Include group add/remove events.
+            include_stream_changes: Include stream add/remove events.
+            show_detailed_list: Show the detailed change list vs. just
+                summary counts.
+            min_changes_threshold: Only send a digest if at least this many
+                changes occurred (>= 1).
+            send_to_discord: Also send the digest to the shared Discord
+                webhook (General Settings).
+            exclude_group_patterns: Full replacement list of regex patterns
+                for groups to exclude from the digest.
+            exclude_stream_patterns: Full replacement list of regex patterns
+                for streams to exclude from the digest.
+            account_ids: M3U accounts (ids) to include in digest
+                NOTIFICATIONS — bd-wwovg. Empty/omitted = all accounts.
+                Change-log DB entries are recorded for every account
+                regardless of this filter; it only scopes what's emailed/
+                Discorded.
+        """
+        payload: dict = {}
+        if enabled is not None:
+            payload["enabled"] = enabled
+        if frequency is not None:
+            payload["frequency"] = frequency
+        if email_recipients is not None:
+            payload["email_recipients"] = email_recipients
+        if include_group_changes is not None:
+            payload["include_group_changes"] = include_group_changes
+        if include_stream_changes is not None:
+            payload["include_stream_changes"] = include_stream_changes
+        if show_detailed_list is not None:
+            payload["show_detailed_list"] = show_detailed_list
+        if min_changes_threshold is not None:
+            payload["min_changes_threshold"] = min_changes_threshold
+        if send_to_discord is not None:
+            payload["send_to_discord"] = send_to_discord
+        if exclude_group_patterns is not None:
+            payload["exclude_group_patterns"] = exclude_group_patterns
+        if exclude_stream_patterns is not None:
+            payload["exclude_stream_patterns"] = exclude_stream_patterns
+        if account_ids is not None:
+            payload["account_ids"] = account_ids
+
+        if not payload:
+            return "No changes specified."
+
+        try:
+            client = get_ecm_client()
+            s = await client.call_endpoint(ENDPOINTS["m3u_digest_update_settings"], body=payload)
+            if not isinstance(s, dict):
+                return "M3U digest settings updated."
+            recipients = s.get("email_recipients") or []
+            account_filter = s.get("account_ids") or []
+            return (
+                "M3U digest settings updated: "
+                f"enabled={s.get('enabled', False)}, "
+                f"frequency={s.get('frequency', 'daily')}, "
+                f"recipients={', '.join(recipients) if recipients else 'none'}, "
+                f"account filter={', '.join(str(a) for a in account_filter) if account_filter else 'all accounts'}"
+            )
+        except Exception as e:
+            logger.error("[MCP] update_m3u_digest_settings failed: %s", e)
+            return f"Error updating M3U digest settings: {e}"
+
+    @mcp.tool()
     async def bulk_update_m3u_group_settings(
         account_id: int,
         groups: dict[str, bool],
