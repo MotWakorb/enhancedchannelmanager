@@ -725,3 +725,151 @@ class TestStalenessRailInertWarning:
             async_client, assume_current_date=False,
         )
         assert data["preflight"]["warnings"] == []
+
+
+class TestOperatorExclusionMarkers:
+    """ti939.3.5: preview surfaces operator never-attach exclusions through
+    the SAME resolver a run uses (parity): the excluded pairing reports
+    ``excluded_by_operator`` — never would_attach — with the suppressed
+    master listed on the row and marked on its candidate entry."""
+
+    ATTACH_STREAM = "WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET"
+    ATTACH_MASTER = "Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET"
+
+    def _saved_rule(self, test_session):
+        rule = ChannelPipelineRule(
+            name="Event Sync Rule",
+            enabled=True,
+            priority=0,
+            conditions=json.dumps([]),
+            actions=json.dumps([]),
+            sort_order="asc",
+            orphan_action="delete",
+            event_sync_config=json.dumps(_config(
+                time_window_minutes=30, attach_threshold=0.80, enabled=True,
+            )),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        test_session.add(rule)
+        test_session.commit()
+        test_session.refresh(rule)
+        return rule
+
+    def _exclusion_row(self, test_session, rule_id: int):
+        from models import EventSyncExclusion
+        from services.event_sync_matcher import parse_event_name
+        from services.event_sync_review import (
+            master_event_key,
+            stream_name_hash,
+        )
+
+        row = EventSyncExclusion(
+            rule_id=rule_id,
+            provider_id=1,  # FuboProvider account id in the shared corpus
+            stream_name_hash=stream_name_hash(self.ATTACH_STREAM),
+            event_key=master_event_key(
+                parse_event_name(self.ATTACH_MASTER, None)
+            ),
+            created_at=1_752_800_000_000,
+            evidence=json.dumps({"stream_name": self.ATTACH_STREAM}),
+        )
+        test_session.add(row)
+        test_session.commit()
+        return row
+
+    def _attach_row(self, data: dict) -> dict:
+        return next(
+            s for s in data["streams"]
+            if s["stream_name"] == self.ATTACH_STREAM
+        )
+
+    @pytest.mark.asyncio
+    async def test_excluded_pairing_reports_excluded_by_operator(
+        self, async_client, test_session
+    ):
+        rule = self._saved_rule(test_session)
+        self._exclusion_row(test_session, rule.id)
+
+        client = _mock_client()
+        resp = await _preview(async_client, client, {"rule_id": rule.id})
+        assert resp.status_code == 200
+        data = resp.json()
+
+        row = self._attach_row(data)
+        assert row["disposition"] == "excluded_by_operator"
+        assert row["would_attach_master"] is None
+        assert row["excluded_masters"] == [self.ATTACH_MASTER]
+        # The candidate stays visible (transparency) with the marker.
+        candidate = next(
+            c for c in row["candidates"]
+            if c["master_channel_name"] == self.ATTACH_MASTER
+        )
+        assert candidate["excluded"] is True
+
+        summary = data["summary"]
+        assert summary["excluded_by_operator"] == 1
+        assert summary["would_attach"] == 0
+        # Five counts reconcile with the rows (the endpoint contract).
+        assert (
+            summary["would_attach"] + summary["ambiguous_skipped"]
+            + summary["unmatched"] + summary["parse_failed"]
+            + summary["excluded_by_operator"]
+        ) == summary["secondary_streams"]
+        _assert_zero_writes(client)
+
+    @pytest.mark.asyncio
+    async def test_exclusion_outranks_accepted_decision_in_preview(
+        self, async_client, test_session
+    ):
+        # PRECEDENCE parity with the run: accept + exclusion for the same
+        # fingerprint previews as excluded, never as a queue attach.
+        from models import EventSyncReview
+        from services.event_sync_matcher import parse_event_name
+        from services.event_sync_review import (
+            master_event_key,
+            stream_name_hash,
+        )
+
+        rule = self._saved_rule(test_session)
+        self._exclusion_row(test_session, rule.id)
+        test_session.add(EventSyncReview(
+            rule_id=rule.id,
+            provider_id=1,
+            stream_name_hash=stream_name_hash(self.ATTACH_STREAM),
+            event_key=master_event_key(
+                parse_event_name(self.ATTACH_MASTER, None)
+            ),
+            status="accepted",
+            created_at=1, last_seen_at=1,
+            evidence=json.dumps({}),
+        ))
+        test_session.commit()
+
+        resp = await _preview(
+            async_client, _mock_client(), {"rule_id": rule.id}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        row = self._attach_row(data)
+        assert row["disposition"] == "excluded_by_operator"
+        assert data["summary"]["would_attach_via_review"] == 0
+
+    @pytest.mark.asyncio
+    async def test_inline_config_has_no_exclusion_state(
+        self, async_client, test_session
+    ):
+        rule = self._saved_rule(test_session)
+        self._exclusion_row(test_session, rule.id)
+
+        # Inline preview (no rule id): exclusions are rule-scoped, so the
+        # pairing previews as a plain threshold attach.
+        resp = await _preview(
+            async_client, _mock_client(), {"event_sync_config": _config()}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        row = self._attach_row(data)
+        assert row["disposition"] == "would_attach"
+        assert row["excluded_masters"] == []
+        assert data["summary"]["excluded_by_operator"] == 0

@@ -3238,3 +3238,85 @@ class EventSyncReview(Base):
             f"<EventSyncReview(id={self.id}, rule_id={self.rule_id}, "
             f"provider_id={self.provider_id}, status={self.status})>"
         )
+
+
+class EventSyncExclusion(Base):
+    """One operator "never attach this pairing" exclusion (bead ti939.3.5).
+
+    Solves the stateless-recompute loop the epic predicted: a false-positive
+    attach the operator manually detaches is re-attached on the next run,
+    forever, until the pattern/threshold changes. An exclusion row is the
+    durable "never": the resolver removes the pairing from candidate
+    consideration BEFORE the attach band is honored, on every run and
+    preview.
+
+    **Keying (HARD security constraint, epic ti939.3 — locked at planning):**
+    identity columns are the content fingerprint — ``rule_id``,
+    ``provider_id``, ``stream_name_hash``, ``event_key`` — NEVER channel or
+    stream IDs (both churn; see ``EventSyncReview``). Fingerprint semantics
+    live in ``services/event_sync_review.py``. Survival across refreshes and
+    stream-ID churn is therefore by construction.
+
+    **Precedence:** an exclusion outranks a prior review-queue ACCEPT for
+    the same fingerprint — the resolver filters excluded candidates before
+    the accept-upgrade step, so the two can never both apply
+    (``services/event_sync_resolver.py`` pins this).
+
+    Unlike ``EventSyncReview`` there is no state machine: the row's
+    existence IS the decision; removal (DELETE) is the undo. ``evidence``
+    is the same display-only JSON snapshot shape as review rows — raw
+    names for the operator's eyes, never identity-authoritative. Create
+    and delete journal under category ``event_sync``
+    (``exclusion_create`` / ``exclusion_delete``).
+    """
+
+    __tablename__ = "event_sync_exclusions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # FK CASCADE mirrors event_sync_reviews: an exclusion is meaningless
+    # without the rule's parse patterns.
+    rule_id = Column(
+        Integer,
+        ForeignKey(
+            "auto_creation_rules.id",
+            name="fk_event_sync_exclusions_rule",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # M3U account id of the secondary stream; 0 = documented
+    # unknown-provider sentinel (NOT NULL — SQLite unique indexes treat
+    # NULLs as distinct, which would break the dedup invariant).
+    provider_id = Column(Integer, nullable=False)
+    # SHA-256 hex of the LOCALS-normalized secondary stream name.
+    stream_name_hash = Column(Text, nullable=False)
+    # Normalized master event identity (see services/event_sync_review.py).
+    event_key = Column(Text, nullable=False)
+    # Epoch-ms (ADR-007 / pending_merges convention).
+    created_at = Column(Integer, nullable=False)
+    # Optional operator free-text ("why I excluded this").
+    note = Column(Text, nullable=True)
+    # Opaque acting-user DB id; "anonymous" when auth is disabled.
+    actor_token_id = Column(Text, nullable=True)
+    # Display-only JSON snapshot (same shape/role as EventSyncReview.evidence).
+    evidence = Column(Text, nullable=False)
+
+    __table_args__ = (
+        # One exclusion per fingerprint, ever — create is idempotent.
+        Index(
+            "uq_event_sync_exclusions_fingerprint",
+            "rule_id",
+            "provider_id",
+            "stream_name_hash",
+            "event_key",
+            unique=True,
+        ),
+        # Per-rule load (every run/preview) + per-rule list filter.
+        Index("idx_event_sync_exclusions_rule", "rule_id"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<EventSyncExclusion(id={self.id}, rule_id={self.rule_id}, "
+            f"provider_id={self.provider_id})>"
+        )

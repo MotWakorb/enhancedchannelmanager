@@ -300,6 +300,77 @@ Audit: accepts/rejects write `journal_entries` rows (category `event_sync`, acti
 
 ---
 
+## Event Sync Exclusions
+
+The `/api/event-sync-exclusions/*` family (bead ti939.3.5) is the operator "never attach this pairing" surface — a durable standing order the shared resolver (`backend/services/event_sync_resolver.py`) filters out on **every** future run and preview, before the attach band is even honored. It closes the loop a stateless recompute otherwise can't: a false-positive attach the operator manually detaches would keep re-attaching on every subsequent run. Rows key on the same **content fingerprint** as review rows — `(rule_id, provider_id, stream_name_hash, event_key)` — never channel/stream IDs, so an exclusion survives Dispatcharr refreshes and stream-ID churn. An exclusion **outranks** a prior review-queue accept for the same fingerprint. Feature guide: [`docs/event_sync.md`](event_sync.md) → "Never-attach exclusions"; fingerprint semantics: `backend/services/event_sync_review.py`.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/event-sync-exclusions` | Paginated list, newest first. Query: `rule_id` (optional filter), `page`, `page_size` (≤200, `400` if out of range). Rows carry the fingerprint columns plus a parsed display-only `evidence` snapshot. `RequireAuthIfEnabled`. |
+| `POST /api/event-sync-exclusions` | Create a standing exclusion from the fingerprint components (body shape below). **Idempotent on the fingerprint** — a repeat POST for an already-excluded pairing returns the existing row (`already_existed: true`) rather than creating a duplicate, and refreshes the stored `note` if a new one is supplied. `404` if `rule_id` doesn't reference an existing rule. `RequireAdminIfEnabled`. |
+| `DELETE /api/event-sync-exclusions/{id}` | Remove the standing order. The pairing becomes matchable again on the next run/preview — the delete itself re-attaches nothing (the idempotent run is the applier, same posture as a review-queue accept). `404` if the id doesn't exist. `RequireAdminIfEnabled`. |
+
+### `POST /api/event-sync-exclusions` — fingerprint body shape
+
+```json
+{
+  "rule_id": 12,
+  "provider_id": 7,
+  "stream_name_hash": "5f2c1a...e91a",
+  "event_key": "mercury vs. aces|2026-07-11T22:00:00+00:00",
+  "note": "Wrong venue, provider always mislabels this slot",
+  "evidence": {
+    "stream_name": "Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+    "master_channel_name": "Mercury vs. Aces",
+    "rule_name": "Live Events (multi-provider)",
+    "provider": "Provider B"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-|-|-|-|
+| `rule_id` | integer | Yes | The owning event_sync rule. Must reference an existing `ChannelPipelineRule` (`404` otherwise). |
+| `provider_id` | integer (≥0) | Yes | The secondary stream's M3U account id — `0` is the documented unknown-provider sentinel. |
+| `stream_name_hash` | string | Yes | SHA-256 hex of the secondary stream's LOCALS-cleaned raw name (`services.dedup_matcher.clean_name`) — copy verbatim from a review row or a preview candidate, never compute it client-side. |
+| `event_key` | string | Yes | The master side's parsed event identity: `<LOCALS-cleaned parsed title>\|<parsed start as UTC ISO-8601>`. |
+| `note` | string, ≤2000 chars | No | Free-text operator annotation ("why never"). |
+| `evidence` | object | No | Display-only snapshot (raw names etc.) for the exclusions-list UI — never identity-authoritative, never re-verified against Dispatcharr. |
+
+The four fingerprint fields are never derived from channel/stream IDs — they're supplied verbatim, exactly as they appear on a review-queue row (`GET /api/event-sync-reviews`) or a preview response's candidate context.
+
+**Response: `200 OK`** — `EventSyncExclusionRecord`:
+
+```json
+{
+  "id": 4,
+  "rule_id": 12,
+  "provider_id": 7,
+  "stream_name_hash": "5f2c1a...e91a",
+  "event_key": "mercury vs. aces|2026-07-11T22:00:00+00:00",
+  "created_at": 1752278400000,
+  "note": "Wrong venue, provider always mislabels this slot",
+  "evidence": { "stream_name": "...", "master_channel_name": "...", "rule_name": "...", "provider": "..." },
+  "already_existed": false
+}
+```
+
+`GET /api/event-sync-exclusions` wraps rows in the standard paginated envelope: `{exclusions: [EventSyncExclusionRecord, ...], total, page, page_size, total_pages}`.
+
+Audit: create/delete write `journal_entries` rows (category `event_sync`, action `exclusion_create` / `exclusion_delete`).
+
+**Example:**
+
+```bash
+curl -X POST "http://localhost:6100/api/event-sync-exclusions" \
+  -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" \
+  -d '{"rule_id": 12, "provider_id": 7, "stream_name_hash": "5f2c1a...e91a", "event_key": "mercury vs. aces|2026-07-11T22:00:00+00:00"}'
+```
+
+MCP mirror: `list_event_sync_exclusions` / `create_event_sync_exclusion` / `delete_event_sync_exclusion` (`mcp-server/tools/event_sync_exclusions.py`) — delete is two-step (`confirm=False` previews, `confirm=True` removes), mirroring other MCP delete tools.
+
+---
+
 ## Logos
 
 | Endpoint | Description |

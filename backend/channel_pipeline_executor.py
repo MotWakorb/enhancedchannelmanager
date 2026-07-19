@@ -3522,7 +3522,8 @@ class ActionExecutor:
     def _resolve_event_sync(self, config: dict, secondary_streams: list,
                             now=None, decisions=None,
                             effective_master_group_id=None,
-                            master_name_to_id=None) -> tuple:
+                            master_name_to_id=None,
+                            exclusions=None) -> tuple:
         """Event-mode candidate resolution (ti939.2.1) — SIBLING of
         :meth:`_resolve_scored_fuzzy`.
 
@@ -3550,6 +3551,10 @@ class ActionExecutor:
                 (bead ti939.3.2) — prior operator accepts/rejects for THIS
                 rule, applied INSIDE the shared resolver so run and preview
                 classification cannot diverge.
+            exclusions: Optional frozenset of operator never-attach
+                fingerprints for THIS rule (bead ti939.3.5), applied INSIDE
+                the shared resolver BEFORE the attach band is honored —
+                same parity argument as decisions.
 
         Returns:
             ``(resolution, name_to_id, master_channel_count)`` where
@@ -3601,7 +3606,8 @@ class ActionExecutor:
 
         resolution = resolve_event_sync(
             config, master_names, secondary_streams, now=now,
-            decisions=decisions, attached_stream_ids=attached_stream_ids,
+            decisions=decisions, exclusions=exclusions,
+            attached_stream_ids=attached_stream_ids,
         )
         return resolution, name_to_id, master_channel_count
 
@@ -3610,7 +3616,8 @@ class ActionExecutor:
                                       secondary_streams: list,
                                       exec_ctx: ExecutionContext,
                                       decisions=None,
-                                      effective_master_group_id=None) -> dict:
+                                      effective_master_group_id=None,
+                                      exclusions=None) -> dict:
         """Execute one event_sync rule's attach path (bead ti939.2.1).
 
         Phase 1B — the FIRST write path for event_sync. Resolves every
@@ -3633,6 +3640,12 @@ class ActionExecutor:
         * ``unmatched`` / ``parse_failed`` → skip with reason (counted).
           Pairings the operator previously REJECTED are already filtered
           inside the resolver (counted via ``rejected_suppressed``).
+        * ``excluded_by_operator`` (bead ti939.3.5) → skip + count. The
+          resolver already removed the excluded pairing(s) BEFORE the
+          attach band was honored; this disposition marks a stream whose
+          only viable pairing was an operator "never attach". Suppression
+          on streams that still attach/queue elsewhere is counted via
+          ``excluded_suppressed``.
 
         Blast-radius controls:
 
@@ -3658,6 +3671,7 @@ class ActionExecutor:
             AMBIGUOUS_REASON_CONTESTED,
             DEFAULT_MAX_ATTACH_PER_RUN,
             DISPOSITION_AMBIGUOUS,
+            DISPOSITION_EXCLUDED,
             DISPOSITION_PARSE_FAILED,
             DISPOSITION_UNMATCHED,
             DISPOSITION_WOULD_ATTACH,
@@ -3694,6 +3708,7 @@ class ActionExecutor:
         resolution, name_to_id, master_channel_count = await run_cpu_bound(
             self._resolve_event_sync, config, secondary_streams, None,
             decisions, effective_master_group_id, master_name_to_id,
+            exclusions,
         )
 
         cap = config.get("max_attach_per_run", DEFAULT_MAX_ATTACH_PER_RUN)
@@ -3724,15 +3739,30 @@ class ActionExecutor:
             "queue_attached": 0,
             "rejected_suppressed": 0,
             "review_candidates": [],
+            # ti939.3.5 operator exclusions: streams whose only viable
+            # pairing was operator-excluded, plus the per-pairing
+            # suppression count (also increments on streams that still
+            # attach/queue elsewhere).
+            "excluded_by_operator": 0,
+            "excluded_suppressed": 0,
         }
 
         for r in resolution.resolved:
             summary["rejected_suppressed"] += r.rejected_suppressed
+            summary["excluded_suppressed"] += r.excluded_suppressed
             if r.disposition == DISPOSITION_PARSE_FAILED:
                 summary["parse_failed"] += 1
                 continue
             if r.disposition == DISPOSITION_UNMATCHED:
                 summary["unmatched"] += 1
+                continue
+            if r.disposition == DISPOSITION_EXCLUDED:
+                summary["excluded_by_operator"] += 1
+                logger.info(
+                    "[EVENT-SYNC] Rule '%s': stream '%s' EXCLUDED by "
+                    "operator (never-attach, %d pairing(s)) — skipped",
+                    rule_name, r.stream.name, r.excluded_suppressed,
+                )
                 continue
             if r.disposition == DISPOSITION_AMBIGUOUS:
                 summary["ambiguous_skipped"] += 1

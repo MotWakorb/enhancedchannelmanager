@@ -947,3 +947,146 @@ class TestStaleDatelessDemote:
             [stream], now=NOW,
         )
         assert resolution.resolved[0].disposition == DISPOSITION_WOULD_ATTACH
+
+
+class TestOperatorExclusions:
+    """bead ti939.3.5: operator "never attach this pairing" exclusions.
+
+    The exclusion set is consulted BEFORE the attach band is honored (step
+    0 of ``_resolve_stream``): an excluded pairing can neither attach
+    (threshold or accept-upgrade — exclusion OUTRANKS an accept for the
+    same fingerprint) nor re-enqueue. A stream whose only viable pairing
+    was excluded reports the distinct ``excluded_by_operator`` disposition;
+    a stream with surviving candidates keeps their disposition and reports
+    the suppression via ``excluded_suppressed`` / ``excluded_masters``.
+    Fingerprints carry NO stream/channel ids, so churn survival is pinned
+    by construction (and by test below).
+    """
+
+    ATTACH_STREAM = "WNBA TV 01: Mercury vs. Aces @ 11 Jul 06:00 PM ET"
+
+    @staticmethod
+    def _key(provider_id: int, stream_name: str, master_name: str):
+        from services.event_sync_matcher import parse_event_name
+        from services.event_sync_review import pairing_key
+
+        key = pairing_key(
+            provider_id, stream_name, parse_event_name(master_name, None, now=NOW)
+        )
+        assert key is not None
+        return key
+
+    def _stream(self, stream_id: int = 201) -> SecondaryStream:
+        return SecondaryStream(
+            name=self.ATTACH_STREAM, group_id=20, stream_id=stream_id,
+            provider="FuboProvider", provider_id=7,
+        )
+
+    def test_excluded_attach_winner_is_forced_out(self):
+        exclusions = frozenset({self._key(7, self.ATTACH_STREAM, MASTERS[0])})
+        resolution = resolve_event_sync(
+            _config(), MASTERS, [self._stream()], now=NOW,
+            exclusions=exclusions,
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == "excluded_by_operator"
+        assert resolved.best is None
+        assert resolved.attach_source is None
+        assert resolved.excluded_suppressed == 1
+        assert resolved.excluded_masters == (MASTERS[0],)
+        # NOT enqueue-eligible: the operator's standing order is final.
+        assert resolved.review_candidates == ()
+
+    def test_exclusion_survives_stream_id_churn(self):
+        # Same provider string + event identity, brand-new stream id after
+        # a provider refresh — the fingerprint carries no ids, so the
+        # exclusion still applies (the acceptance criterion).
+        exclusions = frozenset({self._key(7, self.ATTACH_STREAM, MASTERS[0])})
+        for churned_id in (201, 999_999):
+            resolution = resolve_event_sync(
+                _config(), MASTERS, [self._stream(stream_id=churned_id)],
+                now=NOW, exclusions=exclusions,
+            )
+            assert resolution.resolved[0].disposition \
+                == "excluded_by_operator"
+
+    def test_exclusion_outranks_prior_accept(self):
+        # PRECEDENCE CONTRACT: an accept and an exclusion for the same
+        # pairing never both apply — the exclusion wins (it is filtered
+        # out before the accept-upgrade step can see it).
+        from services.event_sync_review import ReviewDecisions
+
+        key = self._key(7, self.ATTACH_STREAM, MASTERS[0])
+        decisions = ReviewDecisions(accepted=frozenset({key}))
+        resolution = resolve_event_sync(
+            _config(), MASTERS, [self._stream()], now=NOW,
+            decisions=decisions, exclusions=frozenset({key}),
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == "excluded_by_operator"
+        assert resolved.attach_source is None
+        assert resolved.excluded_suppressed == 1
+
+    def test_excluded_ambiguous_candidate_never_reenqueues(self):
+        # The IMSA pairing is ambiguous-band; excluding it removes the
+        # open question entirely — excluded, not ambiguous/unmatched.
+        stream = SecondaryStream(
+            name=AMBIGUOUS_STREAM_NAME, group_id=20, stream_id=202,
+            provider="FuboProvider", provider_id=7,
+        )
+        exclusions = frozenset({
+            self._key(7, AMBIGUOUS_STREAM_NAME, MASTERS[1])
+        })
+        resolution = resolve_event_sync(
+            _config(), MASTERS, [stream], now=NOW, exclusions=exclusions,
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == "excluded_by_operator"
+        assert resolved.review_candidates == ()
+
+    def test_contest_collapses_to_the_other_master(self):
+        # Excluding one side of a contested tie steers the stream to the
+        # other side — same collapse semantics as a reject, but reported
+        # via the exclusion counters.
+        master_a = "PPV 01: Fury vs. Usyk @ 11 Jul 08:00 PM ET"
+        master_b = "PPV 02: Fury vs. Usyk Prelims @ 11 Jul 08:00 PM ET"
+        stream = SecondaryStream(
+            name="BOX HD: Fury vs. Usyk @ 11 Jul 08:00 PM ET",
+            group_id=20, stream_id=301, provider_id=7,
+        )
+        # Sanity: without exclusions the pair is contested -> ambiguous.
+        base = resolve_event_sync(
+            _config(), [master_a, master_b], [stream], now=NOW,
+        )
+        assert base.resolved[0].disposition == DISPOSITION_AMBIGUOUS
+
+        exclusions = frozenset({self._key(7, stream.name, master_b)})
+        resolution = resolve_event_sync(
+            _config(), [master_a, master_b], [stream], now=NOW,
+            exclusions=exclusions,
+        )
+        (resolved,) = resolution.resolved
+        assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+        assert resolved.best.master_name == master_a
+        assert resolved.excluded_suppressed == 1
+        assert resolved.excluded_masters == (master_b,)
+
+    def test_exclusion_is_provider_scoped(self):
+        # A different provider id in the fingerprint must NOT suppress.
+        exclusions = frozenset({self._key(8, self.ATTACH_STREAM, MASTERS[0])})
+        resolution = resolve_event_sync(
+            _config(), MASTERS, [self._stream()], now=NOW,
+            exclusions=exclusions,
+        )
+        assert resolution.resolved[0].disposition == DISPOSITION_WOULD_ATTACH
+
+    def test_empty_or_absent_exclusions_change_nothing(self):
+        for exclusions in (None, frozenset()):
+            resolution = resolve_event_sync(
+                _config(), MASTERS, [self._stream()], now=NOW,
+                exclusions=exclusions,
+            )
+            (resolved,) = resolution.resolved
+            assert resolved.disposition == DISPOSITION_WOULD_ATTACH
+            assert resolved.excluded_suppressed == 0
+            assert resolved.excluded_masters == ()

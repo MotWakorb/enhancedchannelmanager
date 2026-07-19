@@ -36,6 +36,7 @@ from models import (
     ChannelPipelineRule,
     DummyEPGProfile,
     DummyEPGChannelAssignment,
+    EventSyncExclusion,
     EventSyncReview,
     FFmpegProfile,
     NormalizationRuleGroup,
@@ -2449,6 +2450,12 @@ def _restore_auto_creation_rules(items: list) -> dict:
         "created_at", "last_seen_at", "resolved_at", "resolution_source",
         "actor_token_id", "evidence",
     )
+    # ti939.3.5: operator never-attach exclusions have the same CASCADE
+    # exposure as review decisions — preserve/re-key them identically.
+    _EXCLUSION_FIELDS = (
+        "provider_id", "stream_name_hash", "event_key",
+        "created_at", "note", "actor_token_id", "evidence",
+    )
     try:
         id_to_name = {
             rid: name
@@ -2465,6 +2472,15 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 "rule_name": rule_name,
                 **{f: getattr(rv, f) for f in _REVIEW_FIELDS},
             })
+        preserved_exclusions: list[dict] = []
+        for ex in session.query(EventSyncExclusion).all():
+            rule_name = id_to_name.get(ex.rule_id)
+            if rule_name is None:
+                continue
+            preserved_exclusions.append({
+                "rule_name": rule_name,
+                **{f: getattr(ex, f) for f in _EXCLUSION_FIELDS},
+            })
 
         session.query(ChannelPipelineRule).delete()
         # Clear the review table explicitly rather than relying on the FK
@@ -2472,6 +2488,7 @@ def _restore_auto_creation_rules(items: list) -> dict:
         # foreign_keys pragma, and the captured rows above are re-inserted
         # with the restored rules' new ids below.
         session.query(EventSyncReview).delete()
+        session.query(EventSyncExclusion).delete()
         for item in items:
             # ti939.1.3: the export (to_dict) carries event_sync_config as a
             # parsed dict — re-serialize for the Text column. Dropping it
@@ -2571,6 +2588,37 @@ def _restore_auto_creation_rules(items: list) -> dict:
             logger.info(
                 "[BACKUP] Re-keyed %s Event Sync review decision(s) onto "
                 "restored rules by name", rekeyed,
+            )
+
+        # ti939.3.5: same re-key for the never-attach exclusions.
+        seen_ex: set = set()
+        ex_rekeyed = 0
+        ex_orphaned = 0
+        for pe in preserved_exclusions:
+            new_id = name_to_new_id.get(pe["rule_name"])
+            if new_id is None:
+                ex_orphaned += 1
+                continue
+            key = (
+                new_id, pe["provider_id"], pe["stream_name_hash"],
+                pe["event_key"],
+            )
+            if key in seen_ex:
+                continue
+            seen_ex.add(key)
+            session.add(EventSyncExclusion(
+                rule_id=new_id, **{f: pe[f] for f in _EXCLUSION_FIELDS}
+            ))
+            ex_rekeyed += 1
+        if ex_orphaned:
+            warnings.append(
+                f"{ex_orphaned} Event Sync never-attach exclusion(s) dropped "
+                f"on restore: their rule is not in the restored set."
+            )
+        if ex_rekeyed:
+            logger.info(
+                "[BACKUP] Re-keyed %s Event Sync exclusion(s) onto restored "
+                "rules by name", ex_rekeyed,
             )
         session.commit()
         return {"warnings": warnings}
