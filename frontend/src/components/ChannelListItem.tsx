@@ -36,7 +36,6 @@ export interface ChannelListItemProps {
   onDelete: () => void;
   onEditChannel: () => void;
   onCopyChannelUrl?: () => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
   channelUrl?: string;
   showStreamUrls?: boolean;
   onProbeChannel?: () => void;
@@ -269,7 +268,6 @@ export const ChannelListItem = memo(function ChannelListItem({
   onDelete,
   onEditChannel,
   onCopyChannelUrl,
-  onContextMenu,
   channelUrl,
   showStreamUrls = true,
   onProbeChannel,
@@ -335,7 +333,6 @@ export const ChannelListItem = memo(function ChannelListItem({
       style={style}
       className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasStaleStreams ? 'has-stale-streams' : ''}`}
       onClick={onClick}
-      onContextMenu={onContextMenu}
       onDragOver={onStreamDragOver}
       onDragLeave={onStreamDragLeave}
       onDrop={onStreamDrop}

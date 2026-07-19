@@ -1,0 +1,220 @@
+/* SelectionActionBar — floating selection action bar (bead 09x38.17).
+   Fixed to the viewport bottom, spanning under both Channel Manager panes
+   (Gmail/Drive pattern) so pane widths are untouched at every breakpoint.
+   Mirrors the .pane-toolbar-menu-* menu idiom from ChannelsPane.css but is
+   namespaced (.selection-bar-*) so this reusable component carries no
+   dependency on ChannelsPane's stylesheet.
+   Shared classes consumed: none (theme tokens from index.css only). */
+
+.selection-action-bar {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 900; /* above pane content/sticky (500), below modal overlays (--z-overlay: 1000) */
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100vw - 24px);
+  padding: 6px 10px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.selection-action-bar-count {
+  padding: 0 10px 0 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-right: 1px solid var(--border-primary);
+  margin-right: 6px;
+}
+
+.selection-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.selection-bar-btn:hover:not(:disabled) {
+  background-color: var(--accent-10);
+}
+
+.selection-bar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.selection-bar-btn .material-icons {
+  font-size: 18px;
+  color: var(--text-secondary);
+}
+
+.selection-bar-btn--danger,
+.selection-bar-btn--danger .material-icons {
+  color: var(--danger-text);
+}
+
+.selection-bar-btn--danger:hover:not(:disabled) {
+  background-color: var(--danger-bg);
+}
+
+.selection-bar-btn--clear {
+  color: var(--text-secondary);
+}
+
+.selection-bar-btn--more.is-open {
+  background-color: var(--accent-10);
+}
+
+.selection-bar-btn .material-icons.spinning {
+  animation: selection-bar-spin 1s linear infinite;
+}
+
+@keyframes selection-bar-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* '⋮ More' menu — opens upward from the bar */
+.selection-bar-more {
+  position: relative;
+}
+
+.selection-bar-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  min-width: 240px;
+  max-height: min(60vh, 480px);
+  overflow-y: auto;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  padding: 0.25rem 0;
+  white-space: normal;
+}
+
+.selection-bar-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.15s;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.selection-bar-menu-item:hover:not(:disabled),
+.selection-bar-menu-item:focus-visible {
+  background-color: var(--accent-10);
+}
+
+.selection-bar-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.selection-bar-menu-item .material-icons {
+  font-size: 18px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.selection-bar-menu-item--submenu.is-open {
+  background-color: var(--accent-10);
+}
+
+.selection-bar-submenu-arrow {
+  margin-left: auto;
+}
+
+.selection-bar-submenu {
+  border-top: 1px solid var(--border-primary);
+  border-bottom: 1px solid var(--border-primary);
+  background-color: rgba(0, 0, 0, 0.1);
+  margin: 0.125rem 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.selection-bar-menu-item--sub {
+  padding-left: 1.25rem;
+  font-size: 0.8rem;
+}
+
+.selection-bar-menu-item--sub span:not(.material-icons) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.selection-bar-menu-divider {
+  height: 1px;
+  background-color: var(--border-primary);
+  margin: 0.25rem 0;
+}
+
+.selection-bar-menu-section-label {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Profile visibility flyout rows: profile name + enable/disable buttons */
+.selection-bar-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.75rem 0.125rem 1.25rem;
+}
+
+.selection-bar-profile-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+.selection-bar-profile-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.selection-bar-profile-btn:hover,
+.selection-bar-profile-btn:focus-visible {
+  background-color: var(--accent-10);
+  color: var(--text-primary);
+}
+
+.selection-bar-profile-btn .material-icons {
+  font-size: 16px;
+}
