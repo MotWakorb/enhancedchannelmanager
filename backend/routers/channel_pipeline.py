@@ -3156,20 +3156,146 @@ async def preview_event_sync(
             if len(bucket["stream_names"]) < _EVENT_PREVIEW_MAX_FAILURE_SAMPLES:
                 bucket["stream_names"].append(r.stream.name)
 
+    # --- Unmatched-stream promotion plan (bead ti939.4.1) -----------------
+    # Present ONLY when the config opted in — a promotion-less preview
+    # payload stays byte-identical (AC-1). The plan comes from the SAME
+    # pure helper the live run's executor calls over the same resolver
+    # output (services.event_sync_promote.build_promotion_plan), fed with
+    # the target group's CURRENT channels, so "would promote" here equals
+    # what a run would create/adopt on unchanged data (dry-run parity by
+    # construction).
+    promotion_out: dict | None = None
+    promote_annotations: dict[tuple, dict] = {}
+    if config.get("promote_unmatched"):
+        from services.event_sync_promote import build_promotion_plan
+
+        promote_target_group_id = config["promote_target_group_id"]
+        target_channels: list[dict] = []
+        try:
+            tpage = 1
+            while True:
+                resp = await client.get_channels(
+                    page=tpage, page_size=_PREVIEW_FETCH_PAGE_SIZE,
+                    channel_group=promote_target_group_id,
+                )
+                batch = (
+                    resp.get("results", []) if isinstance(resp, dict)
+                    else (resp or [])
+                )
+                target_channels.extend(
+                    ch for ch in batch
+                    if ch.get("channel_group_id") == promote_target_group_id
+                )
+                if len(target_channels) >= _PREVIEW_MAX_CHANNELS:
+                    target_channels = target_channels[:_PREVIEW_MAX_CHANNELS]
+                    truncated = True
+                    break
+                if not isinstance(resp, dict) or not resp.get("next"):
+                    break
+                tpage += 1
+        except Exception as e:
+            logger.warning(
+                "[EVENT-SYNC] preview: promotion target-group fetch failed "
+                "(%s) — planning against an empty group (every unit shows "
+                "as create)", e,
+            )
+            target_channels = []
+
+        existing_name_to_id: dict[str, int] = {}
+        for ch in target_channels:
+            cname, cid = ch.get("name"), ch.get("id")
+            if not cname or cid is None:
+                continue
+            lowered = cname.lower()
+            if lowered not in existing_name_to_id \
+                    or cid < existing_name_to_id[lowered]:
+                existing_name_to_id[lowered] = cid
+
+        plan = build_promotion_plan(
+            config, resolution.resolved, existing_name_to_id
+        )
+        units_out = []
+        for unit in plan.units:
+            for row in unit.rows:
+                promote_annotations[(row.stream.group_id,
+                                     row.stream.stream_id)] = {
+                    "would_promote": True,
+                    "promote_action": unit.action,
+                    "promote_channel_name": unit.channel_name,
+                }
+            units_out.append({
+                "channel_name": unit.channel_name,
+                "action": unit.action,
+                "event_key": unit.event_key,
+                "dateless": unit.dateless,
+                "existing_channel_id": unit.existing_channel_id,
+                "streams": [
+                    {
+                        "stream_id": row.stream.stream_id,
+                        "stream_name": row.stream.name,
+                        "provider": row.stream.provider,
+                        "group_id": row.stream.group_id,
+                        "disposition": row.disposition,
+                    }
+                    for row in unit.rows
+                ],
+            })
+        for unit in plan.capped_units:
+            for row in unit.rows:
+                promote_annotations[(row.stream.group_id,
+                                     row.stream.stream_id)] = {
+                    "would_promote": False,
+                    "promote_action": None,
+                    "promote_channel_name": unit.channel_name,
+                    "promote_capped": True,
+                }
+        promotion_out = {
+            "enabled": True,
+            "target_group_id": promote_target_group_id,
+            "would_promote": len(plan.units),
+            "would_promote_streams": plan.stream_count,
+            "would_create": plan.would_create,
+            "would_attach_existing": plan.would_attach_existing,
+            "cap": plan.cap,
+            "capped": plan.capped,
+            "cap_overage": plan.cap_overage,
+            "units": units_out,
+        }
+        # Annotate the unmatched rows in place — the operator reads the
+        # unmatched table first, so the promotion verdict belongs on it.
+        for row in unmatched_out:
+            note = promote_annotations.get(
+                (row["group_id"], row["stream_id"])
+            )
+            if note is not None:
+                row.update(note)
+            else:
+                # Complete-identity gate: an unmatched row with no
+                # annotation has no complete parsed identity (or lost the
+                # cap) — say so explicitly rather than leaving the column
+                # blank-and-ambiguous.
+                row.setdefault("would_promote", False)
+
     logger.info(
         "[EVENT-SYNC] preview master_group=%s secondaries=%s masters=%d "
         "streams=%d would_attach=%d ambiguous=%d unmatched=%d parse_failed=%d "
         "excluded_by_operator=%d preflight_ok=%s truncated=%s "
-        "stale_suspect=%d freshness_unknown=%d snapshot_covered=%d",
+        "stale_suspect=%d freshness_unknown=%d snapshot_covered=%d "
+        "would_promote=%s",
         master_group_id, secondary_group_ids, len(master_channels),
         len(resolution.resolved), counts[DISPOSITION_WOULD_ATTACH],
         counts[DISPOSITION_AMBIGUOUS], counts[DISPOSITION_UNMATCHED],
         counts[DISPOSITION_PARSE_FAILED], counts[DISPOSITION_EXCLUDED],
         preflight["ok"], truncated,
         stale_suspect_streams, freshness_unknown_streams, snapshot_covered,
+        promotion_out["would_promote"] if promotion_out else "off",
     )
 
     return {
+        # bead ti939.4.1: promotion keys appear ONLY when the config opted
+        # in (promotion_out is None otherwise → the two ** expansions are
+        # empty and the payload is byte-identical to the pre-feature shape).
+        **({"promotion": promotion_out} if promotion_out is not None else {}),
         "preflight": preflight,
         "summary": {
             "secondary_streams": len(resolution.resolved),
@@ -3193,6 +3319,14 @@ async def preview_event_sync(
             # snapshot, unknown provider, uncaptured or capped group).
             "stale_suspect_streams": stale_suspect_streams,
             "freshness_unknown_streams": freshness_unknown_streams,
+            # bead ti939.4.1: promotion counts — units (= channels) and the
+            # justifying streams across them. Keys present only on
+            # promotion-enabled previews (AC-1 payload parity).
+            **({
+                "would_promote": promotion_out["would_promote"],
+                "would_promote_streams": promotion_out[
+                    "would_promote_streams"],
+            } if promotion_out is not None else {}),
         },
         "streams": streams_out,
         "unmatched_streams": unmatched_out,

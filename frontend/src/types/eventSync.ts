@@ -132,6 +132,30 @@ export interface EventSyncConfig {
    * default false.
    */
   parse_master_from_stream?: boolean;
+  /**
+   * bead ti939.4.1: opt-in promotion of unmatched secondary-only events to
+   * ECM-managed channels — the ONE sanctioned exception to "ECM never
+   * creates channels". Backend default false; ABSENT means the feature is
+   * invisible (no preview/summary keys, Pass 4 stays hard-bypassed). When
+   * true, ECM CREATES channels in `promote_target_group_id` and DELETES
+   * them via orphan reconciliation when the justifying stream leaves the
+   * provider playlist.
+   */
+  promote_unmatched?: boolean;
+  /**
+   * bead ti939.4.1: the dedicated ECM-owned channel group promoted event
+   * channels live in. REQUIRED when `promote_unmatched` is true; the
+   * backend refuses the master group and secondary groups (ownership
+   * rails). ECM creates AND deletes channels in this group.
+   */
+  promote_target_group_id?: number;
+  /**
+   * bead ti939.4.1: per-run cap on NEW promoted channels (1..200; backend
+   * default 25, filled on promotion-enabled configs). Adoption of existing
+   * promoted channels never consumes the cap. No editor UI; preserved on
+   * save so an API-set value survives a UI edit.
+   */
+  max_promote_per_run?: number;
 }
 
 // =============================================================================
@@ -209,6 +233,12 @@ export interface EventSyncPreviewSummary {
   /** ti939.3.5: streams whose only viable pairing carries an operator
    * never-attach exclusion (fifth disposition). Absent on older payloads. */
   excluded_by_operator?: number;
+  /** bead ti939.4.1: promotion units (= channels) the plan would realize.
+   * Present ONLY on promotion-enabled previews. */
+  would_promote?: number;
+  /** bead ti939.4.1: justifying streams across all promotion units.
+   * Present ONLY on promotion-enabled previews. */
+  would_promote_streams?: number;
 }
 
 /**
@@ -306,6 +336,53 @@ export interface EventSyncUnmatchedStream {
     band: EventSyncBand;
     reject_reason: string | null;
   } | null;
+  /** bead ti939.4.1: true when this unmatched stream is in the promotion
+   * plan. Present only on promotion-enabled previews; false on rows with
+   * no complete parsed identity (or trimmed by the per-run cap —
+   * `promote_capped` marks those). */
+  would_promote?: boolean;
+  /** bead ti939.4.1: how the plan realizes this stream's unit. */
+  promote_action?: 'create' | 'attach_existing' | null;
+  /** bead ti939.4.1: the deterministic derived channel name. */
+  promote_channel_name?: string;
+  /** bead ti939.4.1: true when the unit was trimmed by max_promote_per_run
+   * this run (it re-surfaces next run — promotion is idempotent). */
+  promote_capped?: boolean;
+}
+
+/** bead ti939.4.1: one stream inside a promotion unit. */
+export interface EventSyncPromotionUnitStream {
+  stream_id: number | null;
+  stream_name: string;
+  provider: string | null;
+  group_id: number;
+  disposition: EventSyncDisposition;
+}
+
+/** bead ti939.4.1: one promotion unit — every same-run promotable stream
+ * sharing one exact event key, realized as ONE channel. */
+export interface EventSyncPromotionUnit {
+  channel_name: string;
+  action: 'create' | 'attach_existing';
+  event_key: string;
+  dateless: boolean;
+  existing_channel_id: number | null;
+  streams: EventSyncPromotionUnitStream[];
+}
+
+/** bead ti939.4.1: the promotion plan block — present ONLY when the
+ * previewed config carries `promote_unmatched: true`. */
+export interface EventSyncPromotionPreview {
+  enabled: boolean;
+  target_group_id: number;
+  would_promote: number;
+  would_promote_streams: number;
+  would_create: number;
+  would_attach_existing: number;
+  cap: number;
+  capped: boolean;
+  cap_overage: number;
+  units: EventSyncPromotionUnit[];
 }
 
 export interface EventSyncParseFailureGroup {
@@ -324,6 +401,9 @@ export interface EventSyncPreviewResponse {
   parse_failures: EventSyncParseFailureGroup[];
   unparsed_master_channels: string[];
   truncated: boolean;
+  /** bead ti939.4.1: promotion plan — absent unless the previewed config
+   * carries `promote_unmatched: true`. */
+  promotion?: EventSyncPromotionPreview;
 }
 
 /** Request body: exactly one of rule_id / event_sync_config. */

@@ -1562,6 +1562,15 @@ def register(mcp: FastMCP):
                 master channel's event identity (title+time) from its first
                 attached stream's name instead of the channel name, so master
                 channels can be named freely.
+                promote_unmatched (bool, default false, bead ti939.4.1):
+                promote unmatched secondary-only events to ECM-managed
+                channels in promote_target_group_id (required when enabled;
+                must be a dedicated group — never the master or a
+                secondary). ECM CREATES those channels and DELETES them via
+                orphan reconciliation when the justifying stream leaves the
+                provider playlist. max_promote_per_run (int, default 25,
+                max 200) caps NEW promoted channels per run. The preview
+                reports the plan under "promotion" / "Would promote".
                 The built-in parse patterns also accept "|" and "("
                 delimiters, weekday prefixes, trailing suffixes after the
                 time, and numeric month-first dates ("(7.12 9:15 AM ET)"); a
@@ -1635,6 +1644,43 @@ def register(mcp: FastMCP):
             )
             if result.get("truncated"):
                 lines.append("NOTE: fetch caps hit — results are truncated.")
+
+            # bead ti939.4.1: unmatched-stream promotion plan — present
+            # ONLY when the rule/config opted in via promote_unmatched.
+            # Rendered as its own block (distinct from excluded/warnings):
+            # promotion is the one path where ECM would CREATE channels.
+            promo = result.get("promotion")
+            if promo:
+                lines.append(
+                    f"Would promote: {promo.get('would_promote', 0)} "
+                    f"channel(s) in target group "
+                    f"{promo.get('target_group_id')} "
+                    f"({promo.get('would_create', 0)} new, "
+                    f"{promo.get('would_attach_existing', 0)} adopt "
+                    f"existing) from "
+                    f"{promo.get('would_promote_streams', 0)} unmatched "
+                    f"stream(s). ECM creates AND deletes channels in that "
+                    f"group (reconciliation-driven lifecycle)."
+                )
+                if promo.get("capped"):
+                    lines.append(
+                        f"  NOTE: promotion capped at {promo.get('cap')} "
+                        f"— {promo.get('cap_overage')} unit(s) deferred "
+                        f"to the next run."
+                    )
+                for unit in promo.get("units", []):
+                    streams = unit.get("streams", [])
+                    lines.append(
+                        f"  PROMOTE [{unit.get('action')}] "
+                        f"'{unit.get('channel_name')}' <- "
+                        f"{len(streams)} stream(s): "
+                        + ", ".join(
+                            f"'{s.get('stream_name')}' "
+                            f"[{s.get('provider')}]"
+                            for s in streams[:5]
+                        )
+                        + (" ..." if len(streams) > 5 else "")
+                    )
 
             for group in result.get("parse_failures", []):
                 lines.append(

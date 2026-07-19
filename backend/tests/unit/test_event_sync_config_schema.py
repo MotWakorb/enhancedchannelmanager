@@ -720,3 +720,102 @@ class TestProviderScopedSchema:
         }
         assert validate_event_sync_config(config) == []
         assert config["master_group_id"] == 10
+
+
+class TestPromotionKeys:
+    """Unmatched-stream promotion config (bead ti939.4.1).
+
+    The opt-in contract: ABSENT keys mean the feature is invisible and the
+    validator must not add any of them (the AC-1 byte-identical rail at the
+    schema layer); an ENABLED config requires a dedicated target group and
+    gets the max_promote_per_run default filled.
+    """
+
+    def test_absent_keys_stay_absent(self):
+        config = _valid_config()
+        assert validate_event_sync_config(config) == []
+        assert "promote_unmatched" not in config
+        assert "promote_target_group_id" not in config
+        assert "max_promote_per_run" not in config
+
+    def test_enabled_requires_target_group(self):
+        config = _valid_config(promote_unmatched=True)
+        errors = validate_event_sync_config(config)
+        assert any("promote_target_group_id" in e for e in errors)
+        assert any("required when promote_unmatched" in e for e in errors)
+
+    def test_enabled_with_target_group_passes_and_fills_cap_default(self):
+        from services.event_sync_promote import DEFAULT_MAX_PROMOTE_PER_RUN
+
+        config = _valid_config(
+            promote_unmatched=True, promote_target_group_id=40
+        )
+        assert validate_event_sync_config(config) == []
+        assert config["max_promote_per_run"] == DEFAULT_MAX_PROMOTE_PER_RUN
+
+    def test_disabled_config_does_not_fill_cap_default(self):
+        config = _valid_config(promote_unmatched=False)
+        assert validate_event_sync_config(config) == []
+        assert "max_promote_per_run" not in config
+
+    def test_target_group_must_not_be_master(self):
+        config = _valid_config(
+            promote_unmatched=True, promote_target_group_id=10
+        )
+        errors = validate_event_sync_config(config)
+        assert any("NOT the master group" in e for e in errors)
+
+    def test_target_group_must_not_be_secondary(self):
+        config = _valid_config(
+            promote_unmatched=True, promote_target_group_id=20
+        )
+        errors = validate_event_sync_config(config)
+        assert any("NOT one of the secondary groups" in e for e in errors)
+
+    @pytest.mark.parametrize("bad", ["yes", 1, None])
+    def test_non_bool_promote_flag_rejected(self, bad):
+        config = _valid_config(promote_unmatched=bad)
+        if bad is None:
+            # Explicit null is not a valid boolean either — but None is the
+            # "absent" sentinel in get(); a literal None key is treated as
+            # absent (feature off), matching the other optional flags.
+            assert validate_event_sync_config(config) == []
+        else:
+            errors = validate_event_sync_config(config)
+            assert any("promote_unmatched" in e for e in errors)
+
+    @pytest.mark.parametrize("bad", [0, -1, True, "40", 1.5])
+    def test_bad_target_group_rejected(self, bad):
+        config = _valid_config(
+            promote_unmatched=True, promote_target_group_id=bad
+        )
+        errors = validate_event_sync_config(config)
+        assert any("promote_target_group_id" in e for e in errors)
+
+    @pytest.mark.parametrize("bad", [0, -5, 201, True, "10", 2.5])
+    def test_bad_cap_rejected(self, bad):
+        config = _valid_config(
+            promote_unmatched=True, promote_target_group_id=40,
+            max_promote_per_run=bad,
+        )
+        errors = validate_event_sync_config(config)
+        assert any("max_promote_per_run" in e for e in errors)
+
+    def test_cap_bounds_accepted(self):
+        from services.event_sync_promote import MAX_PROMOTE_CEILING
+
+        for good in (1, 25, MAX_PROMOTE_CEILING):
+            config = _valid_config(
+                promote_unmatched=True, promote_target_group_id=40,
+                max_promote_per_run=good,
+            )
+            assert validate_event_sync_config(config) == []
+            assert config["max_promote_per_run"] == good
+
+    def test_target_group_shape_validated_even_when_disabled(self):
+        """An inert (disabled) target-group key still gets shape errors —
+        a typo'd id must not lie dormant until the operator flips the
+        toggle."""
+        config = _valid_config(promote_target_group_id=-3)
+        errors = validate_event_sync_config(config)
+        assert any("promote_target_group_id" in e for e in errors)

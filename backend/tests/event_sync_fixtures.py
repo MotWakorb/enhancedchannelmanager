@@ -216,6 +216,33 @@ def make_stateful_client(state: FakeDispatcharrState,
     return client
 
 
+def make_promote_client(state: FakeDispatcharrState, next_channel_id=900):
+    """The shared stateful client + a STATEFUL ``create_channel`` (bead
+    ti939.4.1 — promotion is the ONE path allowed to create channels).
+
+    Created channels land in ``state.channels`` with sequential ids from
+    ``next_channel_id`` so a SECOND run observes the first run's promoted
+    channels (the adoption-idempotence property the promotion scenarios
+    exercise). ``delete_channel`` already writes back on the base client.
+    Non-promotion tests keep using :func:`make_stateful_client`, whose bare
+    ``create_channel`` AsyncMock doubles as the never-creates canary.
+    """
+    client = make_stateful_client(state)
+    counter = {"next": next_channel_id}
+
+    async def _create_channel(data):
+        cid = counter["next"]
+        counter["next"] += 1
+        ch = copy.deepcopy(data)
+        ch["id"] = cid
+        ch.setdefault("streams", [])
+        state.channels[cid] = copy.deepcopy(ch)
+        return copy.deepcopy(ch)
+
+    client.create_channel = AsyncMock(side_effect=_create_channel)
+    return client
+
+
 def assert_never_touched_group_settings(client) -> None:
     """The Phase 1 hard constraint: ECM never toggles Dispatcharr group
     settings (auto_channel_sync stays guidance-only UI)."""

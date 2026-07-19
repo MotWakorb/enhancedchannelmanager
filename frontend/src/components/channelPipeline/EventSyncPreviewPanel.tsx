@@ -95,6 +95,12 @@ function summaryLine(summary: EventSyncPreviewResponse['summary']): string {
       summary.candidates_pending_review === 1 ? '' : 's'
     } pending review`;
   }
+  // bead ti939.4.1: promotion plan count — present only on
+  // promotion-enabled previews. ECM creating channels must be visible in
+  // the one-line summary, not only in the section below.
+  if (summary.would_promote != null) {
+    line += ` · ${summary.would_promote} would promote`;
+  }
   // bead 2ey2y: staleness-signal counts (jqwfq Stage 1) belong in the stats
   // line — a stale-suspect or unknown-freshness population the operator
   // cannot see is exactly the silent-rail problem this surfaces.
@@ -418,8 +424,12 @@ export function EventSyncPreviewPanel({
                 Unmatched secondary streams ({preview.unmatched_streams.length})
               </h4>
               <p className="form-hint">
-                No master channel within the time window — events only a
-                secondary provider carries get no channel in this model.
+                {preview.promotion
+                  ? 'No master channel within the time window — with ' +
+                    'promotion enabled, streams below marked "would ' +
+                    'promote" get their own ECM-managed channel.'
+                  : 'No master channel within the time window — events only a ' +
+                    'secondary provider carries get no channel in this model.'}
               </p>
               <div className="event-sync-table-wrap">
                 <table>
@@ -430,6 +440,9 @@ export function EventSyncPreviewPanel({
                       <th scope="col">Parsed title</th>
                       <th scope="col">Parsed start</th>
                       <th scope="col">Best candidate</th>
+                      {/* bead ti939.4.1: verdict column only on
+                          promotion-enabled previews. */}
+                      {preview.promotion && <th scope="col">Would promote</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -448,11 +461,100 @@ export function EventSyncPreviewPanel({
                                 : '')
                             : 'None in time window'}
                         </td>
+                        {preview.promotion && (
+                          <td>
+                            {row.would_promote
+                              ? `Yes — ${
+                                  row.promote_action === 'attach_existing'
+                                    ? 'existing channel'
+                                    : 'new channel'
+                                } '${row.promote_channel_name}'`
+                              : row.promote_capped
+                                ? 'Deferred (per-run cap)'
+                                : 'No — incomplete parsed identity'}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+            </section>
+          )}
+
+          {/* bead ti939.4.1: promotion plan — between unmatched and parse
+              failures; rendered only on promotion-enabled previews. */}
+          {preview.promotion && (
+            <section
+              className="event-sync-section"
+              data-testid="event-sync-would-promote"
+            >
+              <h4>Would promote ({preview.promotion.would_promote})</h4>
+              <p className="form-hint">
+                Each entry becomes ONE ECM-managed channel in the target
+                group ({preview.promotion.would_create} new,{' '}
+                {preview.promotion.would_attach_existing} adopting an
+                existing promoted channel) with every listed stream
+                attached. ECM deletes a promoted channel when its stream
+                leaves the provider playlist.
+              </p>
+              {preview.promotion.capped && (
+                <div className="warning-message" role="alert">
+                  <span className="material-icons">warning</span>
+                  <span>
+                    Promotion cap reached ({preview.promotion.cap}):{' '}
+                    {preview.promotion.cap_overage} event
+                    {preview.promotion.cap_overage === 1 ? '' : 's'} deferred
+                    to the next run.
+                  </span>
+                </div>
+              )}
+              {preview.promotion.units.length === 0 ? (
+                <p className="form-hint">
+                  Nothing to promote — no unmatched stream has a complete
+                  parsed identity.
+                </p>
+              ) : (
+                <div className="event-sync-table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Channel</th>
+                        <th scope="col">Action</th>
+                        <th scope="col">Streams</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.promotion.units.map(unit => (
+                        <tr key={unit.event_key}>
+                          <td className="event-sync-raw-name">
+                            {unit.channel_name}
+                            {unit.dateless ? ' (dateless)' : ''}
+                          </td>
+                          <td>
+                            {unit.action === 'create'
+                              ? 'Create new channel'
+                              : 'Attach to existing channel'}
+                          </td>
+                          <td>
+                            <ul className="event-sync-promote-streams">
+                              {unit.streams.map(s => (
+                                <li
+                                  key={`${s.group_id}-${s.stream_id ?? s.stream_name}`}
+                                  className="event-sync-raw-name"
+                                >
+                                  {s.stream_name}
+                                  {s.provider ? ` [${s.provider}]` : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
           )}
 

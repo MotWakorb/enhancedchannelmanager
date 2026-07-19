@@ -1888,4 +1888,136 @@ describe('EventSyncRuleEditor', () => {
       }
     });
   });
+  describe('unmatched-event promotion (bead ti939.4.1)', () => {
+    function seedPromoGroup() {
+      seedGroups();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 40, name: 'Promoted Events' })
+      );
+    }
+
+    it('defaults OFF and omits all promotion keys when never set', async () => {
+      const user = userEvent.setup();
+      seedPromoGroup();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      expect(screen.getByTestId('event-sync-promote-unmatched')).not.toBeChecked();
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const config = onSave.mock.calls[0][0].event_sync_config;
+      expect(config).not.toHaveProperty('promote_unmatched');
+      expect(config).not.toHaveProperty('promote_target_group_id');
+      expect(config).not.toHaveProperty('max_promote_per_run');
+    });
+
+    it('blocks save when enabled without a target group, with a teaching error', async () => {
+      const user = userEvent.setup();
+      seedPromoGroup();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByTestId('event-sync-promote-unmatched'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      expect(onSave).not.toHaveBeenCalled();
+      expect(
+        screen.getAllByText(/Pick a target group for promoted channels/i).length
+      ).toBeGreaterThan(0);
+    });
+
+    it('emits the promotion keys when enabled with a target group, and shows the create-AND-delete warning', async () => {
+      const user = userEvent.setup();
+      seedPromoGroup();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(
+        <EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />
+      );
+
+      await user.click(screen.getByTestId('event-sync-promote-unmatched'));
+      // The honest ownership copy renders as soon as the toggle is on.
+      expect(screen.getByTestId('event-sync-promote-warning').textContent)
+        .toMatch(/ECM will CREATE and DELETE channels/i);
+
+      // Pick the dedicated group through the CustomSelect (master and
+      // secondary groups are filtered out of the option list).
+      await waitFor(() =>
+        expect(screen.getByText('Target group for promoted channels')).toBeInTheDocument()
+      );
+      const promoteGroup = screen
+        .getByText('Target group for promoted channels')
+        .closest('.form-group')!;
+      await user.click(promoteGroup.querySelector('.custom-select-trigger')!);
+      const option = await screen.findByText('Promoted Events');
+      const menu = option.closest('.custom-select-menu') as HTMLElement;
+      // Ownership rails in the option list: master (1) and secondary (2)
+      // groups are filtered out — only dedicated groups are offered.
+      expect(within(menu).queryByText('Master Events')).toBeNull();
+      expect(within(menu).queryByText('Secondary Events')).toBeNull();
+      await user.click(option);
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const config = onSave.mock.calls[0][0].event_sync_config;
+      expect(config.promote_unmatched).toBe(true);
+      expect(config.promote_target_group_id).toBe(40);
+      // No editor control for the cap — the key stays absent so the
+      // backend default applies.
+      expect(config).not.toHaveProperty('max_promote_per_run');
+    });
+
+    it('round-trips a stored promotion config and preserves an API-set cap', async () => {
+      const user = userEvent.setup();
+      seedPromoGroup();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          promote_unmatched: true,
+          promote_target_group_id: 40,
+          max_promote_per_run: 10,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      expect(screen.getByTestId('event-sync-promote-unmatched')).toBeChecked();
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const config = onSave.mock.calls[0][0].event_sync_config;
+      expect(config.promote_unmatched).toBe(true);
+      expect(config.promote_target_group_id).toBe(40);
+      expect(config.max_promote_per_run).toBe(10);
+    });
+
+    it('turning a stored promotion OFF keeps an explicit false and the group choice', async () => {
+      const user = userEvent.setup();
+      seedPromoGroup();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        event_sync_config: {
+          ...EXISTING_RULE.event_sync_config!,
+          promote_unmatched: true,
+          promote_target_group_id: 40,
+          max_promote_per_run: 10,
+        },
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByTestId('event-sync-promote-unmatched'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const config = onSave.mock.calls[0][0].event_sync_config;
+      expect(config.promote_unmatched).toBe(false);
+      // The group choice survives the off-toggle so re-enabling later does
+      // not lose it (inert while off; backend validates shape only).
+      expect(config.promote_target_group_id).toBe(40);
+    });
+  });
 });

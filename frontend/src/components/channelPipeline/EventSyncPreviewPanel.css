@@ -253,3 +253,9 @@
 .event-sync-disabled-reason {
   color: var(--text-secondary);
 }
+
+/* bead ti939.4.1: stream list inside a Would-promote unit row. */
+.event-sync-promote-streams {
+  margin: 0;
+  padding-left: 18px;
+}

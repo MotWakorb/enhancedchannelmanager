@@ -404,6 +404,9 @@ backward compatibility; the rule editor now reads and writes the nested shape.
 | `assume_current_date` | no (default **false**) | When true, a listing that carries a **time but no date** is placed on the **current date** so it becomes matchable — deliberately relaxing the never-guess-the-date rail. Accepts the cross-day match risk. See [Dateless live listings](#dateless-live-listings). |
 | `demote_stale_dateless` | no (default **true**) | bead jqwfq: guard for `assume_current_date`. When true (the default), a would-attach whose **dateless** stream name was **already present in the provider's previous-day M3U snapshot** is routed to the [review queue](#the-review-queue-ambiguous-matches-become-questions) (reason `stale_dateless_stream_name`) instead of auto-attached — a name left over from yesterday must not attach to today's master. Positive snapshot membership is the only demoting signal (missing/capped snapshots **fail open** and never demote); dated names are never touched; a prior review-queue **accept** of the pairing outranks the guard. Set **false** only for recurring daily events whose names legitimately repeat every day. Inert unless `assume_current_date` is on. See [Reviewing ambiguous matches](#reviewing-ambiguous-matches-phase-2-review-queue). |
 | `parse_master_from_stream` | no (default **false**) | When true, each master channel's event identity (title + time) is read from its **first attached stream's name** instead of the channel name — so master channels can be named freely. A master with no attached stream is skipped. See [The master channels' date+time must be in their NAMES](#the-master-channels-datetime-must-be-in-their-names). |
+| `promote_unmatched` | no (default **false**) | bead ti939.4.1: opt-in promotion of **unmatched secondary-only events** to ECM-managed channels — the ONE sanctioned exception to "ECM never creates channels". Absent means the feature is completely invisible (no preview keys, no Pass 4 participation). **With this on, ECM CREATES and DELETES channels** in `promote_target_group_id`. See [Promoting unmatched events](#promoting-unmatched-events-phase-3-opt-in). |
+| `promote_target_group_id` | when promoting | The **dedicated ECM-owned channel group** promoted event channels live in. Required when `promote_unmatched` is true. The master group (Dispatcharr-owned) and every secondary group are refused — ownership rails. Treat this group as ECM's: channels in it appear and disappear with the provider playlist. |
+| `max_promote_per_run` | no (default 25) | Per-run cap on **new** promoted channels (1–200; filled on promotion-enabled configs). On overage the run stops creating, warns, and records the overage. Adopting an existing promoted channel (idempotent re-runs) never consumes the cap. |
 
 ### Why validation is strict
 
@@ -708,19 +711,23 @@ report the current state.
 
 If a real event never shows up as a channel at all — not even
 `unmatched` — check whether it's carried **only** by a secondary
-provider and not by the master. This is the accepted "master-as-ceiling"
-limitation of the current model: **events carried only by secondary
-providers get no channel**, because ECM never creates channels — only
+provider and not by the master. This is the default "master-as-ceiling"
+posture of the model: **by default, events carried only by secondary
+providers get no channel**, because ECM does not create channels — only
 Dispatcharr does, from the master group. Every preview reports these
 streams explicitly in the **unmatched secondary streams** list so you
 have visibility into how much coverage you're losing:
 
 ![Unmatched secondary streams table: stream name, provider, parsed title, parsed start, and a "Best candidate: None in time window" column for each row](images/event_sync/5-unmatched-parse-failures.png)
 
-If this list is large and consistently the same events, it's evidence for
-picking a different (broader) master group, or a future promotion feature
-(tracked under epic `enhancedchannelmanager-ti939.4`, not built yet) — not
-something to work around today.
+If this list is large and consistently the same events, you have two
+options: pick a different (broader) master group, or opt into
+[unmatched-event promotion](#promoting-unmatched-events-phase-3-opt-in)
+(`promote_unmatched`, bead ti939.4.1) — the one sanctioned exception,
+under which ECM **creates ECM-managed channels** for those events in a
+dedicated target group and **deletes them again** when the event leaves
+the provider playlist. Read that section's ownership semantics before
+enabling it.
 
 ### The master channels' date+time must be in their NAMES
 
@@ -882,16 +889,24 @@ warning clears immediately.
 
 ## What ECM deliberately does NOT do
 
-* **No channel lifecycle.** Dispatcharr creates, updates and deletes the
-  master channels (verified: its sync task updates in place, preserves
-  channel UUIDs, never resets a channel's stream list, and deletes a
-  channel only when the master provider drops the stream — the cascade
-  detaches secondary streams cleanly).
-* **No orphan reconciliation.** event_sync rules never populate
-  `managed_channel_ids` and hard-bypass the pipeline's Pass 4 orphan
-  cleanup — reconciling channels ECM doesn't own would delete or move
-  Dispatcharr-owned channels. See [Pass 4 orphan
-  bypass](#pass-4-orphan-bypass) below.
+* **No MASTER channel lifecycle.** Dispatcharr creates, updates and
+  deletes the master channels (verified: its sync task updates in place,
+  preserves channel UUIDs, never resets a channel's stream list, and
+  deletes a channel only when the master provider drops the stream — the
+  cascade detaches secondary streams cleanly). The ONE sanctioned
+  exception is strictly opt-in [unmatched-event
+  promotion](#promoting-unmatched-events-phase-3-opt-in) (bead
+  ti939.4.1): with `promote_unmatched: true`, ECM creates and deletes
+  **its own** channels in the rule's dedicated `promote_target_group_id`
+  group — never in the master group.
+* **No orphan reconciliation for masters.** Attach-only event_sync rules
+  never populate `managed_channel_ids` and hard-bypass the pipeline's
+  Pass 4 orphan cleanup — reconciling channels ECM doesn't own would
+  delete or move Dispatcharr-owned channels. A **promotion-enabled** rule
+  DOES reconcile, but its managed set contains only the ECM-promoted
+  channels in the target group (register-time invariant + a Pass 4
+  ownership rail that refuses any id outside that group). See [Pass 4
+  orphan bypass](#pass-4-orphan-bypass) below.
 * **No persisted channel IDs.** Matching is recomputed statelessly every
   run; master channels are the identity anchor. See [No durable cluster
   state](#no-durable-cluster-state) below.
@@ -1421,6 +1436,93 @@ event key — are content-based and need no translation). An exclusion
 whose rule name isn't present in the restored set has nothing to re-key
 onto and is dropped; the restore report's warnings note how many were
 dropped this way.
+
+## Promoting unmatched events (Phase 3 opt-in)
+
+**Off by default; absent config keys mean the feature does not exist for
+the rule.** Promotion (bead ti939.4.1) is the ONE sanctioned exception to
+Event Sync's "ECM never creates channels" principle: with
+`promote_unmatched: true`, each **unmatched secondary-only event** — an
+event a secondary provider carries that the master group does not — gets
+its own **ECM-managed channel** in the rule's dedicated
+`promote_target_group_id` group, with every provider's stream for that
+event attached to it.
+
+**Honest ownership statement — read before enabling:** ECM will **create
+AND delete channels** in the target group. A promoted channel exists only
+while a justifying stream is still observed in the provider playlist on
+the current run; the run after the event leaves the playlist, Pass 4
+orphan reconciliation removes the channel per the rule's `orphan_action`
+(default: delete). Treat the target group as ECM-owned scratch space — do
+not hand-build channels there, and expect its contents to churn with the
+providers' event schedules.
+
+### How promotion decides (all preview-visible)
+
+* **Who is promotable:** streams whose disposition is `unmatched` — and
+  streams whose disposition is `excluded_by_operator` (pinned semantics:
+  a [never-attach exclusion](#never-attach-exclusions-standing-operator-orders)
+  blocks the ATTACH to one specific master; it says nothing about the
+  stream deserving its own channel, so an excluded pairing's stream is
+  still promotable). `ambiguous` streams are NOT promoted — they are open
+  review-queue questions that may still become attaches. `parse_failed`
+  streams are untouched, and only streams with a **complete parsed
+  identity** (title + start) qualify: an identity-less stream can neither
+  name a channel deterministically nor be recognized next run.
+* **Clustering — exact event key only:** same-run promotable streams (any
+  provider) sharing the same normalized event identity (cleaned title +
+  start; the exact key the review queue fingerprints on) form ONE
+  promotion unit → ONE channel. No fuzzy clustering. Promoted channels
+  never enter the matcher's candidate set (the resolver only ever reads
+  the master group).
+* **Deterministic naming from the key:** the channel name is derived
+  purely from the event identity — cleaned title plus the LOCAL clock
+  time, with the date **only when it was genuinely parsed** from the
+  provider name. A dateless listing (`assume_current_date` synthesized
+  the date) gets **no date in the name or the identity**, so a re-run
+  after midnight derives the same name and **adopts the same channel**
+  instead of minting a dated duplicate (the same t6bin semantics the
+  review queue uses).
+* **Create-or-adopt idempotence:** each run looks the derived name up in
+  the target group; found → adopt and attach (already-attached streams
+  are no-ops), not found → create. An immediate re-run creates nothing
+  and attaches nothing new.
+* **Lifecycle is reconciliation, never clocks:** the delete decision is
+  purely "was the justifying stream observed this run?" — no wall-clock
+  arithmetic, no parsed/synthesized timestamps, no run counters. A rule
+  that could not observe (stream fetch failed, config invalid) does NOT
+  reconcile that run, so a transient provider error can never mass-delete
+  promoted channels.
+* **Self-healing when the master catches up:** if the event later appears
+  in the master group, its streams attach to the master channel (normal
+  attach path) and the promoted duplicate — no longer justified — is
+  reconciled away in the same run.
+* **Blast radius:** `max_promote_per_run` (default 25, max 200) caps NEW
+  channels per run; on overage the run warns
+  (`event_sync_promote_capped`) and the remainder re-surfaces next run.
+  Every created channel is a `created_entity` on the execution, every
+  attach is journaled under category `event_sync` with
+  `kind: "event_sync_promote"` fingerprint provenance, and
+  [rollback](#undo-a-bad-event_sync-run) of a promotion run deletes the
+  run's created channels and restores the attached stream lists via the
+  standard snapshot path.
+* **Guide data:** the rule's `dummy_epg_profile_id` (when set) covers
+  promoted channels exactly like master channels — assignment on every
+  run, Pass 5 deferral/retry included, foreign EPG never overwritten.
+* **Masters can never be deleted by this feature:** the managed set is
+  built only from channels created/adopted inside the target group
+  (register-time invariant), and Pass 4 carries a second ownership rail
+  that refuses to reconcile any id outside the target group.
+
+### Preview parity
+
+The **preview computes the promotion plan with the same helper the live
+run executes** (`services/event_sync_promote.py`), so "Would promote (N)"
+in the preview equals what a run would create/adopt on unchanged data.
+The preview annotates each unmatched row (`would_promote`,
+`promote_action: create | attach_existing`, the derived channel name) and
+renders a **Would promote** section between the unmatched list and the
+parse failures. A preview (and a pipeline dry-run) creates nothing.
 
 ## Testing & pre-release verification
 

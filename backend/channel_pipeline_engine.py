@@ -2487,6 +2487,10 @@ class ChannelPipelineEngine:
                 # them correctly.
                 rule_channel_order_streams=rule_channel_order_streams,
                 stream_m3u_map=stream_m3u_map,
+                # bead ti939.4.1: promotion-enabled rules register their
+                # PROMOTED channel ids here — the managed set Pass 4
+                # reconciles. Attach-only rules never write it.
+                rule_channel_order=rule_channel_order,
             )
 
         # =====================================================================
@@ -2637,9 +2641,26 @@ class ChannelPipelineEngine:
             # Pass 4: Reconcile — clean up orphaned channels
             # =================================================================
             logger.debug("[AUTO-CREATE-ENGINE] Starting orphan reconciliation")
+            # bead ti939.4.1: promotion-enabled event_sync rules join Pass 4
+            # — their managed set (promoted channels ONLY) reconciles like
+            # any standard rule's. ONLY rules whose promotion pass ran to
+            # completion THIS run are eligible (the attach phase records
+            # them): a rule skipped for a fetch failure / invalid config
+            # made no observation, and reconciling it would mass-delete
+            # promoted channels on a transient error. Attach-only event_sync
+            # rules never appear here — their hard bypass is unchanged.
+            promotion_reconcile_ids = results.pop(
+                "event_sync_promotion_reconcile_rule_ids", set()
+            )
+            pass4_rules = list(rules)
+            if promotion_reconcile_ids:
+                pass4_rules.extend(
+                    r for r in (event_sync_rules or [])
+                    if r.id in promotion_reconcile_ids
+                )
             await self._reconcile_orphans(
-                rules, rule_channel_order, executor, execution, results, dry_run,
-                settings=settings
+                pass4_rules, rule_channel_order, executor, execution, results,
+                dry_run, settings=settings
             )
 
             # =================================================================
@@ -3079,6 +3100,7 @@ class ChannelPipelineEngine:
         channels_touched_ids: set,
         rule_channel_order_streams: dict = None,
         stream_m3u_map: dict = None,
+        rule_channel_order: dict = None,
     ) -> None:
         """Execute the event_sync attach phase (bead ti939.2.1 — Phase 1B).
 
@@ -3099,7 +3121,16 @@ class ChannelPipelineEngine:
         record by ``run_pipeline``).
 
         NEVER: creates/deletes channels, touches managed_channel_ids, or
-        toggles Dispatcharr group settings.
+        toggles Dispatcharr group settings — with ONE sanctioned, strictly
+        opt-in exception (bead ti939.4.1): a rule whose config carries
+        ``promote_unmatched: true`` CREATES ECM-managed channels for
+        unmatched secondary-only events in its dedicated
+        ``promote_target_group_id`` group, registers exactly those promoted
+        channels in ``rule_channel_order`` (the managed set), and thereby
+        opts into Pass 4 orphan reconciliation for them. Master-group
+        channels stay Dispatcharr-owned and can never enter the managed set
+        (the promotion lookup is scoped to the target group; this method
+        re-asserts the invariant when registering).
 
         Pass 3.5 participation (bead io0tv): when the caller supplies
         ``rule_channel_order_streams``, each rule registers the master
@@ -3484,6 +3515,17 @@ class ChannelPipelineEngine:
             results["streams_merged"] += exec_ctx.streams_merged
             results["streams_skipped"] += exec_ctx.streams_skipped
             results["modified_entities"].extend(exec_ctx.modified_entities)
+            # bead ti939.4.1: promotion is the only event_sync path that
+            # creates channels; for every other rule these are 0/empty, so
+            # the aggregation is a no-op (AC-1 byte-identical). setdefault
+            # tolerates direct callers (tests) that pass a minimal results
+            # dict without the standard-run keys.
+            results.setdefault("created_entities", []).extend(
+                exec_ctx.created_entities
+            )
+            results["channels_created"] = (
+                results.get("channels_created", 0) + exec_ctx.channels_created
+            )
             channels_touched_ids.update(exec_ctx.merged_channel_ids)
             results["rule_match_counts"][rule.id] = summary["attached"]
 
@@ -3508,6 +3550,107 @@ class ChannelPipelineEngine:
                         "action": entry["description"],
                         "would_create": False,
                         "would_modify": not entry.get("skipped", False),
+                    })
+
+            # =============================================================
+            # Unmatched-stream promotion (bead ti939.4.1) — present on the
+            # summary ONLY when the rule's config opted in, so everything
+            # in this block is unreachable for promotion-less rules.
+            # =============================================================
+            promotion = summary.get("promotion")
+            if promotion is not None:
+                # Execution-log + dry-run rows per promotion entry (the
+                # bounded-log chokepoint applies, mirroring attach entries).
+                for entry in promotion.pop("promote_entries"):
+                    match = entry.get("match") or {}
+                    results["execution_log"].append({
+                        "stream_id": match.get("secondary_stream_id"),
+                        "stream_name": match.get("secondary_stream_name"),
+                        "m3u_account_id": None,
+                        "rules_evaluated": [],
+                        "actions_executed": [entry],
+                    })
+                    if dry_run:
+                        results["dry_run_results"].append({
+                            "stream_id": match.get("secondary_stream_id"),
+                            "stream_name": match.get("secondary_stream_name"),
+                            "rule_id": rule.id,
+                            "rule_name": rule.name,
+                            "action": entry["description"],
+                            "would_create": entry["type"] == "event_sync_promote"
+                                             and not entry.get("skipped", False),
+                            "would_modify": not entry.get("skipped", False),
+                        })
+
+                # Register the promoted channels as THIS rule's managed set
+                # (the "current" side of Pass 4 reconciliation). INVARIANT
+                # (dedicated test): the managed set contains ONLY channels
+                # in the promotion target group — a Dispatcharr-owned
+                # master can never leak in. The executor's scoped lookup
+                # already guarantees this; re-assert here so a future bug
+                # upstream turns into a loud WARN + drop, never a Pass 4
+                # delete of a channel ECM does not own.
+                if rule_channel_order is not None:
+                    target_gid = promotion.get("target_group_id")
+                    order_list = rule_channel_order[rule.id]
+                    for cid in promotion["channel_ids"]:
+                        ch = executor._channel_by_id.get(cid) or {}
+                        if ch.get("channel_group_id") != target_gid:
+                            logger.warning(
+                                "[EVENT-SYNC] Rule '%s' (id=%s): promoted "
+                                "channel id=%s is NOT in the promotion "
+                                "target group %s — REFUSING to register it "
+                                "in the managed set (ownership invariant)",
+                                rule.name, rule.id, cid, target_gid,
+                            )
+                            continue
+                        if cid not in order_list:
+                            order_list.append(cid)
+                    # Mark this rule as reconcile-eligible THIS run: the
+                    # promotion pass ran to completion, so an empty managed
+                    # set means "no justifying stream observed" (delete is
+                    # correct), not "the rule never got to look" (fetch
+                    # failure / invalid config / disabled — those `continue`
+                    # above and never reach here, so Pass 4 must not
+                    # reconcile them; a transient fetch failure must never
+                    # mass-delete promoted channels).
+                    results.setdefault(
+                        "event_sync_promotion_reconcile_rule_ids", set()
+                    ).add(rule.id)
+
+                # Cap-overage warning surface (mirrors event_sync_attach_
+                # capped).
+                if promotion["capped"]:
+                    promote_cap_message = (
+                        f"event_sync rule '{rule.name}': per-run promotion "
+                        f"cap ({promotion['cap']}) reached — "
+                        f"{promotion['cap_overage']} unmatched event(s) "
+                        f"were NOT promoted this run. Promotion is "
+                        f"idempotent: run again to continue, or raise "
+                        f"max_promote_per_run on the rule."
+                    )
+                    results["event_sync_warnings"].append({
+                        "type": "event_sync_promote_capped",
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "cap": promotion["cap"],
+                        "overage": promotion["cap_overage"],
+                        "message": promote_cap_message,
+                    })
+                    results["execution_log"].append({
+                        "stream_id": None,
+                        "stream_name": (
+                            f"[EVENT-SYNC] {rule.name}: promotion cap reached"
+                        ),
+                        "m3u_account_id": None,
+                        "rules_evaluated": [],
+                        "actions_executed": [{
+                            "type": "event_sync_promote_capped",
+                            "description": promote_cap_message,
+                            "success": True,
+                            "entity_id": None,
+                            "error": None,
+                        }],
                     })
 
             # bead io0tv: register this rule's touched master channels for
@@ -3658,6 +3801,21 @@ class ChannelPipelineEngine:
                     f"{summary['excluded_suppressed']} pairing(s) "
                     f"suppressed by operator exclusions"
                 )
+            # bead ti939.4.1: promotion visibility in the one-line drift
+            # detector — a run that created/deleted-by-reconcile channels
+            # must be readable in one line. Key absent for promotion-less
+            # rules, so their line is byte-identical.
+            if summary.get("promotion") is not None:
+                promo = summary["promotion"]
+                extras.append(
+                    f"{promo['promoted_created']} promoted, "
+                    f"{promo['promoted_adopted']} promoted-adopted"
+                )
+                if promo["capped"]:
+                    extras.append(
+                        f"promotion capped at {promo['cap']}, "
+                        f"{promo['cap_overage']} deferred"
+                    )
             if summary["capped"]:
                 extras.append(
                     f"capped at {summary['cap']}, "
@@ -4346,14 +4504,40 @@ class ChannelPipelineEngine:
                 # run_pipeline already filters event_sync rules out of the
                 # list this method receives — this guard is belt-and-braces
                 # for any direct caller.
+                event_sync_promote_group_id = None
                 if rule.is_event_sync():
-                    logger.debug(
-                        "[AUTO-CREATE-ENGINE] Rule '%s': event_sync kind — "
-                        "orphan reconciliation hard-bypassed "
-                        "(Dispatcharr owns master-channel lifecycle)",
-                        rule.name,
+                    cfg = rule.get_event_sync_config() or {}
+                    if not cfg.get("promote_unmatched"):
+                        logger.debug(
+                            "[AUTO-CREATE-ENGINE] Rule '%s': event_sync kind — "
+                            "orphan reconciliation hard-bypassed "
+                            "(Dispatcharr owns master-channel lifecycle)",
+                            rule.name,
+                        )
+                        continue
+                    # bead ti939.4.1: promotion-enabled event_sync rules DO
+                    # reconcile — their managed set contains ONLY the
+                    # ECM-promoted channels in promote_target_group_id (the
+                    # attach phase registers nothing else; the register site
+                    # re-asserts it). Lifecycle is reconciliation-driven by
+                    # PO decision: a promoted channel is current iff its
+                    # justifying unmatched stream was observed in the
+                    # provider playlist THIS run — no wall-clock arithmetic,
+                    # no timestamps, no run counters anywhere below. The
+                    # target group id is kept as a LAST-RESORT ownership
+                    # rail on the delete loop.
+                    event_sync_promote_group_id = cfg.get(
+                        "promote_target_group_id"
                     )
-                    continue
+                    if event_sync_promote_group_id is None:
+                        # Config drifted (promote on, target gone) — refuse
+                        # to reconcile rather than guess ownership.
+                        logger.warning(
+                            "[AUTO-CREATE-ENGINE] Rule '%s': promote_unmatched "
+                            "set but no promote_target_group_id — orphan "
+                            "reconciliation skipped for safety", rule.name,
+                        )
+                        continue
 
                 orphan_action = getattr(rule, 'orphan_action', 'delete') or 'delete'
                 logger.debug(
@@ -4404,6 +4588,32 @@ class ChannelPipelineEngine:
                             rule.name, len(stale_ids)
                         )
                         orphan_ids -= stale_ids
+
+                # bead ti939.4.1 ownership rail (last resort, belt over the
+                # register-time invariant): a promotion-enabled event_sync
+                # rule may only ever delete/move channels INSIDE its
+                # promotion target group. Any orphan candidate outside it
+                # means the managed set was polluted — WARN and refuse that
+                # id rather than touch a channel ECM does not own.
+                if event_sync_promote_group_id is not None and orphan_ids:
+                    foreign_ids = {
+                        cid for cid in orphan_ids
+                        if (executor._channel_by_id.get(cid) or {}).get(
+                            "channel_group_id"
+                        ) != event_sync_promote_group_id
+                    }
+                    if foreign_ids:
+                        logger.warning(
+                            "[AUTO-CREATE-ENGINE] Rule '%s': %s managed "
+                            "channel id(s) %s are OUTSIDE the promotion "
+                            "target group %s — refusing to reconcile them "
+                            "(ownership invariant; managed set was "
+                            "polluted)",
+                            rule.name, len(foreign_ids),
+                            sorted(foreign_ids)[:10],
+                            event_sync_promote_group_id,
+                        )
+                        orphan_ids -= foreign_ids
 
                 logger.debug(
                     "[AUTO-CREATE-ENGINE] Rule '%s': previous=%s "

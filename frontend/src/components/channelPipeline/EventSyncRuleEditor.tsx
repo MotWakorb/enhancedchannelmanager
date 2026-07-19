@@ -366,6 +366,16 @@ export function EventSyncRuleEditor({
   const [parseMasterFromStream, setParseMasterFromStream] = useState(
     config?.parse_master_from_stream ?? false
   );
+  // bead ti939.4.1: opt-in promotion of unmatched secondary-only events to
+  // ECM-managed channels. Default OFF — the backend treats an absent key as
+  // false and the whole feature stays invisible. When on, a dedicated
+  // target group is REQUIRED (ECM creates AND deletes channels there).
+  const [promoteUnmatched, setPromoteUnmatched] = useState(
+    config?.promote_unmatched ?? false
+  );
+  const [promoteTargetGroupId, setPromoteTargetGroupId] = useState<number | null>(
+    config?.promote_target_group_id ?? null
+  );
   // Phase 2 (ti939.3.3): optional dummy EPG profile auto-assigned to master
   // channels on every run. null = feature off (key omitted on save).
   const [dummyEpgProfileId, setDummyEpgProfileId] = useState<number | null>(
@@ -588,6 +598,23 @@ export function EventSyncRuleEditor({
     if (effectivePatterns.length === 0) {
       return 'Select at least one parse pattern (or add a custom one)';
     }
+    // bead ti939.4.1: promotion needs its dedicated ECM-owned group — the
+    // backend refuses the master group and secondaries (ownership rails),
+    // so mirror the rails here for an immediate, teaching error.
+    if (promoteUnmatched) {
+      if (promoteTargetGroupId == null) {
+        return 'Pick a target group for promoted channels (Behavior → '
+          + 'Promote unmatched events)';
+      }
+      if (masterScope != null && promoteTargetGroupId === masterScope.group_id) {
+        return 'The promotion target group must not be the master group — '
+          + 'Dispatcharr owns the master channels; pick a dedicated group';
+      }
+      if (secondaryScopes.some(s => s.group_id === promoteTargetGroupId)) {
+        return 'The promotion target group must not be a secondary group — '
+          + 'pick a dedicated group for ECM-managed promoted channels';
+      }
+    }
     return null;
   })();
 
@@ -671,6 +698,21 @@ export function EventSyncRuleEditor({
     // value (absent means false on the backend).
     if (parseMasterFromStream || config?.parse_master_from_stream != null) {
       built.parse_master_from_stream = parseMasterFromStream;
+    }
+    // bead ti939.4.1: emit promotion keys when enabled; preserve explicit
+    // stored values (an untouched legacy config stays without the keys —
+    // absent means the feature is invisible on the backend). The target
+    // group id rides along even while the toggle is off so re-enabling
+    // does not lose the operator's group choice; max_promote_per_run has
+    // no editor control — preserve an API-set value verbatim.
+    if (promoteUnmatched || config?.promote_unmatched != null) {
+      built.promote_unmatched = promoteUnmatched;
+    }
+    if (promoteTargetGroupId != null) {
+      built.promote_target_group_id = promoteTargetGroupId;
+    }
+    if (config?.max_promote_per_run != null) {
+      built.max_promote_per_run = config.max_promote_per_run;
     }
 
     // --- Shared patterns (bead z4y4a: full round-trip) -------------------
@@ -899,6 +941,8 @@ export function EventSyncRuleEditor({
       assumeCurrentDate !== (config?.assume_current_date ?? false) ||
       demoteStaleDateless !== (config?.demote_stale_dateless ?? true) ||
       parseMasterFromStream !== (config?.parse_master_from_stream ?? false) ||
+      promoteUnmatched !== (config?.promote_unmatched ?? false) ||
+      promoteTargetGroupId !== (config?.promote_target_group_id ?? null) ||
       dummyEpgProfileId !== (config?.dummy_epg_profile_id ?? null) ||
       streamSortField !== (rule?.stream_sort_field ?? '') ||
       streamSortOrder !== (rule?.stream_sort_order === 'asc' ? 'asc' : 'desc')
@@ -907,7 +951,8 @@ export function EventSyncRuleEditor({
     name, description, enabled, masterScope, secondaryScopes, selectedPatternIds,
     customShared, groupOverrides, timeWindowText, thresholdText, enforceTimeWindow,
     autoRun, refreshProvidersBeforeRun, includeMasterGroupStreams, assumeCurrentDate,
-    demoteStaleDateless, parseMasterFromStream, dummyEpgProfileId, config, rule,
+    demoteStaleDateless, parseMasterFromStream, promoteUnmatched,
+    promoteTargetGroupId, dummyEpgProfileId, config, rule,
     initial, customSharedMeta, streamSortField, streamSortOrder,
   ]);
   const dirtyRef = useRef(dirty);
@@ -1056,6 +1101,9 @@ export function EventSyncRuleEditor({
     (includeMasterGroupStreams ? 1 : 0) + (parseMasterFromStream ? 1 : 0);
   const guideChanged = dummyEpgProfileId != null ? 1 : 0;
   const streamOrderChanged = streamSortField ? 1 : 0;
+  // bead ti939.4.1: the promotion toggle is the only badge-worthy flag —
+  // the target group is meaningless without it.
+  const promotionChanged = promoteUnmatched ? 1 : 0;
 
   /** Collapsed-subgroup "N changed" badge (S2). */
   const changedBadge = (count: number) =>
@@ -2007,6 +2055,108 @@ export function EventSyncRuleEditor({
                       </div>
                     </details>
                   </div>
+                </div>
+              </details>
+
+              {/* Channel-promotion subgroup (bead ti939.4.1) — the ONE
+                  sanctioned ECM-creates-channels exception; strictly
+                  opt-in and collapsed by default. */}
+              <details className="modal-subgroup">
+                <summary>
+                  Promote unmatched events {changedBadge(promotionChanged)}
+                </summary>
+                <div className="event-sync-details-body">
+                  <div className="form-group">
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={promoteUnmatched}
+                        onChange={e => setPromoteUnmatched(e.target.checked)}
+                        disabled={isLoading}
+                        data-testid="event-sync-promote-unmatched"
+                      />
+                      <span>
+                        Create channels for events only secondary providers
+                        carry
+                      </span>
+                    </label>
+                    <span className="form-hint">
+                      Promotes each unmatched secondary-only event to its own
+                      channel in the target group below, and attaches every
+                      provider&apos;s stream for that event to it.
+                    </span>
+                    {promoteUnmatched && (
+                      <span
+                        className="form-hint event-sync-warning-hint"
+                        data-testid="event-sync-promote-warning"
+                      >
+                        Heads up: with this on, <strong>ECM will CREATE and
+                        DELETE channels in the target group</strong>. A
+                        promoted channel is kept only while its stream is
+                        still in the provider playlist — when the event
+                        leaves the playlist, the next run <strong>deletes the
+                        channel</strong> (per the rule&apos;s orphan action).
+                        Use a dedicated group and treat it as ECM-owned.
+                      </span>
+                    )}
+                    <details className="modal-why">
+                      <summary>Why / when to use</summary>
+                      <div className="event-sync-details-body">
+                        <span className="form-hint">
+                          Off by default. Normally the master group is a
+                          ceiling: events carried only by a secondary provider
+                          get no channel (they show as unmatched in the
+                          preview). Turn this on when that unmatched list is
+                          consistently losing you real events. Streams from
+                          different providers for the SAME event (same parsed
+                          title + start) share one promoted channel. If the
+                          event later appears in the master group, the streams
+                          attach to the master instead and the promoted
+                          duplicate is cleaned up on the same run. The dummy
+                          EPG profile above also covers promoted channels.
+                          The preview shows exactly what would be promoted
+                          before you run anything.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                  {promoteUnmatched && (
+                    <div className="form-group">
+                      <label>Target group for promoted channels</label>
+                      <CustomSelect
+                        value={
+                          promoteTargetGroupId != null
+                            ? promoteTargetGroupId.toString()
+                            : ''
+                        }
+                        onChange={value =>
+                          setPromoteTargetGroupId(
+                            value ? parseInt(value, 10) : null
+                          )
+                        }
+                        options={[
+                          { value: '', label: 'Pick a dedicated group…' },
+                          ...channelGroups
+                            .filter(
+                              g =>
+                                g.id !== masterScope?.group_id &&
+                                !secondaryScopes.some(s => s.group_id === g.id)
+                            )
+                            .map(g => ({
+                              value: g.id.toString(),
+                              label: g.name,
+                            })),
+                        ]}
+                        placeholder="Pick a dedicated group…"
+                        disabled={isLoading}
+                      />
+                      <span className="form-hint">
+                        Must be a dedicated group — the master group
+                        (Dispatcharr-owned) and secondary groups are refused.
+                        ECM creates and deletes promoted channels here.
+                      </span>
+                    </div>
+                  )}
                 </div>
               </details>
 
