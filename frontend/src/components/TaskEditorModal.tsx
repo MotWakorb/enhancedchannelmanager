@@ -19,9 +19,11 @@ interface TaskEditorModalProps {
   task: TaskStatus;
   onClose: () => void;
   onSaved: () => void;
+  /** Open with the Add Schedule sub-editor already showing (vkktd.4 Fix-it path). */
+  openAddSchedule?: boolean;
 }
 
-export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps) {
+export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: TaskEditorModalProps) {
   // Task state
   const [enabled, setEnabled] = useState(task.enabled);
   const [taskConfig, setTaskConfig] = useState<Record<string, unknown>>(task.config || {});
@@ -41,7 +43,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   // Schedules state
   const [schedules, setSchedules] = useState<TaskSchedule[]>(task.schedules || []);
   const [editingSchedule, setEditingSchedule] = useState<TaskSchedule | null>(null);
-  const [isAddingSchedule, setIsAddingSchedule] = useState(false);
+  const [isAddingSchedule, setIsAddingSchedule] = useState(!!openAddSchedule);
 
   // EPG/M3U/Channel Group data for task-specific config and schedule parameters
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
@@ -205,9 +207,24 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     refreshSchedules();
   }, [refreshSchedules]);
 
+  // vkktd.4: a task fires only when BOTH the parent task AND >=1 child
+  // schedule are enabled. MANUAL-only tasks (legacy schedule_type 'manual',
+  // no schedule rows) never auto-fire by design and must not be flagged.
+  const manualOnly = task.schedule?.schedule_type === 'manual' && schedules.length === 0;
+  const wontRun = enabled && !manualOnly && !schedules.some(s => s.enabled);
+  // The backend auto-reconcile (enable the newest existing schedule on task
+  // enable) skips MANUAL-typed tasks, so only promise it when it will happen.
+  const reconcileOnSave = wontRun && schedules.length > 0 && task.schedule?.schedule_type !== 'manual';
+
   // Save task-level settings (enabled, config, alerts)
   const handleSaveTask = async () => {
     setSaving(true);
+
+    // vkktd.4: saving with the task enabled and no enabled child schedule
+    // triggers the backend auto-reconcile (it enables the newest existing
+    // schedule so the task actually fires). Detect it so we can surface a
+    // toast — a silent reconcile is a different trust problem.
+    const mayReconcile = reconcileOnSave;
 
     try {
       const config: api.TaskConfigUpdate = {
@@ -234,6 +251,24 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       onSaved();
       onClose();
       notifications.success('Settings saved successfully');
+
+      // Confirm the auto-reconcile actually happened (rather than assuming)
+      // before announcing it: re-read the schedules post-save.
+      if (mayReconcile) {
+        try {
+          const after = await api.getTaskSchedules(task.task_id);
+          const nowEnabled = after.schedules.find(s => s.enabled);
+          if (nowEnabled) {
+            notifications.info(
+              `Also enabled the "${nowEnabled.name || nowEnabled.description}" schedule, so this task will actually run`,
+              task.task_name
+            );
+          }
+        } catch (reconcileErr) {
+          // Non-fatal — the save already succeeded; we just can't confirm the toast.
+          logger.warn('Failed to confirm schedule auto-reconcile', reconcileErr);
+        }
+      }
     } catch (err) {
       logger.error('Failed to save task configuration', err);
       notifications.error('Failed to save configuration', 'Save Failed');
@@ -406,7 +441,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               <span>Enable task</span>
             </label>
             <div className="enable-hint">
-              When disabled, no schedules will run for this task.
+              The task and at least one schedule below must both be enabled for this to run automatically.
             </div>
           </div>
 
@@ -419,6 +454,21 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                 Add Schedule
               </button>
             </div>
+
+            {/* vkktd.4: live "enabled but won't run" warning — the task is
+                enabled but no child schedule is, so it will never fire. */}
+            {wontRun && (
+              <div className="schedule-wont-run-warning" role="alert" data-testid="schedule-wont-run-warning">
+                <span className="material-icons" aria-hidden="true">warning</span>
+                <span>
+                  {schedules.length === 0
+                    ? 'This task is enabled but has no schedules, so it will not run automatically. Add a schedule below.'
+                    : reconcileOnSave
+                      ? 'This task is enabled but none of its schedules are, so it will not run automatically. Enable a schedule below, or save and the most recent schedule will be enabled for you.'
+                      : 'This task is enabled but none of its schedules are, so it will not run automatically. Enable a schedule below.'}
+                </span>
+              </div>
+            )}
 
             {schedules.length === 0 ? (
               <div className="empty-schedules">
@@ -708,6 +758,62 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                   />
                   <span>Compact database after cleanup</span>
                 </label>
+              </div>
+            </div>
+          )}
+
+          {/* Task-Specific Configuration: Journal Noise Purge
+              (bead enhancedchannelmanager-uliyr). Surfaces the PO-decided
+              auto-purge policy: the two automated-noise journal buckets and
+              the 3-day default retention window. */}
+          {task.task_id === 'journal_noise_purge' && (
+            <div className="config-section">
+              <label className="section-label">Automated-Noise Retention</label>
+              <div className="retention-grid">
+                <div className="retention-item">
+                  <label htmlFor="journal-noise-retention-days">Noise retention (days)</label>
+                  <input
+                    id="journal-noise-retention-days"
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={(taskConfig.retention_days as number) || 3}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, retention_days: parseInt(e.target.value) || 3 })}
+                  />
+                  <small className="form-hint">
+                    Automated-noise journal entries older than this many days
+                    are deleted on each run. Default 3 days. Only the two
+                    categories below are purged — all other journal categories
+                    are untouched (use the Journal tab&apos;s Purge control for
+                    those).
+                  </small>
+                </div>
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.purge_watch_events !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_watch_events: e.target.checked })}
+                  />
+                  <span>Watch start/stop events</span>
+                </label>
+                <small className="form-hint">
+                  Automatic viewing telemetry logged by the bandwidth tracker
+                  each time a channel starts or stops being watched.
+                </small>
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.purge_pipeline_rule_pairs !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_pipeline_rule_pairs: e.target.checked })}
+                  />
+                  <span>Channel Pipeline rule create/delete entries</span>
+                </label>
+                <small className="form-hint">
+                  Rule create/delete churn from automated test clients (plus
+                  unmarked entries from before the automation marker existed).
+                  Operator-initiated rule create/delete entries are kept, as
+                  are rule updates, imports, rollbacks, and snapshot entries.
+                </small>
               </div>
             </div>
           )}

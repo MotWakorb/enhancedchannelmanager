@@ -1,0 +1,89 @@
+/**
+ * AutoCreationGateBanner styles (bead vkktd.4).
+ *
+ * WARNING-tone (amber) banner, visually parallel to BackupScheduleBanner
+ * (bead ikv8z): the operator has configured run-on-refresh rules but the
+ * auto_creation task gate is off, so the rules silently never fire. Amber
+ * (not red) — nothing is broken, it's a "flip this on" nudge. Reuses the
+ * semantic --warning theme tokens so dark/light/high-contrast modes stay
+ * legible. Meaning is carried by the icon + "will never fire" copy, not by
+ * colour alone (WCAG 1.4.1).
+ */
+
+.auto-creation-gate-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  margin-bottom: 1rem;
+  border-radius: var(--radius-md);
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-left: 4px solid var(--warning);
+}
+
+.auto-creation-gate-banner-icon {
+  color: var(--warning);
+  font-size: 1.625rem;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.auto-creation-gate-banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.auto-creation-gate-banner-title {
+  color: var(--warning-text);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.auto-creation-gate-banner-detail {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.auto-creation-gate-banner-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  align-self: flex-start;
+  margin-top: 0.125rem;
+  color: var(--warning-text);
+  font-weight: 600;
+  font-size: 0.875rem;
+  text-decoration: underline;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.auto-creation-gate-banner-cta:hover {
+  text-decoration: none;
+}
+
+.auto-creation-gate-banner-cta-icon {
+  font-size: 1rem;
+}
+
+.auto-creation-gate-banner-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0.125rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+}
+
+.auto-creation-gate-banner-dismiss:hover {
+  color: var(--text-primary);
+}

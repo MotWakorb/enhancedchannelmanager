@@ -23,6 +23,7 @@ import { EventSyncReviewQueue } from './EventSyncReviewQueue';
 import { EventSyncExclusionsPanel } from './EventSyncExclusionsPanel';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 import { CircuitBreakerBanner } from './CircuitBreakerBanner';
+import { AutoCreationGateBanner } from './AutoCreationGateBanner';
 import * as channelPipelineApi from '../../services/channelPipelineApi';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getDateLocale } from '../../utils/formatting';
@@ -921,6 +922,10 @@ export function ChannelPipelineTab() {
           onReset={fetchCircuitBreaker}
         />
       )}
+
+      {/* vkktd.4: run-on-refresh rules exist but the auto_creation task gate is
+          off — the rules will silently never fire. Opt-in discoverability. */}
+      <AutoCreationGateBanner rules={rules} />
 
       {/* Statistics Summary */}
       <div className="channel-pipeline-stats">
