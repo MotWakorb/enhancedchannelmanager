@@ -17,6 +17,13 @@ import './SelectionActionBar.css';
  * The More menu carries the Move / Selection / Profiles sections and is fully
  * keyboard-navigable (arrows, Home/End, Enter, Escape). Escape with no menu
  * open clears the selection (unless a modal owns the keypress).
+ *
+ * The Move-to-group submenu (bead hzzcv) has a type-to-filter input — the
+ * live instance runs ~2,940 groups, too many to scroll — that focuses
+ * automatically when the submenu opens. "Uncategorized" and "New group…"
+ * are pinned outside the filter; only named groups are matched, using the
+ * same case-insensitive substring semantics as the Channels pane's group
+ * filter dropdown (bead mn8).
  */
 
 export interface SelectionBarGroup {
@@ -115,6 +122,10 @@ export function SelectionActionBar({
 }: SelectionActionBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [openSubmenu, setOpenSubmenu] = useState<SubmenuId | null>(null);
+  // Type-to-filter for the Move-to-group submenu (bead hzzcv) — the live
+  // instance has ~2,940 groups, so scrolling to a target is impractical.
+  const [moveFilter, setMoveFilter] = useState('');
+  const moveFilterInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
   // Ref mirror so the document-level Escape listener sees current state
@@ -171,6 +182,24 @@ export function SelectionActionBar({
     first?.focus();
   }, [menuOpen]);
 
+  // Move-to-group submenu: reset the filter whenever it closes, so reopening
+  // starts from the full list rather than a stale filter.
+  useEffect(() => {
+    if (openSubmenu !== 'move') {
+      setMoveFilter('');
+    }
+  }, [openSubmenu]);
+
+  // Move-to-group submenu: focus lands in the filter input the moment it
+  // opens — whether opened by click or by ArrowRight — so typing can start
+  // immediately. (The other submenus keep focusing their first menu item,
+  // handled in the ArrowRight case below.)
+  useEffect(() => {
+    if (openSubmenu !== 'move') return;
+    const raf = requestAnimationFrame(() => moveFilterInputRef.current?.focus());
+    return () => cancelAnimationFrame(raf);
+  }, [openSubmenu]);
+
   const getMenuItems = (): HTMLButtonElement[] => {
     if (!menuRef.current) return [];
     return Array.from(
@@ -219,24 +248,23 @@ export function SelectionActionBar({
         if (submenuId) {
           e.preventDefault();
           setOpenSubmenu(submenuId);
-          // Focus lands on the first submenu item after it renders.
-          requestAnimationFrame(() => {
-            const sub = menuRef.current?.querySelector<HTMLButtonElement>(
-              '.selection-bar-submenu [role="menuitem"]:not(:disabled)',
-            );
-            sub?.focus();
-          });
+          // Focus lands on the first submenu item after it renders. Move's
+          // filter input is focused instead, by the dedicated effect above.
+          if (submenuId !== 'move') {
+            requestAnimationFrame(() => {
+              const sub = menuRef.current?.querySelector<HTMLButtonElement>(
+                '.selection-bar-submenu [role="menuitem"]:not(:disabled)',
+              );
+              sub?.focus();
+            });
+          }
         }
         break;
       }
       case 'ArrowLeft': {
         if (openSubmenu) {
           e.preventDefault();
-          const trigger = menuRef.current?.querySelector<HTMLButtonElement>(
-            `[data-submenu-trigger="${openSubmenu}"]`,
-          );
-          setOpenSubmenu(null);
-          trigger?.focus();
+          closeSubmenuToTrigger(openSubmenu);
         }
         break;
       }
@@ -249,6 +277,47 @@ export function SelectionActionBar({
     setOpenSubmenu((prev) => (prev === id ? null : id));
   };
 
+  /** Closes the given submenu and returns focus to its trigger button. */
+  const closeSubmenuToTrigger = (id: SubmenuId) => {
+    const trigger = menuRef.current?.querySelector<HTMLButtonElement>(`[data-submenu-trigger="${id}"]`);
+    setOpenSubmenu(null);
+    trigger?.focus();
+  };
+
+  /** Keyboard handling for the Move-to-group filter input. ArrowDown hands
+   *  focus off to the (filtered) results list. ArrowUp/Left/Right/Home/End
+   *  stop propagation so the menu's roving-focus and submenu-toggle handlers
+   *  don't hijack normal text-caret movement inside the field. Escape closes
+   *  the submenu only — never the whole menu, never the selection — matching
+   *  the bar's existing "submenu first" Escape contract. */
+  const handleMoveFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    switch (e.key) {
+      case 'ArrowDown': {
+        e.preventDefault();
+        e.stopPropagation();
+        const first = menuRef.current?.querySelector<HTMLButtonElement>(
+          '.selection-bar-submenu [role="menuitem"]:not(:disabled)',
+        );
+        first?.focus();
+        break;
+      }
+      case 'ArrowUp':
+      case 'ArrowLeft':
+      case 'ArrowRight':
+      case 'Home':
+      case 'End':
+        e.stopPropagation();
+        break;
+      case 'Escape':
+        e.preventDefault();
+        e.stopPropagation();
+        closeSubmenuToTrigger('move');
+        break;
+      default:
+        break;
+    }
+  };
+
   const activate = (action: () => void) => {
     closeMenu();
     action();
@@ -259,6 +328,14 @@ export function SelectionActionBar({
   const sortModes = SORT_MODE_ENTRIES.filter(
     (entry) => entry.criterion === null || sortEnabledCriteria[entry.criterion],
   );
+
+  // Move-to-group filtering matches the Channels pane's searchable group
+  // filter dropdown (bead mn8, ChannelsPane.tsx ~L6882/6898): case-insensitive
+  // substring match on the raw (untrimmed) query. "Uncategorized" and "New
+  // group…" are pinned outside the filter — they're fixed actions, not
+  // filterable named groups — so they stay reachable at any filter state.
+  const moveFilterQuery = moveFilter.toLowerCase();
+  const filteredMoveGroups = groups.filter((group) => group.name.toLowerCase().includes(moveFilterQuery));
 
   const submenuTrigger = (id: SubmenuId, icon: string, label: string, loading = false) => (
     <button
@@ -376,6 +453,32 @@ export function SelectionActionBar({
             {submenuTrigger('move', 'drive_file_move', 'Move to group')}
             {openSubmenu === 'move' && (
               <div className="selection-bar-submenu" role="menu" aria-label="Move to group">
+                <div className="selection-bar-move-filter">
+                  <input
+                    ref={moveFilterInputRef}
+                    type="text"
+                    className="selection-bar-move-filter-input"
+                    placeholder="Filter groups…"
+                    aria-label="Filter groups"
+                    value={moveFilter}
+                    onChange={(e) => setMoveFilter(e.target.value)}
+                    onKeyDown={handleMoveFilterKeyDown}
+                  />
+                  {moveFilter && (
+                    <button
+                      type="button"
+                      className="selection-bar-move-filter-clear"
+                      onClick={() => {
+                        setMoveFilter('');
+                        moveFilterInputRef.current?.focus();
+                      }}
+                      aria-label="Clear group filter"
+                      title="Clear group filter"
+                    >
+                      <span className="material-icons" aria-hidden="true">close</span>
+                    </button>
+                  )}
+                </div>
                 <button
                   type="button"
                   role="menuitem"
@@ -385,7 +488,7 @@ export function SelectionActionBar({
                   <span className="material-icons" aria-hidden="true">folder_off</span>
                   <span>Uncategorized</span>
                 </button>
-                {groups.map((group) => (
+                {filteredMoveGroups.map((group) => (
                   <button
                     key={group.id}
                     type="button"
@@ -397,6 +500,11 @@ export function SelectionActionBar({
                     <span>{group.name}</span>
                   </button>
                 ))}
+                {moveFilter !== '' && filteredMoveGroups.length === 0 && (
+                  <div className="selection-bar-move-filter-empty">
+                    No groups match &quot;{moveFilter}&quot;
+                  </div>
+                )}
                 <div className="selection-bar-menu-divider" />
                 <button
                   type="button"
