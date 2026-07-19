@@ -23,6 +23,7 @@ from routers.channels import router as channels_router
 from routers.channel_groups import router as channel_groups_router
 from routers.channel_merges import router as channel_merges_router
 from routers.event_sync_reviews import router as event_sync_reviews_router
+from routers.event_sync_exclusions import router as event_sync_exclusions_router
 from routers.dummy_epg import router as dummy_epg_router
 from routers.cloud_targets import router as cloud_targets_router
 from routers.sync_targets import router as sync_targets_router
@@ -53,6 +54,7 @@ all_routers = [
     channel_groups_router,
     channel_merges_router,
     event_sync_reviews_router,
+    event_sync_exclusions_router,
     dummy_epg_router,
     cloud_targets_router,
     sync_targets_router,

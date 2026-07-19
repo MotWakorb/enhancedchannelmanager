@@ -144,12 +144,15 @@ export type EventSyncBand = 'attach' | 'ambiguous' | 'reject';
 /** Team-token verdict of one scored candidate. */
 export type EventSyncTeamVerdict = 'agree' | 'conflict' | 'uncertain' | 'absent';
 
-/** Exactly one disposition per secondary stream; the four sum to the total. */
+/** Exactly one disposition per secondary stream; the five sum to the total.
+ * `excluded_by_operator` (bead ti939.3.5): the stream's only viable pairing
+ * carries an operator "never attach" exclusion. */
 export type EventSyncDisposition =
   | 'would_attach'
   | 'ambiguous'
   | 'unmatched'
-  | 'parse_failed';
+  | 'parse_failed'
+  | 'excluded_by_operator';
 
 export interface EventSyncPreflightFailure {
   group_id: number;
@@ -203,6 +206,9 @@ export interface EventSyncPreviewSummary {
    * determined (no qualifying snapshot / unknown provider / uncaptured or
    * capped group — the signal fails open). Absent on older payloads. */
   freshness_unknown_streams?: number;
+  /** ti939.3.5: streams whose only viable pairing carries an operator
+   * never-attach exclusion (fifth disposition). Absent on older payloads. */
+  excluded_by_operator?: number;
 }
 
 /**
@@ -229,6 +235,9 @@ export interface EventSyncCandidate {
   time_delta_minutes: number;
   reject_reason: string | null;
   review_status: EventSyncReviewStatus;
+  /** ti939.3.5: true when this exact pairing fingerprint carries an
+   * operator never-attach exclusion. Absent on older payloads. */
+  excluded?: boolean;
 }
 
 /**
@@ -273,6 +282,11 @@ export interface EventSyncStreamRow {
    */
   name_seen_before_today?: boolean | null;
   would_attach_master: { channel_id: number | null; name: string } | null;
+  /** ti939.3.5: masters this stream will NEVER attach to (operator
+   * exclusion) — non-empty whenever a pairing was suppressed, including on
+   * rows that still attach/queue against other masters. Absent on older
+   * payloads → treat as empty. */
+  excluded_masters?: string[];
   candidates: EventSyncCandidate[];
   /** S5 (bead sf8dj): provenance chips for a would-attach row (may be absent
    * on older payloads → treat as empty). */
@@ -388,4 +402,48 @@ export interface AcceptEventSyncReviewOutcome {
 /** Flat outcome for `POST /api/event-sync-reviews/{id}/reject`. */
 export interface RejectEventSyncReviewOutcome {
   status: 'rejected';
+}
+
+// =============================================================================
+// Operator exclusions (bead ti939.3.5) — /api/event-sync-exclusions
+// =============================================================================
+
+/**
+ * One event_sync_exclusions row: a durable "never attach this provider
+ * stream to that event" standing order. Identity is the content fingerprint
+ * (`rule_id`, `provider_id`, `stream_name_hash`, `event_key`) — never
+ * channel/stream IDs — so exclusions survive Dispatcharr refreshes and
+ * stream-ID churn (epic ti939.3 keying constraint). `evidence` is the same
+ * display-only snapshot shape as review rows.
+ */
+export interface EventSyncExclusionRecord {
+  id: number;
+  rule_id: number;
+  provider_id: number;
+  stream_name_hash: string;
+  event_key: string;
+  created_at: number;
+  note: string | null;
+  evidence: EventSyncReviewEvidence;
+  /** True on POST responses when the fingerprint was already excluded. */
+  already_existed?: boolean;
+}
+
+/** Paginated envelope for `GET /api/event-sync-exclusions`. */
+export interface EventSyncExclusionsListResponse {
+  exclusions: EventSyncExclusionRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+/** Create body for `POST /api/event-sync-exclusions`. */
+export interface EventSyncExclusionCreateRequest {
+  rule_id: number;
+  provider_id: number;
+  stream_name_hash: string;
+  event_key: string;
+  note?: string | null;
+  evidence?: EventSyncReviewEvidence;
 }

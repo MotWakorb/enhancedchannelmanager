@@ -20,6 +20,7 @@ import { useChannelPipelineExecution } from '../../hooks/useChannelPipelineExecu
 import { RuleBuilder } from './RuleBuilder';
 import { EventSyncRuleEditor } from './EventSyncRuleEditor';
 import { EventSyncReviewQueue } from './EventSyncReviewQueue';
+import { EventSyncExclusionsPanel } from './EventSyncExclusionsPanel';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 import { CircuitBreakerBanner } from './CircuitBreakerBanner';
 import * as channelPipelineApi from '../../services/channelPipelineApi';
@@ -942,6 +943,9 @@ export function ChannelPipelineTab() {
       {rules.some(r => r.event_sync_config) && (
         <section className="event-sync-review-section">
           <EventSyncReviewQueue />
+          {/* ti939.3.5: standing never-attach exclusions — renders nothing
+              while the list is empty (the normal state). */}
+          <EventSyncExclusionsPanel />
         </section>
       )}
 
