@@ -9,7 +9,8 @@ crashed the caller instead of being safely obfuscated.
 """
 from __future__ import annotations
 
-import pytest
+import re
+from urllib.parse import urlparse
 
 from obfuscate import obfuscate_text, obfuscate_url
 
@@ -55,4 +56,13 @@ class TestObfuscateTextOutOfRangePort:
         text = "fetch failed: http://host:99999/stale-bundle.js"
         result = obfuscate_text(text)
         assert "host:99999" not in result
-        assert "example.com" in result
+        # Parse the redacted URL out of the text and check the hostname
+        # exactly (not a raw substring check) — an "X in result" check
+        # against a hostname flags CodeQL py/incomplete-url-substring-
+        # sanitization, since that pattern is unsafe for real sanitizer
+        # code (e.g. "evil-example.com" would also match). This is test
+        # assertion code, not a sanitizer, but the exact-hostname check
+        # is strictly more precise anyway.
+        match = re.search(r"https?://\S+", result)
+        assert match is not None
+        assert urlparse(match.group(0)).hostname == "example.com"
