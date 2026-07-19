@@ -873,3 +873,187 @@ class TestOperatorExclusionMarkers:
         assert row["disposition"] == "would_attach"
         assert row["excluded_masters"] == []
         assert data["summary"]["excluded_by_operator"] == 0
+
+
+class TestPromotionPreview:
+    """Unmatched-stream promotion in the preview (bead ti939.4.1).
+
+    * AC-1 payload parity: a promotion-less config's payload carries NO
+      promotion keys anywhere.
+    * Enabled: the `promotion` block + annotated unmatched rows render,
+      with zero writes (a preview computes the plan, creates nothing).
+    * AC-8 dry-run parity: `would_promote` and the derived channel names
+      equal what a LIVE run then creates on unchanged data — both sides
+      run the same planner over the same resolver output.
+    """
+
+    PROMOTE_GROUP_ID = 40
+
+    def _promote_config(self, **overrides):
+        config = _config(
+            promote_unmatched=True,
+            promote_target_group_id=self.PROMOTE_GROUP_ID,
+        )
+        config.update(overrides)
+        return config
+
+    @pytest.mark.asyncio
+    async def test_flag_absent_payload_has_no_promotion_keys(
+        self, async_client
+    ):
+        client = _mock_client()
+        resp = await _preview(
+            async_client, client, {"event_sync_config": _config()}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "promotion" not in data
+        assert "would_promote" not in data["summary"]
+        assert "would_promote_streams" not in data["summary"]
+        for row in data["unmatched_streams"]:
+            assert "would_promote" not in row
+            assert "promote_action" not in row
+
+    @pytest.mark.asyncio
+    async def test_enabled_preview_plans_promotion_with_zero_writes(
+        self, async_client
+    ):
+        client = _mock_client()
+        resp = await _preview(
+            async_client, client,
+            {"event_sync_config": self._promote_config()},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        _assert_zero_writes(client)
+
+        promo = data["promotion"]
+        assert promo["enabled"] is True
+        assert promo["target_group_id"] == self.PROMOTE_GROUP_ID
+        # The corpus has exactly one complete-identity unmatched stream
+        # (DAZN 301 'Fury vs. Usyk').
+        assert promo["would_promote"] == 1
+        assert promo["would_promote_streams"] == 1
+        assert promo["would_create"] == 1
+        assert promo["would_attach_existing"] == 0
+        assert data["summary"]["would_promote"] == 1
+        unit = promo["units"][0]
+        assert unit["action"] == "create"
+        assert unit["streams"][0]["stream_id"] == 301
+        assert "Fury Vs. Usyk" in unit["channel_name"]
+
+        # The unmatched row carries the verdict inline.
+        row = data["unmatched_streams"][0]
+        assert row["stream_id"] == 301
+        assert row["would_promote"] is True
+        assert row["promote_action"] == "create"
+        assert row["promote_channel_name"] == unit["channel_name"]
+
+    @pytest.mark.asyncio
+    async def test_existing_promoted_channel_previews_as_adoption(
+        self, async_client
+    ):
+        # A channel with the derived name already lives in the target group
+        # (a previous run promoted it) — the plan adopts instead of creates.
+        first_client = _mock_client()
+        first = await _preview(
+            async_client, first_client,
+            {"event_sync_config": self._promote_config()},
+        )
+        derived_name = first.json()["promotion"]["units"][0]["channel_name"]
+
+        client = _mock_client(
+            master_channels=MASTER_CHANNELS + [
+                {"id": 900, "name": derived_name,
+                 "channel_group_id": self.PROMOTE_GROUP_ID},
+            ],
+        )
+        resp = await _preview(
+            async_client, client,
+            {"event_sync_config": self._promote_config()},
+        )
+        promo = resp.json()["promotion"]
+        assert promo["would_create"] == 0
+        assert promo["would_attach_existing"] == 1
+        assert promo["units"][0]["action"] == "attach_existing"
+        assert promo["units"][0]["existing_channel_id"] == 900
+
+    @pytest.mark.asyncio
+    async def test_preview_counts_equal_live_run_promotions(
+        self, async_client, test_session
+    ):
+        """AC-8: would_promote rows/counts == live promotions on unchanged
+        data (frozen resolver clock on both sides, shared fixtures)."""
+        import pytz
+        from channel_pipeline_engine import ChannelPipelineEngine
+        from tests.event_sync_fixtures import (
+            FakeDispatcharrState,
+            SECONDARY_STREAMS,
+            live_master_channels,
+            make_promote_client,
+        )
+
+        frozen_now = pytz.timezone("America/New_York").localize(
+            datetime(2026, 7, 11, 12, 0, 0)
+        )
+        config = self._promote_config()
+
+        preview_state = FakeDispatcharrState(
+            channels=live_master_channels(),
+            secondary_streams=SECONDARY_STREAMS,
+        )
+        preview_client = make_promote_client(preview_state)
+        with patch("routers.channel_pipeline.get_client",
+                   return_value=preview_client), \
+             patch("services.event_sync_resolver.datetime") as mock_dt:
+            mock_dt.now.return_value = frozen_now
+            resp = await async_client.post(
+                "/api/channel-pipeline/event-sync-preview",
+                json={"event_sync_config": config},
+            )
+        assert resp.status_code == 200
+        promo_preview = resp.json()["promotion"]
+        preview_client.create_channel.assert_not_awaited()
+        assert preview_state.update_channel_calls == []
+
+        rule = ChannelPipelineRule(
+            name="Event Rule", enabled=True, priority=0,
+            conditions=json.dumps([{"type": "always"}]),
+            actions=json.dumps([{"type": "skip"}]),
+            event_sync_config=json.dumps(config),
+        )
+        test_session.add(rule)
+        test_session.commit()
+
+        run_state = FakeDispatcharrState(
+            channels=live_master_channels(),
+            secondary_streams=SECONDARY_STREAMS,
+        )
+        run_client = make_promote_client(run_state)
+        engine = ChannelPipelineEngine(run_client)
+        with patch("channel_pipeline_engine.get_session",
+                   return_value=test_session), \
+             patch("journal.log_entries"), \
+             patch("services.event_sync_resolver.datetime") as mock_dt:
+            mock_dt.now.return_value = frozen_now
+            result = await engine.run_pipeline(
+                dry_run=False, triggered_by="manual"
+            )
+        assert result["success"] is True
+        promo_live = result["event_sync"][0]["promotion"]
+
+        # Counts equal.
+        assert promo_preview["would_promote"] == (
+            promo_live["promoted_created"] + promo_live["promoted_adopted"]
+        )
+        assert promo_preview["would_create"] == promo_live["promoted_created"]
+        assert (promo_preview["would_promote_streams"]
+                == promo_live["streams_attached"])
+        # The exact derived channel names got created.
+        created_names = {
+            run_state.channels[cid]["name"]
+            for cid in promo_live["channel_ids"]
+        }
+        assert created_names == {
+            u["channel_name"] for u in promo_preview["units"]
+        }

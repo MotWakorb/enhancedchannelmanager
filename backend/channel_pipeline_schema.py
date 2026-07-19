@@ -805,6 +805,12 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "assume_current_date",
     "demote_stale_dateless",
     "parse_master_from_stream",
+    # Unmatched-stream promotion (bead ti939.4.1) — the ONE sanctioned
+    # exception to "ECM never creates channels". Opt-in; absent keys mean
+    # the feature is invisible.
+    "promote_unmatched",
+    "promote_target_group_id",
+    "max_promote_per_run",
 })
 
 # Ceiling for event_sync_config.max_attach_per_run. The cap is a blast-radius
@@ -1349,6 +1355,92 @@ def validate_event_sync_config(config: Any) -> list[str]:
                     "→ Dummy EPG, or omit the key to disable dummy EPG "
                     "auto-assignment)",
                 ))
+
+    # --- Unmatched-stream promotion (bead ti939.4.1) ----------------------
+    # OPT-IN and default-invisible: like dummy_epg_profile_id, an ABSENT
+    # promote_unmatched key is NOT default-filled — a config that predates
+    # the feature must stay byte-identical through validation (the AC-1
+    # regression rail). When enabled, promote_target_group_id is REQUIRED
+    # (ECM-owned channels need a home that is neither the Dispatcharr-owned
+    # master group nor a provider stream group), and max_promote_per_run is
+    # default-filled so the blast-radius cap is always explicit on an
+    # enabled config.
+    promote_unmatched = config.get("promote_unmatched")
+    if promote_unmatched is not None and not isinstance(promote_unmatched, bool):
+        errors.append(_event_sync_error(
+            "promote_unmatched", promote_unmatched,
+            "a boolean (default false) — true promotes unmatched "
+            "secondary-only events to ECM-managed channels in "
+            "promote_target_group_id; ECM will CREATE and DELETE channels "
+            "in that group (omit the key entirely to keep promotion off)",
+        ))
+        promote_unmatched = False
+
+    promote_target_group_id = config.get("promote_target_group_id")
+    if promote_target_group_id is not None \
+            and not _is_group_id(promote_target_group_id):
+        errors.append(_event_sync_error(
+            "promote_target_group_id", promote_target_group_id,
+            "a positive integer channel-group id — the ECM-owned group "
+            "promoted event channels are created in (and deleted from)",
+        ))
+        promote_target_group_id = None
+    if promote_unmatched:
+        if promote_target_group_id is None:
+            errors.append(_event_sync_error(
+                "promote_target_group_id", config.get("promote_target_group_id"),
+                "required when promote_unmatched is true — a positive "
+                "integer channel-group id for the ECM-owned promotion "
+                "group. ECM creates AND deletes channels there, so it must "
+                "be a dedicated group",
+            ))
+        else:
+            # Ownership rails: the target group must be a dedicated
+            # ECM-owned home. The MASTER group's channels are
+            # Dispatcharr-owned (Pass 4 reconciliation of the managed set
+            # against the master group would be a delete path into channels
+            # ECM does not own), and secondary groups are provider stream
+            # groups.
+            if master_group_id is not None \
+                    and promote_target_group_id == master_group_id:
+                errors.append(_event_sync_error(
+                    "promote_target_group_id", promote_target_group_id,
+                    "a group that is NOT the master group — Dispatcharr "
+                    "owns the master group's channel lifecycle; ECM-managed "
+                    "promoted channels need their own dedicated group",
+                ))
+            if promote_target_group_id in secondary_group_ids:
+                errors.append(_event_sync_error(
+                    "promote_target_group_id", promote_target_group_id,
+                    "a group that is NOT one of the secondary groups — "
+                    "secondaries are provider stream groups, not a home "
+                    "for ECM-managed channels",
+                ))
+
+    max_promote_per_run = config.get("max_promote_per_run")
+    if max_promote_per_run is None:
+        if promote_unmatched:
+            # Fill the default ONLY on promotion-enabled configs: filling it
+            # on every config would violate the absent-keys-stay-absent
+            # invisibility contract above.
+            from services.event_sync_promote import DEFAULT_MAX_PROMOTE_PER_RUN
+            config["max_promote_per_run"] = DEFAULT_MAX_PROMOTE_PER_RUN
+    else:
+        from services.event_sync_promote import (
+            DEFAULT_MAX_PROMOTE_PER_RUN,
+            MAX_PROMOTE_CEILING,
+        )
+        if (isinstance(max_promote_per_run, bool)
+                or not isinstance(max_promote_per_run, int)
+                or not (1 <= max_promote_per_run <= MAX_PROMOTE_CEILING)):
+            errors.append(_event_sync_error(
+                "max_promote_per_run", max_promote_per_run,
+                f"an integer between 1 and {MAX_PROMOTE_CEILING} (default "
+                f"{DEFAULT_MAX_PROMOTE_PER_RUN}) — the per-run cap on NEW "
+                f"promoted channels; on overage the run stops creating, "
+                f"warns and records the overage count (adoption of "
+                f"existing promoted channels never consumes the cap)",
+            ))
 
     if errors:
         logger.warning(

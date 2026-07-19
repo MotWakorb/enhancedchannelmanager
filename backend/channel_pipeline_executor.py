@@ -3931,7 +3931,263 @@ class ActionExecutor:
                 "match": provenance,
             })
 
+        # Unmatched-stream promotion (bead ti939.4.1) — strictly opt-in.
+        # The "promotion" key exists on the summary ONLY when the config
+        # carries promote_unmatched=true, so a promotion-less rule's summary
+        # (and everything the engine derives from it) stays byte-identical
+        # to the pre-feature shape (AC-1).
+        if config.get("promote_unmatched"):
+            summary["promotion"] = await self._execute_event_sync_promotion(
+                rule_id, rule_name, config, resolution, exec_ctx,
+            )
+
         return summary
+
+    async def _execute_event_sync_promotion(
+        self, rule_id: Optional[int], rule_name: str, config: dict,
+        resolution, exec_ctx: ExecutionContext,
+    ) -> dict:
+        """Promote unmatched secondary-only events to ECM-managed channels
+        (bead ti939.4.1 — the ONE sanctioned channel-creation exception).
+
+        The PLAN comes from ``services.event_sync_promote
+        .build_promotion_plan`` — the same pure helper the preview endpoint
+        calls over the same resolver output, so preview and live promotion
+        cannot diverge on identical inputs. This method only REALIZES the
+        plan:
+
+        * **Create-or-adopt** per unit via a constructed
+          ``Action(type="create_channel", if_exists="skip")`` through
+          :meth:`_execute_create_channel`'s existing group-scoped duplicate
+          lookup (``match_scope_target_group``). ``allow_manual_channel_merge``
+          is True: a previously-promoted channel reads as "manual" on later
+          runs (Dispatcharr does not persist ECM's in-run auto_created
+          marker), and adopting it by name IS the idempotence mechanism —
+          the promotion target group is documented ECM-owned space.
+        * **Attach** every unit stream via :meth:`_add_stream_to_channel`
+          with provenance ``kind="event_sync_promote"`` (content fingerprint
+          + names; IDs display-only) under journal category ``event_sync``.
+          The stream embedded in a CREATE call is journaled explicitly with
+          the same provenance so every attached stream has its journal row.
+        * **Cap**: only units the plan marked realizable run; capped units
+          are counted (the engine surfaces the warning). Adoption never
+          consumes cap budget.
+
+        Returns the promotion summary the engine folds into the rule's
+        event_sync summary and uses to register the managed set
+        (``channel_ids`` — promoted channels ONLY, never masters: the
+        create/adopt lookup is scoped to the promotion target group, so a
+        master-group channel is unreachable by construction; the engine
+        re-asserts this invariant when registering).
+        """
+        from services.event_sync_promote import build_promotion_plan
+        from services.event_sync_review import (
+            PROVIDER_ID_UNKNOWN,
+            stream_name_hash,
+        )
+
+        target_group_id = config["promote_target_group_id"]
+
+        # Existing-name map for the plan's create-vs-adopt decision — the
+        # SAME channel universe the create action's scoped lookup resolves
+        # against (self.existing_channels feeds both).
+        existing_name_to_id: dict[str, int] = {}
+        for ch in self.existing_channels:
+            if ch.get("channel_group_id") != target_group_id:
+                continue
+            name, cid = ch.get("name"), ch.get("id")
+            if not name or cid is None:
+                continue
+            lowered = name.lower()
+            if lowered not in existing_name_to_id \
+                    or cid < existing_name_to_id[lowered]:
+                existing_name_to_id[lowered] = cid
+
+        plan = build_promotion_plan(
+            config, resolution.resolved, existing_name_to_id
+        )
+
+        promo = {
+            "target_group_id": target_group_id,
+            "units": len(plan.units),
+            "promoted_created": 0,
+            "promoted_adopted": 0,
+            "streams_attached": 0,
+            "already_attached": 0,
+            "attach_errors": 0,
+            "cap": plan.cap,
+            "capped": plan.capped,
+            "cap_overage": plan.cap_overage,
+            "channel_ids": [],
+            "promote_entries": [],
+        }
+
+        def _provenance(row, unit, channel_id, channel_name) -> dict:
+            # Content fingerprint (provider_id + normalized-name hash +
+            # event key) is the durable identity; every id is display-only
+            # (Dispatcharr stream/channel ids churn — epic ti939.3 keying
+            # constraint, inherited verbatim).
+            return {
+                "kind": "event_sync_promote",
+                "rule_id": rule_id,
+                "provider_id": (
+                    row.stream.provider_id
+                    if row.stream.provider_id is not None
+                    else PROVIDER_ID_UNKNOWN
+                ),
+                "stream_name_hash": stream_name_hash(row.stream.name),
+                "event_key": unit.event_key,
+                "secondary_stream_id": row.stream.stream_id,
+                "secondary_stream_name": row.stream.name,
+                "provider": row.stream.provider,
+                "secondary_group_id": row.stream.group_id,
+                "promoted_channel_id": channel_id,
+                "promoted_channel_name": channel_name,
+                "disposition": row.disposition,
+            }
+
+        for unit in plan.units:
+            first = unit.rows[0]
+            create_action = Action(type="create_channel", params={
+                "name_template": unit.channel_name,
+                "if_exists": "skip",
+                "group_id": target_group_id,
+                "channel_number": "auto",
+            })
+            first_ctx = StreamContext(
+                stream_id=first.stream.stream_id,
+                stream_name=first.stream.name,
+                group_name=None,
+                m3u_account_name=first.stream.provider,
+            )
+            result = await self._execute_create_channel(
+                create_action, first_ctx, exec_ctx, template_ctx={},
+                rule_target_group_id=target_group_id,
+                match_scope_target_group=True,
+                allow_manual_channel_merge=True,
+            )
+            exec_ctx.add_result(result)
+            if not result.success:
+                logger.warning(
+                    "[EVENT-SYNC] Rule '%s': promotion of event %r FAILED "
+                    "to create/adopt channel '%s': %s",
+                    rule_name, unit.event_key, unit.channel_name,
+                    result.error,
+                )
+                promo["attach_errors"] += 1
+                promo["promote_entries"].append({
+                    "type": "event_sync_promote",
+                    "description": (
+                        f"Promotion failed for '{unit.channel_name}': "
+                        f"{result.error}"
+                    ),
+                    "success": False,
+                    "skipped": False,
+                    "entity_id": None,
+                    "entity_name": unit.channel_name,
+                    "error": result.error,
+                    "match": _provenance(first, unit, None, unit.channel_name),
+                })
+                continue
+
+            channel_id = (
+                result.entity_id if result.entity_id is not None
+                else exec_ctx.current_channel_id
+            )
+            channel = self._channel_by_id.get(channel_id)
+            attach_rows = list(unit.rows)
+            if result.created:
+                promo["promoted_created"] += 1
+                # The FIRST stream rode the create payload — journal its
+                # attach explicitly (live only; dry-run journals nothing)
+                # so every promoted attach has a fingerprinted journal row.
+                promo["streams_attached"] += 1
+                if not exec_ctx.dry_run and first.stream.stream_id is not None:
+                    self._journal_merge(
+                        channel_id, unit.channel_name,
+                        first.stream.stream_id,
+                        [], [first.stream.stream_id],
+                        provenance=_provenance(
+                            first, unit, channel_id, unit.channel_name),
+                        category="event_sync",
+                        stream_name=first.stream.name,
+                    )
+                attach_rows = attach_rows[1:]
+                logger.info(
+                    "[EVENT-SYNC] Rule '%s': PROMOTED event %r -> created "
+                    "channel '%s' (id=%s) in group %s with stream '%s'",
+                    rule_name, unit.event_key, unit.channel_name,
+                    channel_id, target_group_id, first.stream.name,
+                )
+            else:
+                promo["promoted_adopted"] += 1
+                logger.info(
+                    "[EVENT-SYNC] Rule '%s': promotion adopted existing "
+                    "channel '%s' (id=%s) for event %r",
+                    rule_name, unit.channel_name, channel_id, unit.event_key,
+                )
+
+            promo["promote_entries"].append({
+                "type": "event_sync_promote",
+                "description": result.description,
+                "success": True,
+                "skipped": result.skipped,
+                "entity_id": channel_id,
+                "entity_name": unit.channel_name,
+                "error": None,
+                "match": _provenance(first, unit, channel_id, unit.channel_name),
+            })
+
+            # Attach the (remaining) unit streams — idempotent by
+            # construction, exactly like the master attach path.
+            for row in attach_rows:
+                if channel is None:
+                    promo["attach_errors"] += 1
+                    continue
+                row_ctx = StreamContext(
+                    stream_id=row.stream.stream_id,
+                    stream_name=row.stream.name,
+                    group_name=None,
+                    m3u_account_name=row.stream.provider,
+                )
+                attach_result = await self._add_stream_to_channel(
+                    channel, row_ctx, exec_ctx,
+                    merge_provenance=_provenance(
+                        row, unit, channel_id, unit.channel_name),
+                    journal_category="event_sync",
+                )
+                exec_ctx.add_result(attach_result)
+                if not attach_result.success:
+                    promo["attach_errors"] += 1
+                elif attach_result.skipped:
+                    promo["already_attached"] += 1
+                else:
+                    promo["streams_attached"] += 1
+                promo["promote_entries"].append({
+                    "type": "event_sync_promote_attach",
+                    "description": attach_result.description,
+                    "success": attach_result.success,
+                    "skipped": attach_result.skipped,
+                    "entity_id": channel_id,
+                    "entity_name": unit.channel_name,
+                    "error": attach_result.error,
+                    "match": _provenance(
+                        row, unit, channel_id, unit.channel_name),
+                })
+
+            if channel_id is not None:
+                promo["channel_ids"].append(channel_id)
+
+        if plan.capped:
+            logger.warning(
+                "[EVENT-SYNC] Rule '%s': per-run promotion cap reached "
+                "(%s) — %s promotion unit(s) NOT created this run. "
+                "Promotion is idempotent: run again to continue, or raise "
+                "max_promote_per_run on the rule.",
+                rule_name, plan.cap, plan.cap_overage,
+            )
+
+        return promo
 
     async def assign_event_sync_dummy_epg(self, rule_id: Optional[int],
                                           rule_name: str, config: dict,
@@ -3971,6 +4227,15 @@ class ActionExecutor:
         """
         profile_id = config["dummy_epg_profile_id"]
         master_group_id = config["master_group_id"]
+        # bead ti939.4.1: promotion-enabled rules assign the SAME dummy EPG
+        # profile to their ECM-promoted channels in the target group — a
+        # promoted event needs guide data exactly as much as a master event
+        # does. The set stays {master} for every promotion-less config, so
+        # pre-feature behavior is byte-identical.
+        epg_group_ids = {master_group_id}
+        if config.get("promote_unmatched") \
+                and config.get("promote_target_group_id") is not None:
+            epg_group_ids.add(config["promote_target_group_id"])
 
         source_id = self._dummy_source_by_profile.get(profile_id)
         if source_id is None and self._combined_dummy_source_ids:
@@ -4003,8 +4268,25 @@ class ActionExecutor:
             e["id"] for e in self._epg_data_by_source.get(source_id, [])
         }
 
-        for channel in self.existing_channels:
-            if channel.get("channel_group_id") != master_group_id:
+        # bead ti939.4.1: channels PROMOTED THIS RUN are not in
+        # self.existing_channels (that list is the run-start fetch) — they
+        # live in _created_channels. Include them so a promoted channel gets
+        # its guide data on the same run that created it, not one run late.
+        # Promotion-less configs never take this branch (create_channel is
+        # unreachable for them), so the iterated set is unchanged for them.
+        channels_to_assign = list(self.existing_channels)
+        if config.get("promote_unmatched"):
+            existing_ids = {
+                ch.get("id") for ch in self.existing_channels
+            }
+            channels_to_assign.extend(
+                ch for ch in self._created_channels.values()
+                if ch.get("channel_group_id") in epg_group_ids
+                and ch.get("id") not in existing_ids
+            )
+
+        for channel in channels_to_assign:
+            if channel.get("channel_group_id") not in epg_group_ids:
                 continue
             channel_id = channel.get("id")
             channel_name = channel.get("name", f"Channel {channel_id}")

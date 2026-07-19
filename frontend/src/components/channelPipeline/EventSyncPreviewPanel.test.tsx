@@ -476,3 +476,172 @@ describe('operator exclusions (bead ti939.3.5)', () => {
     expect(screen.queryByText(/Never attaches to:/)).not.toBeInTheDocument();
   });
 });
+
+describe('unmatched-event promotion (bead ti939.4.1)', () => {
+  const noop = vi.fn();
+
+  function promotedPreview(): EventSyncPreviewResponse {
+    return buildPreview({
+      summary: {
+        ...buildPreview().summary,
+        would_promote: 1,
+        would_promote_streams: 2,
+      },
+      unmatched_streams: [
+        {
+          stream_id: 102,
+          stream_name: 'Provider B Exclusive Fight @ 11 Jul 09:00 PM ET',
+          group_id: 34,
+          provider: 'Provider B',
+          parsed_title: 'Provider B Exclusive Fight',
+          parsed_start: '2026-07-11T21:00:00-04:00',
+          best_candidate: null,
+          would_promote: true,
+          promote_action: 'create',
+          promote_channel_name: 'Provider B Exclusive Fight @ Jul 11 09:00 PM',
+        },
+        {
+          stream_id: 103,
+          stream_name: '??? partial identity',
+          group_id: 34,
+          provider: 'Provider B',
+          parsed_title: 'Partial',
+          parsed_start: null,
+          best_candidate: null,
+          would_promote: false,
+        },
+      ],
+      promotion: {
+        enabled: true,
+        target_group_id: 40,
+        would_promote: 1,
+        would_promote_streams: 2,
+        would_create: 1,
+        would_attach_existing: 0,
+        cap: 25,
+        capped: false,
+        cap_overage: 0,
+        units: [
+          {
+            channel_name: 'Provider B Exclusive Fight @ Jul 11 09:00 PM',
+            action: 'create',
+            event_key: 'provider b exclusive fight|2026-07-12T01:00:00+00:00',
+            dateless: false,
+            existing_channel_id: null,
+            streams: [
+              {
+                stream_id: 102,
+                stream_name: 'Provider B Exclusive Fight @ 11 Jul 09:00 PM ET',
+                provider: 'Provider B',
+                group_id: 34,
+                disposition: 'unmatched',
+              },
+              {
+                stream_id: 555,
+                stream_name: 'Alt Provider Exclusive Fight @ 11 Jul 09:00 PM ET',
+                provider: 'Provider D',
+                group_id: 35,
+                disposition: 'unmatched',
+              },
+            ],
+          },
+        ],
+      },
+    });
+  }
+
+  it('renders the Would promote section between unmatched and parse failures', () => {
+    render(
+      <EventSyncPreviewPanel
+        preview={promotedPreview()}
+        loading={false}
+        error={null}
+        onRunPreview={noop}
+      />
+    );
+    const section = screen.getByTestId('event-sync-would-promote');
+    expect(within(section).getByText('Would promote (1)')).toBeInTheDocument();
+    expect(
+      within(section).getByText('Provider B Exclusive Fight @ Jul 11 09:00 PM')
+    ).toBeInTheDocument();
+    expect(within(section).getByText('Create new channel')).toBeInTheDocument();
+    // Both clustered streams are listed under the one unit.
+    expect(
+      within(section).getByText(/Alt Provider Exclusive Fight/)
+    ).toBeInTheDocument();
+    // The honest ownership copy — creation AND deletion.
+    expect(
+      within(section).getByText(/deletes a promoted channel/i)
+    ).toBeInTheDocument();
+    // Section order: unmatched → would-promote → parse failures.
+    const results = document.querySelector('.event-sync-preview-results')!;
+    const testids = [...results.querySelectorAll('[data-testid]')].map(
+      el => el.getAttribute('data-testid')
+    );
+    expect(testids.indexOf('event-sync-unmatched')).toBeLessThan(
+      testids.indexOf('event-sync-would-promote')
+    );
+    expect(testids.indexOf('event-sync-would-promote')).toBeLessThan(
+      testids.indexOf('event-sync-parse-failures')
+    );
+  });
+
+  it('annotates unmatched rows with the promotion verdict and counts the summary', () => {
+    render(
+      <EventSyncPreviewPanel
+        preview={promotedPreview()}
+        loading={false}
+        error={null}
+        onRunPreview={noop}
+      />
+    );
+    expect(screen.getByTestId('event-sync-summary').textContent).toContain(
+      '1 would promote'
+    );
+    const unmatched = screen.getByTestId('event-sync-unmatched');
+    expect(within(unmatched).getByText('Would promote')).toBeInTheDocument();
+    expect(
+      within(unmatched).getByText(
+        /Yes — new channel 'Provider B Exclusive Fight @ Jul 11 09:00 PM'/
+      )
+    ).toBeInTheDocument();
+    expect(
+      within(unmatched).getByText('No — incomplete parsed identity')
+    ).toBeInTheDocument();
+  });
+
+  it('renders no promotion chrome when the payload has no promotion block', () => {
+    render(
+      <EventSyncPreviewPanel
+        preview={buildPreview()}
+        loading={false}
+        error={null}
+        onRunPreview={noop}
+      />
+    );
+    expect(screen.queryByTestId('event-sync-would-promote')).toBeNull();
+    expect(screen.getByTestId('event-sync-summary').textContent).not.toContain(
+      'would promote'
+    );
+    const unmatched = screen.getByTestId('event-sync-unmatched');
+    expect(within(unmatched).queryByText('Would promote')).toBeNull();
+  });
+
+  it('surfaces the promotion cap warning', () => {
+    const preview = promotedPreview();
+    preview.promotion!.capped = true;
+    preview.promotion!.cap_overage = 3;
+    render(
+      <EventSyncPreviewPanel
+        preview={preview}
+        loading={false}
+        error={null}
+        onRunPreview={noop}
+      />
+    );
+    const section = screen.getByTestId('event-sync-would-promote');
+    expect(
+      within(section).getByText(/Promotion cap reached \(25\): 3 events deferred/)
+    ).toBeInTheDocument();
+  });
+});

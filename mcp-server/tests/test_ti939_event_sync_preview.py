@@ -254,3 +254,88 @@ class TestPreviewEventSync:
         text = await _call_tool(mcp, client, {"rule_id": 1})
         assert "Error previewing event sync" in text
         assert "backend down" in text
+
+
+class TestPromotionRendering:
+    """bead ti939.4.1: the would-promote plan renders as its own block —
+    and ONLY when the payload carries it (opt-in invisibility)."""
+
+    def _promotion_block(self):
+        return {
+            "enabled": True,
+            "target_group_id": 40,
+            "would_promote": 2,
+            "would_promote_streams": 3,
+            "would_create": 1,
+            "would_attach_existing": 1,
+            "cap": 25,
+            "capped": True,
+            "cap_overage": 4,
+            "units": [
+                {
+                    "channel_name": "Fury Vs. Usyk @ Jul 11 11:00 PM",
+                    "action": "create",
+                    "event_key": "fury vs. usyk|2026-07-12T03:00:00+00:00",
+                    "dateless": False,
+                    "existing_channel_id": None,
+                    "streams": [
+                        {"stream_id": 301,
+                         "stream_name": "DAZN 05: Fury vs. Usyk @ 11 Jul 11:00 PM ET",
+                         "provider": "DaznProvider", "group_id": 30,
+                         "disposition": "unmatched"},
+                        {"stream_id": 555,
+                         "stream_name": "FightBox 02: Fury vs. Usyk @ 11 Jul 11:00 PM ET",
+                         "provider": "FightBox", "group_id": 20,
+                         "disposition": "unmatched"},
+                    ],
+                },
+                {
+                    "channel_name": "Tyson Vs. Paul @ Jul 11 09:00 PM",
+                    "action": "attach_existing",
+                    "event_key": "tyson vs. paul|2026-07-12T01:00:00+00:00",
+                    "dateless": False,
+                    "existing_channel_id": 901,
+                    "streams": [
+                        {"stream_id": 302,
+                         "stream_name": "DAZN 06: Tyson vs. Paul @ 11 Jul 09:00 PM ET",
+                         "provider": "DaznProvider", "group_id": 30,
+                         "disposition": "unmatched"},
+                    ],
+                },
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_promotion_block_renders_counts_units_and_cap(self):
+        mcp = _make_mcp_and_register()
+        client = AsyncMock()
+        client.call_endpoint.return_value = _preview_response(
+            promotion=self._promotion_block(),
+        )
+        text = await _call_tool(
+            mcp, client,
+            {"event_sync_config": {"master_group_id": 10,
+                                   "secondary_group_ids": [20, 30],
+                                   "promote_unmatched": True,
+                                   "promote_target_group_id": 40}},
+        )
+        assert "Would promote: 2 channel(s) in target group 40" in text
+        assert "(1 new, 1 adopt existing)" in text
+        assert "creates AND deletes channels" in text
+        assert "promotion capped at 25" in text and "4 unit(s) deferred" in text
+        assert "PROMOTE [create] 'Fury Vs. Usyk @ Jul 11 11:00 PM'" in text
+        assert "PROMOTE [attach_existing] 'Tyson Vs. Paul @ Jul 11 09:00 PM'" in text
+        assert "'DAZN 05: Fury vs. Usyk @ 11 Jul 11:00 PM ET' [DaznProvider]" in text
+
+    @pytest.mark.asyncio
+    async def test_no_promotion_block_renders_nothing(self):
+        mcp = _make_mcp_and_register()
+        client = AsyncMock()
+        client.call_endpoint.return_value = _preview_response()
+        text = await _call_tool(
+            mcp, client,
+            {"event_sync_config": {"master_group_id": 10,
+                                   "secondary_group_ids": [20, 30]}},
+        )
+        assert "Would promote" not in text
+        assert "PROMOTE" not in text
