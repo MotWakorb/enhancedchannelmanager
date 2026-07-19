@@ -276,6 +276,35 @@ class TestStackPathScrubbing:
 
 
 # ---------------------------------------------------------------------------
+# Hostile URL in stack/message — out-of-range port (bd-k6ud9)
+#
+# Regression: obfuscate.py's obfuscate_url() accessed ``parsed.port``
+# unguarded. Python's urlparse().port raises ValueError for a port outside
+# 0-65535, and that exception was uncaught, so a reported stack trace
+# containing a URL with a hostile port (observed live: a stale-bundle fetch
+# error) 500'd the endpoint whose entire job is collecting error reports —
+# losing exactly the reports that describe malformed input.
+# ---------------------------------------------------------------------------
+class TestHostileUrlPortInStack:
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_port_in_stack_does_not_500(self, async_client):
+        payload = _valid_payload(
+            stack="fetch failed for http://host:99999/path in bundle.js:1:1"
+        )
+        response = await async_client.post("/api/client-errors", json=payload)
+        assert response.status_code == 204, response.text
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_port_in_message_does_not_500(self, async_client):
+        payload = _valid_payload(
+            message="TypeError fetching http://host:99999/stale-bundle.js"
+        )
+        response = await async_client.post("/api/client-errors", json=payload)
+        assert response.status_code == 204, response.text
+
+
+# ---------------------------------------------------------------------------
 # UA hash determinism
 # ---------------------------------------------------------------------------
 class TestUserAgentHash:
