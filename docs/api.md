@@ -421,6 +421,15 @@ Audit: accepts/rejects write `journal_entries` rows (category `event_sync`, acti
 | `POST /api/settings/restart-services` | Restart background services |
 | `POST /api/settings/reset-stats` | Reset all statistics |
 
+## Event Sync Team Aliases
+
+Operator team-alias dictionary for the Event Sync matcher's team-token layer (bead ti939.4.2): groups of known-equivalent team spellings (`Man Utd == Manchester United == MUFC`) that raise recall on abbreviation-heavy providers without lowering the fuzzy threshold. Stored as a JSON setting (no DB table); consulted on BOTH the team hard-reject and boost paths; strictly monotonic (an alias can never create a conflict). Aliases are corpus-gated by policy — see [`docs/event_sync.md`](event_sync.md) → "Team aliases (operator dictionary)".
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/event-sync/team-aliases` | Get the alias dictionary: `{groups: [{terms: [...], note}]}`. Empty by default. |
+| `PUT /api/event-sync/team-aliases` | Full-replace write. Validates each term against the matcher's own team normalization (≥2 terms per group, no blank/identity-free terms, a term may appear in only one group; ≤200 groups, ≤50 terms/group, ≤100 chars/term). Journals before/after under category `event_sync`. |
+
 ## Stream Stats
 
 | Endpoint | Description |

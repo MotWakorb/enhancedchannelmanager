@@ -31,6 +31,9 @@ from routers.lookup_tables import router as lookup_tables_router
 from routers.client_errors import router as client_errors_router
 from routers.session_starts import router as session_starts_router
 from routers.emby import router as emby_router
+# ti939.4.2 — appended at the END (not beside event_sync_reviews) to stay
+# clear of the in-flight exclusions PR's insertion point.
+from routers.event_sync_aliases import router as event_sync_aliases_router
 
 all_routers = [
     tasks_router,
@@ -61,4 +64,5 @@ all_routers = [
     client_errors_router,
     session_starts_router,
     emby_router,
+    event_sync_aliases_router,
 ]

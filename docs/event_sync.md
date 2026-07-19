@@ -580,8 +580,50 @@ titles**, on a 0–1 scale, optionally lifted by team-token agreement:
    their score is pure title fuzz and they face the 0.90 no-teams bar.
 
 So to raise a score you either clean up the parsed titles (a `group_patterns`
-override on the master that strips the slot/year/venue noise) or, if the
-titles are as clean as they'll get, lower the threshold for that rule.
+override on the master that strips the slot/year/venue noise), add a
+**team alias** for a known equivalent spelling (below), or, if the titles
+are as clean as they'll get, lower the threshold for that rule.
+
+### Team aliases (operator dictionary)
+
+**Settings → Channel Pipeline → Event Sync Team Aliases** holds an
+instance-wide dictionary of **known-equivalent team spellings** — e.g.
+`Man Utd == Manchester United == MUFC`, or a nickname a provider uses that
+shares no letters with the canonical name (`Red Devils == Manchester
+United`). The team-token check consults it on **both** of its paths:
+
+* **Hard-reject rescue** — two aliased spellings at the same kickoff no
+  longer read as different teams, so the pair stops hard-rejecting with
+  `team_token_conflict`.
+* **Boost** — the aliased sides count as full team agreement, so
+  `max(fuzzy, team_score)` lifts the pair into the attach band even when
+  the surrounding title text shares almost nothing.
+
+This is the **safe direction** for abbreviation-heavy providers: an alias
+adds one declared equivalence instead of lowering the evidence bar for
+*every* pair the way an `attach_threshold` cut does. The rails are
+untouched — the qualifier rail still outranks aliases (`Barcelona W` never
+aliases onto the men's side), a pair whose teams sit in *different* alias
+groups scores exactly as if the dictionary were empty (an alias can never
+*create* a conflict), and the time window / numeric-identity rails still
+apply.
+
+Mechanics and policy:
+
+* Each group is a list of 2+ spellings plus an optional note. Terms are
+  compared with the matcher's own team normalization (case, punctuation,
+  apostrophes, and generic `FC`-style suffixes ignored), and one term may
+  belong to only one group.
+* **Aliases are corpus-gated: add a group only with evidence.** A wrong
+  alias is a new false-positive vector — it can silently auto-attach the
+  wrong event every day. Add a group when preview/journal evidence shows a
+  recurring missed match traceable to a team-name variant, note the
+  evidence in the group's note field, and re-run **Preview** to confirm.
+  The shipped dictionary is empty by design.
+* The dictionary applies to every Event Sync rule (preview, manual runs
+  and auto-runs all read the same setting), and changes are journaled.
+* API: `GET`/`PUT /api/event-sync/team-aliases`; MCP:
+  `get_event_sync_team_aliases` / `update_event_sync_team_aliases`.
 
 ### Lowering the threshold (operator-authoritative)
 
@@ -1386,6 +1428,16 @@ earlier layers can't catch on their own:
    fuzzy title scoring alone is fooled by sibling-program pairs (e.g. two
    different studio shows sharing most of their surrounding words) that
    score high on lexical overlap without denoting the same event.
+   The layer also consults the **operator team-alias dictionary** (bead
+   ti939.4.2; "Team aliases" above): after the qualifier rail, two sides
+   whose identity-token keys resolve to the same alias group score 1.0.
+   The lookup is strictly monotonic — different-group or no-group pairs
+   fall through to the unchanged base scoring — so aliases can rescue a
+   conflict or lift an agreement but can never manufacture a disagree.
+   The dictionary is loaded from settings at the `match_streams` /
+   `score_pair` boundary (`team_aliases=None`); tests and the frozen
+   corpus inject explicit fixtures (or `()`), keeping the corpus gate
+   byte-stable.
 
 Layer 5, the **event admission policy** (`is_event_attachable`), is
 covered next.

@@ -448,3 +448,43 @@ export async function generateAndFetchDebugBundle(
   const enqueued = await startDebugBundle();
   return pollDebugBundle(enqueued.job_id, signal);
 }
+
+// =============================================================================
+// Event Sync team-alias dictionary (bead ti939.4.2)
+// =============================================================================
+
+/**
+ * One group of KNOWN-equivalent team spellings consulted by the Event Sync
+ * matcher's team-token layer ("Man Utd" == "Manchester United" == "MUFC").
+ * Defined here (with the endpoint pair below) rather than in
+ * types/eventSync.ts to keep clear of the in-flight exclusions PR's edits
+ * to that file; follows the CircuitBreakerState precedent above.
+ */
+export interface EventSyncTeamAliasGroup {
+  terms: string[];
+  note?: string | null;
+}
+
+export interface EventSyncTeamAliasesResponse {
+  groups: EventSyncTeamAliasGroup[];
+}
+
+/** Get the operator team-alias dictionary. */
+export async function getEventSyncTeamAliases(): Promise<EventSyncTeamAliasesResponse> {
+  return fetchJson<EventSyncTeamAliasesResponse>(`${API_BASE}/event-sync/team-aliases`);
+}
+
+/**
+ * Replace the operator team-alias dictionary (full-replace PUT; the backend
+ * validates terms against the matcher's own normalization and journals the
+ * change).
+ */
+export async function updateEventSyncTeamAliases(
+  groups: EventSyncTeamAliasGroup[],
+): Promise<EventSyncTeamAliasesResponse> {
+  return fetchJson<EventSyncTeamAliasesResponse>(`${API_BASE}/event-sync/team-aliases`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groups }),
+  });
+}

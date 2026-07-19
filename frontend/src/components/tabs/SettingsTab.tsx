@@ -13,6 +13,7 @@ import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { MCPSettingsSection } from '../settings/MCPSettingsSection';
 import { LookupTableSection } from '../settings/LookupTableSection';
 import { AlertMethodsSection } from '../settings/AlertMethodsSection';
+import { EventSyncTeamAliasesSection } from '../settings/EventSyncTeamAliasesSection';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -3321,6 +3322,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
       </div>
+
+      {/* Event Sync team-alias dictionary (bead ti939.4.2). Self-contained:
+          loads and saves through its own /api/event-sync/team-aliases
+          endpoints — deliberately NOT part of this page's Save Settings
+          button below. */}
+      <EventSyncTeamAliasesSection />
 
       <div className="settings-actions">
         <div className="settings-actions-left" />

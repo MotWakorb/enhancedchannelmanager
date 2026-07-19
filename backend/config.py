@@ -294,6 +294,15 @@ class DispatcharrSettings(BaseModel):
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
+    # Event Sync operator team-alias dictionary (bead ti939.4.2). Each entry
+    # is {"terms": [str, ...], "note": str|None} — one group of KNOWN-
+    # equivalent team spellings ("Man Utd" == "Manchester United" == "MUFC")
+    # consulted by the event matcher's team-token layer
+    # (services/event_sync_matcher.py). Written ONLY through the dedicated
+    # PUT /api/event-sync/team-aliases endpoint (routers/event_sync_aliases.py
+    # — validated + journaled there), never by the general settings form.
+    # Ships EMPTY by design: aliases are corpus-gated (docs/event_sync.md).
+    event_sync_team_aliases: list[dict] = []
     # Auto-creation pre-run snapshot retention (ADR-010 §D7 / uc51o.3). Two
     # bounds, whichever fires first, pruned by CleanupTask BEFORE the VACUUM
     # step. Without these, a per-run ~570-channel snapshot captured on every

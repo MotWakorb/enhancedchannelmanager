@@ -97,9 +97,11 @@ __all__ = [
     "PairScore",
     "ParsedEvent",
     "StreamMatchResult",
+    "build_team_alias_index",
     "is_event_attachable",
     "match_stream_to_masters",
     "match_streams",
+    "normalize_alias_term",
     "parse_event_name",
     "score_pair",
 ]
@@ -832,6 +834,79 @@ def _identity_tokens(tokens: list[str]) -> list[str]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Operator team-alias dictionary (bead ti939.4.2).
+#
+# Known-equivalence groups ("Man Utd" == "Manchester United" == "MUFC")
+# consulted by the team-token check. SAFETY CONTRACT: aliases are strictly
+# MONOTONIC — a same-group hit raises a team-pair similarity to 1.0; every
+# other pair takes the unchanged base path — so an alias can only convert a
+# would-be conflict/uncertain into agreement, never manufacture a disagree.
+# The dictionary ships EMPTY; operator aliases are corpus-gated (every alias
+# added must carry corpus pairs proving it — a wrong alias is a new
+# false-positive vector; see docs/event_sync.md).
+# ---------------------------------------------------------------------------
+
+
+def normalize_alias_term(term: str) -> tuple[str, ...]:
+    """Normalize one alias term with the SAME pipeline as a team side.
+
+    Lowercase, apostrophe-family fusing, ``\\w+`` tokenization, then
+    qualifier/generic-token stripping — identical to what
+    :func:`_team_similarity` does to a real team side, so an alias term and
+    a provider spelling can only agree via one normalization. Returns the
+    identity-token key, or ``()`` for a term with no identity tokens
+    (unusable — the settings surface rejects those at save time).
+    """
+    return tuple(_identity_tokens(_team_tokens(term)))
+
+
+def build_team_alias_index(
+    groups: Sequence[Sequence[str]] | None,
+) -> dict[tuple[str, ...], int]:
+    """Build the normalized-term → group-id lookup from raw alias groups.
+
+    Deterministic on duplicate terms (first group wins); terms that
+    normalize to no identity tokens are skipped. Group ids are positional
+    and meaningless outside one built index.
+    """
+    index: dict[tuple[str, ...], int] = {}
+    for group_id, group in enumerate(groups or ()):
+        for term in group:
+            key = normalize_alias_term(term)
+            if key:
+                index.setdefault(key, group_id)
+    return index
+
+
+def _load_settings_team_alias_groups() -> tuple[tuple[str, ...], ...]:
+    """Load the operator alias dictionary from the settings store.
+
+    The boundary where the otherwise-pure matcher reads operator state:
+    ``score_pair`` / ``match_streams`` callers that pass
+    ``team_aliases=None`` (every production caller — attach run, preview,
+    debug bundle) get the one instance-wide dictionary, so the paths can
+    never disagree on aliases. Tests and the frozen-corpus gate inject
+    explicit fixtures (or ``()``) instead. Fails OPEN to no aliases — a
+    broken settings read must degrade to pre-alias matching, never break
+    scoring.
+    """
+    try:
+        from config import get_settings
+        raw = get_settings().event_sync_team_aliases or []
+        return tuple(
+            tuple(group.get("terms") or ())
+            for group in raw
+            if isinstance(group, dict)
+        )
+    except Exception as e:  # pragma: no cover - defensive fail-open
+        logger.warning(
+            "[EVENT-SYNC] team-alias settings read failed (%s) — matching "
+            "without operator aliases", e,
+        )
+        return ()
+
+
 # An abbreviation must be SUBSTANTIALLY shorter than the word it
 # abbreviates. Without this bound the subsequence test accepts near-length
 # sibling words — 'austria' is a same-first-letter subsequence of
@@ -876,7 +951,11 @@ def _initialism_matches(single: str, words: list[str]) -> bool:
     return len(token) >= 2 and token == initials
 
 
-def _team_similarity(team_a: str, team_b: str) -> float:
+def _team_similarity(
+    team_a: str,
+    team_b: str,
+    alias_index: dict[tuple[str, ...], int] | None = None,
+) -> float:
     """Similarity of two single-team names in [0.0, 1.0].
 
     Qualifier mismatch (women's/men's, U21/senior, reserves/first team)
@@ -885,6 +964,13 @@ def _team_similarity(team_a: str, team_b: str) -> float:
     shorter side (precision-first: one clearly-different distinctive token
     — 'rangers' vs 'knicks' — drags the whole team comparison down even
     when the city tokens agree).
+
+    ``alias_index`` (bead ti939.4.2) is the operator team-alias dictionary:
+    when BOTH identity-token keys resolve to the SAME alias group the teams
+    are a declared equivalence — similarity 1.0. The lookup runs AFTER the
+    qualifier rail (an alias never bridges women's vs men's sides) and is
+    strictly monotonic: different-group or no-group pairs fall through to
+    the unchanged base scoring, so aliases can only ADD agreement.
     """
     tokens_a = _team_tokens(team_a)
     tokens_b = _team_tokens(team_b)
@@ -897,6 +983,11 @@ def _team_similarity(team_a: str, team_b: str) -> float:
         return fuzz.ratio(" ".join(tokens_a), " ".join(tokens_b)) / 100.0
     if ident_a == ident_b:
         return 1.0
+
+    if alias_index:
+        group_a = alias_index.get(tuple(ident_a))
+        if group_a is not None and group_a == alias_index.get(tuple(ident_b)):
+            return 1.0
 
     if len(ident_a) == 1 and _initialism_matches(ident_a[0], ident_b):
         return 0.95
@@ -916,23 +1007,27 @@ def _team_similarity(team_a: str, team_b: str) -> float:
 def _team_pair_verdict(
     teams_a: tuple[str, str] | None,
     teams_b: tuple[str, str] | None,
+    alias_index: dict[tuple[str, ...], int] | None = None,
 ) -> tuple[str, float | None]:
     """Order-insensitive verdict for two (team, team) pairs.
 
     Returns ``(verdict, team_score)`` where ``team_score`` is the worst
     per-team similarity of the best home/away assignment (None when either
-    side has no team pair).
+    side has no team pair). ``alias_index`` rides through to
+    :func:`_team_similarity` — because BOTH the hard-reject (conflict) and
+    boost (agree) verdicts derive from these similarities, the operator
+    alias dictionary reaches both paths through this one seam.
     """
     if teams_a is None or teams_b is None:
         return TEAM_VERDICT_ABSENT, None
 
     straight = (
-        _team_similarity(teams_a[0], teams_b[0]),
-        _team_similarity(teams_a[1], teams_b[1]),
+        _team_similarity(teams_a[0], teams_b[0], alias_index),
+        _team_similarity(teams_a[1], teams_b[1], alias_index),
     )
     swapped = (
-        _team_similarity(teams_a[0], teams_b[1]),
-        _team_similarity(teams_a[1], teams_b[0]),
+        _team_similarity(teams_a[0], teams_b[1], alias_index),
+        _team_similarity(teams_a[1], teams_b[0], alias_index),
     )
     best = straight if sum(straight) >= sum(swapped) else swapped
     team_score = min(best)
@@ -1249,6 +1344,7 @@ def _score_parsed_pair(
     *,
     window_minutes: int | None,
     threshold: float,
+    alias_index: dict[tuple[str, ...], int] | None = None,
 ) -> PairScore:
     def _result(
         score: float,
@@ -1298,7 +1394,9 @@ def _score_parsed_pair(
         )
 
     delta = abs((parsed_a.start - parsed_b.start).total_seconds()) / 60.0
-    verdict, team_score = _team_pair_verdict(parsed_a.teams, parsed_b.teams)
+    verdict, team_score = _team_pair_verdict(
+        parsed_a.teams, parsed_b.teams, alias_index
+    )
     fuzzy = _fuzzy_title_score(parsed_a.title, parsed_b.title)
 
     if window_minutes is not None and delta > window_minutes:
@@ -1395,13 +1493,22 @@ def score_pair(
     threshold: float = EVENT_ATTACH_FLOOR,
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
     now: datetime | None = None,
+    team_aliases: Sequence[Sequence[str]] | None = None,
 ) -> PairScore:
     """Score two raw provider event names through every matcher layer.
 
     The pairwise entry point used by the frozen-corpus CI gate; the
     stream-vs-masters path (:func:`match_streams`) routes through the same
     ``_score_parsed_pair`` body so the two can never diverge.
+
+    ``team_aliases`` (bead ti939.4.2): operator alias groups — each a
+    sequence of equivalent team spellings. ``None`` (the default every
+    production caller uses) loads the instance-wide dictionary from the
+    settings store; pass ``()`` to score without aliases (the frozen-corpus
+    gate's byte-stability baseline) or explicit fixture groups in tests.
     """
+    if team_aliases is None:
+        team_aliases = _load_settings_team_alias_groups()
     parsed_a = parse_event_name(
         name_a, patterns, event_timezone=event_timezone, now=now
     )
@@ -1409,7 +1516,8 @@ def score_pair(
         name_b, patterns, event_timezone=event_timezone, now=now
     )
     return _score_parsed_pair(
-        parsed_a, parsed_b, window_minutes=window_minutes, threshold=threshold
+        parsed_a, parsed_b, window_minutes=window_minutes, threshold=threshold,
+        alias_index=build_team_alias_index(team_aliases),
     )
 
 
@@ -1429,6 +1537,7 @@ def match_streams(
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
     now: datetime | None = None,
     assume_current_date: bool = False,
+    team_aliases: Sequence[Sequence[str]] | None = None,
 ) -> list[StreamMatchResult]:
     """Match every secondary stream name against the master channel names.
 
@@ -1447,10 +1556,19 @@ def match_streams(
 
     Masters are identified by NAME only — the caller re-resolves channel
     IDs against Dispatcharr on every run.
+
+    ``team_aliases`` (bead ti939.4.2): operator alias groups, built into
+    ONE index for the whole call. ``None`` (every production caller) loads
+    the instance-wide dictionary from the settings store — attach run,
+    preview, and debug bundle therefore share one dictionary by
+    construction; pass ``()`` or fixture groups in tests.
     """
     tz = pytz.timezone(event_timezone)
     if now is None:
         now = datetime.now(tz)
+    if team_aliases is None:
+        team_aliases = _load_settings_team_alias_groups()
+    alias_index = build_team_alias_index(team_aliases)
 
     effective_master_patterns = (
         master_patterns if master_patterns is not None else patterns
@@ -1547,7 +1665,8 @@ def match_streams(
                     )
                 continue  # blocked — not a candidate (gate disabled when None)
             pair = _score_parsed_pair(
-                parsed, master, window_minutes=window_minutes, threshold=threshold
+                parsed, master, window_minutes=window_minutes,
+                threshold=threshold, alias_index=alias_index,
             )
             candidates.append(MasterCandidate(
                 master_name=master.raw_name,
@@ -1577,6 +1696,7 @@ def match_stream_to_masters(
     threshold: float = EVENT_ATTACH_FLOOR,
     event_timezone: str = DEFAULT_EVENT_TIMEZONE,
     now: datetime | None = None,
+    team_aliases: Sequence[Sequence[str]] | None = None,
 ) -> StreamMatchResult:
     """Single-stream convenience wrapper over :func:`match_streams`."""
     return match_streams(
@@ -1587,4 +1707,5 @@ def match_stream_to_masters(
         threshold=threshold,
         event_timezone=event_timezone,
         now=now,
+        team_aliases=team_aliases,
     )[0]
