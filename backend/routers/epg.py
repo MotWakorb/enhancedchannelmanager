@@ -7,6 +7,7 @@ import asyncio
 import gzip
 import io
 import logging
+import re
 import secrets
 import time
 import xml.etree.ElementTree as ET
@@ -1095,15 +1096,17 @@ class _GuideMigrationJob:
         "created_at",
         "completed_at",
         "error",
+        "actor",
         "result",
         "total",
     )
 
-    def __init__(self, total: int) -> None:
+    def __init__(self, total: int, actor: str) -> None:
         self.status = "running"
         self.created_at = time.time()
         self.completed_at: float | None = None
         self.error: str | None = None
+        self.actor = actor
         self.total = total
         self.result = {
             "mutated": 0,
@@ -1116,9 +1119,13 @@ class _GuideMigrationJob:
 
 
 def _prune_guide_migration_jobs() -> None:
-    cutoff = time.time() - _GUIDE_MIGRATION_JOB_TTL_SECONDS
+    now = time.time()
     for batch_id in [
-        key for key, job in _GUIDE_MIGRATION_JOBS.items() if job.created_at < cutoff
+        key
+        for key, job in _GUIDE_MIGRATION_JOBS.items()
+        if job.status != "running"
+        and job.completed_at is not None
+        and now - job.completed_at >= _GUIDE_MIGRATION_JOB_TTL_SECONDS
     ]:
         _GUIDE_MIGRATION_JOBS.pop(batch_id, None)
 
@@ -1494,7 +1501,8 @@ async def apply_guide_migration(
         )
     _prune_guide_migration_jobs()
     batch_id = secrets.token_hex(16)
-    job = _GuideMigrationJob(len(request.items))
+    accepting_actor = _migration_actor(_admin)
+    job = _GuideMigrationJob(len(request.items), accepting_actor)
     job.result["batch_id"] = batch_id
     _GUIDE_MIGRATION_JOBS[batch_id] = job
     _ACTIVE_GUIDE_MIGRATION_JOB_ID = batch_id
@@ -1508,14 +1516,19 @@ async def apply_guide_migration(
             job.status = "completed"
         except asyncio.CancelledError:
             job.status = "failed"
-            job.error = "Background task cancelled."
+            job.error = "Guide migration failed."
             raise
         except HTTPException as exc:
             job.status = "failed"
-            job.error = str(exc.detail)
+            job.error = "Guide migration failed."
+            logger.warning(
+                "[EPG-MIGRATION] Job %s rejected during execution: %s",
+                batch_id,
+                exc.detail,
+            )
         except Exception as exc:
             job.status = "failed"
-            job.error = f"{type(exc).__name__}: {exc}"
+            job.error = "Guide migration failed."
             logger.exception("[EPG-MIGRATION] Job %s failed", batch_id)
         finally:
             job.completed_at = time.time()
@@ -1542,9 +1555,14 @@ async def get_guide_migration_status(
     _admin=RequireAdminIfEnabled,
 ):
     """Return current per-item progress for an accepted migration."""
+    _prune_guide_migration_jobs()
+    if re.fullmatch(r"[0-9a-f]{32}", batch_id) is None:
+        raise HTTPException(status_code=404, detail="Guide migration job not found.")
     job = _GUIDE_MIGRATION_JOBS.get(batch_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Guide migration job not found.")
+    if job.actor != _migration_actor(_admin):
+        raise HTTPException(status_code=403, detail="Guide migration job access denied.")
     envelope = {
         "batch_id": batch_id,
         "status": job.status,
@@ -1553,7 +1571,7 @@ async def get_guide_migration_status(
         "result": job.result,
     }
     if job.status == "failed":
-        envelope["error"] = job.error or "Guide migration failed."
+        envelope["error"] = "Guide migration failed."
     return envelope
 
 

@@ -535,9 +535,22 @@ the current counters (`mutated`, `updated`, `audit_failed`, `skipped`,
 Only one migration apply may run at a time; another POST receives
 `409 Conflict`. Invalid, expired, reordered, or tampered preview identities
 also receive `409` and must be previewed again. Job polling state is
-process-local and retained for 30 minutes, matching ECM's established
-operator-task pattern; successful Dispatcharr mutations remain durably
-represented by per-item Journal entries even if ECM restarts.
+process-local, is never pruned while running, and is retained for 30 minutes
+measured from terminal completion. Status reads also perform expiry cleanup.
+Poll access is bound to the administrator who accepted the job (auth-disabled
+mode intentionally treats operators as equivalent); authorization is checked
+at acceptance and polling, not continuously during execution. Batch IDs must
+be exactly 32 lowercase hexadecimal characters. Malformed, expired, and
+unknown IDs return the same not-found response.
+
+The process-local envelope and active-job marker are lost on restart.
+Dispatcharr PATCH and ECM Journal commit are separate operations: cancellation,
+restart, an indeterminate HTTP response, or failure between PATCH and Journal
+can leave a changed channel without a corresponding Journal row. After any
+interruption, do not infer upstream state from the missing job or Journal
+alone—build a fresh preview, verify affected channels directly in Dispatcharr,
+and reconcile before retrying. Fatal polls intentionally contain only the
+fixed `Guide migration failed.` message; detailed exceptions remain server-side.
 
 Before any mutation, apply rebuilds one bounded source/target snapshot and
 requires every signed target to remain the exact sole candidate. It then

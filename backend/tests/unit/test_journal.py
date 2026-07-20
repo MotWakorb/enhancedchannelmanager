@@ -211,6 +211,25 @@ class TestLogEntries:
         mock_session.rollback.assert_called_once()
         mock_session.close.assert_called_once()
 
+    def test_log_entry_commit_failure_rolls_back_and_closes(self):
+        """A failed single-row commit never leaves its transaction/session open."""
+        mock_session = MagicMock()
+        mock_session.commit.side_effect = RuntimeError("disk full")
+
+        with patch("journal.get_session", return_value=mock_session):
+            from journal import log_entry
+
+            result = log_entry(
+                category="epg",
+                action_type="guide_migration",
+                entity_name="News",
+                description="Migration audit",
+            )
+
+        assert result is None
+        mock_session.rollback.assert_called_once_with()
+        mock_session.close.assert_called_once_with()
+
 
 class TestGetEntries:
     """Tests for get_entries() function."""

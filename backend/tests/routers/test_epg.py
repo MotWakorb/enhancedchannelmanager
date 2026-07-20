@@ -8,7 +8,7 @@ Mocks: get_client() to isolate from Dispatcharr.
 import asyncio
 import httpx
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import gzip
 import socket
 import time
@@ -892,6 +892,264 @@ class TestGuideMigration:
             {"channel_id": 7, "status": "unsupported_origin"}
         ]
         client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_job_ttl_starts_at_terminal_time_and_running_job_is_never_pruned(
+        self, async_client
+    ):
+        from routers import epg
+
+        batch_id = "a" * 32
+        job = epg._GuideMigrationJob(1, "auth-disabled")
+        job.created_at = 0
+        epg._GUIDE_MIGRATION_JOBS[batch_id] = job
+        try:
+            with patch("routers.epg.time.time", return_value=4000):
+                running = await async_client.get(
+                    f"/api/epg/migration/apply/{batch_id}"
+                )
+            assert running.status_code == 200
+            assert running.json()["status"] == "running"
+
+            job.status = "completed"
+            job.completed_at = 4000
+            with patch("routers.epg.time.time", return_value=5799):
+                retained = await async_client.get(
+                    f"/api/epg/migration/apply/{batch_id}"
+                )
+            assert retained.status_code == 200
+            with patch("routers.epg.time.time", return_value=5800):
+                expired = await async_client.get(
+                    f"/api/epg/migration/apply/{batch_id}"
+                )
+            assert expired.status_code == 404
+        finally:
+            epg._GUIDE_MIGRATION_JOBS.pop(batch_id, None)
+
+    @pytest.mark.asyncio
+    async def test_poll_is_bound_to_accepting_actor(self, async_client):
+        from auth import RequireAdminIfEnabled as admin_dependency
+        from main import app
+        from routers import epg
+
+        batch_id = "b" * 32
+        epg._GUIDE_MIGRATION_JOBS[batch_id] = epg._GuideMigrationJob(1, "1:alice")
+
+        async def actor_b():
+            return type("Actor", (), {"id": 2, "username": "bob"})()
+
+        app.dependency_overrides[admin_dependency.dependency] = actor_b
+        try:
+            response = await async_client.get(
+                f"/api/epg/migration/apply/{batch_id}"
+            )
+        finally:
+            app.dependency_overrides.pop(admin_dependency.dependency, None)
+            epg._GUIDE_MIGRATION_JOBS.pop(batch_id, None)
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Guide migration job access denied."
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "batch_id", ["not-hex", "A" * 32, "c" * 31, "d" * 33, "e" * 32]
+    )
+    async def test_malformed_batch_ids_have_uniform_not_found_response(
+        self, async_client, batch_id
+    ):
+        response = await async_client.get(f"/api/epg/migration/apply/{batch_id}")
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Guide migration job not found."}
+
+    @pytest.mark.asyncio
+    async def test_fatal_job_hides_secret_and_retains_partial_results(
+        self, async_client
+    ):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "iptv.news",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+
+        async def fatal_run(request, admin, *, batch_id, job):
+            job.result["results"].append({"channel_id": 7, "status": "updated"})
+            job.result["mutated"] = 1
+            raise RuntimeError("credential=super-secret")
+
+        with patch("routers.epg.get_jwt_secret_key", return_value=secret), patch(
+            "routers.epg._run_guide_migration", side_effect=fatal_run
+        ):
+            accepted = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+            terminal = await _poll_migration(async_client, accepted)
+        assert terminal["status"] == "failed"
+        assert terminal["error"] == "Guide migration failed."
+        assert terminal["processed"] == 1
+        assert "super-secret" not in str(terminal)
+
+    @pytest.mark.asyncio
+    async def test_cancelled_job_releases_lock_clears_active_and_remains_pollable(
+        self, async_client
+    ):
+        from routers import epg
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "iptv.news",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+        started = asyncio.Event()
+
+        async def cancellable_run(request, admin, *, batch_id, job):
+            await epg._GUIDE_MIGRATION_APPLY_LOCK.acquire()
+            try:
+                job.result["results"].append(
+                    {"channel_id": 7, "status": "updated"}
+                )
+                started.set()
+                await asyncio.Event().wait()
+            finally:
+                epg._GUIDE_MIGRATION_APPLY_LOCK.release()
+
+        with patch("routers.epg.get_jwt_secret_key", return_value=secret), patch(
+            "routers.epg._run_guide_migration", side_effect=cancellable_run
+        ):
+            accepted = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+            await started.wait()
+            batch_id = accepted.json()["batch_id"]
+            task = next(
+                task
+                for task in epg._GUIDE_MIGRATION_BACKGROUND_TASKS
+                if task.get_name() == f"guide-migration-{batch_id}"
+            )
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            terminal = await async_client.get(
+                f"/api/epg/migration/apply/{batch_id}"
+            )
+        assert terminal.json()["status"] == "failed"
+        assert terminal.json()["processed"] == 1
+        assert epg._ACTIVE_GUIDE_MIGRATION_JOB_ID is None
+        assert not epg._GUIDE_MIGRATION_APPLY_LOCK.locked()
+
+    @pytest.mark.asyncio
+    async def test_repeated_audit_failures_close_sessions_and_continue(
+        self, async_client
+    ):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        items = [
+            {
+                "channel_id": channel_id,
+                "current_epg_data_id": 10 + channel_id,
+                "current_source_id": 1,
+                "current_tvg_id": str(channel_id),
+                "lcn": str(channel_id),
+                "target_epg_data_id": 20 + channel_id,
+                "target_tvg_id": str(channel_id),
+            }
+            for channel_id in (7, 8)
+        ]
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=items,
+        )
+        client = AsyncMock()
+        client.get_epg_sources.return_value = [
+            {"id": 1, "source_type": "schedules_direct"},
+            {"id": 2, "source_type": "schedules_direct"},
+        ]
+        target_rows = [
+            {"id": 20 + item["channel_id"], "epg_source": 2, "tvg_id": item["target_tvg_id"]}
+            for item in items
+        ]
+        client.get_epg_data.return_value = target_rows
+        epg_rows = {
+            **{
+                item["current_epg_data_id"]: {
+                    "id": item["current_epg_data_id"],
+                    "epg_source": 1,
+                    "tvg_id": item["current_tvg_id"],
+                }
+                for item in items
+            },
+            **{row["id"]: row for row in target_rows},
+        }
+        client.get_epg_data_by_id.side_effect = lambda row_id: epg_rows[row_id]
+        client.get_channel.side_effect = [
+            {"id": item["channel_id"], "name": "Test", "epg_data_id": item["current_epg_data_id"]}
+            for item in items
+        ]
+        sessions = [MagicMock(), MagicMock()]
+        for session in sessions:
+            session.commit.side_effect = RuntimeError("audit unavailable")
+        with patch("routers.epg.get_client", return_value=client), patch(
+            "routers.epg.get_jwt_secret_key", return_value=secret
+        ), patch("journal.get_session", side_effect=sessions):
+            accepted = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": items,
+                },
+            )
+            terminal = await _poll_migration(async_client, accepted)
+        assert [row["status"] for row in terminal["result"]["results"]] == [
+            "updated_audit_failed",
+            "updated_audit_failed",
+        ]
+        assert terminal["result"]["audit_failed"] == 2
+        assert client.update_channel.await_count == 2
+        for session in sessions:
+            session.rollback.assert_called_once_with()
+            session.close.assert_called_once_with()
 
 
 class TestGetEPGSources:

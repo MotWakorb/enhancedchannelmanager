@@ -65,14 +65,20 @@ compare-and-swap channel update, so a non-migration writer can still change the
 source mapping after the snapshot, or the channel in the small interval between
 its refetch and PATCH.
 
-Each successful upstream mutation is written to the Journal under a shared
-batch ID: 128 random bits displayed as 32 lowercase hexadecimal characters.
-Polling state is process-local and expires after 30 minutes; a restart can
-remove the progress envelope, but completed upstream changes still have their
-per-channel Journal records. Dispatcharr and ECM's Journal are separate systems and cannot commit
-atomically. If the channel PATCH succeeds but the Journal write fails, ECM
-reports **updated_audit_failed** and does not claim a clean audited success or
-retry the mutation automatically.
+Each attempted audit uses a shared batch ID: 128 random bits displayed as 32
+lowercase hexadecimal characters. Polling state is process-local, is never
+expired while running, and remains available for 30 minutes after the job
+becomes terminal. Only the administrator who accepted the job can poll it;
+authorization is not continuously rechecked while it runs.
+
+A restart removes the progress envelope. Dispatcharr and ECM's Journal are
+separate systems and cannot commit atomically. If the channel PATCH succeeds
+but the Journal write fails, ECM reports **updated_audit_failed** and does not
+claim a clean audited success or retry automatically. Cancellation, restart,
+an indeterminate Dispatcharr response, or interruption between PATCH and
+Journal can also leave upstream state without a Journal row. After any
+interruption, create a fresh preview, verify affected channels directly in
+Dispatcharr, and reconcile their current assignments before retrying.
 
 XMLTV downloads use ECM's established outbound SSRF policy: HTTP(S) only,
 resolve-and-connect by validated IP, and every redirect is revalidated.
