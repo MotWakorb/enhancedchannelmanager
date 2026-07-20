@@ -41,10 +41,12 @@ or updated-but-not-audited row.
 
 ## Limits and recovery
 
-A preview is bounded to 1,000 channels and 50,000 EPG rows. If an instance is
-larger, ECM stops before mutation. Apply can partially succeed if Dispatcharr
-rejects an individual update; rerun Preview to see the current state and retry
-only the remaining ready rows.
+A preview is bounded to 1,000 channels and 50,000 EPG rows. Bounded EPG reads
+also stream behind a response-byte ceiling before JSON decoding, including on
+Dispatcharr versions that return one flat list. If an instance is larger, ECM
+stops before mutation. Apply can partially succeed if Dispatcharr rejects an
+individual update; rerun Preview to see the current state and retry only the
+remaining ready rows.
 
 ECM does not provide an automatic undo for a migration. To reverse it, choose
 the former source as the target, preview the reverse mapping, and confirm the
@@ -53,10 +55,13 @@ ready rows.
 Preview tokens are intentionally short-lived but are not stored in a one-time
 token database. Replaying one after a successful apply is idempotent: the
 apply-time current-assignment check skips already changed channels. ECM
-serializes migration applies and refetches each channel immediately before its
-PATCH. Dispatcharr does not offer a compare-and-swap update, so another
-non-migration writer can still change a channel in the small interval between
-that refetch and the PATCH.
+serializes migration applies. Inside that serialized operation it acquires one
+bounded target/source mapping snapshot, proves each signed target is still the
+sole candidate, and refetches each channel and its current/target EPG rows
+immediately before PATCH. Dispatcharr does not expose a mapping revision or a
+compare-and-swap channel update, so a non-migration writer can still change the
+source mapping after the snapshot, or the channel in the small interval between
+its refetch and PATCH.
 
 Each successful upstream mutation is written to the Journal under a shared
 batch ID. Dispatcharr and ECM's Journal are separate systems and cannot commit

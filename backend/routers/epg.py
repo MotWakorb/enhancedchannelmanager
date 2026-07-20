@@ -1394,6 +1394,7 @@ async def apply_guide_migration(
         ) from exc
 
     client = get_client()
+    await _GUIDE_MIGRATION_APPLY_LOCK.acquire()
     try:
         sources = await client.get_epg_sources()
         source_by_id = {source.get("id"): source for source in sources}
@@ -1427,132 +1428,161 @@ async def apply_guide_migration(
                     "target EPG rows."
                 ),
             )
+        target_by_tvg: dict[str, list[dict]] = {}
+        for candidate in epg_data:
+            target_by_tvg.setdefault(str(candidate.get("tvg_id") or ""), []).append(
+                candidate
+            )
+        invalid_target_channels = set()
+        for item in request.items:
+            if target_source.get("source_type") == "xmltv":
+                target_tvgs = xmltv_indexes[
+                    request.target_epg_source_id
+                ].lcn_to_channels.get(item.lcn, ())
+            else:
+                target_tvgs = (item.lcn,)
+            live_candidates = [
+                (candidate.get("id"), str(candidate.get("tvg_id") or ""))
+                for tvg_id in target_tvgs
+                for candidate in target_by_tvg.get(tvg_id, ())
+            ]
+            if live_candidates != [(item.target_epg_data_id, item.target_tvg_id)]:
+                invalid_target_channels.add(item.channel_id)
+
         results = []
         updated = 0
         mutated = 0
         audit_failed = 0
         skipped = 0
         failed = 0
-        batch_id = secrets.token_hex(4)
-        async with _GUIDE_MIGRATION_APPLY_LOCK:
-            for item in request.items:
+        batch_id = secrets.token_hex(16)
+        for item in request.items:
+            try:
+                if item.channel_id in invalid_target_channels:
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "ambiguous_target",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                current_source = source_by_id.get(item.current_source_id)
+                if (
+                    current_source is None
+                    or current_source.get("source_type")
+                    not in {"xmltv", "schedules_direct"}
+                ):
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "unsupported_origin",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                current_mapping_valid = (
+                    xmltv_indexes[item.current_source_id].channel_to_lcn.get(
+                        item.current_tvg_id
+                    )
+                    == item.lcn
+                    if current_source.get("source_type") == "xmltv"
+                    else item.current_tvg_id == item.lcn
+                )
+                target_mapping_valid = (
+                    item.target_tvg_id
+                    in xmltv_indexes[
+                        request.target_epg_source_id
+                    ].lcn_to_channels.get(item.lcn, ())
+                    if target_source.get("source_type") == "xmltv"
+                    else item.target_tvg_id == item.lcn
+                )
+                if not current_mapping_valid or not target_mapping_valid:
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "semantic_drift",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                current_epg = await client.get_epg_data_by_id(
+                    item.current_epg_data_id
+                )
+                target_epg = await client.get_epg_data_by_id(
+                    item.target_epg_data_id
+                )
+                if (
+                    current_epg.get("epg_source") != item.current_source_id
+                    or str(current_epg.get("tvg_id") or "") != item.current_tvg_id
+                    or target_epg.get("epg_source")
+                    != request.target_epg_source_id
+                    or str(target_epg.get("tvg_id") or "") != item.target_tvg_id
+                ):
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "semantic_drift",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                channel = await client.get_channel(item.channel_id)
+                if channel.get("epg_data_id") != item.current_epg_data_id:
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "changed_since_preview",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                await client.update_channel(
+                    item.channel_id, {"epg_data_id": item.target_epg_data_id}
+                )
+                mutated += 1
                 try:
-                    current_source = source_by_id.get(item.current_source_id)
-                    if (
-                        current_source is None
-                        or current_source.get("source_type")
-                        not in {"xmltv", "schedules_direct"}
-                    ):
-                        results.append(
-                            {
-                                "channel_id": item.channel_id,
-                                "status": "unsupported_origin",
-                            }
-                        )
-                        skipped += 1
-                        continue
-                    current_mapping_valid = (
-                        xmltv_indexes[item.current_source_id].channel_to_lcn.get(
-                            item.current_tvg_id
-                        )
-                        == item.lcn
-                        if current_source.get("source_type") == "xmltv"
-                        else item.current_tvg_id == item.lcn
+                    entry = journal.log_entry(
+                        category="epg",
+                        action_type="guide_migration",
+                        entity_id=item.channel_id,
+                        entity_name=channel.get("name"),
+                        description=(
+                            f"Migrated channel guide from EPG data "
+                            f"{item.current_epg_data_id} to "
+                            f"{item.target_epg_data_id}"
+                        ),
+                        before_value={"epg_data_id": item.current_epg_data_id},
+                        after_value={"epg_data_id": item.target_epg_data_id},
+                        batch_id=batch_id,
                     )
-                    target_mapping_valid = (
-                        item.target_tvg_id
-                        in xmltv_indexes[
-                            request.target_epg_source_id
-                        ].lcn_to_channels.get(item.lcn, ())
-                        if target_source.get("source_type") == "xmltv"
-                        else item.target_tvg_id == item.lcn
-                    )
-                    if not current_mapping_valid or not target_mapping_valid:
-                        results.append(
-                            {
-                                "channel_id": item.channel_id,
-                                "status": "semantic_drift",
-                            }
-                        )
-                        skipped += 1
-                        continue
-                    current_epg = await client.get_epg_data_by_id(
-                        item.current_epg_data_id
-                    )
-                    target_epg = await client.get_epg_data_by_id(
-                        item.target_epg_data_id
-                    )
-                    if (
-                        current_epg.get("epg_source") != item.current_source_id
-                        or str(current_epg.get("tvg_id") or "") != item.current_tvg_id
-                        or target_epg.get("epg_source")
-                        != request.target_epg_source_id
-                        or str(target_epg.get("tvg_id") or "") != item.target_tvg_id
-                    ):
-                        results.append(
-                            {
-                                "channel_id": item.channel_id,
-                                "status": "semantic_drift",
-                            }
-                        )
-                        skipped += 1
-                        continue
-                    channel = await client.get_channel(item.channel_id)
-                    if channel.get("epg_data_id") != item.current_epg_data_id:
-                        results.append(
-                            {
-                                "channel_id": item.channel_id,
-                                "status": "changed_since_preview",
-                            }
-                        )
-                        skipped += 1
-                        continue
-                    await client.update_channel(
-                        item.channel_id, {"epg_data_id": item.target_epg_data_id}
-                    )
-                    mutated += 1
-                    try:
-                        entry = journal.log_entry(
-                            category="epg",
-                            action_type="guide_migration",
-                            entity_id=item.channel_id,
-                            entity_name=channel.get("name"),
-                            description=(
-                                f"Migrated channel guide from EPG data "
-                                f"{item.current_epg_data_id} to "
-                                f"{item.target_epg_data_id}"
-                            ),
-                            before_value={"epg_data_id": item.current_epg_data_id},
-                            after_value={"epg_data_id": item.target_epg_data_id},
-                            batch_id=batch_id,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "[EPG-MIGRATION] Journal write raised after channel=%s "
-                            "was already updated",
-                            item.channel_id,
-                        )
-                        entry = None
-                    if entry is None:
-                        audit_failed += 1
-                        results.append(
-                            {
-                                "channel_id": item.channel_id,
-                                "status": "updated_audit_failed",
-                            }
-                        )
-                    else:
-                        results.append(
-                            {"channel_id": item.channel_id, "status": "updated"}
-                        )
-                        updated += 1
                 except Exception:
                     logger.exception(
-                        "[EPG-MIGRATION] Channel update failed channel=%s",
+                        "[EPG-MIGRATION] Journal write raised after channel=%s "
+                        "was already updated",
                         item.channel_id,
                     )
-                    results.append({"channel_id": item.channel_id, "status": "failed"})
-                    failed += 1
+                    entry = None
+                if entry is None:
+                    audit_failed += 1
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "updated_audit_failed",
+                        }
+                    )
+                else:
+                    results.append(
+                        {"channel_id": item.channel_id, "status": "updated"}
+                    )
+                    updated += 1
+            except Exception:
+                logger.exception(
+                    "[EPG-MIGRATION] Channel update failed channel=%s",
+                    item.channel_id,
+                )
+                results.append({"channel_id": item.channel_id, "status": "failed"})
+                failed += 1
         logger.info(
             "[EPG-MIGRATION] Apply target_source=%s mutated=%d updated=%d "
             "audit_failed=%d skipped=%d failed=%d batch=%s",
@@ -1578,6 +1608,8 @@ async def apply_guide_migration(
     except Exception as exc:
         logger.exception("[EPG-MIGRATION] Apply failed: %s", exc)
         raise HTTPException(status_code=500, detail="Guide migration failed")
+    finally:
+        _GUIDE_MIGRATION_APPLY_LOCK.release()
 
 
 @router.post("/match")
