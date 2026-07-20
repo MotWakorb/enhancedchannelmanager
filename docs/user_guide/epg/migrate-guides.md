@@ -37,8 +37,11 @@ the current administrator, ECM instance, target source, LCN, and exact current
 and target EPG identities. If the source mapping, EPG row, or channel assignment
 changes after preview, ECM skips that channel instead of overwriting the newer
 state. Apply is accepted as a background job, and the dialog polls its progress
-so slow multi-channel runs continue outside the request timeout. Results stay
-open in the dialog and report every updated, skipped, failed, or
+without an arbitrary time limit so slow multi-channel runs continue outside the
+request timeout. Transient polling failures retain the batch ID and latest
+partial progress and are retried while the dialog remains open. Closing the
+dialog stops client polling but does not cancel the accepted server job.
+Results stay open in the dialog and report every updated, skipped, failed, or
 updated-but-not-audited row.
 
 ## Limits and recovery

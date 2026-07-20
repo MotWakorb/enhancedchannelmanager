@@ -1925,11 +1925,39 @@ export async function previewGuideMigration(
 }
 
 const GUIDE_MIGRATION_POLL_INTERVAL_MS = 750;
-const GUIDE_MIGRATION_POLL_MAX_DURATION_MS = 60 * 60 * 1000;
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Guide migration polling aborted', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Guide migration polling aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export class GuideMigrationPollingError extends Error {
+  constructor(
+    message: string,
+    public readonly batchId: string
+  ) {
+    super(message);
+    this.name = 'GuideMigrationPollingError';
+  }
+}
 
 export async function applyGuideMigration(
   preview: GuideMigrationPreview,
-  onProgress?: (status: GuideMigrationJobStatus) => void
+  onProgress?: (status: GuideMigrationJobStatus) => void,
+  signal?: AbortSignal
 ): Promise<GuideMigrationApplyResult> {
   const items = preview.rows
     .filter((row) => row.status === 'ready')
@@ -1947,29 +1975,66 @@ export async function applyGuideMigration(
     status: 'running';
   }>(`${API_BASE}/epg/migration/apply`, {
     method: 'POST',
+    signal,
     body: JSON.stringify({
       target_epg_source_id: preview.target_source_id,
       preview_token: preview.preview_token,
       items,
     }),
   });
-  const started = Date.now();
-  while (Date.now() - started < GUIDE_MIGRATION_POLL_MAX_DURATION_MS) {
-    const status = await fetchJson<GuideMigrationJobStatus>(
-      `${API_BASE}/epg/migration/apply/${encodeURIComponent(accepted.batch_id)}`
-    );
-    onProgress?.(status);
-    if (status.status === 'completed') return status.result;
-    if (status.status === 'failed') {
-      throw new Error(`Guide migration failed: ${status.error ?? 'unknown error'}`);
+  const emptyResult: GuideMigrationApplyResult = {
+    mutated: 0,
+    updated: 0,
+    audit_failed: 0,
+    skipped: 0,
+    failed: 0,
+    results: [],
+    batch_id: accepted.batch_id,
+  };
+  onProgress?.({
+    batch_id: accepted.batch_id,
+    status: 'running',
+    processed: 0,
+    total: items.length,
+    result: emptyResult,
+  });
+  while (!signal?.aborted) {
+    try {
+      const status = await fetchJson<GuideMigrationJobStatus>(
+        `${API_BASE}/epg/migration/apply/${encodeURIComponent(accepted.batch_id)}`,
+        { signal }
+      );
+      onProgress?.(status);
+      if (status.status === 'completed') return status.result;
+      if (status.status === 'failed') {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} failed. Build a fresh preview and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+    } catch (error) {
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+        throw error;
+      }
+      if (error instanceof GuideMigrationPollingError) throw error;
+      if (error instanceof HttpError && error.status === 404) {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} is no longer available, possibly because ECM restarted. Preserve this batch ID, build a fresh preview, and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+      if (error instanceof HttpError && error.status < 500) {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} polling stopped: ${error.message}. Preserve this batch ID and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+      // Network and transient server errors do not discard a known accepted
+      // batch or its last partial result. Keep polling until terminal/unmount.
     }
-    await new Promise((resolve) =>
-      setTimeout(resolve, GUIDE_MIGRATION_POLL_INTERVAL_MS)
-    );
+    await abortableDelay(GUIDE_MIGRATION_POLL_INTERVAL_MS, signal);
   }
-  throw new Error(
-    `Guide migration polling exceeded ${GUIDE_MIGRATION_POLL_MAX_DURATION_MS / 1000}s`
-  );
+  throw new DOMException('Guide migration polling aborted', 'AbortError');
 }
 
 // EPG Matching (server-side)

@@ -455,6 +455,36 @@ describe('API Service', () => {
   });
 
   describe('applyGuideMigration (202+poll)', () => {
+    const oneReadyPreview = {
+      target_source_id: 2,
+      target_source_name: 'SD',
+      preview_token: 'signed',
+      counts: {
+        ready: 1,
+        already_target: 0,
+        unassigned: 0,
+        missing_lcn: 0,
+        missing_target: 0,
+        ambiguous_target: 0,
+        unsupported_origin: 0,
+      },
+      rows: [
+        {
+          channel_id: 7,
+          channel_name: 'A',
+          current_epg_data_id: 11,
+          current_source_id: 1,
+          current_source_name: 'XML',
+          lcn: '1',
+          target_epg_data_id: 21,
+          target_name: 'A',
+          current_tvg_id: 'a',
+          target_tvg_id: '1',
+          status: 'ready' as const,
+        },
+      ],
+    };
+
     beforeEach(() => {
       vi.stubGlobal(
         'setTimeout',
@@ -465,7 +495,10 @@ describe('API Service', () => {
       );
     });
 
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
 
     it('reports partial progress and returns the terminal result', async () => {
       let poll = 0;
@@ -554,9 +587,161 @@ describe('API Service', () => {
         },
         progress
       );
-      expect(progress).toHaveBeenCalledTimes(2);
-      expect(progress.mock.calls[0][0].processed).toBe(1);
+      expect(progress).toHaveBeenCalledTimes(3);
+      expect(progress.mock.calls[0][0].processed).toBe(0);
+      expect(progress.mock.calls[1][0].processed).toBe(1);
       expect(resolved).toEqual(result);
+    });
+
+    it('continues beyond the former one-hour wall-clock cutoff', async () => {
+      const batchId = '11111111111111111111111111111111';
+      let polls = 0;
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(7_200_000);
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () => {
+          polls += 1;
+          const result = {
+            mutated: 1,
+            updated: 1,
+            audit_failed: 0,
+            skipped: 0,
+            failed: 0,
+            results: [{ channel_id: 7, status: 'updated' as const }],
+            batch_id: batchId,
+          };
+          return HttpResponse.json({
+            batch_id: batchId,
+            status: polls < 3 ? 'running' : 'completed',
+            processed: polls < 3 ? 0 : 1,
+            total: 1,
+            result,
+          });
+        })
+      );
+      const result = await applyGuideMigration(oneReadyPreview);
+      expect(polls).toBe(3);
+      expect(result.updated).toBe(1);
+    });
+
+    it('surfaces terminal failure with the known batch and reconciliation guidance', async () => {
+      const batchId = '22222222222222222222222222222222';
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () =>
+          HttpResponse.json({
+            batch_id: batchId,
+            status: 'failed',
+            processed: 0,
+            total: 1,
+            result: {
+              mutated: 0,
+              updated: 0,
+              audit_failed: 0,
+              skipped: 0,
+              failed: 0,
+              results: [],
+              batch_id: batchId,
+            },
+            error: 'Guide migration failed.',
+          })
+        )
+      );
+      await expect(applyGuideMigration(oneReadyPreview)).rejects.toThrow(
+        new RegExp(`${batchId}.*fresh preview.*Dispatcharr`, 'i')
+      );
+    });
+
+    it('retains the batch and partial progress across a transient poll error', async () => {
+      const batchId = '33333333333333333333333333333333';
+      let polls = 0;
+      const progress = vi.fn();
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () => {
+          polls += 1;
+          if (polls === 2) {
+            return HttpResponse.json({ detail: 'temporary outage' }, { status: 503 });
+          }
+          const completed = polls === 3;
+          return HttpResponse.json({
+            batch_id: batchId,
+            status: completed ? 'completed' : 'running',
+            processed: completed ? 1 : 0,
+            total: 1,
+            result: {
+              mutated: completed ? 1 : 0,
+              updated: completed ? 1 : 0,
+              audit_failed: 0,
+              skipped: 0,
+              failed: 0,
+              results: completed ? [{ channel_id: 7, status: 'updated' }] : [],
+              batch_id: batchId,
+            },
+          });
+        })
+      );
+      const result = await applyGuideMigration(oneReadyPreview, progress);
+      expect(result.batch_id).toBe(batchId);
+      expect(progress.mock.calls.some(([value]) => value.batch_id === batchId)).toBe(true);
+      expect(polls).toBe(3);
+    });
+
+    it('turns restart 404 into actionable guidance without losing the batch', async () => {
+      const batchId = '44444444444444444444444444444444';
+      const progress = vi.fn();
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () =>
+          HttpResponse.json({ detail: 'Guide migration job not found.' }, { status: 404 })
+        )
+      );
+      await expect(applyGuideMigration(oneReadyPreview, progress)).rejects.toThrow(
+        new RegExp(`${batchId}.*restarted.*Dispatcharr`, 'i')
+      );
+      expect(progress).toHaveBeenCalledWith(
+        expect.objectContaining({ batch_id: batchId, processed: 0 })
+      );
+    });
+
+    it('surfaces a non-transient poll error with the accepted batch', async () => {
+      const batchId = '66666666666666666666666666666666';
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () =>
+          HttpResponse.json({ detail: 'Permission denied' }, { status: 403 })
+        )
+      );
+      await expect(applyGuideMigration(oneReadyPreview)).rejects.toThrow(
+        new RegExp(`${batchId}.*Permission denied.*Dispatcharr`, 'i')
+      );
+    });
+
+    it('aborts accepted polling without waiting for a timer', async () => {
+      const batchId = '55555555555555555555555555555555';
+      const controller = new AbortController();
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        )
+      );
+      await expect(
+        applyGuideMigration(
+          oneReadyPreview,
+          () => controller.abort(),
+          controller.signal
+        )
+      ).rejects.toMatchObject({ name: 'AbortError' });
     });
   });
 

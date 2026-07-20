@@ -532,6 +532,14 @@ the current counters (`mutated`, `updated`, `audit_failed`, `skipped`,
 `updated`, `updated_audit_failed`, `ambiguous_target`, `unsupported_origin`,
 `semantic_drift`, `changed_since_preview`, or `failed`.
 
+The ECM dialog polls until a terminal response while it remains open; it does
+not impose a client-side wall-clock cutoff. Closing the dialog aborts client
+polling but does not cancel the accepted server job. Transient network and
+server errors retain the known batch ID and last partial result and are
+retried. A not-found poll can indicate a server restart; the dialog preserves
+the batch ID and directs the operator to build a fresh preview and reconcile
+the affected channels in Dispatcharr.
+
 Only one migration apply may run at a time; another POST receives
 `409 Conflict`. Invalid, expired, reordered, or tampered preview identities
 also receive `409` and must be previewed again. Job polling state is

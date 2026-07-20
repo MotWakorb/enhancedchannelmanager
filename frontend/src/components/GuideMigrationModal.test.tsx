@@ -123,7 +123,8 @@ describe('GuideMigrationModal', () => {
     await waitFor(() =>
       expect(api.applyGuideMigration).toHaveBeenCalledWith(
         preview,
-        expect.any(Function)
+        expect.any(Function),
+        expect.any(AbortSignal)
       )
     );
     expect(onApplied).toHaveBeenCalledWith(
@@ -260,7 +261,89 @@ describe('GuideMigrationModal', () => {
     ).toBeInTheDocument();
     rejectApply(new Error('Preview token expired. Preview again.'));
     expect(await screen.findByRole('alert')).toHaveClass('error-banner');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Preview migration' })).toHaveFocus()
+    );
     expect(screen.queryByText('News SD')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply 0 migrations' })).toBeDisabled();
+  });
+
+  it('focuses a generic polling error and preserves batch progress', async () => {
+    vi.mocked(api.previewGuideMigration).mockResolvedValue(preview);
+    vi.mocked(api.applyGuideMigration).mockImplementation(async (_preview, progress) => {
+      progress?.({
+        batch_id: '0123456789abcdef0123456789abcdef',
+        status: 'running',
+        processed: 1,
+        total: 2,
+        result: {
+          mutated: 1,
+          updated: 1,
+          audit_failed: 0,
+          skipped: 0,
+          failed: 0,
+          results: [{ channel_id: 7, status: 'updated' }],
+          batch_id: '0123456789abcdef0123456789abcdef',
+        },
+      });
+      throw new Error(
+        'Guide migration 0123456789abcdef0123456789abcdef is no longer available. Verify Dispatcharr.'
+      );
+    });
+    render(
+      <GuideMigrationModal
+        isOpen
+        sources={sources}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Target EPG source'), {
+      target: { value: '2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview migration' }));
+    await screen.findByText('News SD');
+    fireEvent.click(
+      screen.getByLabelText('Change guide assignments for exactly 1 ready channel.')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 migration' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('0123456789abcdef0123456789abcdef');
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  it('aborts polling when the modal unmounts', async () => {
+    vi.mocked(api.previewGuideMigration).mockResolvedValue(preview);
+    let observedSignal: AbortSignal | undefined;
+    vi.mocked(api.applyGuideMigration).mockImplementation(
+      async (_preview, _progress, signal) => {
+        observedSignal = signal;
+        return await new Promise((_, reject) => {
+          signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError'))
+          );
+        });
+      }
+    );
+    const rendered = render(
+      <GuideMigrationModal
+        isOpen
+        sources={sources}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Target EPG source'), {
+      target: { value: '2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview migration' }));
+    await screen.findByText('News SD');
+    fireEvent.click(
+      screen.getByLabelText('Change guide assignments for exactly 1 ready channel.')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 migration' }));
+    await waitFor(() => expect(observedSignal).toBeDefined());
+    rendered.unmount();
+    expect(observedSignal?.aborted).toBe(true);
   });
 });

@@ -53,11 +53,22 @@ export function GuideMigrationModal({
   > | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLSelectElement>(null);
+  const previewButtonRef = useRef<HTMLButtonElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const applyControllerRef = useRef<AbortController | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
 
+  useEffect(
+    () => () => {
+      applyControllerRef.current?.abort();
+    },
+    []
+  );
+
   useEffect(() => {
     if (!isOpen) {
+      applyControllerRef.current?.abort();
       setTargetId('');
       setPreview(null);
       setConfirmed(false);
@@ -111,6 +122,7 @@ export function GuideMigrationModal({
       setPreview(await api.previewGuideMigration(Number(targetId)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Guide migration preview failed');
+      window.requestAnimationFrame(() => errorRef.current?.focus());
     } finally {
       setBusy(false);
     }
@@ -120,19 +132,34 @@ export function GuideMigrationModal({
     if (!preview) return;
     setBusy(true);
     setError(null);
+    const controller = new AbortController();
+    applyControllerRef.current?.abort();
+    applyControllerRef.current = controller;
     try {
-      const result = await api.applyGuideMigration(preview, setJobProgress);
+      const result = await api.applyGuideMigration(
+        preview,
+        setJobProgress,
+        controller.signal
+      );
       onApplied(result);
       setApplyResult(result);
       setBusy(false);
     } catch (err) {
+      if (controller.signal.aborted) return;
       const message = err instanceof Error ? err.message : 'Guide migration failed';
       setError(message);
       if (/preview.*(expired|invalid|again)/i.test(message)) {
         setPreview(null);
         setConfirmed(false);
+        window.requestAnimationFrame(() => previewButtonRef.current?.focus());
+      } else {
+        window.requestAnimationFrame(() => errorRef.current?.focus());
       }
       setBusy(false);
+    } finally {
+      if (applyControllerRef.current === controller) {
+        applyControllerRef.current = null;
+      }
     }
   };
 
@@ -183,13 +210,23 @@ export function GuideMigrationModal({
             </select>
           </div>
           <button
+            ref={previewButtonRef}
             className="btn-secondary"
             onClick={runPreview}
             disabled={!targetId || busy}
           >
             {busy && !preview ? 'Building preview…' : 'Preview migration'}
           </button>
-          {error && <div className="error-banner" role="alert">{error}</div>}
+          {error && (
+            <div
+              ref={errorRef}
+              className="error-banner"
+              role="alert"
+              tabIndex={-1}
+            >
+              {error}
+            </div>
+          )}
           {preview && (
             <>
               <div className="guide-migration-summary" aria-label="Migration summary">
@@ -262,7 +299,7 @@ export function GuideMigrationModal({
             <div className="guide-migration-progress" role="status">
               Applied {jobProgress.processed} of {jobProgress.total}; updated{' '}
               {jobProgress.result.updated}, skipped {jobProgress.result.skipped},
-              failed {jobProgress.result.failed}.
+              failed {jobProgress.result.failed}. Batch {jobProgress.batch_id}.
             </div>
           )}
         </div>
