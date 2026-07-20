@@ -334,6 +334,19 @@ export function SelectionActionBar({
     const items = Array.from(
       e.currentTarget.querySelectorAll<HTMLButtonElement>('.selection-bar-menu-item--sub:not(:disabled)'),
     );
+    const clearButton = e.currentTarget.querySelector<HTMLButtonElement>('.selection-bar-move-filter-clear');
+    if (e.target === clearButton) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'ArrowDown') {
+        items[0]?.focus();
+      } else if (e.key === 'End') {
+        items[items.length - 1]?.focus();
+      } else {
+        moveFilterInputRef.current?.focus();
+      }
+      return;
+    }
     const activeIndex = items.indexOf(document.activeElement as HTMLButtonElement);
     if (activeIndex === -1 || items.length === 0) return;
 

@@ -6,7 +6,7 @@
  * sections, keyboard navigation, and the Escape-clears-selection contract.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SelectionActionBar } from './SelectionActionBar';
 
@@ -335,8 +335,8 @@ describe('SelectionActionBar', () => {
       await user.type(screen.getByRole('textbox', { name: 'Filter groups' }), 'zzz-nomatch');
 
       expect(screen.getByText('No groups match "zzz-nomatch"')).toBeInTheDocument();
-      expect(screen.queryByRole('menuitem', { name: /Sports/ })).not.toBeInTheDocument();
-      expect(screen.queryByRole('menuitem', { name: /News/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Sports/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /News/ })).not.toBeInTheDocument();
       // Pinned entries still reachable even with a zero-match filter.
       expect(screen.getByRole('button', { name: /Uncategorized/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /New group/ })).toBeInTheDocument();
@@ -400,11 +400,13 @@ describe('SelectionActionBar', () => {
       const input = screen.getByRole('textbox', { name: 'Filter groups' }) as HTMLInputElement;
       await user.type(input, 'Sports');
 
-      for (const key of ['{Left}', '{Right}', '{Home}', '{End}']) {
-        await user.keyboard(key);
-        expect(input).toHaveFocus();
-        expect(screen.getByRole('dialog', { name: 'Move to group' })).toBeInTheDocument();
+      // jsdom does not implement the browser's default caret movement, so
+      // verify directly that none of these native editing events is canceled.
+      for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
+        expect(fireEvent.keyDown(input, { key })).toBe(true);
       }
+      expect(input).toHaveFocus();
+      expect(screen.getByRole('dialog', { name: 'Move to group' })).toBeInTheDocument();
     });
 
     it('announces filtered and zero-result counts politely', async () => {
@@ -438,6 +440,51 @@ describe('SelectionActionBar', () => {
       expect(input).toHaveFocus();
     });
 
+    it('contains chooser navigation and Escape when the clear control has focus', async () => {
+      const user = userEvent.setup();
+      renderBar();
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      await user.type(input, 'Sports');
+      await user.tab();
+      const clearButton = screen.getByRole('button', { name: 'Clear group filter' });
+
+      await user.keyboard('{ArrowUp}');
+      expect(input).toHaveFocus();
+      clearButton.focus();
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('button', { name: /Uncategorized/ })).toHaveFocus();
+      clearButton.focus();
+      await user.keyboard('{Home}');
+      expect(input).toHaveFocus();
+      clearButton.focus();
+      await user.keyboard('{End}');
+      expect(screen.getByRole('button', { name: /New group/ })).toHaveFocus();
+
+      clearButton.focus();
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: 'Move to group' })).not.toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /Move to group/ })).toHaveFocus();
+    });
+
+    it('supports Space to clear and Escape from a destination', async () => {
+      const user = userEvent.setup();
+      renderBar();
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      await user.type(input, 'Sports');
+      await user.tab();
+      await user.keyboard(' ');
+      expect(input).toHaveValue('');
+      expect(input).toHaveFocus();
+
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('button', { name: /Uncategorized/ })).toHaveFocus();
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: 'Move to group' })).not.toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /Move to group/ })).toHaveFocus();
+    });
+
     it('Escape closes the submenu (not the whole menu, not the selection) and returns focus to the trigger', async () => {
       const user = userEvent.setup();
       const { props } = renderBar();
@@ -460,7 +507,7 @@ describe('SelectionActionBar', () => {
       renderBar({ groups: [{ id: 1, name: 'Sports' }, { id: 2, name: 'News' }] });
       await openMoveSubmenu(user);
       await user.type(screen.getByRole('textbox', { name: 'Filter groups' }), 'Sports');
-      expect(screen.queryByRole('menuitem', { name: /News/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /News/ })).not.toBeInTheDocument();
 
       await user.keyboard('{Escape}'); // closes submenu only
       await user.click(screen.getByRole('menuitem', { name: /Move to group/ }));
