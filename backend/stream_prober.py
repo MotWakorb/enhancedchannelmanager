@@ -115,6 +115,7 @@ def smart_sort_streams(
     failed_stream_sort_order: list[str] = None,
     channel_name: str = "unknown",
     custom_stream_ids: set[int] | None = None,
+    catchup_stream_ids: set[int] | None = None,
 ) -> list[int]:
     """
     Pure function — sort stream IDs by quality/priority criteria.
@@ -142,10 +143,12 @@ def smart_sort_streams(
         stream_m3u_map = {}
     if custom_stream_ids is None:
         custom_stream_ids = set()
+    if catchup_stream_ids is None:
+        catchup_stream_ids = set()
     if stream_sort_priority is None:
-        stream_sort_priority = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"]
+        stream_sort_priority = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"]
     if stream_sort_enabled is None:
-        stream_sort_enabled = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False}
+        stream_sort_enabled = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False, "catchup": False}
     if m3u_account_priorities is None:
         m3u_account_priorities = {}
     if failed_stream_sort_order is None:
@@ -256,6 +259,9 @@ def smart_sort_streams(
                 custom_value = 1 if stream_id in custom_stream_ids else 0
                 values.append(-custom_value)
 
+            elif criterion == "catchup":
+                values.append(-(1 if stream_id in catchup_stream_ids else 0))
+
         return values
 
     def get_sort_value(stream_id: int) -> tuple:
@@ -305,6 +311,8 @@ def smart_sort_streams(
                     # Binary: custom streams sort first (negated). Inert if
                     # custom_stream_ids not supplied.
                     sort_values.append(-(1 if stream_id in custom_stream_ids else 0))
+                elif criterion == "catchup":
+                    sort_values.append(-(1 if stream_id in catchup_stream_ids else 0))
                 else:
                     sort_values.append(0)
             return tuple(sort_values) + (stream_id,)
@@ -377,6 +385,9 @@ def smart_sort_streams(
                 # sort first when ranked highest. Inert if custom_stream_ids not supplied.
                 custom_value = 1 if stream_id in custom_stream_ids else 0
                 sort_values.append(-custom_value)
+
+            elif criterion == "catchup":
+                sort_values.append(-(1 if stream_id in catchup_stream_ids else 0))
 
         m3u_account_id = stream_m3u_map.get(stream_id)
         logger.debug("[STREAM-PROBE-SORT]   %s: sort_tuple=%s "
@@ -453,7 +464,7 @@ class StreamProber:
         self.stream_fetch_page_limit = stream_fetch_page_limit
         logger.info("[STREAM-PROBE] auto_reorder_after_probe=%s", auto_reorder_after_probe)
         # Smart Sort configuration
-        self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
+        self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
         self.m3u_account_priorities = m3u_account_priorities or {}
         self.failed_stream_sort_order = failed_stream_sort_order or ["failed", "black_screen", "low_fps"]
@@ -1930,8 +1941,10 @@ class StreamProber:
                     # (Dispatcharr is_custom) from the same already-fetched stream data,
                     # only when the criterion is active (mirrors how m3u_priority gates).
                     custom_active = self.stream_sort_enabled.get("custom_streams", False)
+                    catchup_active = self.stream_sort_enabled.get("catchup", False)
                     stream_m3u_map = {}
                     custom_stream_ids: set[int] = set()
+                    catchup_stream_ids: set[int] = set()
                     for s in streams_data:
                         stream_id = s.get("id", s.get("stream_id"))
                         if stream_id is None:
@@ -1941,6 +1954,8 @@ class StreamProber:
                         )
                         if custom_active and s.get("is_custom"):
                             custom_stream_ids.add(int(stream_id))
+                        if catchup_active and s.get("is_catchup"):
+                            catchup_stream_ids.add(int(stream_id))
                     logger.debug("[STREAM-PROBE-SORT] Channel %s: Built M3U map for %s streams: %s", channel_id, len(stream_m3u_map), stream_m3u_map)
 
                     # Fetch stream stats for this channel's streams (uses get_session and StreamStats imported at top of file)
@@ -1957,7 +1972,11 @@ class StreamProber:
                         logger.info("[STREAM-PROBE-SORT] Channel %s: Found stats for %s/%s streams", channel_id, len(stats_map), len(stream_ids))
 
                         # Sort streams using smart sort logic (similar to frontend)
-                        sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map, stream_m3u_map, channel_name, custom_stream_ids=custom_stream_ids)
+                        sorted_stream_ids = self._smart_sort_streams(
+                            stream_ids, stats_map, stream_m3u_map, channel_name,
+                            custom_stream_ids=custom_stream_ids,
+                            catchup_stream_ids=catchup_stream_ids,
+                        )
                         logger.info("[STREAM-PROBE-SORT] Channel %s: Original order: %s", channel_id, stream_ids)
                         logger.info("[STREAM-PROBE-SORT] Channel %s: Sorted order:   %s", channel_id, sorted_stream_ids)
                         logger.info("[STREAM-PROBE-SORT] Channel %s: Order changed: %s", channel_id, sorted_stream_ids != stream_ids)
@@ -2110,8 +2129,10 @@ class StreamProber:
         # ID set for the custom_streams criterion (only when that criterion is
         # active — mirrors the m3u_priority gating).
         custom_active = self.stream_sort_enabled.get("custom_streams", False)
+        catchup_active = self.stream_sort_enabled.get("catchup", False)
         stream_m3u_map = {}
         custom_stream_ids: set[int] = set()
+        catchup_stream_ids: set[int] = set()
         try:
             streams_data = await self.client.get_streams_by_ids(all_stream_ids)
             for s in streams_data:
@@ -2120,6 +2141,8 @@ class StreamProber:
                     stream_m3u_map[int(sid)] = self._extract_m3u_account_id(s.get("m3u_account"))
                     if custom_active and s.get("is_custom"):
                         custom_stream_ids.add(int(sid))
+                    if catchup_active and s.get("is_catchup"):
+                        catchup_stream_ids.add(int(sid))
         except Exception as e:
             logger.warning("[STREAM-PROBE-SORT] Failed to fetch M3U data for bulk reorder: %s", e)
 
@@ -2142,6 +2165,7 @@ class StreamProber:
                 failed_stream_sort_order=self.failed_stream_sort_order,
                 channel_name=channel_name,
                 custom_stream_ids=custom_stream_ids,
+                catchup_stream_ids=catchup_stream_ids,
             )
             if sorted_ids == stream_ids:
                 continue
@@ -2196,6 +2220,7 @@ class StreamProber:
         stream_m3u_map: dict[int, int] = None,
         channel_name: str = "unknown",
         custom_stream_ids: set[int] | None = None,
+        catchup_stream_ids: set[int] | None = None,
     ) -> list[int]:
         """Sort stream IDs using smart sort logic. Delegates to module-level function."""
         return smart_sort_streams(
@@ -2211,6 +2236,7 @@ class StreamProber:
             failed_stream_sort_order=self.failed_stream_sort_order,
             channel_name=channel_name,
             custom_stream_ids=custom_stream_ids,
+            catchup_stream_ids=catchup_stream_ids,
         )
 
     async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None, start_send_alerts: bool = True):

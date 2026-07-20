@@ -2504,6 +2504,46 @@ class TestSmartSortCustomStreamsCriterion:
         )
 
 
+class TestSmartSortCatchupCriterion:
+    """enhancedchannelmanager-jnbka / GH #652: catch-up-enabled streams rank first."""
+
+    def test_catchup_stream_sorts_first_when_top_criterion(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["catchup"],
+            stream_sort_enabled={"catchup": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, stream_name="Live"),
+            20: _success_stats_dict(20, stream_name="Catch-up"),
+        }
+
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={},
+            channel_name="gh652-catchup-first", settings=settings,
+            catchup_stream_ids={20},
+        )
+
+        assert result == [20, 10]
+
+    def test_catchup_tie_falls_through_to_resolution(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["catchup", "resolution"],
+            stream_sort_enabled={"catchup": True, "resolution": True},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1280x720"),
+            20: _success_stats_dict(20, resolution="1920x1080"),
+        }
+
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map={},
+            channel_name="gh652-catchup-tie", settings=settings,
+            catchup_stream_ids={10, 20},
+        )
+
+        assert result == [20, 10]
+
+
 class TestRunPipelineCreateChannelMergeChannelsTouched:
     """bd-0emgo.4 real-path regression: create_channel + if_exists=merge dry-run.
 

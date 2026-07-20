@@ -190,7 +190,7 @@ interface SortDropdownButtonProps {
   className?: string;
   showLabel?: boolean;
   labelText?: string;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup', boolean>;
 }
 
 // Sort mode labels for journal/description. Module-scoped so it's stable
@@ -204,6 +204,7 @@ const SORT_MODE_LABELS: Record<SortMode, string> = {
   m3u_priority: 'M3U priority',
   audio_channels: 'audio channels',
   custom_streams: 'Custom streams',
+  catchup: 'Catch-up',
 };
 
 const SortDropdownButton = memo(function SortDropdownButton({
@@ -213,13 +214,13 @@ const SortDropdownButton = memo(function SortDropdownButton({
   className = '',
   showLabel = false,
   labelText = 'Sort',
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false },
 }: SortDropdownButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Check if any criteria are enabled (for Smart Sort to be useful)
-  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.video_codec || enabledCriteria.m3u_priority || enabledCriteria.audio_channels || enabledCriteria.custom_streams;
+  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.video_codec || enabledCriteria.m3u_priority || enabledCriteria.audio_channels || enabledCriteria.custom_streams || enabledCriteria.catchup;
 
   // Close on outside click
   useEffect(() => {
@@ -306,6 +307,12 @@ const SortDropdownButton = memo(function SortDropdownButton({
               <span>By Custom Streams</span>
             </button>
           )}
+          {enabledCriteria.catchup && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('catchup')}>
+              <span className="material-icons">history</span>
+              <span>By Catch-up</span>
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -325,7 +332,7 @@ interface PaneToolbarMenuProps {
   onImportCSV: () => void;
   onSortAllByMode: (mode: SortMode) => void;
   bulkSortingByQuality: boolean;
-  sortEnabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels' | 'custom_streams', boolean>;
+  sortEnabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup', boolean>;
   onRenumberAllGroups: () => void;
 }
 
@@ -338,7 +345,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   onImportCSV,
   onSortAllByMode,
   bulkSortingByQuality,
-  sortEnabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false, custom_streams: false },
+  sortEnabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false },
   onRenumberAllGroups,
 }: PaneToolbarMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -348,7 +355,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const anyLoading = bulkSortingByQuality;
-  const anySortEnabled = sortEnabledCriteria.resolution || sortEnabledCriteria.bitrate || sortEnabledCriteria.framerate || sortEnabledCriteria.m3u_priority || sortEnabledCriteria.audio_channels || sortEnabledCriteria.custom_streams;
+  const anySortEnabled = sortEnabledCriteria.resolution || sortEnabledCriteria.bitrate || sortEnabledCriteria.framerate || sortEnabledCriteria.m3u_priority || sortEnabledCriteria.audio_channels || sortEnabledCriteria.custom_streams || sortEnabledCriteria.catchup;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -478,6 +485,12 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                           <span>By Custom Streams</span>
                         </button>
                       )}
+                      {sortEnabledCriteria.catchup && (
+                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('catchup')}>
+                          <span className="material-icons">history</span>
+                          <span>By Catch-up</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </>
@@ -579,7 +592,7 @@ interface DroppableGroupHeaderProps {
   onSortStreamsByQuality?: () => void;
   onSortStreamsByMode?: (mode: SortMode) => void;
   isSortingByQuality?: boolean;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup', boolean>;
   failedChannelCount?: number;
   successChannelCount?: number;
 }
@@ -607,7 +620,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByQuality,
   onSortStreamsByMode,
   isSortingByQuality = false,
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false },
   failedChannelCount = 0,
   successChannelCount = 0,
 }: DroppableGroupHeaderProps) {
@@ -865,7 +878,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                 </button>
               )}
               {/* Sort Streams sub-menu */}
-              {(onSortStreamsByQuality || onSortStreamsByMode) && (enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.custom_streams) && (
+              {(onSortStreamsByQuality || onSortStreamsByMode) && (enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.custom_streams || enabledCriteria.catchup) && (
                 <>
                   <div className="group-menu-divider" />
                   <button
@@ -921,6 +934,12 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                         <button className="group-menu-item submenu-item" onClick={() => handleSortModeClick('custom_streams')}>
                           <span className="material-icons">edit_note</span>
                           <span>By Custom Streams</span>
+                        </button>
+                      )}
+                      {enabledCriteria.catchup && (
+                        <button className="group-menu-item submenu-item" onClick={() => handleSortModeClick('catchup')}>
+                          <span className="material-icons">history</span>
+                          <span>By Catch-up</span>
                         </button>
                       )}
                     </div>

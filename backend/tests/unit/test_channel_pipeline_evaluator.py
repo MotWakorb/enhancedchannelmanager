@@ -3,6 +3,9 @@ Unit tests for the channel_pipeline_evaluator module.
 
 Tests condition evaluation against stream contexts.
 """
+import json
+from pathlib import Path
+
 from channel_pipeline_evaluator import (
     ConditionEvaluator,
     StreamContext,
@@ -31,6 +34,17 @@ class TestStreamContext:
         assert ctx.tvg_id == "espn.us"
         assert ctx.logo_url == "http://example.com/logo.png"
         assert ctx.m3u_account_id == 1
+
+    def test_from_recorded_dispatcharr_catchup_stream(self):
+        fixture_path = (
+            Path(__file__).parents[1] / "fixtures" / "dispatcharr_stream_catchup.json"
+        )
+        stream = json.loads(fixture_path.read_text())
+
+        ctx = StreamContext.from_dispatcharr_stream(stream, m3u_account_id=7)
+
+        assert ctx.stream_id == 65201
+        assert ctx.is_catchup is True
 
     def test_from_dispatcharr_stream_with_stats(self):
         """Creates context with stream stats for quality."""

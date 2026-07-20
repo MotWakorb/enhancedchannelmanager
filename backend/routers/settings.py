@@ -382,8 +382,8 @@ class SettingsRequest(BaseModel):
     probe_retry_count: int = 1  # Retries on transient ffprobe failure (0 = no retry, max 5)
     probe_retry_delay: int = 2  # Seconds between retries (1-30)
     stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]  # Priority order for Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}  # Which criteria are enabled
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"]  # Priority order for Smart Sort
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False, "catchup": False}  # Which criteria are enabled
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     black_screen_detection_enabled: bool = False  # Run ffmpeg blackdetect after successful probe
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)

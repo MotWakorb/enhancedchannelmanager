@@ -1245,6 +1245,11 @@ This is useful for cleaning up dead or unreliable streams that accumulate over t
 2. Toggle individual criteria on/off
 3. Enable "Deprioritize Failed Streams"
 
+The default-disabled **Catch-up** criterion prefers streams that Dispatcharr
+marks as catch-up enabled. Drag it higher or lower to decide when catch-up
+availability should win over resolution, bitrate, and the other enabled
+criteria.
+
 ### Stream Preview Settings
 
 Configure how streams and channels are previewed in the browser:
