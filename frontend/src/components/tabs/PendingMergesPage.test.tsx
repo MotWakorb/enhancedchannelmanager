@@ -115,6 +115,73 @@ describe('PendingMergesPage — list rendering (BD-J / bd-gfxrz)', () => {
     expect(api.getPendingMergesSnapshot).toHaveBeenCalledWith({ groupId: 17 });
   });
 
+  it('ignores a stale group load that resolves after the active group', async () => {
+    let resolveGroup7!: (value: Awaited<ReturnType<typeof api.getPendingMerges>>) => void;
+    const group7Request = new Promise<Awaited<ReturnType<typeof api.getPendingMerges>>>(
+      (resolve) => {
+        resolveGroup7 = resolve;
+      },
+    );
+    const group8Row = makeRecord({
+      id: 8,
+      stream_name: 'Group 8 Stream',
+      group_id: 8,
+    });
+    vi.mocked(api.getPendingMerges).mockImplementation(({ groupId } = {}) => {
+      if (groupId === 7) return group7Request;
+      return Promise.resolve({
+        merges: [group8Row],
+        total: 1,
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+      });
+    });
+
+    const { rerender } = render(<PendingMergesPage groupId={7} />);
+    rerender(<PendingMergesPage groupId={8} />);
+
+    expect(await screen.findByText('Group 8 Stream')).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Group 8 Stream' }),
+    );
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveGroup7({
+        merges: [
+          makeRecord({
+            id: 7,
+            stream_name: 'Stale Group 7 Stream',
+            group_id: 7,
+          }),
+        ],
+        total: 77,
+        page: 1,
+        page_size: 50,
+        total_pages: 2,
+      });
+      await group7Request;
+    });
+
+    expect(screen.queryByText('Stale Group 7 Stream')).toBeNull();
+    expect(screen.getByText('Group 8 Stream')).toBeInTheDocument();
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', { name: 'Select Group 8 Stream' }),
+    ).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Merge selected$/i }));
+    const dialog = await screen.findByRole('dialog', {
+      name: /Confirm bulk action/i,
+    });
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: /^Confirm merge$/i }),
+    );
+    await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledWith(8));
+    expect(api.acceptPendingMerge).not.toHaveBeenCalledWith(7);
+  });
+
   it('renders the empty state with the PO-ratified nudge copy when there are no rows', async () => {
     vi.mocked(api.getPendingMerges).mockResolvedValue({
       merges: [],
