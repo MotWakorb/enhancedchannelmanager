@@ -321,7 +321,7 @@ describe('SelectionActionBar', () => {
 
       expect(screen.getByRole('button', { name: /Sports HD/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Kids Sport/ })).toBeInTheDocument();
-      expect(screen.queryByRole('menuitem', { name: /^News$/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^News$/ })).not.toBeInTheDocument();
       // Pinned entries stay reachable regardless of the filter text.
       expect(screen.getByRole('button', { name: /Uncategorized/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /New group/ })).toBeInTheDocument();
