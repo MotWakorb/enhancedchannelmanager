@@ -117,6 +117,13 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
     // progress label. A snapshot started after this effect owns a newer token.
     snapshotRequestTokenRef.current += 1;
     setSnapshotAction(null);
+    // A confirmation belongs to the scope that produced its targets. Cancel
+    // any still-unconfirmed intent without restoring the previous scope's
+    // materialized rows or focus over the new scope's load.
+    setBulkIntent(null);
+    preConfirmViewRef.current = null;
+    restoreBulkFocusRef.current = false;
+    bulkTriggerRef.current = null;
     bulkLockRef.current = false;
   }, [groupId]);
 
