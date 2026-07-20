@@ -158,12 +158,26 @@ complete before deploying the frontend:
 docker cp backend/main.py ecm-ecm-1:/app/main.py
 docker cp backend/routers/. ecm-ecm-1:/app/routers/
 docker restart ecm-ecm-1
-docker inspect -f '{{.State.Running}}' ecm-ecm-1
+ready=0
+for attempt in $(seq 1 30); do
+  if docker exec ecm-ecm-1 python -c "import os, urllib.request; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=2)" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo "ECM backend did not become ready; frontend was not deployed" >&2
+  docker logs --tail 100 ecm-ecm-1 >&2
+  exit 1
+fi
 scripts/deploy-frontend.sh
 ```
 
 This order prevents the new frontend from calling an API contract that the
-running backend does not yet provide. Roll back in reverse dependency order:
+running backend does not yet provide. The readiness loop is bounded to 30
+attempts with a two-second request timeout; `/api/health/ready` is public, so
+the in-container probe needs no credentials. Roll back in reverse dependency order:
 restore and deploy the previous frontend build first, then restore the previous
 backend files and restart `ecm-ecm-1`. Do not roll back the backend while the
 dependent frontend is still live.

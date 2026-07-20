@@ -183,9 +183,26 @@ then deploy the frontend:
 docker cp backend/main.py ecm-ecm-1:/app/main.py
 docker cp backend/routers/. ecm-ecm-1:/app/routers/
 docker restart ecm-ecm-1
-docker inspect -f '{{.State.Running}}' ecm-ecm-1
+ready=0
+for attempt in $(seq 1 30); do
+  if docker exec ecm-ecm-1 python -c "import os, urllib.request; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=2)" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo "ECM backend did not become ready; frontend was not deployed" >&2
+  docker logs --tail 100 ecm-ecm-1 >&2
+  exit 1
+fi
 scripts/deploy-frontend.sh
 ```
+
+The readiness loop is bounded to 30 attempts with a two-second request timeout.
+It probes the public `/api/health/ready` endpoint from inside the container, so
+it honors the configured `ECM_PORT` and needs no credentials. If readiness
+fails, it prints the latest container logs and exits before frontend deployment.
 
 Roll back a coupled change in reverse dependency order: restore and deploy the
 previous frontend build first, then restore the previous backend files and
