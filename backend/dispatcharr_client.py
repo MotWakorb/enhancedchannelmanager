@@ -1254,6 +1254,7 @@ class DispatcharrClient:
             )
         else:
             headers["Authorization"] = f"Bearer {self.access_token}"
+        headers["Accept-Encoding"] = "identity"
 
         async def send() -> httpx.Response:
             request = self._client.build_request(
@@ -1269,6 +1270,11 @@ class DispatcharrClient:
             response = await send()
         try:
             response.raise_for_status()
+            content_encoding = response.headers.get("Content-Encoding", "").strip()
+            if content_encoding and content_encoding.lower() != "identity":
+                raise ValueError(
+                    "Dispatcharr EPG response used unexpected Content-Encoding"
+                )
             body = bytearray()
             async for chunk in response.aiter_bytes():
                 if len(body) + len(chunk) > max_bytes:

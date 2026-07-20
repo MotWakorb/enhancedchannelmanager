@@ -17,6 +17,16 @@ def _client(handler) -> DispatcharrClient:
     return client
 
 
+class _TrackingStream(httpx.AsyncByteStream):
+    def __init__(self, content: bytes):
+        self.content = content
+        self.iterated = False
+
+    async def __aiter__(self):
+        self.iterated = True
+        yield self.content
+
+
 @pytest.mark.asyncio
 async def test_bounded_flat_response_rejected_before_json_decode():
     payload = b"[" + (b" " * (1024 * 1024)) + b"]"
@@ -34,16 +44,56 @@ async def test_bounded_flat_response_rejected_before_json_decode():
 
 @pytest.mark.asyncio
 async def test_bounded_flat_response_returns_normal_rows():
-    client = _client(
-        lambda request: httpx.Response(
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(
             200, json=[{"id": 1, "tvg_id": "101"}, {"id": 2, "tvg_id": "102"}]
         )
-    )
+
+    client = _client(handler)
     try:
         assert await client.get_epg_data(max_results=2) == [
             {"id": 1, "tvg_id": "101"},
             {"id": 2, "tvg_id": "102"},
         ]
+        assert requests[0].headers["Accept-Encoding"] == "identity"
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["gzip", "br", "deflate"])
+async def test_encoded_response_rejected_before_stream_or_json_decode(encoding):
+    stream = _TrackingStream(b'[{"id": 1}]')
+    client = _client(
+        lambda request: httpx.Response(
+            200,
+            headers={"Content-Encoding": encoding},
+            stream=stream,
+        )
+    )
+    try:
+        with patch(
+            "dispatcharr_client.json.loads",
+            side_effect=AssertionError("encoded body must not be decoded"),
+        ):
+            with pytest.raises(ValueError, match="unexpected Content-Encoding"):
+                await client.get_epg_data(max_results=1)
+        assert stream.iterated is False
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("headers", [{}, {"Content-Encoding": "identity"}])
+async def test_absent_or_identity_encoding_is_accepted(headers):
+    client = _client(
+        lambda request: httpx.Response(200, headers=headers, json=[{"id": 1}])
+    )
+    try:
+        assert await client.get_epg_data(max_results=1) == [{"id": 1}]
     finally:
         await client._client.aclose()
 
