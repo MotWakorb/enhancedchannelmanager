@@ -8,6 +8,7 @@ import httpx
 import logging
 from typing import Optional
 from config import get_settings, DispatcharrSettings
+from concurrency import run_cpu_bound
 
 logger = logging.getLogger(__name__)
 
@@ -1283,7 +1284,7 @@ class DispatcharrClient:
                     )
                 body.extend(chunk)
             # Parsing occurs only after the bounded stream is complete.
-            return json.loads(body)
+            return await run_cpu_bound(json.loads, bytes(body))
         finally:
             await response.aclose()
 

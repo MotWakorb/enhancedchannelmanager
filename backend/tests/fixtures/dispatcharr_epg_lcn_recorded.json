@@ -1,8 +1,10 @@
 {
   "capture": {
-    "source": "Dispatcharr live XMLTV cache and /api/epg/epgdata/ response",
+    "source": "Shape-preserving redacted example derived from a live Dispatcharr XMLTV cache and /api/epg/epgdata/ survey",
+    "fixture_kind": "survey-backed redacted reconstruction",
+    "literal_raw_capture": false,
     "captured_at": "2026-07-20",
-    "redaction": "Names and identifiers replaced; element names, scalar types, and nesting retained",
+    "redaction": "Names, identifiers, and example rows were reconstructed; observed element names, scalar types, nesting, and aggregate distributions are retained",
     "survey": {
       "xmltv_channel_rows_examined": 19867,
       "id_equals_gnid_equals_lcn": 19867,

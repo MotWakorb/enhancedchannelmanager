@@ -1,5 +1,7 @@
 """Bounded EPG-data response handling for migration callers."""
 
+import asyncio
+import time
 from unittest.mock import patch
 
 import httpx
@@ -94,6 +96,28 @@ async def test_absent_or_identity_encoding_is_accepted(headers):
     )
     try:
         assert await client.get_epg_data(max_results=1) == [{"id": 1}]
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_large_json_decode_does_not_block_event_loop():
+    client = _client(lambda request: httpx.Response(200, content=b'[{"id": 1}]'))
+    real_loads = __import__("json").loads
+
+    def slow_loads(payload):
+        time.sleep(0.1)
+        return real_loads(payload)
+
+    try:
+        with patch("dispatcharr_client.json.loads", side_effect=slow_loads):
+            decode_task = asyncio.create_task(client.get_epg_data(max_results=1))
+            started = time.perf_counter()
+            await asyncio.sleep(0.01)
+            elapsed = time.perf_counter() - started
+            result = await decode_task
+        assert elapsed < 0.05
+        assert result == [{"id": 1}]
     finally:
         await client._client.aclose()
 

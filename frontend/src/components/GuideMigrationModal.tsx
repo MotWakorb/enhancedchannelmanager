@@ -20,6 +20,16 @@ const STATUS_LABELS: Record<api.GuideMigrationStatus, string> = {
   unsupported_origin: 'Unsupported source type',
 };
 
+const APPLY_STATUS_LABELS: Record<api.GuideMigrationApplyStatus, string> = {
+  updated: 'Updated and audited',
+  updated_audit_failed: 'Updated; audit record failed',
+  ambiguous_target: 'Skipped: target is no longer unique',
+  unsupported_origin: 'Skipped: source type is unsupported',
+  semantic_drift: 'Skipped: guide mapping changed',
+  changed_since_preview: 'Skipped: channel changed since preview',
+  failed: 'Update failed',
+};
+
 export function GuideMigrationModal({
   isOpen,
   sources,
@@ -36,6 +46,8 @@ export function GuideMigrationModal({
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [jobProgress, setJobProgress] =
+    useState<api.GuideMigrationJobStatus | null>(null);
   const [applyResult, setApplyResult] = useState<Awaited<
     ReturnType<typeof api.applyGuideMigration>
   > | null>(null);
@@ -52,6 +64,7 @@ export function GuideMigrationModal({
       setError(null);
       setBusy(false);
       setApplyResult(null);
+      setJobProgress(null);
     }
   }, [isOpen]);
 
@@ -93,6 +106,7 @@ export function GuideMigrationModal({
     setPreview(null);
     setConfirmed(false);
     setApplyResult(null);
+    setJobProgress(null);
     try {
       setPreview(await api.previewGuideMigration(Number(targetId)));
     } catch (err) {
@@ -107,12 +121,17 @@ export function GuideMigrationModal({
     setBusy(true);
     setError(null);
     try {
-      const result = await api.applyGuideMigration(preview);
+      const result = await api.applyGuideMigration(preview, setJobProgress);
       onApplied(result);
       setApplyResult(result);
       setBusy(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Guide migration failed');
+      const message = err instanceof Error ? err.message : 'Guide migration failed';
+      setError(message);
+      if (/preview.*(expired|invalid|again)/i.test(message)) {
+        setPreview(null);
+        setConfirmed(false);
+      }
       setBusy(false);
     }
   };
@@ -170,7 +189,7 @@ export function GuideMigrationModal({
           >
             {busy && !preview ? 'Building preview…' : 'Preview migration'}
           </button>
-          {error && <div className="alert alert-error" role="alert">{error}</div>}
+          {error && <div className="error-banner" role="alert">{error}</div>}
           {preview && (
             <>
               <div className="guide-migration-summary" aria-label="Migration summary">
@@ -232,11 +251,18 @@ export function GuideMigrationModal({
                   );
                   return (
                     <li key={result.channel_id}>
-                      {row?.channel_name ?? `Channel ${result.channel_id}`}: {result.status}
+                      {row?.channel_name ?? `Channel ${result.channel_id}`}: {APPLY_STATUS_LABELS[result.status]}
                     </li>
                   );
                 })}
               </ul>
+            </div>
+          )}
+          {busy && jobProgress && (
+            <div className="guide-migration-progress" role="status">
+              Applied {jobProgress.processed} of {jobProgress.total}; updated{' '}
+              {jobProgress.result.updated}, skipped {jobProgress.result.skipped},
+              failed {jobProgress.result.failed}.
             </div>
           )}
         </div>

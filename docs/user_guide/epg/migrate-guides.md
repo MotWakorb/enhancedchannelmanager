@@ -36,8 +36,10 @@ remain untouched. The signed preview expires after five minutes and is bound to
 the current administrator, ECM instance, target source, LCN, and exact current
 and target EPG identities. If the source mapping, EPG row, or channel assignment
 changes after preview, ECM skips that channel instead of overwriting the newer
-state. Results stay open in the dialog and report every updated, skipped, failed,
-or updated-but-not-audited row.
+state. Apply is accepted as a background job, and the dialog polls its progress
+so slow multi-channel runs continue outside the request timeout. Results stay
+open in the dialog and report every updated, skipped, failed, or
+updated-but-not-audited row.
 
 ## Limits and recovery
 
@@ -64,7 +66,10 @@ source mapping after the snapshot, or the channel in the small interval between
 its refetch and PATCH.
 
 Each successful upstream mutation is written to the Journal under a shared
-batch ID. Dispatcharr and ECM's Journal are separate systems and cannot commit
+batch ID: 128 random bits displayed as 32 lowercase hexadecimal characters.
+Polling state is process-local and expires after 30 minutes; a restart can
+remove the progress envelope, but completed upstream changes still have their
+per-channel Journal records. Dispatcharr and ECM's Journal are separate systems and cannot commit
 atomically. If the channel PATCH succeeds but the Journal write fails, ECM
 reports **updated_audit_failed** and does not claim a clean audited success or
 retry the mutation automatically.

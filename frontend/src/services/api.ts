@@ -1887,6 +1887,34 @@ export interface GuideMigrationPreview {
   preview_token: string;
 }
 
+export type GuideMigrationApplyStatus =
+  | 'updated'
+  | 'updated_audit_failed'
+  | 'ambiguous_target'
+  | 'unsupported_origin'
+  | 'semantic_drift'
+  | 'changed_since_preview'
+  | 'failed';
+
+export interface GuideMigrationApplyResult {
+  mutated: number;
+  updated: number;
+  audit_failed: number;
+  skipped: number;
+  failed: number;
+  results: Array<{ channel_id: number; status: GuideMigrationApplyStatus }>;
+  batch_id: string;
+}
+
+export interface GuideMigrationJobStatus {
+  batch_id: string;
+  status: 'running' | 'completed' | 'failed';
+  processed: number;
+  total: number;
+  result: GuideMigrationApplyResult;
+  error?: string;
+}
+
 export async function previewGuideMigration(
   targetEpgSourceId: number
 ): Promise<GuideMigrationPreview> {
@@ -1896,15 +1924,13 @@ export async function previewGuideMigration(
   });
 }
 
-export async function applyGuideMigration(preview: GuideMigrationPreview): Promise<{
-  mutated: number;
-  updated: number;
-  audit_failed: number;
-  skipped: number;
-  failed: number;
-  results: Array<{ channel_id: number; status: string }>;
-  batch_id: string;
-}> {
+const GUIDE_MIGRATION_POLL_INTERVAL_MS = 750;
+const GUIDE_MIGRATION_POLL_MAX_DURATION_MS = 60 * 60 * 1000;
+
+export async function applyGuideMigration(
+  preview: GuideMigrationPreview,
+  onProgress?: (status: GuideMigrationJobStatus) => void
+): Promise<GuideMigrationApplyResult> {
   const items = preview.rows
     .filter((row) => row.status === 'ready')
     .map((row) => ({
@@ -1916,7 +1942,10 @@ export async function applyGuideMigration(preview: GuideMigrationPreview): Promi
       target_epg_data_id: row.target_epg_data_id,
       target_tvg_id: row.target_tvg_id,
     }));
-  return fetchJson(`${API_BASE}/epg/migration/apply`, {
+  const accepted = await fetchJson<{
+    batch_id: string;
+    status: 'running';
+  }>(`${API_BASE}/epg/migration/apply`, {
     method: 'POST',
     body: JSON.stringify({
       target_epg_source_id: preview.target_source_id,
@@ -1924,6 +1953,23 @@ export async function applyGuideMigration(preview: GuideMigrationPreview): Promi
       items,
     }),
   });
+  const started = Date.now();
+  while (Date.now() - started < GUIDE_MIGRATION_POLL_MAX_DURATION_MS) {
+    const status = await fetchJson<GuideMigrationJobStatus>(
+      `${API_BASE}/epg/migration/apply/${encodeURIComponent(accepted.batch_id)}`
+    );
+    onProgress?.(status);
+    if (status.status === 'completed') return status.result;
+    if (status.status === 'failed') {
+      throw new Error(`Guide migration failed: ${status.error ?? 'unknown error'}`);
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, GUIDE_MIGRATION_POLL_INTERVAL_MS)
+    );
+  }
+  throw new Error(
+    `Guide migration polling exceeded ${GUIDE_MIGRATION_POLL_MAX_DURATION_MS / 1000}s`
+  );
 }
 
 // EPG Matching (server-side)

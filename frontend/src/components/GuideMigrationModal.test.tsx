@@ -62,14 +62,31 @@ describe('GuideMigrationModal', () => {
 
   it('requires a target, preview, and explicit confirmation before apply', async () => {
     vi.mocked(api.previewGuideMigration).mockResolvedValue(preview);
-    vi.mocked(api.applyGuideMigration).mockResolvedValue({
-      mutated: 1,
-      updated: 1,
-      audit_failed: 0,
-      skipped: 0,
-      failed: 0,
-      results: [{ channel_id: 7, status: 'updated' }],
-      batch_id: 'batch01',
+    vi.mocked(api.applyGuideMigration).mockImplementation(async (_preview, progress) => {
+      progress?.({
+        batch_id: '0123456789abcdef0123456789abcdef',
+        status: 'running',
+        processed: 0,
+        total: 1,
+        result: {
+          mutated: 0,
+          updated: 0,
+          audit_failed: 0,
+          skipped: 0,
+          failed: 0,
+          results: [],
+          batch_id: '0123456789abcdef0123456789abcdef',
+        },
+      });
+      return {
+        mutated: 1,
+        updated: 1,
+        audit_failed: 0,
+        skipped: 0,
+        failed: 0,
+        results: [{ channel_id: 7, status: 'updated' }],
+        batch_id: '0123456789abcdef0123456789abcdef',
+      };
     });
     const onApplied = vi.fn();
     const onClose = vi.fn();
@@ -103,12 +120,17 @@ describe('GuideMigrationModal', () => {
     );
     fireEvent.click(applyButton);
 
-    await waitFor(() => expect(api.applyGuideMigration).toHaveBeenCalledWith(preview));
+    await waitFor(() =>
+      expect(api.applyGuideMigration).toHaveBeenCalledWith(
+        preview,
+        expect.any(Function)
+      )
+    );
     expect(onApplied).toHaveBeenCalledWith(
       expect.objectContaining({ mutated: 1, updated: 1 })
     );
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByText('News: updated')).toBeInTheDocument();
+    expect(screen.getByText('News: Updated and audited')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(onClose).toHaveBeenCalled();
   });
@@ -137,6 +159,108 @@ describe('GuideMigrationModal', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Preview migration' }));
     expect(await screen.findByText('Ready: 0')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply 0 migrations' })).toBeDisabled();
+  });
+
+  it('renders a human label for every apply outcome', async () => {
+    const statuses: api.GuideMigrationApplyStatus[] = [
+      'updated',
+      'updated_audit_failed',
+      'ambiguous_target',
+      'unsupported_origin',
+      'semantic_drift',
+      'changed_since_preview',
+      'failed',
+    ];
+    vi.mocked(api.previewGuideMigration).mockResolvedValue(preview);
+    vi.mocked(api.applyGuideMigration).mockResolvedValue({
+      mutated: 1,
+      updated: 1,
+      audit_failed: 0,
+      skipped: 5,
+      failed: 1,
+      results: statuses.map((status, index) => ({
+        channel_id: 100 + index,
+        status,
+      })),
+      batch_id: '0123456789abcdef0123456789abcdef',
+    });
+    render(
+      <GuideMigrationModal
+        isOpen
+        sources={sources}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Target EPG source'), {
+      target: { value: '2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview migration' }));
+    await screen.findByText('News SD');
+    fireEvent.click(
+      screen.getByLabelText('Change guide assignments for exactly 1 ready channel.')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 migration' }));
+    for (const label of [
+      'Updated and audited',
+      'Updated; audit record failed',
+      'Skipped: target is no longer unique',
+      'Skipped: source type is unsupported',
+      'Skipped: guide mapping changed',
+      'Skipped: channel changed since preview',
+      'Update failed',
+    ]) {
+      expect(await screen.findByText(new RegExp(label))).toBeInTheDocument();
+    }
+  });
+
+  it('shows polling progress and requires a fresh preview after expiry', async () => {
+    vi.mocked(api.previewGuideMigration).mockResolvedValue(preview);
+    let rejectApply!: (error: Error) => void;
+    vi.mocked(api.applyGuideMigration).mockImplementation(async (_preview, progress) => {
+      progress?.({
+        batch_id: '0123456789abcdef0123456789abcdef',
+        status: 'running',
+        processed: 1,
+        total: 2,
+        result: {
+          mutated: 1,
+          updated: 1,
+          audit_failed: 0,
+          skipped: 0,
+          failed: 0,
+          results: [{ channel_id: 7, status: 'updated' }],
+          batch_id: '0123456789abcdef0123456789abcdef',
+        },
+      });
+      return await new Promise((_, reject) => {
+        rejectApply = reject;
+      });
+    });
+    render(
+      <GuideMigrationModal
+        isOpen
+        sources={sources}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Target EPG source'), {
+      target: { value: '2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview migration' }));
+    await screen.findByText('News SD');
+    fireEvent.click(
+      screen.getByLabelText('Change guide assignments for exactly 1 ready channel.')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 migration' }));
+    expect(
+      await screen.findByText(/Applied 1 of 2; updated 1, skipped 0, failed 0/)
+    ).toBeInTheDocument();
+    rejectApply(new Error('Preview token expired. Preview again.'));
+    expect(await screen.findByRole('alert')).toHaveClass('error-banner');
+    expect(screen.queryByText('News SD')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply 0 migrations' })).toBeDisabled();
   });
 });

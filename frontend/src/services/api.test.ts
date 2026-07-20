@@ -12,6 +12,7 @@ import {
   reorderChannelStreams,
   deleteChannel,
   bulkCommit,
+  applyGuideMigration,
   getChannelMergeCandidates,
   getPendingMergesSnapshot,
   // Compute sort
@@ -450,6 +451,112 @@ describe('API Service', () => {
           operations: [{ type: 'createChannel', tempId: -1, name: 'X' }],
         })
       ).rejects.toThrow(/dispatcharr unreachable/);
+    });
+  });
+
+  describe('applyGuideMigration (202+poll)', () => {
+    beforeEach(() => {
+      vi.stubGlobal(
+        'setTimeout',
+        ((fn: () => void) => {
+          fn();
+          return 0;
+        }) as unknown as typeof setTimeout
+      );
+    });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('reports partial progress and returns the terminal result', async () => {
+      let poll = 0;
+      const result = {
+        mutated: 2,
+        updated: 1,
+        audit_failed: 0,
+        skipped: 0,
+        failed: 1,
+        results: [
+          { channel_id: 7, status: 'updated' as const },
+          { channel_id: 8, status: 'failed' as const },
+        ],
+        batch_id: '0123456789abcdef0123456789abcdef',
+      };
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json(
+            { batch_id: result.batch_id, status: 'running' },
+            { status: 202 }
+          )
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () => {
+          poll += 1;
+          if (poll === 1) {
+            return HttpResponse.json({
+              batch_id: result.batch_id,
+              status: 'running',
+              processed: 1,
+              total: 2,
+              result: { ...result, results: result.results.slice(0, 1), failed: 0 },
+            });
+          }
+          return HttpResponse.json({
+            batch_id: result.batch_id,
+            status: 'completed',
+            processed: 2,
+            total: 2,
+            result,
+          });
+        })
+      );
+      const progress = vi.fn();
+      const resolved = await applyGuideMigration(
+        {
+          target_source_id: 2,
+          target_source_name: 'SD',
+          preview_token: 'signed',
+          counts: {
+            ready: 2,
+            already_target: 0,
+            unassigned: 0,
+            missing_lcn: 0,
+            missing_target: 0,
+            ambiguous_target: 0,
+            unsupported_origin: 0,
+          },
+          rows: [
+            {
+              channel_id: 7,
+              channel_name: 'A',
+              current_epg_data_id: 11,
+              current_source_id: 1,
+              current_source_name: 'XML',
+              lcn: '1',
+              target_epg_data_id: 21,
+              target_name: 'A',
+              current_tvg_id: 'a',
+              target_tvg_id: '1',
+              status: 'ready',
+            },
+            {
+              channel_id: 8,
+              channel_name: 'B',
+              current_epg_data_id: 12,
+              current_source_id: 1,
+              current_source_name: 'XML',
+              lcn: '2',
+              target_epg_data_id: 22,
+              target_name: 'B',
+              current_tvg_id: 'b',
+              target_tvg_id: '2',
+              status: 'ready',
+            },
+          ],
+        },
+        progress
+      );
+      expect(progress).toHaveBeenCalledTimes(2);
+      expect(progress.mock.calls[0][0].processed).toBe(1);
+      expect(resolved).toEqual(result);
     });
   });
 

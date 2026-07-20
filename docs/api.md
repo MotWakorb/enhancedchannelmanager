@@ -499,6 +499,55 @@ MCP mirror: `list_event_sync_exclusions` / `create_event_sync_exclusion` / `dele
 | `GET /api/epg/grid` | Get EPG program grid for guide view |
 | `GET /api/epg/lcn` | Get LCN (Logical Channel Number) for a TVG-ID |
 | `POST /api/epg/lcn/batch` | Batch LCN lookup for multiple TVG-IDs |
+| `POST /api/epg/migration/preview` | Build a signed, non-mutating XMLTV/Schedules Direct migration preview |
+| `POST /api/epg/migration/apply` | Accept a signed preview for asynchronous application (`202`) |
+| `GET /api/epg/migration/apply/{batch_id}` | Poll migration progress and per-channel outcomes |
+
+### Guide migration
+
+`POST /api/epg/migration/preview` accepts
+`{"target_epg_source_id": 20}` and returns every channel classification, status
+counts, and a five-minute signed `preview_token`. Only `ready` rows may be sent
+to apply. A row is ready only when its LCN/station identifier resolves to
+exactly one target EPG row.
+
+`POST /api/epg/migration/apply` accepts the target source, preview token, and
+the exact ready-row identities returned by preview. A valid request returns
+`202 Accepted`:
+
+```json
+{
+  "batch_id": "0123456789abcdef0123456789abcdef",
+  "status": "running",
+  "total": 2,
+  "poll_url": "/api/epg/migration/apply/0123456789abcdef0123456789abcdef"
+}
+```
+
+`batch_id` is 128 random bits rendered as 32 lowercase hexadecimal characters.
+Poll the supplied URL until `status` is `completed` or `failed`. Running and
+terminal responses include `processed`, `total`, and a `result` envelope with
+the current counters (`mutated`, `updated`, `audit_failed`, `skipped`,
+`failed`) plus all per-channel results produced so far. Result statuses are
+`updated`, `updated_audit_failed`, `ambiguous_target`, `unsupported_origin`,
+`semantic_drift`, `changed_since_preview`, or `failed`.
+
+Only one migration apply may run at a time; another POST receives
+`409 Conflict`. Invalid, expired, reordered, or tampered preview identities
+also receive `409` and must be previewed again. Job polling state is
+process-local and retained for 30 minutes, matching ECM's established
+operator-task pattern; successful Dispatcharr mutations remain durably
+represented by per-item Journal entries even if ECM restarts.
+
+Before any mutation, apply rebuilds one bounded source/target snapshot and
+requires every signed target to remain the exact sole candidate. It then
+refetches each current/target EPG row and channel immediately before PATCH.
+Dispatcharr exposes neither a source-mapping revision nor compare-and-swap for
+the channel update, so it cannot eliminate a non-migration writer changing
+mapping state after the snapshot or the channel between the final GET and
+PATCH. This accepted TOCTOU limitation is fail-closed wherever Dispatcharr
+provides a revalidation point; rerun Preview after any skipped or uncertain
+result.
 
 ## Channel Profiles
 

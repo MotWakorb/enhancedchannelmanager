@@ -16,7 +16,10 @@ from typing import Any
 
 
 PREVIEW_AUDIENCE = "ecm-guide-migration-apply"
+PREVIEW_ISSUER = "enhanced-channel-manager"
 PREVIEW_TTL_SECONDS = 300
+_PREVIEW_KEY_DOMAIN = b"ecm:guide-migration:preview-token:v1"
+_PREVIEW_INSTANCE_DOMAIN = b"ecm:guide-migration:instance:v1"
 
 
 class PreviewTokenError(ValueError):
@@ -181,6 +184,16 @@ def _ready_identity(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return canonical
 
 
+def _preview_signing_key(secret: str) -> bytes:
+    return hmac.new(secret.encode(), _PREVIEW_KEY_DOMAIN, hashlib.sha256).digest()
+
+
+def _instance_binding(secret: str) -> str:
+    return hmac.new(
+        secret.encode(), _PREVIEW_INSTANCE_DOMAIN, hashlib.sha256
+    ).hexdigest()[:32]
+
+
 def create_preview_token(
     *,
     secret: str,
@@ -196,6 +209,7 @@ def create_preview_token(
         "v": 1,
         "iss": issuer,
         "aud": PREVIEW_AUDIENCE,
+        "instance": _instance_binding(secret),
         "sub": actor,
         "iat": issued,
         "exp": issued + ttl_seconds,
@@ -205,7 +219,7 @@ def create_preview_token(
     }
     payload = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
     encoded = base64.urlsafe_b64encode(payload).rstrip(b"=")
-    signature = hmac.new(secret.encode(), encoded, hashlib.sha256).digest()
+    signature = hmac.new(_preview_signing_key(secret), encoded, hashlib.sha256).digest()
     return (
         encoded.decode()
         + "."
@@ -228,7 +242,9 @@ def verify_preview_token(
         signature = base64.urlsafe_b64decode(
             encoded_signature + "=" * (-len(encoded_signature) % 4)
         )
-        expected = hmac.new(secret.encode(), encoded.encode(), hashlib.sha256).digest()
+        expected = hmac.new(
+            _preview_signing_key(secret), encoded.encode(), hashlib.sha256
+        ).digest()
         if not hmac.compare_digest(signature, expected):
             raise PreviewTokenError("Preview signature is invalid.")
         payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
@@ -243,6 +259,8 @@ def verify_preview_token(
         raise PreviewTokenError("Preview token version is unsupported.")
     if envelope.get("iss") != issuer or envelope.get("aud") != PREVIEW_AUDIENCE:
         raise PreviewTokenError("Preview token belongs to another instance or audience.")
+    if envelope.get("instance") != _instance_binding(secret):
+        raise PreviewTokenError("Preview token belongs to another instance.")
     if envelope.get("sub") != actor:
         raise PreviewTokenError("Preview token belongs to another actor.")
     if not isinstance(envelope.get("iat"), int) or not isinstance(envelope.get("exp"), int):

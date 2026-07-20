@@ -13,7 +13,7 @@ from services.epg_migration import (
 )
 
 
-def test_recorded_dispatcharr_response_preserves_xmltv_lcn_as_epg_tvg_id():
+def test_survey_backed_dispatcharr_fixture_preserves_xmltv_lcn_as_epg_tvg_id():
     fixture = json.loads(
         (
             Path(__file__).parents[1]
@@ -21,6 +21,8 @@ def test_recorded_dispatcharr_response_preserves_xmltv_lcn_as_epg_tvg_id():
             / "dispatcharr_epg_lcn_recorded.json"
         ).read_text()
     )
+    assert fixture["capture"]["fixture_kind"] == "survey-backed redacted reconstruction"
+    assert fixture["capture"]["literal_raw_capture"] is False
     assert fixture["capture"]["survey"] == {
         "xmltv_channel_rows_examined": 19867,
         "id_equals_gnid_equals_lcn": 19867,

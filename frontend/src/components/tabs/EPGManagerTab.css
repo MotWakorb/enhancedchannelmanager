@@ -568,7 +568,7 @@
 .guide-migration-table-wrap th,
 .guide-migration-table-wrap td {
   padding: 0.5rem;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-primary);
   text-align: left;
 }
 
@@ -581,7 +581,7 @@
 
 .guide-migration-results {
   padding: 0.75rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: 0.375rem;
 }
 
