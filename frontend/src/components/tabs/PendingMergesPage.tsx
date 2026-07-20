@@ -38,6 +38,7 @@ import { ModalOverlay } from '../ModalOverlay';
 import './PendingMergesPage.css';
 
 const PAGE_SIZE = 50;
+const MAX_RENDERED_ROWS = 200;
 const EXACT_MATCH_THRESHOLD = 1.0;
 type BulkScope = 'all' | 'selected';
 type BulkOperation = 'Merge' | 'Clear';
@@ -104,18 +105,18 @@ export function PendingMergesPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const response = await api.getPendingMerges({
-        status: 'pending',
-        page: 1,
-        pageSize: PAGE_SIZE,
-      });
-      let refreshedRows = response.merges;
       // A refresh while records are selected must reconcile those selections
-      // against the whole queue, not just page one. Otherwise an off-page
-      // selected failure can disappear from the retry surface.
-      if (selectedIdsRef.current.size > 0 && response.total > response.merges.length) {
-        refreshedRows = (await api.getPendingMergesSnapshot()).merges;
-      }
+      // against one coherent snapshot. Do not mix its rows with a separately
+      // timed paginated total.
+      const response =
+        selectedIdsRef.current.size > 0
+          ? await api.getPendingMergesSnapshot()
+          : await api.getPendingMerges({
+              status: 'pending',
+              page: 1,
+              pageSize: PAGE_SIZE,
+            });
+      const refreshedRows = response.merges;
       setRows(refreshedRows);
       setTotalRows(response.total);
       const loadedIds = new Set(refreshedRows.map((row) => row.id));
@@ -192,6 +193,11 @@ export function PendingMergesPage() {
     bulkProgress?.phase === 'running' || bulkProgress?.phase === 'stopping';
   const anyRowBusy = Object.keys(rowBusy).length > 0;
   const actionsDisabled = loading || bulkBusy || bulkIntent !== null || anyRowBusy;
+  // Keep the complete coherent snapshot in state for targeting and progress,
+  // but bound DOM work at the server safety ceiling. As successful leading
+  // rows are removed, later records naturally move into this visible window;
+  // failed records remain in rows and therefore become reachable for retry.
+  const renderedRows = rows.slice(0, MAX_RENDERED_ROWS);
 
   const toggleSelected = useCallback((rowId: number) => {
     setSelectedIds((previous) => {
@@ -582,7 +588,7 @@ export function PendingMergesPage() {
 
       {rows.length > 0 && (
         <ul className="pending-merges-list" aria-label="Pending merges">
-          {rows.map((row) => {
+          {renderedRows.map((row) => {
             const isExact = row.confidence >= EXACT_MATCH_THRESHOLD;
             const busy = !!rowBusy[row.id];
             const rowError = rowErrors[row.id];

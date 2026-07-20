@@ -367,6 +367,41 @@ class TestPendingMergesSnapshot:
         assert "Nothing was changed" in response.json()["detail"]
 
     @pytest.mark.asyncio
+    async def test_exact_cap_is_returned_and_created_at_ties_use_id_desc(
+        self, async_client, test_session
+    ):
+        first = _make_pending(test_session, stream_name="First", created_at=100)
+        second = _make_pending(test_session, stream_name="Second", created_at=100)
+        with patch("routers.channel_merges.MAX_SNAPSHOT_ROWS", 2):
+            response = await async_client.get("/api/channel-merges/snapshot")
+        assert response.status_code == 200
+        assert response.json()["total"] == 2
+        assert [row["id"] for row in response.json()["merges"]] == [
+            second.id,
+            first.id,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_non_admin_is_forbidden(self, async_client):
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as admin_dependency
+
+        async def reject_non_admin() -> None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        app.dependency_overrides[admin_dependency.dependency] = reject_non_admin
+        try:
+            response = await async_client.get("/api/channel-merges/snapshot")
+        finally:
+            app.dependency_overrides.pop(admin_dependency.dependency, None)
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
     async def test_candidate_deleted_since_queuing_returns_null_fields(
         self, async_client, test_session
     ):

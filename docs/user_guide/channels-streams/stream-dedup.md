@@ -98,6 +98,8 @@ Clicking **Create New** dismisses the dedup candidate and signals that you want 
 
 Use the row checkboxes for a targeted batch, or **Merge all** / **Clear all** for the entire pending queue. ECM loads one coherent, bounded server snapshot before showing the confirmation, so the count and records you confirm are the records it processes. If the queue exceeds the safety limit, ECM shows an error and changes nothing.
 
+For very large queues, ECM keeps the complete snapshot as the action target but renders at most 200 queue rows at once. Later records move into view as earlier records resolve, preventing the browser from mounting up to 20,000 interactive rows at the safety ceiling.
+
 Every bulk action opens a confirmation dialog showing the exact record count and consequence. After confirmation, ECM processes records one at a time and keeps a live progress message visible. Choose **Stop** to finish only the request already in flight and leave every later record selected for a future retry.
 
 **Merge all is irreversible within ECM.** The confirmation dialog is the safety boundary: review its exact count before continuing. Recovery requires correcting the affected channels in Dispatcharr; ECM cannot automatically undo completed merges.

@@ -633,7 +633,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(3));
   });
 
-  it('materializes a 201-row all-queue snapshot before the sweep and keeps live progress mounted', async () => {
+  it('targets a 201-row snapshot, bounds its DOM window, and keeps live progress mounted', async () => {
     const allRows = Array.from({ length: 201 }, (_, index) =>
       makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
     );
@@ -688,7 +688,8 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
 
     const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
-    expect(screen.getByText('Stream 201')).toBeInTheDocument();
+    expect(screen.getByText('Stream 200')).toBeInTheDocument();
+    expect(screen.queryByText('Stream 201')).toBeNull();
     expect(within(dialog).getByText(/201 pending merges/i)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /^Confirm merge$/i }));
 
@@ -696,7 +697,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     expect(status).toHaveAttribute('aria-live', 'polite');
     expect(within(status).getByText(/Merged 0 of 201/i)).toBeInTheDocument();
     expect(within(status).getByRole('button', { name: /^Stop$/i })).toBeEnabled();
-    expect(screen.getByText('Stream 201')).toBeInTheDocument();
+    expect(screen.getByText('Stream 200')).toBeInTheDocument();
 
     await act(async () => resolveFirst?.());
     await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(201));
@@ -1091,11 +1092,37 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     render(<PendingMergesPage />);
     await screen.findByText('Stream 1');
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select Stream 1' }));
+    vi.mocked(api.getPendingMerges).mockClear();
     vi.mocked(api.getPendingMergesSnapshot).mockClear();
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: allRows, total: 777,
+    });
     fireEvent.click(screen.getByRole('button', { name: /Refresh/i }));
     await waitFor(() => expect(api.getPendingMergesSnapshot).toHaveBeenCalledTimes(1));
+    expect(api.getPendingMerges).not.toHaveBeenCalled();
     expect(screen.getByRole('checkbox', { name: 'Select Stream 1' })).toBeChecked();
     expect(screen.getByText('Stream 51')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Select all$/i })).toBeEnabled();
+  });
+
+  it('bounds snapshot DOM rendering to 200 rows while retaining the full target count', async () => {
+    const allRows = Array.from({ length: 20_000 }, (_, index) =>
+      makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
+    );
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: allRows.slice(0, 50), total: 20_000, page: 1,
+      page_size: 50, total_pages: 400,
+    });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: allRows, total: 20_000,
+    });
+    render(<PendingMergesPage />);
+    await screen.findByText('Stream 1');
+    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
+    expect(within(dialog).getByText(/20000 pending merges/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(200);
+    expect(screen.queryByText('Stream 201')).toBeNull();
   });
 
   it('keeps a failure at id 250 visible, selected, and retryable', async () => {
