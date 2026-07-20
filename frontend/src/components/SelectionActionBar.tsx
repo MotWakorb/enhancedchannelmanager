@@ -296,7 +296,7 @@ export function SelectionActionBar({
         e.preventDefault();
         e.stopPropagation();
         const first = menuRef.current?.querySelector<HTMLButtonElement>(
-          '.selection-bar-submenu [role="menuitem"]:not(:disabled)',
+          '#selection-bar-move-chooser .selection-bar-menu-item--sub:not(:disabled)',
         );
         first?.focus();
         break;
@@ -315,6 +315,38 @@ export function SelectionActionBar({
         break;
       default:
         break;
+    }
+  };
+
+  /** Keep vertical roving focus inside the Move-to-group chooser. The filter
+   * input naturally precedes the first result; navigation clamps at the final
+   * action while preserving normal text-editing keys in the input. */
+  const handleMoveSubmenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target === moveFilterInputRef.current) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSubmenuToTrigger('move');
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+
+    const items = Array.from(
+      e.currentTarget.querySelectorAll<HTMLButtonElement>('.selection-bar-menu-item--sub:not(:disabled)'),
+    );
+    const activeIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (activeIndex === -1 || items.length === 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Home') {
+      items[0]?.focus();
+    } else if (e.key === 'End') {
+      items[items.length - 1]?.focus();
+    } else if (e.key === 'ArrowUp') {
+      (activeIndex === 0 ? moveFilterInputRef.current : items[activeIndex - 1])?.focus();
+    } else {
+      items[Math.min(activeIndex + 1, items.length - 1)]?.focus();
     }
   };
 
@@ -342,8 +374,9 @@ export function SelectionActionBar({
       type="button"
       role="menuitem"
       className={`selection-bar-menu-item selection-bar-menu-item--submenu ${openSubmenu === id ? 'is-open' : ''}`}
-      aria-haspopup="menu"
+      aria-haspopup={id === 'move' ? 'dialog' : 'menu'}
       aria-expanded={openSubmenu === id}
+      aria-controls={id === 'move' ? 'selection-bar-move-chooser' : undefined}
       data-submenu-trigger={id}
       disabled={loading}
       onClick={() => toggleSubmenu(id)}
@@ -452,7 +485,14 @@ export function SelectionActionBar({
             <div className="selection-bar-menu-section-label">Move</div>
             {submenuTrigger('move', 'drive_file_move', 'Move to group')}
             {openSubmenu === 'move' && (
-              <div className="selection-bar-submenu" role="menu" aria-label="Move to group">
+              <div
+                id="selection-bar-move-chooser"
+                className="selection-bar-submenu"
+                role="dialog"
+                aria-label="Move to group"
+                aria-modal="false"
+                onKeyDown={handleMoveSubmenuKeyDown}
+              >
                 <div className="selection-bar-move-filter">
                   <input
                     ref={moveFilterInputRef}
@@ -479,9 +519,20 @@ export function SelectionActionBar({
                     </button>
                   )}
                 </div>
+                <div
+                  className="selection-bar-move-filter-status"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  {moveFilter !== '' && (
+                    filteredMoveGroups.length === 0
+                      ? 'No groups found'
+                      : `${filteredMoveGroups.length} ${filteredMoveGroups.length === 1 ? 'group' : 'groups'} found`
+                  )}
+                </div>
                 <button
                   type="button"
-                  role="menuitem"
                   className="selection-bar-menu-item selection-bar-menu-item--sub"
                   onClick={() => activate(() => onMoveToGroup(null))}
                 >
@@ -492,7 +543,6 @@ export function SelectionActionBar({
                   <button
                     key={group.id}
                     type="button"
-                    role="menuitem"
                     className="selection-bar-menu-item selection-bar-menu-item--sub"
                     onClick={() => activate(() => onMoveToGroup(group.id))}
                   >
@@ -508,7 +558,6 @@ export function SelectionActionBar({
                 <div className="selection-bar-menu-divider" />
                 <button
                   type="button"
-                  role="menuitem"
                   className="selection-bar-menu-item selection-bar-menu-item--sub"
                   onClick={() => activate(onNewGroup)}
                 >

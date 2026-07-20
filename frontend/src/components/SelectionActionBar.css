@@ -178,9 +178,11 @@
   font-size: 0.8rem;
 }
 
-.selection-bar-move-filter-input:focus {
-  outline: none;
+.selection-bar-move-filter-input:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
   border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-20);
 }
 
 .selection-bar-move-filter-input::placeholder {
@@ -189,7 +191,7 @@
 
 .selection-bar-move-filter-clear {
   position: absolute;
-  right: 0.75rem;
+  right: 0.5rem;
   top: 50%;
   transform: translateY(-50%);
   display: inline-flex;
@@ -197,15 +199,38 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 0.125rem;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 4px;
 }
 
 .selection-bar-move-filter-clear:hover {
   color: var(--text-primary);
 }
 
+.selection-bar-move-filter-clear:focus-visible {
+  color: var(--text-primary);
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
 .selection-bar-move-filter-clear .material-icons {
-  font-size: 14px;
+  font-size: 18px;
+}
+
+.selection-bar-move-filter-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .selection-bar-move-filter-empty {
