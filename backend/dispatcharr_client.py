@@ -8,6 +8,7 @@ import httpx
 import logging
 from typing import Optional
 from config import get_settings, DispatcharrSettings
+from concurrency import run_cpu_bound
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,8 @@ _SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 _USER_AGENTS_PATH = "/api/core/useragents/"
 _CORE_SETTINGS_PATH = "/api/core/settings/"
 _DVR_RULES_PATH = "/api/dvr/rules/"
+_EPG_DATA_BYTES_PER_RESULT = 2048
+_EPG_DATA_MIN_RESPONSE_BYTES = 1024 * 1024
 
 
 class DispatcharrClient:
@@ -1180,6 +1183,7 @@ class DispatcharrClient:
         page_size: int = 500,
         search: Optional[str] = None,
         epg_source: Optional[int] = None,
+        max_results: Optional[int] = None,
     ) -> list:
         """Get all EPG data entries.
 
@@ -1192,29 +1196,97 @@ class DispatcharrClient:
         if epg_source:
             params["epg_source"] = epg_source
 
-        response = await self._request("GET", "/api/epg/epgdata/", params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        # New Dispatcharr: flat list response
-        if isinstance(data, list):
-            return data
-
-        # Old Dispatcharr: paginated dict response - fetch all pages
-        all_results = data.get("results", [])
-        while data.get("next"):
-            page += 1
-            params["page"] = page
+        if max_results is None:
             response = await self._request("GET", "/api/epg/epgdata/", params=params)
             response.raise_for_status()
             data = response.json()
+        else:
+            # Newer Dispatcharr versions ignore pagination and return one flat
+            # array. Stream that response behind a byte ceiling so a bounded
+            # caller cannot be forced to materialize arbitrarily large JSON.
+            max_bytes = max(
+                _EPG_DATA_MIN_RESPONSE_BYTES,
+                max_results * _EPG_DATA_BYTES_PER_RESULT,
+            )
+            data = await self._get_json_bounded(
+                "/api/epg/epgdata/", params=params, max_bytes=max_bytes
+            )
+
+        # New Dispatcharr: flat list response
+        if isinstance(data, list):
+            return data[:max_results] if max_results is not None else data
+
+        # Old Dispatcharr: paginated dict response - fetch all pages
+        all_results = data.get("results", [])
+        if max_results is not None and len(all_results) >= max_results:
+            return all_results[:max_results]
+        while data.get("next"):
+            page += 1
+            params["page"] = page
+            if max_results is None:
+                response = await self._request(
+                    "GET", "/api/epg/epgdata/", params=params
+                )
+                response.raise_for_status()
+                data = response.json()
+            else:
+                data = await self._get_json_bounded(
+                    "/api/epg/epgdata/", params=params, max_bytes=max_bytes
+                )
             if isinstance(data, list):
                 # Switched to new format mid-pagination (unlikely but safe)
                 all_results.extend(data)
                 break
             all_results.extend(data.get("results", []))
+            if max_results is not None and len(all_results) >= max_results:
+                return all_results[:max_results]
 
-        return all_results
+        return all_results[:max_results] if max_results is not None else all_results
+
+    async def _get_json_bounded(
+        self, path: str, *, params: dict, max_bytes: int
+    ):
+        """GET and decode JSON only after its streamed body fits ``max_bytes``."""
+        await self._ensure_authenticated()
+        headers = {}
+        if self._uses_api_key:
+            headers["X-API-Key"] = (
+                self.settings.dispatcharr_api_key or self.settings.api_key
+            )
+        else:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        headers["Accept-Encoding"] = "identity"
+
+        async def send() -> httpx.Response:
+            request = self._client.build_request(
+                "GET", f"{self.base_url}{path}", headers=headers, params=params
+            )
+            return await self._client.send(request, stream=True)
+
+        response = await send()
+        if response.status_code == 401 and not self._uses_api_key:
+            await response.aclose()
+            await self._refresh_access_token()
+            headers["Authorization"] = f"Bearer {self.access_token}"
+            response = await send()
+        try:
+            response.raise_for_status()
+            content_encoding = response.headers.get("Content-Encoding", "").strip()
+            if content_encoding and content_encoding.lower() != "identity":
+                raise ValueError(
+                    "Dispatcharr EPG response used unexpected Content-Encoding"
+                )
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(body) + len(chunk) > max_bytes:
+                    raise ValueError(
+                        f"Dispatcharr EPG response exceeds {max_bytes} bytes"
+                    )
+                body.extend(chunk)
+            # Parsing occurs only after the bounded stream is complete.
+            return await run_cpu_bound(json.loads, bytes(body))
+        finally:
+            await response.aclose()
 
     async def get_epg_data_by_id(self, data_id: int) -> dict:
         """Get a single EPG data entry by ID."""

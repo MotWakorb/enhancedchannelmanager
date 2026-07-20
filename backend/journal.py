@@ -235,8 +235,9 @@ def log_entry(
     Returns:
         The created JournalEntry or None if failed
     """
+    session: Session | None = None
     try:
-        session: Session = get_session()
+        session = get_session()
         logger.debug(
             "[JOURNAL] Creating entry: category=%s action=%s entity=%r (id=%s) user_initiated=%s%s",
             category, action_type, entity_name, entity_id, user_initiated,
@@ -257,11 +258,15 @@ def log_entry(
         session.add(entry)
         session.commit()
         logger.debug("[JOURNAL] Entry logged: %s/%s - %s (id=%s)", category, action_type, entity_name, entry.id)
-        session.close()
         return entry
     except Exception as e:
         logger.exception("[JOURNAL] Failed to log journal entry: %s", e)
+        if session is not None:
+            session.rollback()
         return None
+    finally:
+        if session is not None:
+            session.close()
 
 
 def get_entries(

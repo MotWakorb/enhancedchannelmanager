@@ -7,17 +7,22 @@ import asyncio
 import gzip
 import io
 import logging
+import re
+import secrets
 import time
 import xml.etree.ElementTree as ET
 import zlib
-from typing import Optional
+from typing import Any, Optional
+from urllib.parse import urljoin
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from alert_methods import send_alert
+from auth import RequireAdminIfEnabled
+from auth import get_jwt_secret_key
 from cache import get_cache
 from config import validate_url_scheme
 from dispatcharr_client import get_client, upstream_http_exception
@@ -28,6 +33,22 @@ from epg_matching import (
     find_shared_epg_links,
 )
 import journal
+from concurrency import run_cpu_bound
+from services.epg_migration import (
+    PREVIEW_ISSUER,
+    PreviewTokenError,
+    create_preview_token,
+    parse_xmltv_lcn_index,
+    preview_migration,
+    verify_preview_token,
+)
+from tasks.dbas_sync_client import _PinnedSSRFTransport
+from security.ssrf import (
+    SSRFError,
+    check_redirect_depth,
+    get_ssrf_mode,
+    validate_redirect,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +72,26 @@ class LCNLookupItem(BaseModel):
 class BatchLCNRequest(BaseModel):
     """Request body for batch LCN lookup."""
     items: list[LCNLookupItem]
+
+
+class GuideMigrationPreviewRequest(BaseModel):
+    target_epg_source_id: int
+
+
+class GuideMigrationApplyItem(BaseModel):
+    channel_id: int
+    current_epg_data_id: int
+    target_epg_data_id: int
+    current_source_id: int
+    current_tvg_id: str
+    lcn: str
+    target_tvg_id: str
+
+
+class GuideMigrationApplyRequest(BaseModel):
+    target_epg_source_id: int
+    preview_token: str
+    items: list[GuideMigrationApplyItem]
 
 
 # ---------------------------------------------------------------------------
@@ -1036,6 +1077,737 @@ async def _fetch_all_channels(client) -> list[dict]:
             _CHANNELS_FETCH_MAX_PAGES, fetched,
         )
     return channels
+
+
+_GUIDE_MIGRATION_MAX_CHANNELS = 1000
+_GUIDE_MIGRATION_MAX_EPG_ROWS = 50000
+_XMLTV_HEADER_MAX_DOWNLOAD = 25 * 1024 * 1024
+_XMLTV_HEADER_MAX_DECOMPRESSED = 30 * 1024 * 1024
+_GUIDE_MIGRATION_APPLY_LOCK = asyncio.Lock()
+_GUIDE_MIGRATION_JOB_TTL_SECONDS = 1800
+_GUIDE_MIGRATION_JOBS: dict[str, "_GuideMigrationJob"] = {}
+_GUIDE_MIGRATION_BACKGROUND_TASKS: set[asyncio.Task] = set()
+_ACTIVE_GUIDE_MIGRATION_JOB_ID: str | None = None
+
+
+class _GuideMigrationJob:
+    __slots__ = (
+        "status",
+        "created_at",
+        "completed_at",
+        "error",
+        "actor",
+        "result",
+        "total",
+    )
+
+    def __init__(self, total: int, actor: str) -> None:
+        self.status = "running"
+        self.created_at = time.time()
+        self.completed_at: float | None = None
+        self.error: str | None = None
+        self.actor = actor
+        self.total = total
+        self.result = {
+            "mutated": 0,
+            "updated": 0,
+            "audit_failed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "results": [],
+        }
+
+
+def _prune_guide_migration_jobs() -> None:
+    now = time.time()
+    for batch_id in [
+        key
+        for key, job in _GUIDE_MIGRATION_JOBS.items()
+        if job.status != "running"
+        and job.completed_at is not None
+        and now - job.completed_at >= _GUIDE_MIGRATION_JOB_TTL_SECONDS
+    ]:
+        _GUIDE_MIGRATION_JOBS.pop(batch_id, None)
+
+
+def _append_gzip_bounded(
+    decompressor: Any,
+    chunk: bytes,
+    output: bytearray,
+) -> None:
+    pending = chunk
+    while pending:
+        remaining = _XMLTV_HEADER_MAX_DECOMPRESSED - len(output)
+        if remaining <= 0:
+            raise HTTPException(status_code=413, detail="XMLTV channel header is too large.")
+        piece = decompressor.decompress(pending, remaining + 1)
+        if len(piece) > remaining:
+            raise HTTPException(status_code=413, detail="XMLTV channel header is too large.")
+        output.extend(piece)
+        pending = decompressor.unconsumed_tail
+        if not pending:
+            break
+
+
+def _reject_unsafe_xml(content: bytes) -> None:
+    lowered = content.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise HTTPException(
+            status_code=422,
+            detail="XMLTV DTDs and entity declarations are not supported.",
+        )
+
+
+def _parse_bounded_xmltv_header(
+    content: bytes, source_id: int
+):
+    """Validate, complete, and index a bounded XMLTV header off-loop."""
+    _reject_unsafe_xml(content)
+    marker = content.find(b"<programme")
+    header = bytearray(content[:marker] if marker >= 0 else content)
+    if not header:
+        raise HTTPException(status_code=422, detail="XMLTV source has no readable header.")
+    if not header.rstrip().endswith(b"</tv>"):
+        header.extend(b"</tv>")
+    try:
+        index = parse_xmltv_lcn_index(bytes(header))
+    except ET.ParseError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"XMLTV source {source_id} channel header is invalid.",
+        ) from exc
+    if not index.channel_to_lcn:
+        raise HTTPException(
+            status_code=422,
+            detail=f"XMLTV source {source_id} contains no LCN/Gracenote mappings.",
+        )
+    return index
+
+
+async def _fetch_migration_channels(client) -> list[dict]:
+    channels: list[dict] = []
+    page = 1
+    while len(channels) <= _GUIDE_MIGRATION_MAX_CHANNELS:
+        result = await client.get_channels(
+            page=page, page_size=_CHANNELS_FETCH_PAGE_SIZE
+        )
+        page_rows = result.get("results", [])
+        remaining = _GUIDE_MIGRATION_MAX_CHANNELS + 1 - len(channels)
+        channels.extend(page_rows[:remaining])
+        if (
+            len(channels) > _GUIDE_MIGRATION_MAX_CHANNELS
+            or not page_rows
+            or len(channels) >= result.get("count", 0)
+        ):
+            break
+        page += 1
+    return channels
+
+
+def _needed_preview_source_ids(
+    channels: list[dict], epg_data: list[dict], target_source_id: int
+) -> set[int]:
+    epg_by_id = {row.get("id"): row for row in epg_data}
+    source_ids = {
+        epg_by_id[channel.get("epg_data_id")].get("epg_source")
+        for channel in channels
+        if channel.get("epg_data_id") in epg_by_id
+        and epg_by_id[channel.get("epg_data_id")].get("epg_source") is not None
+    }
+    source_ids.add(target_source_id)
+    return source_ids
+
+
+def _invalid_live_target_channels(
+    items: list[GuideMigrationApplyItem],
+    epg_data: list[dict],
+    target_source_id: int,
+    target_source_type: str,
+    xmltv_indexes: dict,
+) -> set[int]:
+    target_by_tvg: dict[str, list[dict]] = {}
+    for candidate in epg_data:
+        target_by_tvg.setdefault(str(candidate.get("tvg_id") or ""), []).append(
+            candidate
+        )
+    invalid = set()
+    for item in items:
+        if target_source_type == "xmltv":
+            target_tvgs = xmltv_indexes[target_source_id].lcn_to_channels.get(
+                item.lcn, ()
+            )
+        else:
+            target_tvgs = (item.lcn,)
+        live_candidates = [
+            (candidate.get("id"), str(candidate.get("tvg_id") or ""))
+            for tvg_id in target_tvgs
+            for candidate in target_by_tvg.get(tvg_id, ())
+        ]
+        if live_candidates != [(item.target_epg_data_id, item.target_tvg_id)]:
+            invalid.add(item.channel_id)
+    return invalid
+
+
+def _migration_actor(admin: Any) -> str:
+    if admin is None:
+        return "auth-disabled"
+    provider = str(getattr(admin, "auth_provider", "unknown") or "unknown")
+    principal_id = str(getattr(admin, "id", "unknown"))
+    return f"{provider}:{principal_id}"
+
+
+def _migration_issuer(secret: str) -> str:
+    del secret  # The instance is bound separately inside the signed envelope.
+    return PREVIEW_ISSUER
+
+
+async def _load_xmltv_migration_index(source: dict):
+    """Download only the XMLTV channel header and return its LCN index."""
+    url = source.get("url")
+    if not url:
+        raise HTTPException(
+            status_code=400,
+            detail=f"XMLTV source {source.get('id')} has no downloadable URL.",
+        )
+    compressed = url.lower().endswith(".gz")
+    downloaded = 0
+    output = bytearray()
+    programme_found = False
+    decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16) if compressed else None
+    try:
+        transport = _PinnedSSRFTransport(verify=True)
+        async with httpx.AsyncClient(
+            timeout=120.0, follow_redirects=False, transport=transport
+        ) as http_client:
+            current_url = url
+            depth = 0
+            while True:
+                async with http_client.stream("GET", current_url) as response:
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise HTTPException(
+                                status_code=502,
+                                detail="XMLTV source returned an invalid redirect.",
+                            )
+                        depth += 1
+                        check_redirect_depth(depth)
+                        next_url = urljoin(current_url, location)
+                        validate_redirect(current_url, next_url, get_ssrf_mode())
+                        current_url = next_url
+                        continue
+                    response.raise_for_status()
+                    if response.headers.get("content-encoding", "").lower() == "gzip":
+                        compressed = True
+                        decompressor = decompressor or zlib.decompressobj(
+                            zlib.MAX_WBITS | 16
+                        )
+                    async for chunk in response.aiter_raw():
+                        downloaded += len(chunk)
+                        if downloaded > _XMLTV_HEADER_MAX_DOWNLOAD:
+                            raise HTTPException(
+                                status_code=413,
+                                detail="XMLTV channel header download is too large.",
+                            )
+                        previous_length = len(output)
+                        if compressed and decompressor is not None:
+                            _append_gzip_bounded(decompressor, chunk, output)
+                        else:
+                            if len(output) + len(chunk) > _XMLTV_HEADER_MAX_DECOMPRESSED:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail="XMLTV channel header is too large.",
+                                )
+                            output.extend(chunk)
+                        if output.find(
+                            b"<programme", max(0, previous_length - len(b"<programme"))
+                        ) >= 0:
+                            programme_found = True
+                            break
+                    if (
+                        compressed
+                        and decompressor is not None
+                        and not programme_found
+                    ):
+                        remaining = _XMLTV_HEADER_MAX_DECOMPRESSED - len(output)
+                        tail = decompressor.flush(remaining + 1)
+                        if len(tail) > remaining:
+                            raise HTTPException(
+                                status_code=413,
+                                detail="XMLTV channel header is too large.",
+                            )
+                        output.extend(tail)
+                break
+    except HTTPException:
+        raise
+    except SSRFError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="XMLTV source URL is blocked by the outbound security policy.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "[EPG-MIGRATION] XMLTV source id=%s could not be read: %s",
+            source.get("id"),
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not read XMLTV source {source.get('id')}.",
+        ) from exc
+
+    return await run_cpu_bound(
+        _parse_bounded_xmltv_header, bytes(output), int(source.get("id"))
+    )
+
+
+@router.post("/migration/preview")
+async def preview_guide_migration(
+    request: GuideMigrationPreviewRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Preview an LCN-based guide migration without mutating channels.
+
+    Plain ``RequireAdminIfEnabled`` is intentional: project auth policy treats
+    the MCP service principal as admin-equivalent for ordinary channel
+    management. Only settings/secret-rewrite surfaces require the human-admin
+    variant; this endpoint neither exposes nor changes those fields.
+    """
+    client = get_client()
+    try:
+        sources = await client.get_epg_sources()
+        source_by_id = {source.get("id"): source for source in sources}
+        target = source_by_id.get(request.target_epg_source_id)
+        if target is None or target.get("source_type") not in {
+            "xmltv",
+            "schedules_direct",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="Choose an XMLTV or Schedules Direct target source.",
+            )
+
+        channels = await _fetch_migration_channels(client)
+        if len(channels) > _GUIDE_MIGRATION_MAX_CHANNELS:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Guide migration is limited to {_GUIDE_MIGRATION_MAX_CHANNELS} "
+                    "channels per operation."
+                ),
+            )
+        epg_data = await client.get_epg_data(
+            max_results=_GUIDE_MIGRATION_MAX_EPG_ROWS + 1
+        )
+        if len(epg_data) > _GUIDE_MIGRATION_MAX_EPG_ROWS:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Guide migration is limited to {_GUIDE_MIGRATION_MAX_EPG_ROWS} "
+                    "EPG rows per preview."
+                ),
+            )
+
+        needed_source_ids = await run_cpu_bound(
+            _needed_preview_source_ids,
+            channels,
+            epg_data,
+            request.target_epg_source_id,
+        )
+        xmltv_indexes = {}
+        for source_id in sorted(needed_source_ids):
+            source = source_by_id.get(source_id)
+            if source and source.get("source_type") == "xmltv":
+                xmltv_indexes[source_id] = await _load_xmltv_migration_index(source)
+
+        rows = await run_cpu_bound(
+            preview_migration,
+            channels=channels,
+            epg_data=epg_data,
+            sources=sources,
+            target_source_id=request.target_epg_source_id,
+            xmltv_indexes=xmltv_indexes,
+        )
+        ready = [row for row in rows if row["status"] == "ready"]
+        counts = {
+            status: sum(row["status"] == status for row in rows)
+            for status in (
+                "ready",
+                "already_target",
+                "unassigned",
+                "missing_lcn",
+                "missing_target",
+                "ambiguous_target",
+                "unsupported_origin",
+            )
+        }
+        logger.info(
+            "[EPG-MIGRATION] Preview target_source=%s channels=%d ready=%d",
+            request.target_epg_source_id,
+            len(rows),
+            len(ready),
+        )
+        signing_secret = get_jwt_secret_key()
+        return {
+            "target_source_id": request.target_epg_source_id,
+            "target_source_name": target.get("name"),
+            "rows": rows,
+            "counts": counts,
+            "preview_token": create_preview_token(
+                secret=signing_secret,
+                issuer=_migration_issuer(signing_secret),
+                actor=_migration_actor(_admin),
+                target_source_id=request.target_epg_source_id,
+                rows=ready,
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[EPG-MIGRATION] Preview failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Guide migration preview failed")
+
+
+@router.post("/migration/apply")
+async def apply_guide_migration(
+    request: GuideMigrationApplyRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Accept a signed migration and run it outside the request timeout."""
+    global _ACTIVE_GUIDE_MIGRATION_JOB_ID
+    if not request.items:
+        raise HTTPException(status_code=400, detail="No ready migrations were selected.")
+    if len(request.items) > _GUIDE_MIGRATION_MAX_CHANNELS:
+        raise HTTPException(status_code=400, detail="Too many migration items.")
+    items = [item.model_dump() for item in request.items]
+    secret = get_jwt_secret_key()
+    try:
+        verify_preview_token(
+            token=request.preview_token,
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor=_migration_actor(_admin),
+            target_source_id=request.target_epg_source_id,
+            rows=items,
+        )
+    except PreviewTokenError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{exc} Preview again.",
+        ) from exc
+
+    if _ACTIVE_GUIDE_MIGRATION_JOB_ID is not None or _GUIDE_MIGRATION_APPLY_LOCK.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Another guide migration is already running.",
+        )
+    _prune_guide_migration_jobs()
+    batch_id = secrets.token_hex(16)
+    accepting_actor = _migration_actor(_admin)
+    job = _GuideMigrationJob(len(request.items), accepting_actor)
+    job.result["batch_id"] = batch_id
+    _GUIDE_MIGRATION_JOBS[batch_id] = job
+    _ACTIVE_GUIDE_MIGRATION_JOB_ID = batch_id
+
+    async def _runner() -> None:
+        global _ACTIVE_GUIDE_MIGRATION_JOB_ID
+        try:
+            job.result = await _run_guide_migration(
+                request, _admin, batch_id=batch_id, job=job
+            )
+            job.status = "completed"
+        except asyncio.CancelledError:
+            job.status = "failed"
+            job.error = "Guide migration failed."
+            raise
+        except HTTPException as exc:
+            job.status = "failed"
+            job.error = "Guide migration failed."
+            logger.warning(
+                "[EPG-MIGRATION] Job %s rejected during execution: %s",
+                batch_id,
+                exc.detail,
+            )
+        except Exception as exc:
+            job.status = "failed"
+            job.error = "Guide migration failed."
+            logger.exception("[EPG-MIGRATION] Job %s failed", batch_id)
+        finally:
+            job.completed_at = time.time()
+            if _ACTIVE_GUIDE_MIGRATION_JOB_ID == batch_id:
+                _ACTIVE_GUIDE_MIGRATION_JOB_ID = None
+
+    task = asyncio.create_task(_runner(), name=f"guide-migration-{batch_id}")
+    _GUIDE_MIGRATION_BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_GUIDE_MIGRATION_BACKGROUND_TASKS.discard)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "batch_id": batch_id,
+            "status": "running",
+            "total": len(request.items),
+            "poll_url": f"/api/epg/migration/apply/{batch_id}",
+        },
+    )
+
+
+@router.get("/migration/apply/{batch_id}")
+async def get_guide_migration_status(
+    batch_id: str,
+    _admin=RequireAdminIfEnabled,
+):
+    """Return current per-item progress for an accepted migration."""
+    _prune_guide_migration_jobs()
+    if re.fullmatch(r"[0-9a-f]{32}", batch_id) is None:
+        raise HTTPException(status_code=404, detail="Guide migration job not found.")
+    job = _GUIDE_MIGRATION_JOBS.get(batch_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Guide migration job not found.")
+    if job.actor != _migration_actor(_admin):
+        raise HTTPException(status_code=404, detail="Guide migration job not found.")
+    envelope = {
+        "batch_id": batch_id,
+        "status": job.status,
+        "processed": len(job.result["results"]),
+        "total": job.total,
+        "result": job.result,
+    }
+    if job.status == "failed":
+        envelope["error"] = "Guide migration failed."
+    return envelope
+
+
+async def _run_guide_migration(
+    request: GuideMigrationApplyRequest,
+    _admin: Any,
+    *,
+    batch_id: str,
+    job: _GuideMigrationJob,
+) -> dict:
+    """Apply only the signed, still-current assignments from a preview."""
+    client = get_client()
+    await _GUIDE_MIGRATION_APPLY_LOCK.acquire()
+    try:
+        sources = await client.get_epg_sources()
+        source_by_id = {source.get("id"): source for source in sources}
+        target_source = source_by_id.get(request.target_epg_source_id)
+        if target_source is None or target_source.get("source_type") not in {
+            "xmltv",
+            "schedules_direct",
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail="Target EPG source changed or is no longer supported.",
+            )
+        needed_source_ids = {
+            item.current_source_id for item in request.items
+        } | {request.target_epg_source_id}
+        xmltv_indexes = {}
+        for source_id in sorted(needed_source_ids):
+            source = source_by_id.get(source_id)
+            if source and source.get("source_type") == "xmltv":
+                xmltv_indexes[source_id] = await _load_xmltv_migration_index(source)
+
+        epg_data = await client.get_epg_data(
+            epg_source=request.target_epg_source_id,
+            max_results=_GUIDE_MIGRATION_MAX_EPG_ROWS + 1,
+        )
+        if len(epg_data) > _GUIDE_MIGRATION_MAX_EPG_ROWS:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Guide migration is limited to {_GUIDE_MIGRATION_MAX_EPG_ROWS} "
+                    "target EPG rows."
+                ),
+            )
+        invalid_target_channels = await run_cpu_bound(
+            _invalid_live_target_channels,
+            request.items,
+            epg_data,
+            request.target_epg_source_id,
+            target_source.get("source_type"),
+            xmltv_indexes,
+        )
+
+        results = []
+        updated = 0
+        mutated = 0
+        audit_failed = 0
+        skipped = 0
+        failed = 0
+        job.result = {
+            "mutated": 0,
+            "updated": 0,
+            "audit_failed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "results": results,
+            "batch_id": batch_id,
+        }
+        for item in request.items:
+            try:
+                if item.channel_id in invalid_target_channels:
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "ambiguous_target",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                current_source = source_by_id.get(item.current_source_id)
+                if (
+                    current_source is None
+                    or current_source.get("source_type")
+                    not in {"xmltv", "schedules_direct"}
+                ):
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "unsupported_origin",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                current_mapping_valid = (
+                    xmltv_indexes[item.current_source_id].channel_to_lcn.get(
+                        item.current_tvg_id
+                    )
+                    == item.lcn
+                    if current_source.get("source_type") == "xmltv"
+                    else item.current_tvg_id == item.lcn
+                )
+                target_mapping_valid = (
+                    item.target_tvg_id
+                    in xmltv_indexes[
+                        request.target_epg_source_id
+                    ].lcn_to_channels.get(item.lcn, ())
+                    if target_source.get("source_type") == "xmltv"
+                    else item.target_tvg_id == item.lcn
+                )
+                if not current_mapping_valid or not target_mapping_valid:
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "semantic_drift",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                current_epg = await client.get_epg_data_by_id(
+                    item.current_epg_data_id
+                )
+                target_epg = await client.get_epg_data_by_id(
+                    item.target_epg_data_id
+                )
+                if (
+                    current_epg.get("epg_source") != item.current_source_id
+                    or str(current_epg.get("tvg_id") or "") != item.current_tvg_id
+                    or target_epg.get("epg_source")
+                    != request.target_epg_source_id
+                    or str(target_epg.get("tvg_id") or "") != item.target_tvg_id
+                ):
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "semantic_drift",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                channel = await client.get_channel(item.channel_id)
+                if channel.get("epg_data_id") != item.current_epg_data_id:
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "changed_since_preview",
+                        }
+                    )
+                    skipped += 1
+                    continue
+                await client.update_channel(
+                    item.channel_id, {"epg_data_id": item.target_epg_data_id}
+                )
+                mutated += 1
+                try:
+                    entry = journal.log_entry(
+                        category="epg",
+                        action_type="guide_migration",
+                        entity_id=item.channel_id,
+                        entity_name=channel.get("name"),
+                        description=(
+                            f"Migrated channel guide from EPG data "
+                            f"{item.current_epg_data_id} to "
+                            f"{item.target_epg_data_id}"
+                        ),
+                        before_value={"epg_data_id": item.current_epg_data_id},
+                        after_value={"epg_data_id": item.target_epg_data_id},
+                        batch_id=batch_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[EPG-MIGRATION] Journal write raised after channel=%s "
+                        "was already updated",
+                        item.channel_id,
+                    )
+                    entry = None
+                if entry is None:
+                    audit_failed += 1
+                    results.append(
+                        {
+                            "channel_id": item.channel_id,
+                            "status": "updated_audit_failed",
+                        }
+                    )
+                else:
+                    results.append(
+                        {"channel_id": item.channel_id, "status": "updated"}
+                    )
+                    updated += 1
+            except Exception:
+                logger.exception(
+                    "[EPG-MIGRATION] Channel update failed channel=%s",
+                    item.channel_id,
+                )
+                results.append({"channel_id": item.channel_id, "status": "failed"})
+                failed += 1
+            finally:
+                job.result.update(
+                    {
+                        "mutated": mutated,
+                        "updated": updated,
+                        "audit_failed": audit_failed,
+                        "skipped": skipped,
+                        "failed": failed,
+                    }
+                )
+        logger.info(
+            "[EPG-MIGRATION] Apply target_source=%s mutated=%d updated=%d "
+            "audit_failed=%d skipped=%d failed=%d batch=%s",
+            request.target_epg_source_id,
+            mutated,
+            updated,
+            audit_failed,
+            skipped,
+            failed,
+            batch_id,
+        )
+        return {
+            "mutated": mutated,
+            "updated": updated,
+            "audit_failed": audit_failed,
+            "skipped": skipped,
+            "failed": failed,
+            "results": results,
+            "batch_id": batch_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[EPG-MIGRATION] Apply failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Guide migration failed")
+    finally:
+        _GUIDE_MIGRATION_APPLY_LOCK.release()
 
 
 @router.post("/match")

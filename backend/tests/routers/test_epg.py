@@ -5,9 +5,17 @@ Tests: 12 endpoints covering EPG sources CRUD, refresh, import,
        EPG data listing, grid, and LCN lookup.
 Mocks: get_client() to isolate from Dispatcharr.
 """
+import asyncio
 import httpx
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+import gzip
+import socket
+import time
+
+from fastapi import HTTPException
+from security.ssrf import SSRFMode
+from services.epg_migration import build_xmltv_lcn_index
 
 
 class _FakeEPGHTTPClient:
@@ -35,6 +43,28 @@ class _FakeEPGHTTPClient:
             200, content=self._content_by_url[url], request=httpx.Request("GET", url)
         )
 
+    def stream(self, method, url, *args, **kwargs):
+        content = self._content_by_url[url]
+
+        class _Stream:
+            async def __aenter__(self):
+                self.response = httpx.Response(
+                    200,
+                    content=content,
+                    request=httpx.Request(method, url),
+                )
+
+                async def _aiter_raw():
+                    yield content
+
+                self.response.aiter_raw = _aiter_raw
+                return self.response
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Stream()
+
 
 def _xmltv(channels_xml: str) -> bytes:
     """Build a minimal XMLTV document. A trailing <programme> ensures the parsers
@@ -58,6 +88,1109 @@ def _channels_page(channels, count=None):
     than ``len(channels)`` to simulate one page of a multi-page fleet.
     """
     return {"count": count if count is not None else len(channels), "results": channels}
+
+
+async def _poll_migration(async_client, accepted):
+    assert accepted.status_code == 202
+    batch_id = accepted.json()["batch_id"]
+    for _ in range(100):
+        response = await async_client.get(f"/api/epg/migration/apply/{batch_id}")
+        body = response.json()
+        if body["status"] != "running":
+            return body
+        await asyncio.sleep(0)
+    raise AssertionError("migration job did not reach a terminal state")
+
+
+class TestGuideMigration:
+    def test_migration_actor_has_stable_auth_disabled_and_mcp_identities(self):
+        from routers.epg import _migration_actor
+
+        assert _migration_actor(None) == "auth-disabled"
+        before = type(
+            "Actor",
+            (),
+            {"id": -100, "username": "mcp-service", "auth_provider": "mcp"},
+        )()
+        renamed = type(
+            "Actor",
+            (),
+            {"id": -100, "username": "renamed", "auth_provider": "mcp"},
+        )()
+        assert _migration_actor(before) == _migration_actor(renamed) == "mcp:-100"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path,payload",
+        [
+            ("/api/epg/migration/preview", {"target_epg_source_id": 2}),
+            (
+                "/api/epg/migration/apply",
+                {
+                    "target_epg_source_id": 2,
+                    "preview_token": "x.y",
+                    "items": [],
+                },
+            ),
+        ],
+    )
+    async def test_non_admin_is_forbidden(self, async_client, path, payload):
+        from auth import RequireAdminIfEnabled as admin_dependency
+        from main import app
+
+        async def reject():
+            raise HTTPException(status_code=403, detail="Admin access required")
+
+        app.dependency_overrides[admin_dependency.dependency] = reject
+        try:
+            response = await async_client.post(path, json=payload)
+        finally:
+            app.dependency_overrides.pop(admin_dependency.dependency, None)
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_preview_uses_recorded_xml_lcn_and_returns_signed_ready_row(
+        self, async_client
+    ):
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {
+                "id": 1,
+                "name": "IPTV",
+                "source_type": "xmltv",
+                "url": "https://epg.test/iptv.xml",
+            },
+            {
+                "id": 2,
+                "name": "Gracenote",
+                "source_type": "schedules_direct",
+                "url": None,
+            },
+        ]
+        mock_client.get_channels.return_value = _channels_page(
+            [{"id": 7, "name": "News", "epg_data_id": 11}]
+        )
+        mock_client.get_epg_data.return_value = [
+            {"id": 11, "epg_source": 1, "tvg_id": "iptv.news"},
+            {"id": 22, "epg_source": 2, "tvg_id": "10101", "name": "News SD"},
+        ]
+        xml = _xmltv(
+            '<channel id="iptv.news"><display-name>News</display-name>'
+            "<lcn>10101</lcn><gnid>10101</gnid></channel>"
+        )
+        fake_http = _FakeEPGHTTPClient({"https://epg.test/iptv.xml": xml})
+
+        with patch("routers.epg.get_client", return_value=mock_client), patch(
+            "routers.epg.httpx.AsyncClient", return_value=fake_http
+        ):
+            response = await async_client.post(
+                "/api/epg/migration/preview",
+                json={"target_epg_source_id": 2},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["counts"]["ready"] == 1
+        assert body["rows"][0]["lcn"] == "10101"
+        assert body["rows"][0]["target_epg_data_id"] == 22
+        assert "." in body["preview_token"]
+
+    @pytest.mark.asyncio
+    async def test_preview_rejects_channel_fleet_beyond_bound(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {
+                "id": 2,
+                "name": "Gracenote",
+                "source_type": "schedules_direct",
+                "url": None,
+            }
+        ]
+        mock_client.get_channels.return_value = _channels_page(
+            [
+                {"id": index, "name": f"Channel {index}", "epg_data_id": None}
+                for index in range(1001)
+            ]
+        )
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/epg/migration/preview",
+                json={"target_epg_source_id": 2},
+            )
+        assert response.status_code == 409
+        mock_client.get_epg_data.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_apply_updates_current_rows_and_skips_preview_drift(
+        self, async_client
+    ):
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {
+                "id": 1,
+                "name": "IPTV",
+                "source_type": "xmltv",
+                "url": "https://epg.test/iptv.xml",
+            },
+            {
+                "id": 2,
+                "name": "Gracenote",
+                "source_type": "schedules_direct",
+                "url": None,
+            },
+        ]
+        preview_channels = [
+            {"id": 7, "name": "News", "epg_data_id": 11},
+            {"id": 8, "name": "Sports", "epg_data_id": 12},
+        ]
+        mock_client.get_channels.return_value = _channels_page(preview_channels)
+        mock_client.get_channel.side_effect = [
+            {"id": 7, "name": "News", "epg_data_id": 11},
+            {"id": 8, "name": "Sports", "epg_data_id": 99},
+        ]
+        all_epg = [
+            {"id": 11, "epg_source": 1, "tvg_id": "iptv.news"},
+            {"id": 12, "epg_source": 1, "tvg_id": "iptv.sports"},
+            {"id": 22, "epg_source": 2, "tvg_id": "10101", "name": "News SD"},
+            {"id": 23, "epg_source": 2, "tvg_id": "10102", "name": "Sports SD"},
+        ]
+        mock_client.get_epg_data.side_effect = [
+            all_epg,
+            [all_epg[2], all_epg[3]],
+        ]
+        epg_by_id = {row["id"]: row for row in all_epg}
+        mock_client.get_epg_data_by_id.side_effect = lambda epg_id: epg_by_id[epg_id]
+        xml = _xmltv(
+            '<channel id="iptv.news"><gnid>10101</gnid></channel>'
+            '<channel id="iptv.sports"><gnid>10102</gnid></channel>'
+        )
+        fake_http = _FakeEPGHTTPClient({"https://epg.test/iptv.xml": xml})
+        with patch("routers.epg.get_client", return_value=mock_client), patch(
+            "routers.epg.httpx.AsyncClient", return_value=fake_http
+        ), patch("routers.epg.journal"):
+            preview = await async_client.post(
+                "/api/epg/migration/preview",
+                json={"target_epg_source_id": 2},
+            )
+            ready = [
+                {
+                    "channel_id": row["channel_id"],
+                    "current_epg_data_id": row["current_epg_data_id"],
+                    "current_source_id": row["current_source_id"],
+                    "current_tvg_id": row["current_tvg_id"],
+                    "lcn": row["lcn"],
+                    "target_epg_data_id": row["target_epg_data_id"],
+                    "target_tvg_id": row["target_tvg_id"],
+                }
+                for row in preview.json()["rows"]
+                if row["status"] == "ready"
+            ]
+            applied = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": preview.json()["preview_token"],
+                    "items": ready,
+                },
+            )
+            terminal = await _poll_migration(async_client, applied)
+
+        assert terminal["status"] == "completed"
+        assert terminal["result"]["updated"] == 1
+        assert terminal["result"]["skipped"] == 1
+        assert terminal["result"]["mutated"] == 1
+        mock_client.update_channel.assert_awaited_once_with(7, {"epg_data_id": 22})
+
+    @pytest.mark.asyncio
+    async def test_preview_enforces_epg_cap_before_xml_fetch(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {"id": 2, "name": "SD", "source_type": "schedules_direct", "url": None}
+        ]
+        mock_client.get_channels.return_value = _channels_page([])
+        mock_client.get_epg_data.return_value = [
+            {"id": index, "epg_source": 2, "tvg_id": str(index)}
+            for index in range(50001)
+        ]
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/epg/migration/preview", json={"target_epg_source_id": 2}
+            )
+        assert response.status_code == 409
+        mock_client.get_epg_data.assert_awaited_once_with(max_results=50001)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "url,mode,resolved_ip",
+        [
+            ("file:///etc/passwd", SSRFMode.PUBLIC_ONLY, None),
+            ("http://127.0.0.1/epg.xml", SSRFMode.PUBLIC_ONLY, None),
+            ("http://169.254.169.254/latest", SSRFMode.LAN_FRIENDLY, None),
+            ("http://epg.internal/guide.xml", SSRFMode.PUBLIC_ONLY, "10.0.0.8"),
+            ("http://epg.internal/guide.xml", SSRFMode.PUBLIC_ONLY, "169.254.1.2"),
+        ],
+    )
+    async def test_xmltv_fetch_uses_ssrf_chokepoint(
+        self, url, mode, resolved_ip
+    ):
+        from routers.epg import _load_xmltv_migration_index
+
+        def resolve(host, port, **kwargs):
+            ip = resolved_ip or host
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
+        with patch("security.ssrf.socket.getaddrinfo", side_effect=resolve), patch(
+            "routers.epg.get_ssrf_mode", return_value=mode
+        ), patch("tasks.dbas_sync_client.get_ssrf_mode", return_value=mode):
+            with pytest.raises(HTTPException) as exc:
+                await _load_xmltv_migration_index({"id": 1, "url": url})
+        assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_xmltv_rejects_doctype_before_parsing(self):
+        from routers.epg import _load_xmltv_migration_index
+
+        content = (
+            b"<?xml version='1.0'?><!DOCTYPE tv [<!ENTITY x 'boom'>]>"
+            b"<tv><channel id='1'><lcn>&x;</lcn></channel><programme/></tv>"
+        )
+        fake_http = _FakeEPGHTTPClient({"https://epg.test/unsafe.xml": content})
+        with patch("routers.epg.httpx.AsyncClient", return_value=fake_http):
+            with pytest.raises(HTTPException) as exc:
+                await _load_xmltv_migration_index(
+                    {"id": 1, "url": "https://epg.test/unsafe.xml"}
+                )
+        assert exc.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_xmltv_redirect_to_metadata_is_revalidated_and_blocked(self):
+        from routers.epg import _load_xmltv_migration_index
+
+        class RedirectClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            def stream(self, method, url):
+                response = httpx.Response(
+                    302,
+                    headers={"location": "http://169.254.169.254/latest"},
+                    request=httpx.Request(method, url),
+                )
+
+                class Context:
+                    async def __aenter__(self):
+                        return response
+
+                    async def __aexit__(self, *exc):
+                        return False
+
+                return Context()
+
+        with patch("routers.epg.httpx.AsyncClient", return_value=RedirectClient()):
+            with pytest.raises(HTTPException) as exc:
+                await _load_xmltv_migration_index(
+                    {"id": 1, "url": "https://public.example/guide.xml"}
+                )
+        assert exc.value.status_code == 400
+
+    def test_gzip_decompression_is_bounded_including_unconsumed_tail(self):
+        from routers import epg
+
+        payload = gzip.compress(b"A" * 4096)
+        output = bytearray()
+        decompressor = epg.zlib.decompressobj(epg.zlib.MAX_WBITS | 16)
+        with patch("routers.epg._XMLTV_HEADER_MAX_DECOMPRESSED", 64):
+            with pytest.raises(HTTPException) as exc:
+                epg._append_gzip_bounded(decompressor, payload, output)
+        assert exc.value.status_code == 413
+
+    @pytest.mark.asyncio
+    async def test_large_xml_index_parse_does_not_block_event_loop(self):
+        from routers.epg import _load_xmltv_migration_index
+
+        fake_http = _FakeEPGHTTPClient(
+            {"https://epg.test/large.xml": _xmltv('<channel id="x"><gnid>1</gnid></channel>')}
+        )
+
+        def slow_parse(content, source_id):
+            time.sleep(0.1)
+            return build_xmltv_lcn_index([("x", "1")])
+
+        with patch("routers.epg.httpx.AsyncClient", return_value=fake_http), patch(
+            "routers.epg._parse_bounded_xmltv_header", side_effect=slow_parse
+        ):
+            parse_task = asyncio.create_task(
+                _load_xmltv_migration_index(
+                    {"id": 1, "url": "https://epg.test/large.xml"}
+                )
+            )
+            started = time.perf_counter()
+            await asyncio.sleep(0.01)
+            elapsed = time.perf_counter() - started
+            result = await parse_task
+        assert elapsed < 0.05
+        assert result.channel_to_lcn == {"x": "1"}
+
+    @pytest.mark.asyncio
+    async def test_apply_continues_after_row_failure_and_reports_audit_failure(
+        self, async_client
+    ):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        items = [
+            {
+                "channel_id": 7,
+                "current_epg_data_id": 11,
+                "current_source_id": 1,
+                "current_tvg_id": "iptv.news",
+                "lcn": "10101",
+                "target_epg_data_id": 22,
+                "target_tvg_id": "10101",
+            },
+            {
+                "channel_id": 8,
+                "current_epg_data_id": 12,
+                "current_source_id": 1,
+                "current_tvg_id": "iptv.sports",
+                "lcn": "10102",
+                "target_epg_data_id": 23,
+                "target_tvg_id": "10102",
+            },
+            {
+                "channel_id": 9,
+                "current_epg_data_id": 13,
+                "current_source_id": 1,
+                "current_tvg_id": "iptv.local",
+                "lcn": "10103",
+                "target_epg_data_id": 24,
+                "target_tvg_id": "10103",
+            },
+        ]
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=items,
+        )
+        epg_rows = {
+            11: {"id": 11, "epg_source": 1, "tvg_id": "iptv.news"},
+            12: {"id": 12, "epg_source": 1, "tvg_id": "iptv.sports"},
+            13: {"id": 13, "epg_source": 1, "tvg_id": "iptv.local"},
+            22: {"id": 22, "epg_source": 2, "tvg_id": "10101"},
+            23: {"id": 23, "epg_source": 2, "tvg_id": "10102"},
+            24: {"id": 24, "epg_source": 2, "tvg_id": "10103"},
+        }
+        client = AsyncMock()
+        client.get_epg_sources.return_value = [
+            {"id": 1, "name": "IPTV", "source_type": "xmltv", "url": "https://x"},
+            {"id": 2, "name": "SD", "source_type": "schedules_direct", "url": None},
+        ]
+        client.get_epg_data.return_value = [epg_rows[22], epg_rows[23], epg_rows[24]]
+        client.get_epg_data_by_id.side_effect = lambda row_id: epg_rows[row_id]
+        client.get_channel.side_effect = [
+            {"id": 7, "name": "News", "epg_data_id": 11},
+            {"id": 8, "name": "Sports", "epg_data_id": 12},
+            {"id": 9, "name": "Local", "epg_data_id": 13},
+        ]
+        client.update_channel.side_effect = [
+            RuntimeError("first row failed"),
+            {"id": 8},
+            {"id": 9},
+        ]
+        with patch("routers.epg.get_client", return_value=client), patch(
+            "routers.epg.get_jwt_secret_key", return_value=secret
+        ), patch(
+            "routers.epg._load_xmltv_migration_index",
+            new=AsyncMock(
+                return_value=build_xmltv_lcn_index(
+                    [
+                        ("iptv.news", "10101"),
+                        ("iptv.sports", "10102"),
+                        ("iptv.local", "10103"),
+                    ]
+                )
+            ),
+        ), patch(
+            "routers.epg.journal.log_entry",
+            side_effect=[object(), RuntimeError("journal unavailable")],
+        ):
+            response = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": items,
+                },
+            )
+            terminal = await _poll_migration(async_client, response)
+        assert terminal["status"] == "completed"
+        body = terminal["result"]
+        assert body["failed"] == 1
+        assert body["updated"] == 1
+        assert body["audit_failed"] == 1
+        assert body["mutated"] == 2
+        assert len(body["batch_id"]) == 32
+        int(body["batch_id"], 16)
+        assert [row["status"] for row in body["results"]] == [
+            "failed",
+            "updated",
+            "updated_audit_failed",
+        ]
+        assert client.update_channel.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_apply_skips_target_semantic_drift_before_patch(self, async_client):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "iptv.news",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "10101",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+        client = AsyncMock()
+        client.get_epg_sources.return_value = [
+            {"id": 1, "name": "IPTV", "source_type": "xmltv", "url": "https://x"},
+            {"id": 2, "name": "SD", "source_type": "schedules_direct", "url": None},
+        ]
+        client.get_epg_data.return_value = [
+            {"id": 22, "epg_source": 2, "tvg_id": "10101"}
+        ]
+        client.get_epg_data_by_id.side_effect = [
+            {"id": 11, "epg_source": 1, "tvg_id": "iptv.news"},
+            {"id": 22, "epg_source": 2, "tvg_id": "changed"},
+        ]
+        with patch("routers.epg.get_client", return_value=client), patch(
+            "routers.epg.get_jwt_secret_key", return_value=secret
+        ), patch(
+            "routers.epg._load_xmltv_migration_index",
+            new=AsyncMock(
+                return_value=build_xmltv_lcn_index([("iptv.news", "10101")])
+            ),
+        ):
+            response = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+            terminal = await _poll_migration(async_client, response)
+        assert terminal["result"]["results"][0]["status"] == "semantic_drift"
+        client.get_channel.assert_not_awaited()
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_apply_rejects_sd_duplicate_introduced_after_preview(
+        self, async_client
+    ):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "iptv.news",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "10101",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+        client = AsyncMock()
+        client.get_epg_sources.return_value = [
+            {"id": 1, "source_type": "xmltv", "url": "https://iptv"},
+            {"id": 2, "source_type": "schedules_direct"},
+        ]
+        client.get_epg_data.return_value = [
+            {"id": 22, "epg_source": 2, "tvg_id": "10101"},
+            {"id": 23, "epg_source": 2, "tvg_id": "10101"},
+        ]
+        with patch("routers.epg.get_client", return_value=client), patch(
+            "routers.epg.get_jwt_secret_key", return_value=secret
+        ), patch(
+            "routers.epg._load_xmltv_migration_index",
+            new=AsyncMock(
+                return_value=build_xmltv_lcn_index([("iptv.news", "10101")])
+            ),
+        ):
+            response = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+            terminal = await _poll_migration(async_client, response)
+        assert terminal["result"]["results"] == [
+            {"channel_id": 7, "status": "ambiguous_target"}
+        ]
+        client.get_epg_data_by_id.assert_not_awaited()
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_apply_rejects_xml_duplicate_introduced_after_preview(
+        self, async_client
+    ):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "iptv.news",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+        client = AsyncMock()
+        client.get_epg_sources.return_value = [
+            {"id": 1, "source_type": "schedules_direct"},
+            {"id": 2, "source_type": "xmltv", "url": "https://iptv"},
+        ]
+        client.get_epg_data.return_value = [
+            {"id": 22, "epg_source": 2, "tvg_id": "iptv.news"},
+            {"id": 23, "epg_source": 2, "tvg_id": "iptv.news.alt"},
+        ]
+        with patch("routers.epg.get_client", return_value=client), patch(
+            "routers.epg.get_jwt_secret_key", return_value=secret
+        ), patch(
+            "routers.epg._load_xmltv_migration_index",
+            new=AsyncMock(
+                return_value=build_xmltv_lcn_index(
+                    [
+                        ("iptv.news", "10101"),
+                        ("iptv.news.alt", "10101"),
+                    ]
+                )
+            ),
+        ):
+            response = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+            terminal = await _poll_migration(async_client, response)
+        assert terminal["result"]["results"] == [
+            {"channel_id": 7, "status": "ambiguous_target"}
+        ]
+        client.get_epg_data_by_id.assert_not_awaited()
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("token_kind", ["expired", "tampered"])
+    async def test_apply_rejects_invalid_preview_tokens_at_acceptance(
+        self, async_client, token_kind
+    ):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "iptv.news",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+            now=0 if token_kind == "expired" else None,
+        )
+        if token_kind == "tampered":
+            token = token[:-1] + ("A" if token[-1] != "A" else "B")
+        with patch("routers.epg.get_jwt_secret_key", return_value=secret):
+            response = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+        assert response.status_code == 409
+        assert "Preview again" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_apply_fails_fast_when_another_job_is_running(self, async_client):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "iptv.news",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_run(request, admin, *, batch_id, job):
+            started.set()
+            await release.wait()
+            return {**job.result, "batch_id": batch_id}
+
+        payload = {
+            "target_epg_source_id": 2,
+            "preview_token": token,
+            "items": [item],
+        }
+        with patch("routers.epg.get_jwt_secret_key", return_value=secret), patch(
+            "routers.epg._run_guide_migration", side_effect=slow_run
+        ):
+            first = await async_client.post("/api/epg/migration/apply", json=payload)
+            await started.wait()
+            second = await async_client.post("/api/epg/migration/apply", json=payload)
+            assert first.status_code == 202
+            assert second.status_code == 409
+            release.set()
+            terminal = await _poll_migration(async_client, first)
+        assert terminal["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_poll_exposes_partial_multi_item_progress(self, async_client):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        base = {
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "iptv.news",
+        }
+        items = [
+            {**base, "channel_id": 7, "current_epg_data_id": 11},
+            {**base, "channel_id": 8, "current_epg_data_id": 12},
+        ]
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=items,
+        )
+        first_visible = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_run(request, admin, *, batch_id, job):
+            job.result["results"].append({"channel_id": 7, "status": "updated"})
+            job.result["mutated"] = 1
+            job.result["updated"] = 1
+            first_visible.set()
+            await release.wait()
+            job.result["results"].append({"channel_id": 8, "status": "failed"})
+            job.result["failed"] = 1
+            return {**job.result, "batch_id": batch_id}
+
+        with patch("routers.epg.get_jwt_secret_key", return_value=secret), patch(
+            "routers.epg._run_guide_migration", side_effect=slow_run
+        ):
+            accepted = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": items,
+                },
+            )
+            await first_visible.wait()
+            partial = await async_client.get(
+                f"/api/epg/migration/apply/{accepted.json()['batch_id']}"
+            )
+            assert partial.json()["processed"] == 1
+            assert partial.json()["result"]["updated"] == 1
+            release.set()
+            terminal = await _poll_migration(async_client, accepted)
+        assert terminal["processed"] == 2
+        assert terminal["result"]["failed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_apply_reports_unsupported_origin_from_worker(self, async_client):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "10101",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+        client = AsyncMock()
+        client.get_epg_sources.return_value = [
+            {"id": 1, "source_type": "dummy"},
+            {"id": 2, "source_type": "schedules_direct"},
+        ]
+        client.get_epg_data.return_value = [
+            {"id": 22, "epg_source": 2, "tvg_id": "10101"}
+        ]
+        with patch("routers.epg.get_client", return_value=client), patch(
+            "routers.epg.get_jwt_secret_key", return_value=secret
+        ):
+            accepted = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+            terminal = await _poll_migration(async_client, accepted)
+        assert terminal["result"]["results"] == [
+            {"channel_id": 7, "status": "unsupported_origin"}
+        ]
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_job_ttl_starts_at_terminal_time_and_running_job_is_never_pruned(
+        self, async_client
+    ):
+        from routers import epg
+
+        batch_id = "a" * 32
+        job = epg._GuideMigrationJob(1, "auth-disabled")
+        job.created_at = 0
+        epg._GUIDE_MIGRATION_JOBS[batch_id] = job
+        try:
+            with patch("routers.epg.time.time", return_value=4000):
+                running = await async_client.get(
+                    f"/api/epg/migration/apply/{batch_id}"
+                )
+            assert running.status_code == 200
+            assert running.json()["status"] == "running"
+
+            job.status = "completed"
+            job.completed_at = 4000
+            with patch("routers.epg.time.time", return_value=5799):
+                retained = await async_client.get(
+                    f"/api/epg/migration/apply/{batch_id}"
+                )
+            assert retained.status_code == 200
+            with patch("routers.epg.time.time", return_value=5800):
+                expired = await async_client.get(
+                    f"/api/epg/migration/apply/{batch_id}"
+                )
+            assert expired.status_code == 404
+        finally:
+            epg._GUIDE_MIGRATION_JOBS.pop(batch_id, None)
+
+    @pytest.mark.asyncio
+    async def test_poll_ownership_uses_provider_and_id_not_mutable_username(
+        self, async_client
+    ):
+        from auth import RequireAdminIfEnabled as admin_dependency
+        from main import app
+        from routers import epg
+
+        batch_id = "b" * 32
+        epg._GUIDE_MIGRATION_JOBS[batch_id] = epg._GuideMigrationJob(1, "local:1")
+
+        async def renamed_actor_a():
+            return type(
+                "Actor",
+                (),
+                {"id": 1, "username": "alice-renamed", "auth_provider": "local"},
+            )()
+
+        async def actor_b():
+            return type(
+                "Actor",
+                (),
+                {"id": 2, "username": "bob", "auth_provider": "local"},
+            )()
+
+        app.dependency_overrides[admin_dependency.dependency] = renamed_actor_a
+        try:
+            renamed_owner_response = await async_client.get(
+                f"/api/epg/migration/apply/{batch_id}"
+            )
+            app.dependency_overrides[admin_dependency.dependency] = actor_b
+            foreign_response = await async_client.get(
+                f"/api/epg/migration/apply/{batch_id}"
+            )
+        finally:
+            app.dependency_overrides.pop(admin_dependency.dependency, None)
+            epg._GUIDE_MIGRATION_JOBS.pop(batch_id, None)
+        assert renamed_owner_response.status_code == 200
+        assert foreign_response.status_code == 404
+        assert foreign_response.json() == {
+            "detail": "Guide migration job not found."
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "batch_id", ["not-hex", "A" * 32, "c" * 31, "d" * 33, "e" * 32]
+    )
+    async def test_malformed_batch_ids_have_uniform_not_found_response(
+        self, async_client, batch_id
+    ):
+        response = await async_client.get(f"/api/epg/migration/apply/{batch_id}")
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Guide migration job not found."}
+
+    @pytest.mark.asyncio
+    async def test_fatal_job_hides_secret_and_retains_partial_results(
+        self, async_client
+    ):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "iptv.news",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+
+        async def fatal_run(request, admin, *, batch_id, job):
+            job.result["results"].append({"channel_id": 7, "status": "updated"})
+            job.result["mutated"] = 1
+            raise RuntimeError("credential=super-secret")
+
+        with patch("routers.epg.get_jwt_secret_key", return_value=secret), patch(
+            "routers.epg._run_guide_migration", side_effect=fatal_run
+        ):
+            accepted = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+            terminal = await _poll_migration(async_client, accepted)
+        assert terminal["status"] == "failed"
+        assert terminal["error"] == "Guide migration failed."
+        assert terminal["processed"] == 1
+        assert "super-secret" not in str(terminal)
+
+    @pytest.mark.asyncio
+    async def test_cancelled_job_releases_lock_clears_active_and_remains_pollable(
+        self, async_client
+    ):
+        from routers import epg
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        item = {
+            "channel_id": 7,
+            "current_epg_data_id": 11,
+            "current_source_id": 1,
+            "current_tvg_id": "10101",
+            "lcn": "10101",
+            "target_epg_data_id": 22,
+            "target_tvg_id": "iptv.news",
+        }
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=[item],
+        )
+        started = asyncio.Event()
+
+        async def cancellable_run(request, admin, *, batch_id, job):
+            await epg._GUIDE_MIGRATION_APPLY_LOCK.acquire()
+            try:
+                job.result["results"].append(
+                    {"channel_id": 7, "status": "updated"}
+                )
+                started.set()
+                await asyncio.Event().wait()
+            finally:
+                epg._GUIDE_MIGRATION_APPLY_LOCK.release()
+
+        with patch("routers.epg.get_jwt_secret_key", return_value=secret), patch(
+            "routers.epg._run_guide_migration", side_effect=cancellable_run
+        ):
+            accepted = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": [item],
+                },
+            )
+            await started.wait()
+            batch_id = accepted.json()["batch_id"]
+            task = next(
+                task
+                for task in epg._GUIDE_MIGRATION_BACKGROUND_TASKS
+                if task.get_name() == f"guide-migration-{batch_id}"
+            )
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            terminal = await async_client.get(
+                f"/api/epg/migration/apply/{batch_id}"
+            )
+        assert terminal.json()["status"] == "failed"
+        assert terminal.json()["processed"] == 1
+        assert epg._ACTIVE_GUIDE_MIGRATION_JOB_ID is None
+        assert not epg._GUIDE_MIGRATION_APPLY_LOCK.locked()
+
+    @pytest.mark.asyncio
+    async def test_repeated_audit_failures_close_sessions_and_continue(
+        self, async_client
+    ):
+        from routers.epg import _migration_issuer
+        from services.epg_migration import create_preview_token
+
+        items = [
+            {
+                "channel_id": channel_id,
+                "current_epg_data_id": 10 + channel_id,
+                "current_source_id": 1,
+                "current_tvg_id": str(channel_id),
+                "lcn": str(channel_id),
+                "target_epg_data_id": 20 + channel_id,
+                "target_tvg_id": str(channel_id),
+            }
+            for channel_id in (7, 8)
+        ]
+        secret = "configured-secret"
+        token = create_preview_token(
+            secret=secret,
+            issuer=_migration_issuer(secret),
+            actor="auth-disabled",
+            target_source_id=2,
+            rows=items,
+        )
+        client = AsyncMock()
+        client.get_epg_sources.return_value = [
+            {"id": 1, "source_type": "schedules_direct"},
+            {"id": 2, "source_type": "schedules_direct"},
+        ]
+        target_rows = [
+            {"id": 20 + item["channel_id"], "epg_source": 2, "tvg_id": item["target_tvg_id"]}
+            for item in items
+        ]
+        client.get_epg_data.return_value = target_rows
+        epg_rows = {
+            **{
+                item["current_epg_data_id"]: {
+                    "id": item["current_epg_data_id"],
+                    "epg_source": 1,
+                    "tvg_id": item["current_tvg_id"],
+                }
+                for item in items
+            },
+            **{row["id"]: row for row in target_rows},
+        }
+        client.get_epg_data_by_id.side_effect = lambda row_id: epg_rows[row_id]
+        client.get_channel.side_effect = [
+            {"id": item["channel_id"], "name": "Test", "epg_data_id": item["current_epg_data_id"]}
+            for item in items
+        ]
+        sessions = [MagicMock(), MagicMock()]
+        for session in sessions:
+            session.commit.side_effect = RuntimeError("audit unavailable")
+        with patch("routers.epg.get_client", return_value=client), patch(
+            "routers.epg.get_jwt_secret_key", return_value=secret
+        ), patch("journal.get_session", side_effect=sessions):
+            accepted = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": token,
+                    "items": items,
+                },
+            )
+            terminal = await _poll_migration(async_client, accepted)
+        assert [row["status"] for row in terminal["result"]["results"]] == [
+            "updated_audit_failed",
+            "updated_audit_failed",
+        ]
+        assert terminal["result"]["audit_failed"] == 2
+        assert terminal["result"]["mutated"] == 2
+        assert terminal["result"]["updated"] == 0
+        assert terminal["processed"] == 2
+        assert terminal["result"]["skipped"] == 0
+        assert terminal["result"]["failed"] == 0
+        assert client.update_channel.await_count == 2
+        for session in sessions:
+            session.rollback.assert_called_once_with()
+            session.close.assert_called_once_with()
 
 
 class TestGetEPGSources:

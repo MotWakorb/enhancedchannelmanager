@@ -24,6 +24,7 @@ import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { PageHeader } from '../PageHeader';
+import { GuideMigrationModal } from '../GuideMigrationModal';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
 import '../ModalBase.css';
@@ -817,6 +818,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<EPGSource | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
+  const [migrationOpen, setMigrationOpen] = useState(false);
   // Dummy EPG modal state
   const [dummyModalOpen, setDummyModalOpen] = useState(false);
   const [editingDummySource, setEditingDummySource] = useState<EPGSource | null>(null);
@@ -1096,6 +1098,12 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
               <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
               {refreshingAll ? 'Refreshing...' : 'Refresh All'}
             </button>
+            {sources.length > 1 && (
+              <button className="btn-secondary" onClick={() => setMigrationOpen(true)}>
+                <span className="material-icons">swap_horiz</span>
+                Migrate Guides
+              </button>
+            )}
             <button className="btn-primary" onClick={handleAddSource}>
               <span className="material-icons">add</span>
               Add Standard EPG
@@ -1255,6 +1263,25 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         source={editingDummySource}
         onClose={() => setDummyModalOpen(false)}
         onSave={handleSaveDummySource}
+      />
+
+      <GuideMigrationModal
+        isOpen={migrationOpen}
+        sources={sources}
+        onClose={() => setMigrationOpen(false)}
+        onApplied={(result) => {
+          if (result.failed > 0 || result.audit_failed > 0) {
+            notifications.warning(
+              `Migrated ${result.mutated} channel guides; ${result.skipped} skipped, ${result.failed} failed, and ${result.audit_failed} audit writes failed.`,
+              'Guide Migration'
+            );
+          } else {
+            notifications.success(
+              `Migrated ${result.mutated} channel guides${result.skipped ? `; ${result.skipped} skipped` : ''}.`,
+              'Guide Migration'
+            );
+          }
+        }}
       />
 
       {/* Dummy EPG Profiles — the supported dummy EPG path (bead 09x38.4) */}

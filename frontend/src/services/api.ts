@@ -1856,6 +1856,187 @@ export async function getEPGLcnBatch(items: LCNLookupItem[]): Promise<{
   });
 }
 
+export type GuideMigrationStatus =
+  | 'ready'
+  | 'already_target'
+  | 'unassigned'
+  | 'missing_lcn'
+  | 'missing_target'
+  | 'ambiguous_target'
+  | 'unsupported_origin';
+
+export interface GuideMigrationRow {
+  channel_id: number;
+  channel_name: string;
+  current_epg_data_id: number | null;
+  current_source_id: number | null;
+  current_source_name: string | null;
+  lcn: string | null;
+  target_epg_data_id: number | null;
+  target_name: string | null;
+  current_tvg_id: string | null;
+  target_tvg_id: string | null;
+  status: GuideMigrationStatus;
+}
+
+export interface GuideMigrationPreview {
+  target_source_id: number;
+  target_source_name: string;
+  rows: GuideMigrationRow[];
+  counts: Record<GuideMigrationStatus, number>;
+  preview_token: string;
+}
+
+export type GuideMigrationApplyStatus =
+  | 'updated'
+  | 'updated_audit_failed'
+  | 'ambiguous_target'
+  | 'unsupported_origin'
+  | 'semantic_drift'
+  | 'changed_since_preview'
+  | 'failed';
+
+export interface GuideMigrationApplyResult {
+  mutated: number;
+  updated: number;
+  audit_failed: number;
+  skipped: number;
+  failed: number;
+  results: Array<{ channel_id: number; status: GuideMigrationApplyStatus }>;
+  batch_id: string;
+}
+
+export interface GuideMigrationJobStatus {
+  batch_id: string;
+  status: 'running' | 'completed' | 'failed';
+  processed: number;
+  total: number;
+  result: GuideMigrationApplyResult;
+  error?: string;
+}
+
+export async function previewGuideMigration(
+  targetEpgSourceId: number
+): Promise<GuideMigrationPreview> {
+  return fetchJson(`${API_BASE}/epg/migration/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ target_epg_source_id: targetEpgSourceId }),
+  });
+}
+
+const GUIDE_MIGRATION_POLL_INTERVAL_MS = 750;
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Guide migration polling aborted', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Guide migration polling aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export class GuideMigrationPollingError extends Error {
+  constructor(
+    message: string,
+    public readonly batchId: string
+  ) {
+    super(message);
+    this.name = 'GuideMigrationPollingError';
+  }
+}
+
+export async function applyGuideMigration(
+  preview: GuideMigrationPreview,
+  onProgress?: (status: GuideMigrationJobStatus) => void,
+  signal?: AbortSignal
+): Promise<GuideMigrationApplyResult> {
+  const items = preview.rows
+    .filter((row) => row.status === 'ready')
+    .map((row) => ({
+      channel_id: row.channel_id,
+      current_epg_data_id: row.current_epg_data_id,
+      current_source_id: row.current_source_id,
+      current_tvg_id: row.current_tvg_id,
+      lcn: row.lcn,
+      target_epg_data_id: row.target_epg_data_id,
+      target_tvg_id: row.target_tvg_id,
+    }));
+  const accepted = await fetchJson<{
+    batch_id: string;
+    status: 'running';
+  }>(`${API_BASE}/epg/migration/apply`, {
+    method: 'POST',
+    signal,
+    body: JSON.stringify({
+      target_epg_source_id: preview.target_source_id,
+      preview_token: preview.preview_token,
+      items,
+    }),
+  });
+  const emptyResult: GuideMigrationApplyResult = {
+    mutated: 0,
+    updated: 0,
+    audit_failed: 0,
+    skipped: 0,
+    failed: 0,
+    results: [],
+    batch_id: accepted.batch_id,
+  };
+  onProgress?.({
+    batch_id: accepted.batch_id,
+    status: 'running',
+    processed: 0,
+    total: items.length,
+    result: emptyResult,
+  });
+  while (!signal?.aborted) {
+    try {
+      const status = await fetchJson<GuideMigrationJobStatus>(
+        `${API_BASE}/epg/migration/apply/${encodeURIComponent(accepted.batch_id)}`,
+        { signal }
+      );
+      onProgress?.(status);
+      if (status.status === 'completed') return status.result;
+      if (status.status === 'failed') {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} failed. Build a fresh preview and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+    } catch (error) {
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+        throw error;
+      }
+      if (error instanceof GuideMigrationPollingError) throw error;
+      if (error instanceof HttpError && error.status === 404) {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} is no longer available, possibly because ECM restarted. Preserve this batch ID, build a fresh preview, and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+      if (error instanceof HttpError && error.status < 500) {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} polling stopped: ${error.message}. Preserve this batch ID and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+      // Network and transient server errors do not discard a known accepted
+      // batch or its last partial result. Keep polling until terminal/unmount.
+    }
+    await abortableDelay(GUIDE_MIGRATION_POLL_INTERVAL_MS, signal);
+  }
+  throw new DOMException('Guide migration polling aborted', 'AbortError');
+}
+
 // EPG Matching (server-side)
 export interface EPGMatchEntry {
   epg_id: number;
