@@ -150,6 +150,24 @@ docker cp backend/routers/. ecm-ecm-1:/app/routers/
 docker restart ecm-ecm-1
 ```
 
+**Coupled backend/frontend changes:** When a frontend build depends on a new or
+changed backend route, deploy the backend first and wait for its restart to
+complete before deploying the frontend:
+
+```bash
+docker cp backend/main.py ecm-ecm-1:/app/main.py
+docker cp backend/routers/. ecm-ecm-1:/app/routers/
+docker restart ecm-ecm-1
+docker inspect -f '{{.State.Running}}' ecm-ecm-1
+scripts/deploy-frontend.sh
+```
+
+This order prevents the new frontend from calling an API contract that the
+running backend does not yet provide. Roll back in reverse dependency order:
+restore and deploy the previous frontend build first, then restore the previous
+backend files and restart `ecm-ecm-1`. Do not roll back the backend while the
+dependent frontend is still live.
+
 **Python packages** use `uv` (not pip): `docker exec ecm-ecm-1 uv pip install <package>`
 
 ### Shipping (When User Says "Ship the Fix")

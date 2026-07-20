@@ -166,17 +166,31 @@ See `css-guidelines.md` for full details. Layers: design tokens (`index.css`) â†
 ## Build & Deploy
 
 ```bash
-# Build frontend
-cd frontend && npm run build     # Output: frontend/dist/
+# Deploy a frontend-only change (build, remove stale assets, and copy)
+scripts/deploy-frontend.sh
 
-# Deploy to container (dev workflow)
-docker cp frontend/dist/. ecm-ecm-1:/app/static/   # Frontend only
+# Deploy a backend-only change
 docker cp backend/main.py ecm-ecm-1:/app/main.py    # Backend core
 docker cp backend/routers/. ecm-ecm-1:/app/routers/  # Backend routers (requires restart)
-
-# Restart backend in container
 docker restart ecm-ecm-1
 ```
+
+For a coupled change where the frontend calls a new or changed backend route,
+deploy and restart the backend first. Confirm that the container is running,
+then deploy the frontend:
+
+```bash
+docker cp backend/main.py ecm-ecm-1:/app/main.py
+docker cp backend/routers/. ecm-ecm-1:/app/routers/
+docker restart ecm-ecm-1
+docker inspect -f '{{.State.Running}}' ecm-ecm-1
+scripts/deploy-frontend.sh
+```
+
+Roll back a coupled change in reverse dependency order: restore and deploy the
+previous frontend build first, then restore the previous backend files and
+restart `ecm-ecm-1`. This keeps the newer backend contract available until the
+dependent frontend is no longer live.
 
 ## Config & Data
 
