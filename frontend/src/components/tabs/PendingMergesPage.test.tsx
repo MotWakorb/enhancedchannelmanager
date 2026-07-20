@@ -21,7 +21,7 @@
  *     preserving per-row endpoint semantics (GH #642 / bead ixcf1).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { PendingMergesPage } from './PendingMergesPage';
 import type { PendingMergeRecord } from '../../services/api';
 import * as api from '../../services/api';
@@ -304,8 +304,15 @@ describe('PendingMergesPage — per-row actions (BD-E accept/dismiss)', () => {
 describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
+
+  async function startBulk(actionName: RegExp) {
+    fireEvent.click(screen.getByRole('button', { name: actionName }));
+    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: /^Confirm (merge|clear)$/i }),
+    );
+  }
 
   function mockRows() {
     vi.mocked(api.getPendingMerges).mockResolvedValue({
@@ -368,7 +375,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     expect(screen.getByText('Stream 51')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Select Stream 51' })).toBeChecked();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Merge selected$/i }));
+    await startBulk(/^Merge selected$/i);
     await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(51));
     expect(api.acceptPendingMerge).toHaveBeenCalledWith(51);
   });
@@ -415,12 +422,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     await screen.findByText('ESPN HD');
     fireEvent.click(screen.getByRole('checkbox', { name: /Select ESPN HD/i }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Select BBC HD/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Merge selected/i }));
+    await startBulk(/^Merge selected$/i);
 
     await waitFor(() => expect(callOrder).toEqual([1, 3]));
-    expect(window.confirm).toHaveBeenCalledWith(
-      'Merge 2 selected pending merges? This will attach each incoming stream to its candidate channel.',
-    );
     await waitFor(() => expect(screen.queryByText('ESPN HD')).toBeNull());
     expect(screen.queryByText('BBC HD')).toBeNull();
     expect(screen.getByText('CNN HD')).toBeInTheDocument();
@@ -428,14 +432,18 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
 
   it('clear all dismisses every loaded row and is cancelled when confirmation is declined', async () => {
     mockRows();
-    vi.mocked(window.confirm).mockReturnValue(false);
     render(<PendingMergesPage />);
     await screen.findByText('ESPN HD');
 
     fireEvent.click(screen.getByRole('button', { name: /Clear all/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
+    expect(within(dialog).getByText(/3 pending merges/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/cannot be undone/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Cancel$/i }));
 
     expect(api.dismissPendingMerge).not.toHaveBeenCalled();
     expect(screen.getByText('ESPN HD')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /Confirm bulk action/i })).toBeNull();
   });
 
   it('snapshots every page before Merge all so mutation cannot shift pagination', async () => {
@@ -472,7 +480,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
 
     render(<PendingMergesPage />);
     await screen.findByText('Stream 1');
-    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
+    await startBulk(/^Merge all$/i);
 
     await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(201));
     expect(api.getPendingMerges).toHaveBeenCalledWith({
@@ -485,9 +493,6 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
       page: 2,
       pageSize: 200,
     });
-    expect(window.confirm).toHaveBeenCalledWith(
-      'Merge 201 pending merges? This will attach each incoming stream to its candidate channel.',
-    );
   });
 
   it.each([
@@ -531,7 +536,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
 
       render(<PendingMergesPage />);
       await screen.findByText('Stream 1');
-      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${label}$`, 'i') }));
+      await startBulk(new RegExp(`^${label}$`, 'i'));
 
       const mutation =
         action === 'merge' ? api.acceptPendingMerge : api.dismissPendingMerge;
@@ -564,7 +569,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     await screen.findByText('ESPN HD');
     fireEvent.click(screen.getByRole('button', { name: /^Select all$/i }));
     await screen.findByText('3 selected');
-    fireEvent.click(screen.getByRole('button', { name: /Clear selected/i }));
+    await startBulk(/^Clear selected$/i);
 
     await waitFor(() => expect(api.dismissPendingMerge).toHaveBeenCalledTimes(3));
     expect(screen.queryByText('ESPN HD')).toBeNull();
@@ -602,18 +607,250 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
 
     render(<PendingMergesPage />);
     await screen.findByText('ESPN HD');
-    fireEvent.click(screen.getByRole('button', { name: /Merge all/i }));
+    await startBulk(/^Merge all$/i);
 
-    expect(await screen.findByRole('button', { name: /Merging 1 of 3/i })).toBeDisabled();
+    const progress = await screen.findByRole('status', {
+      name: /Bulk action progress/i,
+    });
+    expect(progress).toHaveTextContent(/Merged 0 of 3/i);
     expect(screen.getByRole('button', { name: /^Clear all$/i })).toBeDisabled();
     expect(screen.getAllByRole('button', { name: /^Working\.\.\.$/i })[0]).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: /Merging 1 of 3/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
     expect(api.acceptPendingMerge).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       resolveFirst?.();
     });
     await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(3));
+  });
+
+  it('materializes a 201-row all-queue snapshot before the sweep and keeps live progress mounted', async () => {
+    const allRows = Array.from({ length: 201 }, (_, index) =>
+      makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
+    );
+    vi.mocked(api.getPendingMerges).mockImplementation(async (params) => {
+      if (params?.pageSize === 200) {
+        const page = params.page ?? 1;
+        return {
+          merges: allRows.slice((page - 1) * 200, page * 200),
+          total: 201,
+          page,
+          page_size: 200,
+          total_pages: 2,
+        };
+      }
+      return {
+        merges: allRows.slice(0, 50),
+        total: 201,
+        page: 1,
+        page_size: 50,
+        total_pages: 5,
+      };
+    });
+    let resolveFirst: (() => void) | undefined;
+    vi.mocked(api.acceptPendingMerge)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = () =>
+              resolve({
+                merged_into_channel_id: 'channel-uuid-abc',
+                journal_entry_id: 1,
+                source_stream_id: 'stream-1',
+                confidence: 0.92,
+                status: 'merged',
+              });
+          }),
+      )
+      .mockImplementation(async (id) => ({
+        merged_into_channel_id: 'channel-uuid-abc',
+        journal_entry_id: id,
+        source_stream_id: `stream-${id}`,
+        confidence: 0.92,
+        status: 'merged',
+      }));
+
+    render(<PendingMergesPage />);
+    await screen.findByText('Stream 1');
+    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
+    expect(screen.getByText('Stream 201')).toBeInTheDocument();
+    expect(within(dialog).getByText(/201 pending merges/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Confirm merge$/i }));
+
+    const status = await screen.findByRole('status', { name: /Bulk action progress/i });
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(within(status).getByText(/Merged 0 of 201/i)).toBeInTheDocument();
+    expect(within(status).getByRole('button', { name: /^Stop$/i })).toBeEnabled();
+    expect(screen.getByText('Stream 201')).toBeInTheDocument();
+
+    await act(async () => resolveFirst?.());
+    await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(201));
+    expect(screen.getByRole('status', { name: /Bulk action progress/i })).toHaveTextContent(
+      'Completed 201 of 201',
+    );
+  });
+
+  it('Stop waits for the in-flight row, skips every later row, and keeps the remainder selected', async () => {
+    const allRows = Array.from({ length: 3 }, (_, index) =>
+      makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
+    );
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: allRows,
+      total: 3,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    });
+    let resolveFirst: (() => void) | undefined;
+    vi.mocked(api.acceptPendingMerge)
+      .mockImplementationOnce(
+        () =>
+        new Promise((resolve) => {
+          resolveFirst = () =>
+            resolve({
+              merged_into_channel_id: 'channel-uuid-abc',
+              journal_entry_id: 1,
+              source_stream_id: 'stream-1',
+              confidence: 0.92,
+              status: 'merged',
+            });
+        }),
+      )
+      .mockImplementation(async (id) => ({
+        merged_into_channel_id: 'channel-uuid-abc',
+        journal_entry_id: id,
+        source_stream_id: `stream-${id}`,
+        confidence: 0.92,
+        status: 'merged',
+      }));
+
+    render(<PendingMergesPage />);
+    await screen.findByText('Stream 1');
+    await startBulk(/^Merge all$/i);
+    const status = await screen.findByRole('status', { name: /Bulk action progress/i });
+    fireEvent.click(within(status).getByRole('button', { name: /^Stop$/i }));
+    expect(status).toHaveTextContent(/Stopping after the current item/i);
+
+    await act(async () => resolveFirst?.());
+    await waitFor(() => expect(status).toHaveTextContent('Stopped after 1 of 3'));
+    expect(api.acceptPendingMerge).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Stream 1')).toBeNull();
+    expect(screen.getByText('Stream 2')).toBeInTheDocument();
+    expect(screen.getByText('Stream 3')).toBeInTheDocument();
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+  });
+
+  it('guards modal confirmation against same-tick double submission', async () => {
+    mockRows();
+    let resolveFirst: (() => void) | undefined;
+    vi.mocked(api.acceptPendingMerge)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = () =>
+              resolve({
+                merged_into_channel_id: 'channel-uuid-abc',
+                journal_entry_id: 1,
+                source_stream_id: 'stream-1',
+                confidence: 0.92,
+                status: 'merged',
+              });
+          }),
+      )
+      .mockImplementation(async (id) => ({
+        merged_into_channel_id: 'channel-uuid-abc',
+        journal_entry_id: id,
+        source_stream_id: `stream-${id}`,
+        confidence: 0.92,
+        status: 'merged',
+      }));
+
+    render(<PendingMergesPage />);
+    await screen.findByText('ESPN HD');
+    const trigger = screen.getByRole('button', { name: /^Merge all$/i });
+    fireEvent.click(trigger);
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
+    const confirm = within(dialog).getByRole('button', { name: /^Confirm merge$/i });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(1));
+    await act(async () => resolveFirst?.());
+    await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(3));
+  });
+
+  it('retains multiple failures, including an all-failing sweep, with exact errors', async () => {
+    mockRows();
+    vi.mocked(api.dismissPendingMerge).mockImplementation(async (id) => {
+      throw new Error(`Clear failed for row ${id}`);
+    });
+
+    render(<PendingMergesPage />);
+    await screen.findByText('ESPN HD');
+    await startBulk(/^Clear all$/i);
+
+    await waitFor(() => expect(api.dismissPendingMerge).toHaveBeenCalledTimes(3));
+    expect(screen.getByText('Clear failed for row 1')).toBeInTheDocument();
+    expect(screen.getByText('Clear failed for row 2')).toBeInTheDocument();
+    expect(screen.getByText('Clear failed for row 3')).toBeInTheDocument();
+    expect(screen.getByText('3 selected')).toBeInTheDocument();
+    expect(screen.queryByText('No pending merges')).toBeNull();
+    expect(screen.getByRole('status', { name: /Bulk action progress/i })).toHaveTextContent(
+      'Completed 3 of 3 with 3 failures',
+    );
+  });
+
+  it('expands a changing page-count snapshot, deduplicates overlaps, and resolves each id once', async () => {
+    const records = Array.from({ length: 401 }, (_, index) =>
+      makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
+    );
+    vi.mocked(api.getPendingMerges).mockImplementation(async (params) => {
+      if (params?.pageSize !== 200) {
+        return {
+          merges: records.slice(0, 50),
+          total: 201,
+          page: 1,
+          page_size: 50,
+          total_pages: 5,
+        };
+      }
+      const page = params.page ?? 1;
+      const pageRows =
+        page === 1
+          ? records.slice(0, 200)
+          : page === 2
+            ? records.slice(149, 349)
+            : records.slice(349);
+      return {
+        merges: pageRows,
+        total: 401,
+        page,
+        page_size: 200,
+        total_pages: 3,
+      };
+    });
+    const resolvedIds: number[] = [];
+    vi.mocked(api.acceptPendingMerge).mockImplementation(async (id) => {
+      resolvedIds.push(id);
+      return {
+        merged_into_channel_id: 'channel-uuid-abc',
+        journal_entry_id: id,
+        source_stream_id: `stream-${id}`,
+        confidence: 0.92,
+        status: 'merged',
+      };
+    });
+
+    render(<PendingMergesPage />);
+    await screen.findByText('Stream 1');
+    await startBulk(/^Merge all$/i);
+
+    await waitFor(() => expect(resolvedIds).toHaveLength(401));
+    expect(new Set(resolvedIds).size).toBe(401);
+    expect(resolvedIds).toEqual(expect.arrayContaining([1, 200, 201, 350, 401]));
   });
 
   it('drops stale selections after a refresh replaces the loaded rows', async () => {

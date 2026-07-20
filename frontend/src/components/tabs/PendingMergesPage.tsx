@@ -34,10 +34,31 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
 import type { PendingMergeRecord } from '../../services/api';
 import { logger } from '../../utils/logger';
+import { ModalOverlay } from '../ModalOverlay';
 import './PendingMergesPage.css';
 
 const PAGE_SIZE = 50;
 const EXACT_MATCH_THRESHOLD = 1.0;
+const BULK_PAGE_SIZE = 200;
+const MAX_BULK_PAGES = 100;
+
+type BulkScope = 'all' | 'selected';
+type BulkOperation = 'Merge' | 'Clear';
+
+interface BulkIntent {
+  scope: BulkScope;
+  operation: BulkOperation;
+  targets: PendingMergeRecord[];
+}
+
+interface BulkProgress {
+  scope: BulkScope;
+  operation: BulkOperation;
+  completed: number;
+  total: number;
+  failures: number;
+  phase: 'running' | 'stopping' | 'stopped' | 'completed';
+}
 
 /** Format a 0.0–1.0 confidence as an integer-percent badge string. */
 function formatConfidencePercent(confidence: number): string {
@@ -56,12 +77,11 @@ export function PendingMergesPage() {
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const selectedIdsRef = useRef(selectedIds);
-  const [bulkProgress, setBulkProgress] = useState<{
-    scope: 'all' | 'selected';
-    operation: 'Merge' | 'Clear';
-    current: number;
-    total: number;
-  } | null>(null);
+  const [bulkIntent, setBulkIntent] = useState<BulkIntent | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
+  const bulkLockRef = useRef(false);
+  const confirmingRef = useRef(false);
+  const stopRequestedRef = useRef(false);
 
   useEffect(() => {
     selectedIdsRef.current = selectedIds;
@@ -81,18 +101,27 @@ export function PendingMergesPage() {
       // against the whole queue, not just page one. Otherwise an off-page
       // selected failure can disappear from the retry surface.
       if (selectedIdsRef.current.size > 0 && response.total > response.merges.length) {
-        const pageSize = 200;
-        const totalPages = Math.ceil(response.total / pageSize);
-        const allRows: PendingMergeRecord[] = [];
-        for (let page = 1; page <= totalPages; page += 1) {
+        const allRows = new Map<number, PendingMergeRecord>();
+        let observedTotal = response.total;
+        for (let page = 1; page <= MAX_BULK_PAGES; page += 1) {
           const pageResponse = await api.getPendingMerges({
             status: 'pending',
             page,
-            pageSize,
+            pageSize: BULK_PAGE_SIZE,
           });
-          allRows.push(...pageResponse.merges);
+          observedTotal = Math.max(observedTotal, pageResponse.total);
+          pageResponse.merges.forEach((row) => allRows.set(row.id, row));
+          const expectedPages = Math.ceil(observedTotal / BULK_PAGE_SIZE);
+          if (
+            pageResponse.merges.length === 0 ||
+            (page >= expectedPages &&
+              (allRows.size >= observedTotal ||
+                pageResponse.merges.length < BULK_PAGE_SIZE))
+          ) {
+            break;
+          }
         }
-        refreshedRows = allRows;
+        refreshedRows = [...allRows.values()];
       }
       setRows(refreshedRows);
       setTotalRows(response.total);
@@ -166,9 +195,10 @@ export function PendingMergesPage() {
     [handleAction],
   );
 
-  const bulkBusy = bulkProgress !== null;
+  const bulkBusy =
+    bulkProgress?.phase === 'running' || bulkProgress?.phase === 'stopping';
   const anyRowBusy = Object.keys(rowBusy).length > 0;
-  const actionsDisabled = loading || bulkBusy || anyRowBusy;
+  const actionsDisabled = loading || bulkBusy || bulkIntent !== null || anyRowBusy;
 
   const toggleSelected = useCallback((rowId: number) => {
     setSelectedIds((previous) => {
@@ -182,18 +212,27 @@ export function PendingMergesPage() {
   const getAllPendingRows = useCallback(async (): Promise<PendingMergeRecord[]> => {
     if (totalRows <= rows.length) return rows;
 
-    const allRows: PendingMergeRecord[] = [];
-    const pageSize = 200;
-    const totalPages = Math.ceil(totalRows / pageSize);
-    for (let page = 1; page <= totalPages; page += 1) {
+    const allRows = new Map<number, PendingMergeRecord>();
+    let observedTotal = totalRows;
+    for (let page = 1; page <= MAX_BULK_PAGES; page += 1) {
       const response = await api.getPendingMerges({
         status: 'pending',
         page,
-        pageSize,
+        pageSize: BULK_PAGE_SIZE,
       });
-      allRows.push(...response.merges);
+      observedTotal = Math.max(observedTotal, response.total);
+      response.merges.forEach((row) => allRows.set(row.id, row));
+      const expectedPages = Math.ceil(observedTotal / BULK_PAGE_SIZE);
+      if (
+        response.merges.length === 0 ||
+        (page >= expectedPages &&
+          (allRows.size >= observedTotal ||
+            response.merges.length < BULK_PAGE_SIZE))
+      ) {
+        break;
+      }
     }
-    return allRows;
+    return [...allRows.values()];
   }, [rows, totalRows]);
 
   const handleSelectAll = useCallback(async () => {
@@ -214,50 +253,66 @@ export function PendingMergesPage() {
     }
   }, [actionsDisabled, getAllPendingRows]);
 
-  const runBulkAction = useCallback(
+  const requestBulkAction = useCallback(
     async (
-      scope: 'all' | 'selected',
-      operation: 'Merge' | 'Clear',
-      action: (id: number) => Promise<unknown>,
+      scope: BulkScope,
+      operation: BulkOperation,
     ) => {
-      if (bulkBusy || anyRowBusy) return;
+      if (bulkLockRef.current || bulkBusy || anyRowBusy) return;
+      bulkLockRef.current = true;
+      setBulkProgress(null);
 
-      let targets =
-        scope === 'selected'
-          ? rows.filter((row) => selectedIds.has(row.id))
-          : rows;
-      if (targets.length === 0) return;
-
-      if (scope === 'all' && totalRows > rows.length) {
-        setLoading(true);
-        try {
+      try {
+        let targets =
+          scope === 'selected'
+            ? rows.filter((row) => selectedIds.has(row.id))
+            : rows;
+        if (scope === 'all' && totalRows > rows.length) {
+          setLoading(true);
           targets = await getAllPendingRows();
-        } catch (err) {
-          const detail =
-            err instanceof Error ? err.message : 'Failed to load all pending merges';
-          logger.error('PendingMergesPage: failed to prepare bulk action', err);
-          setLoadError(detail);
-          return;
-        } finally {
-          setLoading(false);
         }
+        if (targets.length === 0) {
+          bulkLockRef.current = false;
+          return;
+        }
+        if (scope === 'all') {
+          // Materialize the stable snapshot before confirmation. This keeps
+          // progress, remaining records, cancellation, and off-page failures
+          // anchored to one visible set throughout the sweep.
+          setRows(targets);
+          setTotalRows(targets.length);
+        }
+        setBulkIntent({ scope, operation, targets });
+      } catch (err) {
+        const detail =
+          err instanceof Error ? err.message : 'Failed to load all pending merges';
+        logger.error('PendingMergesPage: failed to prepare bulk action', err);
+        setLoadError(detail);
+        bulkLockRef.current = false;
+      } finally {
+        setLoading(false);
       }
+    },
+    [anyRowBusy, bulkBusy, getAllPendingRows, rows, selectedIds, totalRows],
+  );
 
-      const count = targets.length;
-      const scopeLabel = scope === 'selected' ? ' selected' : '';
-      const consequence =
-        operation === 'Merge'
-          ? 'This will attach each incoming stream to its candidate channel.'
-          : 'This will dismiss each candidate so it can be created as a new channel.';
-      if (
-        !window.confirm(
-          `${operation} ${count}${scopeLabel} pending merge${count === 1 ? '' : 's'}? ${consequence}`,
-        )
-      ) {
-        return;
-      }
-
-      setBulkProgress({ scope, operation, current: 1, total: count });
+  const runConfirmedBulkAction = useCallback(async (intent: BulkIntent) => {
+    if (confirmingRef.current) return;
+    confirmingRef.current = true;
+    stopRequestedRef.current = false;
+    setBulkIntent(null);
+    const { scope, operation, targets } = intent;
+    const count = targets.length;
+    let completed = 0;
+    let failures = 0;
+    setBulkProgress({
+      scope,
+      operation,
+      completed,
+      total: count,
+      failures,
+      phase: 'running',
+    });
       setRowErrors((previous) => {
         const next = { ...previous };
         targets.forEach((row) => delete next[row.id]);
@@ -268,10 +323,15 @@ export function PendingMergesPage() {
         ...Object.fromEntries(targets.map((row) => [row.id, true])),
       }));
 
+    try {
       for (let index = 0; index < targets.length; index += 1) {
+        if (stopRequestedRef.current) break;
         const row = targets[index];
-        setBulkProgress({ scope, operation, current: index + 1, total: count });
         try {
+          const action =
+            operation === 'Merge'
+              ? api.acceptPendingMerge
+              : api.dismissPendingMerge;
           await action(row.id);
           setRows((previous) => previous.filter((item) => item.id !== row.id));
           setTotalRows((previous) => Math.max(0, previous - 1));
@@ -282,6 +342,7 @@ export function PendingMergesPage() {
             return next;
           });
         } catch (err) {
+          failures += 1;
           const detail =
             err instanceof Error ? err.message : `${operation} failed`;
           logger.error(
@@ -301,24 +362,56 @@ export function PendingMergesPage() {
               : [...previous, row],
           );
         }
+        completed += 1;
+        setBulkProgress({
+          scope,
+          operation,
+          completed,
+          total: count,
+          failures,
+          phase: stopRequestedRef.current ? 'stopping' : 'running',
+        });
       }
 
+      const stopped = stopRequestedRef.current && completed < count;
+      if (stopped) {
+        const unprocessedIds = targets
+          .slice(completed)
+          .map((row) => row.id);
+        setSelectedIds((previous) => new Set([...previous, ...unprocessedIds]));
+      }
       setRowBusy((previous) => {
         const next = { ...previous };
         targets.forEach((row) => delete next[row.id]);
         return next;
       });
-      setBulkProgress(null);
-    },
-    [
-      anyRowBusy,
-      bulkBusy,
-      getAllPendingRows,
-      rows,
-      selectedIds,
-      totalRows,
-    ],
-  );
+      setBulkProgress({
+        scope,
+        operation,
+        completed,
+        total: count,
+        failures,
+        phase: stopped ? 'stopped' : 'completed',
+      });
+    } finally {
+      confirmingRef.current = false;
+      bulkLockRef.current = false;
+    }
+  }, []);
+
+  const cancelBulkIntent = useCallback(() => {
+    setBulkIntent(null);
+    bulkLockRef.current = false;
+  }, []);
+
+  const stopBulkAction = useCallback(() => {
+    stopRequestedRef.current = true;
+    setBulkProgress((previous) =>
+      previous && previous.phase === 'running'
+        ? { ...previous, phase: 'stopping' }
+        : previous,
+    );
+  }, []);
 
   return (
     <div className="pending-merges-page">
@@ -364,50 +457,76 @@ export function PendingMergesPage() {
             <button
               type="button"
               className="btn-secondary"
-              onClick={() =>
-                runBulkAction('selected', 'Clear', api.dismissPendingMerge)
-              }
+              onClick={() => requestBulkAction('selected', 'Clear')}
               disabled={actionsDisabled || selectedIds.size === 0}
             >
-              {bulkProgress?.operation === 'Clear' &&
-              bulkProgress.scope === 'selected'
-                ? `Clearing ${bulkProgress.current} of ${bulkProgress.total}`
-                : 'Clear selected'}
+              Clear selected
             </button>
             <button
               type="button"
               className="btn-primary"
-              onClick={() =>
-                runBulkAction('selected', 'Merge', api.acceptPendingMerge)
-              }
+              onClick={() => requestBulkAction('selected', 'Merge')}
               disabled={actionsDisabled || selectedIds.size === 0}
             >
-              {bulkProgress?.operation === 'Merge' &&
-              bulkProgress.scope === 'selected'
-                ? `Merging ${bulkProgress.current} of ${bulkProgress.total}`
-                : 'Merge selected'}
+              Merge selected
             </button>
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => runBulkAction('all', 'Clear', api.dismissPendingMerge)}
+              onClick={() => requestBulkAction('all', 'Clear')}
               disabled={actionsDisabled}
             >
-              {bulkProgress?.operation === 'Clear' && bulkProgress.scope === 'all'
-                ? `Clearing ${bulkProgress.current} of ${bulkProgress.total}`
-                : 'Clear all'}
+              Clear all
             </button>
             <button
               type="button"
               className="btn-primary"
-              onClick={() => runBulkAction('all', 'Merge', api.acceptPendingMerge)}
+              onClick={() => requestBulkAction('all', 'Merge')}
               disabled={actionsDisabled}
             >
-              {bulkProgress?.operation === 'Merge' && bulkProgress.scope === 'all'
-                ? `Merging ${bulkProgress.current} of ${bulkProgress.total}`
-                : 'Merge all'}
+              Merge all
             </button>
           </div>
+        </div>
+      )}
+
+      {bulkProgress && (
+        <div
+          className={`pending-merges-bulk-progress pending-merges-bulk-progress-${bulkProgress.phase}`}
+          role="status"
+          aria-live="polite"
+          aria-label="Bulk action progress"
+        >
+          <span className="material-icons" aria-hidden="true">
+            {bulkProgress.phase === 'completed'
+              ? bulkProgress.failures > 0
+                ? 'warning'
+                : 'check_circle'
+              : bulkProgress.phase === 'stopped'
+                ? 'pause_circle'
+                : 'sync'}
+          </span>
+          <span>
+            {bulkProgress.phase === 'running' &&
+              `${bulkProgress.operation === 'Merge' ? 'Merged' : 'Cleared'} ${bulkProgress.completed} of ${bulkProgress.total}`}
+            {bulkProgress.phase === 'stopping' &&
+              `Stopping after the current item… ${bulkProgress.completed} of ${bulkProgress.total} processed.`}
+            {bulkProgress.phase === 'stopped' &&
+              `Stopped after ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}. ${bulkProgress.total - bulkProgress.completed} remaining.`}
+            {bulkProgress.phase === 'completed' &&
+              `Completed ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}.`}
+          </span>
+          {(bulkProgress.phase === 'running' ||
+            bulkProgress.phase === 'stopping') && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={stopBulkAction}
+              disabled={bulkProgress.phase === 'stopping'}
+            >
+              Stop
+            </button>
+          )}
         </div>
       )}
 
@@ -505,7 +624,7 @@ export function PendingMergesPage() {
                       type="button"
                       className="btn-secondary"
                       onClick={() => handleCreateNew(row.id)}
-                      disabled={busy || bulkBusy}
+                      disabled={busy || actionsDisabled}
                     >
                       Create New
                     </button>
@@ -517,7 +636,7 @@ export function PendingMergesPage() {
                           : 'btn-secondary pending-merges-merge-btn'
                       }
                       onClick={() => handleMerge(row.id)}
-                      disabled={busy || bulkBusy}
+                      disabled={busy || actionsDisabled}
                     >
                       {busy ? 'Working...' : 'Merge'}
                     </button>
@@ -536,6 +655,63 @@ export function PendingMergesPage() {
             );
           })}
         </ul>
+      )}
+
+      {bulkIntent && (
+        <ModalOverlay
+          onClose={cancelBulkIntent}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pending-merges-bulk-confirm-title"
+        >
+          <div className="modal-container modal-sm">
+            <div className="modal-header">
+              <h2 id="pending-merges-bulk-confirm-title">Confirm bulk action</h2>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={cancelBulkIntent}
+                aria-label="Close"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>
+                This will {bulkIntent.operation === 'Merge' ? 'merge' : 'clear'}{' '}
+                <strong>
+                  {bulkIntent.targets.length} pending{' '}
+                  {bulkIntent.targets.length === 1 ? 'merge' : 'merges'}
+                </strong>
+                {bulkIntent.scope === 'selected' ? ' currently selected' : ''}.
+              </p>
+              <p>
+                {bulkIntent.operation === 'Merge'
+                  ? 'Each incoming stream will be attached to its candidate channel.'
+                  : 'These candidates will be dismissed so the streams can create new channels on a future trigger.'}
+              </p>
+              <p className="pending-merges-confirm-warning">
+                This action cannot be undone.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="modal-btn modal-btn-secondary"
+                onClick={cancelBulkIntent}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="modal-btn modal-btn-danger"
+                onClick={() => runConfirmedBulkAction(bulkIntent)}
+              >
+                Confirm {bulkIntent.operation.toLowerCase()}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
       )}
     </div>
   );

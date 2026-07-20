@@ -65,6 +65,36 @@
   flex-wrap: wrap;
 }
 
+.pending-merges-bulk-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  color: var(--text-primary, #fff);
+  background: var(--bg-secondary, #252540);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg);
+}
+
+.pending-merges-bulk-progress > span:nth-child(2) {
+  flex: 1;
+}
+
+.pending-merges-bulk-progress-completed .material-icons {
+  color: var(--success, #4ade80);
+}
+
+.pending-merges-bulk-progress-stopping .material-icons,
+.pending-merges-bulk-progress-stopped .material-icons {
+  color: var(--warning, #f0ad4e);
+}
+
+.pending-merges-confirm-warning {
+  color: var(--warning, #f0ad4e);
+  font-weight: 600;
+}
+
 .pending-merges-list {
   list-style: none;
   padding: 0;
