@@ -1496,6 +1496,7 @@ class ChannelPipelineEngine:
         settings=None,
         stream_m3u_map: dict = None,
         custom_stream_ids: set[int] | None = None,
+        catchup_stream_ids: set[int] | None = None,
     ):
         """
         Pass 3.5: Reorder streams within channels using smart sort.
@@ -1508,6 +1509,8 @@ class ChannelPipelineEngine:
             stream_m3u_map = {}
         if custom_stream_ids is None:
             custom_stream_ids = set()
+        if catchup_stream_ids is None:
+            catchup_stream_ids = set()
 
         for rule in rules:
             if not rule.stream_sort_field:
@@ -1580,6 +1583,7 @@ class ChannelPipelineEngine:
                     channel_name,
                     settings,
                     custom_stream_ids=custom_stream_ids,
+                    catchup_stream_ids=catchup_stream_ids,
                 )
 
                 # Skip if order didn't change
@@ -1949,10 +1953,13 @@ class ChannelPipelineEngine:
         # the "custom_streams" Smart Sort criterion (bead ap1ud / GH #244).
         stream_m3u_map = {}
         custom_stream_ids: set[int] = set()
+        catchup_stream_ids: set[int] = set()
         for s in streams:
             stream_m3u_map[s.stream_id] = s.m3u_account_id
             if getattr(s, "is_custom", False):
                 custom_stream_ids.add(s.stream_id)
+            if getattr(s, "is_catchup", False):
+                catchup_stream_ids.add(s.stream_id)
 
         executor = ActionExecutor(
             self.client, self._existing_channels, self._existing_groups,
@@ -2624,6 +2631,7 @@ class ChannelPipelineEngine:
                 rule_channel_order_streams, results, dry_run,
                 settings=settings, stream_m3u_map=stream_m3u_map,
                 custom_stream_ids=custom_stream_ids,
+                catchup_stream_ids=catchup_stream_ids,
             )
 
             # =================================================================
@@ -5183,6 +5191,7 @@ def _smart_sort_streams(
     channel_name: str = "unknown",
     settings=None,
     custom_stream_ids: set[int] | None = None,
+    catchup_stream_ids: set[int] | None = None,
 ) -> list[int]:
     """
     Sort stream IDs using smart sort logic (mirrors stream_prober._smart_sort_streams).
@@ -5202,6 +5211,8 @@ def _smart_sort_streams(
     """
     if custom_stream_ids is None:
         custom_stream_ids = set()
+    if catchup_stream_ids is None:
+        catchup_stream_ids = set()
     if settings is None:
         # Fallback: resolution-only sort (descending)
         def fallback_key(sid):
@@ -5304,6 +5315,9 @@ def _smart_sort_streams(
                 custom_value = 1 if sid in custom_stream_ids else 0
                 values.append(-custom_value)
 
+            elif criterion == "catchup":
+                values.append(-(1 if sid in catchup_stream_ids else 0))
+
         return values
 
     def get_sort_value(sid: int) -> tuple:
@@ -5334,7 +5348,9 @@ def _smart_sort_streams(
             # unprobed-stream path). m3u_priority behaviour here is intentionally
             # left as-is (zeroed when unprobed and deprioritize_failed is off).
             unprobed_values = [
-                -(1 if sid in custom_stream_ids else 0) if criterion == "custom_streams" else 0
+                -(1 if sid in custom_stream_ids else 0) if criterion == "custom_streams"
+                else -(1 if sid in catchup_stream_ids else 0) if criterion == "catchup"
+                else 0
                 for criterion in active_criteria
             ]
             return (0, 0) + tuple(unprobed_values)
@@ -5561,6 +5577,7 @@ def _reorder_streams_for_rule(
     channel_name: str,
     settings,
     custom_stream_ids: set[int] | None = None,
+    catchup_stream_ids: set[int] | None = None,
 ) -> list[int]:
     """Dispatch stream reordering based on rule.stream_sort_field."""
     field = (getattr(rule, "stream_sort_field", None) or "").strip()
@@ -5586,6 +5603,7 @@ def _reorder_streams_for_rule(
         return _smart_sort_streams(
             stream_ids, stats_cache, stream_m3u_map, channel_name, settings,
             custom_stream_ids=custom_stream_ids,
+            catchup_stream_ids=catchup_stream_ids,
         )
 
     if field == "provider_order":
@@ -5623,6 +5641,7 @@ def _reorder_streams_for_rule(
     return _smart_sort_streams(
         stream_ids, stats_cache, stream_m3u_map, channel_name, settings,
         custom_stream_ids=custom_stream_ids,
+        catchup_stream_ids=catchup_stream_ids,
     )
 
 

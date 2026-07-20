@@ -37,7 +37,7 @@ export interface SelectionBarProfile {
 }
 
 export type SortEnabledCriteria = Record<
-  'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels' | 'custom_streams',
+  'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup',
   boolean
 >;
 
@@ -48,6 +48,7 @@ const DEFAULT_SORT_CRITERIA: SortEnabledCriteria = {
   m3u_priority: false,
   audio_channels: false,
   custom_streams: false,
+  catchup: false,
 };
 
 /** Sort-mode entries mirroring PaneToolbarMenu / SortDropdownButton labels. */
@@ -59,6 +60,7 @@ const SORT_MODE_ENTRIES: { mode: SortMode; label: string; icon: string; criterio
   { mode: 'm3u_priority', label: 'By M3U Priority', icon: 'low_priority', criterion: 'm3u_priority' },
   { mode: 'audio_channels', label: 'By Audio Channels', icon: 'surround_sound', criterion: 'audio_channels' },
   { mode: 'custom_streams', label: 'By Custom Streams', icon: 'edit_note', criterion: 'custom_streams' },
+  { mode: 'catchup', label: 'By Catch-up', icon: 'history', criterion: 'catchup' },
 ];
 
 type SubmenuId = 'move' | 'sort' | 'profiles';

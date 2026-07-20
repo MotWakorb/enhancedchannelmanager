@@ -438,6 +438,32 @@ class TestComputeSort:
         assert results[0]["channel_id"] == 1
         mock_sort.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_catchup_mode_outranks_probe_status_with_default_deprioritization(
+        self, async_client, test_session,
+    ):
+        """GH #652: the endpoint derives catch-up IDs from Dispatcharr's real field."""
+        _create_stream_stats(test_session, 10, resolution="1920x1080")
+        mock_settings = MagicMock()
+        mock_settings.m3u_account_priorities = {}
+        mock_settings.deprioritize_failed_streams = True
+        mock_client = AsyncMock()
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 10, "is_catchup": False},
+            {"id": 20, "is_catchup": True, "catchup_days": 7},
+        ]
+
+        with patch("routers.stream_stats.get_settings", return_value=mock_settings), \
+             patch("routers.stream_stats.get_client", return_value=mock_client):
+            response = await async_client.post("/api/stream-stats/compute-sort", json={
+                "channels": [{"channel_id": 1, "stream_ids": [10, 20]}],
+                "mode": "catchup",
+            })
+
+        assert response.status_code == 200
+        assert response.json()["results"][0]["sorted_stream_ids"] == [20, 10]
+        mock_client.get_streams_by_ids.assert_awaited_once_with([10, 20])
+
 
 class TestGetStreamStatsById:
     """Tests for GET /api/stream-stats/{stream_id}."""

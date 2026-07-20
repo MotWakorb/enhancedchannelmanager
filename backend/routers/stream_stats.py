@@ -371,7 +371,7 @@ async def compute_sort(request: ComputeSortRequest):
     settings = get_settings()
 
     # Determine sort priority based on mode
-    valid_criteria = {"resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"}
+    valid_criteria = {"resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"}
     if request.mode == "smart":
         sort_priority = [c for c in settings.stream_sort_priority if settings.stream_sort_enabled.get(c, False)]
         sort_enabled = {c: True for c in sort_priority}
@@ -409,9 +409,11 @@ async def compute_sort(request: ComputeSortRequest):
     # m3u_priority-only gate so custom_streams gets its data too — bead ap1ud / GH #244).
     stream_m3u_map = {}
     custom_stream_ids: set[int] = set()
+    catchup_stream_ids: set[int] = set()
     needs_m3u = "m3u_priority" in sort_priority
     needs_custom = "custom_streams" in sort_priority
-    if needs_m3u or needs_custom:
+    needs_catchup = "catchup" in sort_priority
+    if needs_m3u or needs_custom or needs_catchup:
         try:
             client = get_client()
             start_fetch = time.time()
@@ -428,15 +430,18 @@ async def compute_sort(request: ComputeSortRequest):
                     stream_m3u_map[int(stream_id)] = extract_m3u_account_id(s.get("m3u_account"))
                 if needs_custom and s.get("is_custom"):
                     custom_stream_ids.add(int(stream_id))
+                if needs_catchup and s.get("is_catchup"):
+                    catchup_stream_ids.add(int(stream_id))
         except Exception as e:
             logger.warning("[STREAM-STATS-SORT] Failed to fetch stream data for sort: %s", e)
 
     # Sort each channel
     results = []
     for ch in request.channels:
-        # M3U priority does not require probe stats; respect priorities even if stats are missing.
+        # Direct metadata-only sorts do not require probe stats; respect them
+        # even when the preferred stream has not been probed yet.
         deprioritize_failed = settings.deprioritize_failed_streams
-        if request.mode == "m3u_priority":
+        if request.mode in {"m3u_priority", "catchup"}:
             deprioritize_failed = False
 
         sorted_ids = smart_sort_streams(
@@ -452,6 +457,7 @@ async def compute_sort(request: ComputeSortRequest):
             failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
             channel_name=f"channel-{ch.channel_id}",
             custom_stream_ids=custom_stream_ids,
+            catchup_stream_ids=catchup_stream_ids,
         )
         changed = sorted_ids != ch.stream_ids
         results.append(ChannelSortResult(

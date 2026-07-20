@@ -28,7 +28,7 @@ export interface MergeChannelsRequest {
   target_stream_profile_id?: number | null;
 }
 
-export type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams';
+export type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup';
 
 export type EPGSourceType = 'xmltv' | 'schedules_direct' | 'dummy';
 export type EPGSourceStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'disabled';
@@ -2051,4 +2051,3 @@ export interface DummyEPGChannelAssignment {
   channel_id: number;
   channel_name: string;
 }
-

@@ -207,6 +207,7 @@ describe('SelectionActionBar', () => {
         m3u_priority: false,
         audio_channels: false,
         custom_streams: false,
+        catchup: false,
       },
     });
     await openMoreMenu(user);
