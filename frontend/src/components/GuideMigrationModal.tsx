@@ -295,11 +295,31 @@ export function GuideMigrationModal({
               </ul>
             </div>
           )}
-          {busy && jobProgress && (
+          {jobProgress && !applyResult && (
             <div className="guide-migration-progress" role="status">
-              Applied {jobProgress.processed} of {jobProgress.total}; updated{' '}
-              {jobProgress.result.updated}, skipped {jobProgress.result.skipped},
-              failed {jobProgress.result.failed}. Batch {jobProgress.batch_id}.
+              <h3>{busy ? 'Migration progress' : 'Last known migration progress'}</h3>
+              <p>
+                Processed {jobProgress.processed} of {jobProgress.total}; mutated{' '}
+                {jobProgress.result.mutated}, audited {jobProgress.result.updated},
+                audit failures {jobProgress.result.audit_failed}, skipped{' '}
+                {jobProgress.result.skipped}, failed {jobProgress.result.failed}.
+              </p>
+              <p>Batch {jobProgress.batch_id}.</p>
+              {jobProgress.result.results.length > 0 && (
+                <ul>
+                  {jobProgress.result.results.map((result) => {
+                    const row = preview?.rows.find(
+                      (candidate) => candidate.channel_id === result.channel_id
+                    );
+                    return (
+                      <li key={result.channel_id}>
+                        {row?.channel_name ?? `Channel ${result.channel_id}`}:{' '}
+                        {APPLY_STATUS_LABELS[result.status]}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           )}
         </div>

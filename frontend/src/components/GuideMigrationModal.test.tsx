@@ -257,7 +257,9 @@ describe('GuideMigrationModal', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 migration' }));
     expect(
-      await screen.findByText(/Applied 1 of 2; updated 1, skipped 0, failed 0/)
+      await screen.findByText(
+        /Processed 1 of 2; mutated 1, audited 1, audit failures 0, skipped 0, failed 0/
+      )
     ).toBeInTheDocument();
     rejectApply(new Error('Preview token expired. Preview again.'));
     expect(await screen.findByRole('alert')).toHaveClass('error-banner');
@@ -310,6 +312,18 @@ describe('GuideMigrationModal', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('0123456789abcdef0123456789abcdef');
     await waitFor(() => expect(alert).toHaveFocus());
+    expect(
+      screen.getByRole('heading', { name: 'Last known migration progress' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Processed 1 of 2; mutated 1, audited 1, audit failures 0, skipped 0, failed 0.'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Batch 0123456789abcdef0123456789abcdef.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('News: Updated and audited')).toBeInTheDocument();
   });
 
   it('aborts polling when the modal unmounts', async () => {
