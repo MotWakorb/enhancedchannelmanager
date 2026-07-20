@@ -13,6 +13,7 @@ import {
   deleteChannel,
   bulkCommit,
   getChannelMergeCandidates,
+  getPendingMergesSnapshot,
   // Compute sort
   computeSort,
   // Stale streams (enhancedchannelmanager-n4g7g)
@@ -208,6 +209,32 @@ describe('API Service', () => {
       expect(requestUrl).toContain('stream_name=CNN');
       expect(requestUrl).not.toContain('group_id=');
     });
+  });
+
+  it('gets the complete pending-merges snapshot from the static snapshot route', async () => {
+    server.use(
+      http.get('/api/channel-merges/snapshot', () =>
+        HttpResponse.json({ merges: [], total: 0 }),
+      ),
+    );
+    await expect(getPendingMergesSnapshot()).resolves.toEqual({
+      merges: [],
+      total: 0,
+    });
+  });
+
+  it('scopes a pending-merges snapshot to the requested group', async () => {
+    let requestUrl = '';
+    server.use(
+      http.get('/api/channel-merges/snapshot', ({ request }) => {
+        requestUrl = request.url;
+        return HttpResponse.json({ merges: [], total: 0 });
+      }),
+    );
+
+    await getPendingMergesSnapshot({ groupId: 17 });
+
+    expect(requestUrl).toContain('group_id=17');
   });
 
   describe('addStreamToChannel', () => {

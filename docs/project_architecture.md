@@ -166,17 +166,48 @@ See `css-guidelines.md` for full details. Layers: design tokens (`index.css`) â†
 ## Build & Deploy
 
 ```bash
-# Build frontend
-cd frontend && npm run build     # Output: frontend/dist/
+# Deploy a frontend-only change (build, remove stale assets, and copy)
+scripts/deploy-frontend.sh
 
-# Deploy to container (dev workflow)
-docker cp frontend/dist/. ecm-ecm-1:/app/static/   # Frontend only
+# Deploy a backend-only change
 docker cp backend/main.py ecm-ecm-1:/app/main.py    # Backend core
 docker cp backend/routers/. ecm-ecm-1:/app/routers/  # Backend routers (requires restart)
-
-# Restart backend in container
 docker restart ecm-ecm-1
 ```
+
+For a coupled change where the frontend calls a new or changed backend route,
+deploy and restart the backend first. Confirm that the container is running,
+then deploy the frontend:
+
+```bash
+docker cp backend/main.py ecm-ecm-1:/app/main.py
+docker cp backend/routers/. ecm-ecm-1:/app/routers/
+docker restart ecm-ecm-1
+ready=0
+for attempt in $(seq 1 30); do
+  if docker exec ecm-ecm-1 python -c "import os, urllib.request; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=2)" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo "ECM backend did not become ready; frontend was not deployed" >&2
+  docker logs --tail 100 ecm-ecm-1 >&2
+  exit 1
+fi
+scripts/deploy-frontend.sh
+```
+
+The readiness loop is bounded to 30 attempts with a two-second request timeout.
+It probes the public `/api/health/ready` endpoint from inside the container, so
+it honors the configured `ECM_PORT` and needs no credentials. If readiness
+fails, it prints the latest container logs and exits before frontend deployment.
+
+Roll back a coupled change in reverse dependency order: restore and deploy the
+previous frontend build first, then restore the previous backend files and
+restart `ecm-ecm-1`. This keeps the newer backend contract available until the
+dependent frontend is no longer live.
 
 ## Config & Data
 

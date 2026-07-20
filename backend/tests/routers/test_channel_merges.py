@@ -320,6 +320,133 @@ class TestListPendingMergesCandidateNameResolution:
         assert row["candidate_channel_group_name"] == "Sports"
         mock_client.get_channels.assert_called_once()
 
+
+class TestPendingMergesSnapshot:
+    """GH #642 coherent, admin-gated read snapshot."""
+
+    @pytest.mark.asyncio
+    async def test_pending_only_deterministic_order_and_full_serialization(
+        self, async_client, test_session
+    ):
+        older = _make_pending(
+            test_session, stream_name="Older", candidate_channel_id="501",
+            created_at=100,
+        )
+        newer = _make_pending(
+            test_session, stream_name="Newer", candidate_channel_id="999",
+            created_at=200,
+        )
+        _make_pending(test_session, stream_name="Done", status="merged", created_at=300)
+        mock_client = _mock_dispatcharr_channels_client([
+            {
+                "id": 501, "name": "Resolved", "channel_number": 7.0,
+                "channel_group_name": "Sports",
+            }
+        ])
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges/snapshot")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert [row["id"] for row in data["merges"]] == [newer.id, older.id]
+        assert data["merges"][0]["candidate_channel_name"] is None
+        assert data["merges"][1]["candidate_channel_name"] == "Resolved"
+        assert data["merges"][1]["candidate_channel_number"] == 7.0
+        assert data["merges"][1]["candidate_channel_group_name"] == "Sports"
+        assert data["merges"][1]["trigger_context"] == "m3u_refresh"
+
+    @pytest.mark.asyncio
+    async def test_optional_group_filter_scopes_complete_snapshot(
+        self, async_client, test_session
+    ):
+        in_scope = _make_pending(
+            test_session, stream_name="Sports", group_id=7, created_at=100,
+        )
+        _make_pending(
+            test_session, stream_name="News", group_id=8, created_at=200,
+        )
+
+        response = await async_client.get(
+            "/api/channel-merges/snapshot", params={"group_id": 7},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert [row["id"] for row in response.json()["merges"]] == [in_scope.id]
+
+    @pytest.mark.asyncio
+    async def test_group_filter_is_applied_before_snapshot_safety_cap(
+        self, async_client, test_session
+    ):
+        target = _make_pending(
+            test_session, stream_name="Target", group_id=7, created_at=100,
+        )
+        _make_pending(
+            test_session, stream_name="Other 1", group_id=8, created_at=300,
+        )
+        _make_pending(
+            test_session, stream_name="Other 2", group_id=8, created_at=200,
+        )
+        _make_pending(
+            test_session, stream_name="Resolved", group_id=7,
+            status="merged", created_at=400,
+        )
+
+        with patch("routers.channel_merges.MAX_SNAPSHOT_ROWS", 1):
+            response = await async_client.get(
+                "/api/channel-merges/snapshot", params={"group_id": 7},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert [row["id"] for row in response.json()["merges"]] == [target.id]
+
+    @pytest.mark.asyncio
+    async def test_safety_cap_fails_closed(self, async_client, test_session):
+        _make_pending(test_session, stream_name="One")
+        _make_pending(test_session, stream_name="Two")
+        with patch("routers.channel_merges.MAX_SNAPSHOT_ROWS", 1):
+            response = await async_client.get("/api/channel-merges/snapshot")
+        assert response.status_code == 409
+        assert "safety limit of 1" in response.json()["detail"]
+        assert "Nothing was changed" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_exact_cap_is_returned_and_created_at_ties_use_id_desc(
+        self, async_client, test_session
+    ):
+        first = _make_pending(test_session, stream_name="First", created_at=100)
+        second = _make_pending(test_session, stream_name="Second", created_at=100)
+        with patch("routers.channel_merges.MAX_SNAPSHOT_ROWS", 2):
+            response = await async_client.get("/api/channel-merges/snapshot")
+        assert response.status_code == 200
+        assert response.json()["total"] == 2
+        assert [row["id"] for row in response.json()["merges"]] == [
+            second.id,
+            first.id,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_non_admin_is_forbidden(self, async_client):
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as admin_dependency
+
+        async def reject_non_admin() -> None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        app.dependency_overrides[admin_dependency.dependency] = reject_non_admin
+        try:
+            response = await async_client.get("/api/channel-merges/snapshot")
+        finally:
+            app.dependency_overrides.pop(admin_dependency.dependency, None)
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
     @pytest.mark.asyncio
     async def test_candidate_deleted_since_queuing_returns_null_fields(
         self, async_client, test_session

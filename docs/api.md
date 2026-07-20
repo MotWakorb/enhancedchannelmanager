@@ -100,10 +100,11 @@ See [`docs/user_guide/channels-streams/stream-dedup.md`](user_guide/channels-str
 |-|-|
 | `GET /api/channel-merges/candidates` | Synchronous candidate lookup — find the best matching channel for an incoming stream name |
 | `GET /api/channel-merges` | List pending (or resolved) merge rows, paginated |
+| `GET /api/channel-merges/snapshot` | Read one coherent, bounded snapshot of the complete pending queue |
 | `POST /api/channel-merges/{id}/accept` | Accept the dedup candidate — merge the stream into the candidate channel |
 | `POST /api/channel-merges/{id}/dismiss` | Dismiss the dedup candidate — signal that a new channel should be created |
 
-All endpoints require JWT Bearer token authentication. `GET /api/channel-merges/candidates` and `GET /api/channel-merges` require `RequireAuthIfEnabled`. The `POST` mutation endpoints (`/accept`, `/dismiss`) require `RequireAdminIfEnabled`.
+All endpoints require JWT Bearer token authentication. `GET /api/channel-merges` requires `RequireAuthIfEnabled`. The candidate lookup, complete snapshot, and `POST` mutation endpoints require `RequireAdminIfEnabled`.
 
 ---
 
@@ -193,6 +194,51 @@ Returns the paginated list of channel merge rows. Use the `status` query paramet
 ```
 
 `trigger_context` is one of `drag_drop`, `add_stream`, `m3u_refresh`, `mcp_tool`. `created_at` and `resolved_at` are epoch milliseconds (UTC). Terminal-state rows (`merged`, `dismissed`) have `resolved_at` populated and `resolution_source` set to `operator`, `auto`, `bulk_m3u_hook`, or `mcp_tool`.
+
+---
+
+### `GET /api/channel-merges/snapshot`
+
+Returns one deterministic snapshot of the complete `pending` queue for Select
+all, selected Refresh, and queue-wide confirmation. The route is read-only but
+**requires admin authorization** because it exposes the complete destructive
+action target set. Optional `group_id` scopes the snapshot to pending records
+in one channel group, matching the list endpoint's group filter. Clients must
+forward the active list scope so a bulk action cannot target another group.
+
+The database record set is read by one ordered query (`created_at DESC`,
+`id DESC`). Candidate name, number, and group enrichment follows the paginated
+list serializer; unresolved candidates retain their ID and return null
+enrichment fields.
+
+**Response: `200 OK`**
+
+```json
+{
+  "merges": [
+    {
+      "id": 42,
+      "stream_name": "ESPN HD",
+      "group_id": 12,
+      "candidate_channel_id": "a1b2c3d4-e5f6-...",
+      "candidate_channel_name": "ESPN",
+      "candidate_channel_number": 101,
+      "candidate_channel_group_name": "Sports",
+      "confidence": 0.87,
+      "status": "pending",
+      "trigger_context": "m3u_refresh",
+      "created_at": 1747497600000,
+      "resolved_at": null,
+      "resolution_source": null
+    }
+  ],
+  "total": 1
+}
+```
+
+The safety ceiling is 20,000 pending records. If the queue exceeds it, ECM
+returns **`409 Conflict`** with `detail` stating the limit and that nothing was
+changed; it never returns a partial snapshot.
 
 ---
 
