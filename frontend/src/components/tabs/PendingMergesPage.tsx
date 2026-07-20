@@ -30,7 +30,7 @@
  * amplifying concurrent Dispatcharr mutations; failures do not stop later
  * rows, and only successful rows are removed.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
 import type { PendingMergeRecord } from '../../services/api';
 import { logger } from '../../utils/logger';
@@ -55,12 +55,17 @@ export function PendingMergesPage() {
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const selectedIdsRef = useRef(selectedIds);
   const [bulkProgress, setBulkProgress] = useState<{
     scope: 'all' | 'selected';
     operation: 'Merge' | 'Clear';
     current: number;
     total: number;
   } | null>(null);
+
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -71,9 +76,27 @@ export function PendingMergesPage() {
         page: 1,
         pageSize: PAGE_SIZE,
       });
-      setRows(response.merges);
+      let refreshedRows = response.merges;
+      // A refresh while records are selected must reconcile those selections
+      // against the whole queue, not just page one. Otherwise an off-page
+      // selected failure can disappear from the retry surface.
+      if (selectedIdsRef.current.size > 0 && response.total > response.merges.length) {
+        const pageSize = 200;
+        const totalPages = Math.ceil(response.total / pageSize);
+        const allRows: PendingMergeRecord[] = [];
+        for (let page = 1; page <= totalPages; page += 1) {
+          const pageResponse = await api.getPendingMerges({
+            status: 'pending',
+            page,
+            pageSize,
+          });
+          allRows.push(...pageResponse.merges);
+        }
+        refreshedRows = allRows;
+      }
+      setRows(refreshedRows);
       setTotalRows(response.total);
-      const loadedIds = new Set(response.merges.map((row) => row.id));
+      const loadedIds = new Set(refreshedRows.map((row) => row.id));
       setSelectedIds((previous) => {
         const next = new Set([...previous].filter((id) => loadedIds.has(id)));
         return next.size === previous.size ? previous : next;
@@ -173,6 +196,24 @@ export function PendingMergesPage() {
     return allRows;
   }, [rows, totalRows]);
 
+  const handleSelectAll = useCallback(async () => {
+    if (actionsDisabled) return;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const allRows = await getAllPendingRows();
+      setRows(allRows);
+      setSelectedIds(new Set(allRows.map((row) => row.id)));
+    } catch (err) {
+      const detail =
+        err instanceof Error ? err.message : 'Failed to load all pending merges';
+      logger.error('PendingMergesPage: failed to select whole queue', err);
+      setLoadError(detail);
+    } finally {
+      setLoading(false);
+    }
+  }, [actionsDisabled, getAllPendingRows]);
+
   const runBulkAction = useCallback(
     async (
       scope: 'all' | 'selected',
@@ -251,6 +292,14 @@ export function PendingMergesPage() {
           );
           setRowErrors((previous) => ({ ...previous, [row.id]: detail }));
           setSelectedIds((previous) => new Set(previous).add(row.id));
+          // All-queue snapshots may contain records that were never on the
+          // visible first page. Pin a failed record into the rendered list so
+          // its verbatim error and per-row retry controls remain reachable.
+          setRows((previous) =>
+            previous.some((item) => item.id === row.id)
+              ? previous
+              : [...previous, row],
+          );
         }
       }
 
@@ -296,8 +345,11 @@ export function PendingMergesPage() {
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => setSelectedIds(new Set(rows.map((row) => row.id)))}
-              disabled={actionsDisabled || selectedIds.size === rows.length}
+              onClick={handleSelectAll}
+              disabled={
+                actionsDisabled ||
+                (selectedIds.size === totalRows && rows.length >= totalRows)
+              }
             >
               Select all
             </button>
@@ -366,7 +418,7 @@ export function PendingMergesPage() {
         </div>
       )}
 
-      {!loading && rows.length === 0 && !loadError && (
+      {!loading && rows.length === 0 && totalRows === 0 && !loadError && (
         <div className="empty-state">
           <span className="material-icons">inbox</span>
           <h3>No pending merges</h3>
