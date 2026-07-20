@@ -2,11 +2,41 @@
   "capture": {
     "source": "Dispatcharr live XMLTV cache and /api/epg/epgdata/ response",
     "captured_at": "2026-07-20",
-    "redaction": "Names and identifiers replaced; element names, scalar types, and nesting retained"
+    "redaction": "Names and identifiers replaced; element names, scalar types, and nesting retained",
+    "survey": {
+      "xmltv_channel_rows_examined": 19867,
+      "id_equals_gnid_equals_lcn": 19867,
+      "duplicate_lcn_rows_within_source": 0,
+      "schedules_direct_epg_rows_examined": 3033,
+      "schedules_direct_duplicate_tvg_ids": 0
+    }
   },
   "xmltv": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><tv><channel id=\"10101\"><display-name>WXYZ Test</display-name><display-name>WXYZ</display-name><icon src=\"https://example.invalid/logo.png\"/><lcn>10101</lcn><gnid>10101</gnid></channel><programme channel=\"10101\" start=\"20260720000000 +0000\" stop=\"20260720010000 +0000\"><title>Recorded test programme</title></programme></tv>",
+  "source_response": [
+    {
+      "id": 22,
+      "name": "Recorded XMLTV",
+      "source_type": "xmltv",
+      "url": "https://example.invalid/epg.xml",
+      "file_path": "/app/media/cached_epg/22.xml",
+      "custom_properties": {}
+    },
+    {
+      "id": 20,
+      "name": "Recorded Schedules Direct",
+      "source_type": "schedules_direct",
+      "url": null,
+      "file_path": null,
+      "custom_properties": {
+        "auto_apply_epg_logos": false,
+        "fetch_posters": true,
+        "logo_style": "light",
+        "poster_style": "show"
+      }
+    }
+  ],
   "epgdata_response": {
-    "count": 1,
+    "count": 2,
     "next": null,
     "previous": null,
     "results": [
@@ -15,6 +45,13 @@
         "icon_url": "https://example.invalid/logo.png",
         "id": 101,
         "name": "WXYZ Test",
+        "tvg_id": "10101"
+      },
+      {
+        "epg_source": 22,
+        "icon_url": "https://example.invalid/logo.png",
+        "id": 102,
+        "name": "WXYZ Test XML",
         "tvg_id": "10101"
       }
     ]

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { EPGSource } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
@@ -7,7 +7,7 @@ interface Props {
   isOpen: boolean;
   sources: EPGSource[];
   onClose: () => void;
-  onApplied: (updated: number, skipped: number, failed: number) => void;
+  onApplied: (result: Awaited<ReturnType<typeof api.applyGuideMigration>>) => void;
 }
 
 const STATUS_LABELS: Record<api.GuideMigrationStatus, string> = {
@@ -17,6 +17,7 @@ const STATUS_LABELS: Record<api.GuideMigrationStatus, string> = {
   missing_lcn: 'LCN not found',
   missing_target: 'No target match',
   ambiguous_target: 'Ambiguous target',
+  unsupported_origin: 'Unsupported source type',
 };
 
 export function GuideMigrationModal({
@@ -35,6 +36,13 @@ export function GuideMigrationModal({
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [applyResult, setApplyResult] = useState<Awaited<
+    ReturnType<typeof api.applyGuideMigration>
+  > | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const targetRef = useRef<HTMLSelectElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
 
   useEffect(() => {
     if (!isOpen) {
@@ -43,7 +51,38 @@ export function GuideMigrationModal({
       setConfirmed(false);
       setError(null);
       setBusy(false);
+      setApplyResult(null);
     }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const frame = window.requestAnimationFrame(() => targetRef.current?.focus());
+    const handleTab = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !containerRef.current) return;
+      const focusable = Array.from(
+        containerRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), select:not([disabled]), input:not([disabled])'
+        )
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleTab);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', handleTab);
+      previousFocusRef.current?.focus();
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -53,6 +92,7 @@ export function GuideMigrationModal({
     setError(null);
     setPreview(null);
     setConfirmed(false);
+    setApplyResult(null);
     try {
       setPreview(await api.previewGuideMigration(Number(targetId)));
     } catch (err) {
@@ -68,8 +108,9 @@ export function GuideMigrationModal({
     setError(null);
     try {
       const result = await api.applyGuideMigration(preview);
-      onApplied(result.updated, result.skipped, result.failed);
-      onClose();
+      onApplied(result);
+      setApplyResult(result);
+      setBusy(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Guide migration failed');
       setBusy(false);
@@ -78,10 +119,15 @@ export function GuideMigrationModal({
 
   const ready = preview?.counts.ready ?? 0;
   return (
-    <ModalOverlay onClose={busy ? () => undefined : onClose}>
-      <div className="modal-container modal-lg guide-migration-modal">
+    <ModalOverlay
+      onClose={busy ? () => undefined : onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+    >
+      <div ref={containerRef} className="modal-container modal-lg guide-migration-modal">
         <div className="modal-header">
-          <h2>Migrate channel guides</h2>
+          <h2 id={titleId}>Migrate channel guides</h2>
           <button
             className="modal-close-btn"
             onClick={onClose}
@@ -100,6 +146,7 @@ export function GuideMigrationModal({
             <label htmlFor="guide-migration-target">Target EPG source</label>
             <select
               id="guide-migration-target"
+              ref={targetRef}
               value={targetId}
               onChange={(event) => {
                 setTargetId(event.target.value);
@@ -170,15 +217,37 @@ export function GuideMigrationModal({
               )}
             </>
           )}
+          {applyResult && (
+            <div className="guide-migration-results" role="status">
+              <h3>Apply results</h3>
+              <p>
+                Mutated {applyResult.mutated}; audited {applyResult.updated};
+                audit failures {applyResult.audit_failed}; skipped {applyResult.skipped};
+                failed {applyResult.failed}.
+              </p>
+              <ul>
+                {applyResult.results.map((result) => {
+                  const row = preview?.rows.find(
+                    (candidate) => candidate.channel_id === result.channel_id
+                  );
+                  return (
+                    <li key={result.channel_id}>
+                      {row?.channel_name ?? `Channel ${result.channel_id}`}: {result.status}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
         </div>
         <div className="modal-footer">
           <button className="btn-secondary" onClick={onClose} disabled={busy}>
-            Cancel
+            {applyResult ? 'Done' : 'Cancel'}
           </button>
           <button
             className="btn-primary"
             onClick={apply}
-            disabled={!preview || ready === 0 || !confirmed || busy}
+            disabled={!preview || ready === 0 || !confirmed || busy || !!applyResult}
           >
             {busy && preview ? 'Applying…' : `Apply ${ready} migration${ready === 1 ? '' : 's'}`}
           </button>

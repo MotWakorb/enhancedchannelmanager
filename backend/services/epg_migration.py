@@ -5,15 +5,22 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import secrets
 import io
+import base64
+import time
+import uuid
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
 
-_TOKEN_KEY = secrets.token_bytes(32)
+PREVIEW_AUDIENCE = "ecm-guide-migration-apply"
+PREVIEW_TTL_SECONDS = 300
+
+
+class PreviewTokenError(ValueError):
+    """A preview token is invalid, expired, or for another actor/instance."""
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,8 @@ def preview_migration(
             "lcn": None,
             "target_epg_data_id": None,
             "target_name": None,
+            "current_tvg_id": current.get("tvg_id") if current else None,
+            "target_tvg_id": None,
         }
         if current is None:
             rows.append({**base, "status": "unassigned"})
@@ -108,6 +117,12 @@ def preview_migration(
         )
         if current_source_id == target_source_id:
             rows.append({**base, "status": "already_target"})
+            continue
+        if current_source is None or current_source.get("source_type") not in {
+            "xmltv",
+            "schedules_direct",
+        }:
+            rows.append({**base, "status": "unsupported_origin"})
             continue
 
         current_tvg = str(current.get("tvg_id") or "")
@@ -144,34 +159,98 @@ def preview_migration(
                     "status": "ready",
                     "target_epg_data_id": candidate["id"],
                     "target_name": candidate.get("name"),
+                    "target_tvg_id": candidate.get("tvg_id"),
                 }
             )
     return rows
 
 
-def sign_ready_rows(target_source_id: int, rows: list[dict[str, Any]]) -> str:
-    payload = _token_payload(target_source_id, rows)
-    return hmac.new(_TOKEN_KEY, payload, hashlib.sha256).hexdigest()
-
-
-def verify_ready_rows(
-    target_source_id: int, rows: list[dict[str, Any]], token: str
-) -> bool:
-    expected = sign_ready_rows(target_source_id, rows)
-    return hmac.compare_digest(expected, token)
-
-
-def _token_payload(target_source_id: int, rows: list[dict[str, Any]]) -> bytes:
+def _ready_identity(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     canonical = [
         {
             "channel_id": row["channel_id"],
             "current_epg_data_id": row["current_epg_data_id"],
+            "current_source_id": row["current_source_id"],
+            "current_tvg_id": row["current_tvg_id"],
+            "lcn": row["lcn"],
             "target_epg_data_id": row["target_epg_data_id"],
+            "target_tvg_id": row["target_tvg_id"],
         }
         for row in rows
     ]
-    return json.dumps(
-        {"target_source_id": target_source_id, "rows": canonical},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
+    return canonical
+
+
+def create_preview_token(
+    *,
+    secret: str,
+    issuer: str,
+    actor: str,
+    target_source_id: int,
+    rows: list[dict[str, Any]],
+    now: int | None = None,
+    ttl_seconds: int = PREVIEW_TTL_SECONDS,
+) -> str:
+    issued = int(time.time() if now is None else now)
+    envelope = {
+        "v": 1,
+        "iss": issuer,
+        "aud": PREVIEW_AUDIENCE,
+        "sub": actor,
+        "iat": issued,
+        "exp": issued + ttl_seconds,
+        "jti": uuid.uuid4().hex,
+        "target_source_id": target_source_id,
+        "rows": _ready_identity(rows),
+    }
+    payload = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=")
+    signature = hmac.new(secret.encode(), encoded, hashlib.sha256).digest()
+    return (
+        encoded.decode()
+        + "."
+        + base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
+    )
+
+
+def verify_preview_token(
+    *,
+    token: str,
+    secret: str,
+    issuer: str,
+    actor: str,
+    target_source_id: int,
+    rows: list[dict[str, Any]],
+    now: int | None = None,
+) -> dict[str, Any]:
+    try:
+        encoded, encoded_signature = token.split(".", 1)
+        signature = base64.urlsafe_b64decode(
+            encoded_signature + "=" * (-len(encoded_signature) % 4)
+        )
+        expected = hmac.new(secret.encode(), encoded.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise PreviewTokenError("Preview signature is invalid.")
+        payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        envelope = json.loads(payload)
+    except PreviewTokenError:
+        raise
+    except Exception as exc:
+        raise PreviewTokenError("Preview token is malformed.") from exc
+
+    current = int(time.time() if now is None else now)
+    if envelope.get("v") != 1:
+        raise PreviewTokenError("Preview token version is unsupported.")
+    if envelope.get("iss") != issuer or envelope.get("aud") != PREVIEW_AUDIENCE:
+        raise PreviewTokenError("Preview token belongs to another instance or audience.")
+    if envelope.get("sub") != actor:
+        raise PreviewTokenError("Preview token belongs to another actor.")
+    if not isinstance(envelope.get("iat"), int) or not isinstance(envelope.get("exp"), int):
+        raise PreviewTokenError("Preview token timestamps are invalid.")
+    if envelope["iat"] > current + 30 or envelope["exp"] <= current:
+        raise PreviewTokenError("Preview token is expired or not yet valid.")
+    if envelope.get("target_source_id") != target_source_id:
+        raise PreviewTokenError("Preview target source changed.")
+    if envelope.get("rows") != _ready_identity(rows):
+        raise PreviewTokenError("Preview assignments changed.")
+    return envelope

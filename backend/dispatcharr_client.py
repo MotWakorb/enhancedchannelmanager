@@ -1180,6 +1180,7 @@ class DispatcharrClient:
         page_size: int = 500,
         search: Optional[str] = None,
         epg_source: Optional[int] = None,
+        max_results: Optional[int] = None,
     ) -> list:
         """Get all EPG data entries.
 
@@ -1198,10 +1199,12 @@ class DispatcharrClient:
 
         # New Dispatcharr: flat list response
         if isinstance(data, list):
-            return data
+            return data[:max_results] if max_results is not None else data
 
         # Old Dispatcharr: paginated dict response - fetch all pages
         all_results = data.get("results", [])
+        if max_results is not None and len(all_results) >= max_results:
+            return all_results[:max_results]
         while data.get("next"):
             page += 1
             params["page"] = page
@@ -1213,8 +1216,10 @@ class DispatcharrClient:
                 all_results.extend(data)
                 break
             all_results.extend(data.get("results", []))
+            if max_results is not None and len(all_results) >= max_results:
+                return all_results[:max_results]
 
-        return all_results
+        return all_results[:max_results] if max_results is not None else all_results
 
     async def get_epg_data_by_id(self, data_id: int) -> dict:
         """Get a single EPG data entry by ID."""

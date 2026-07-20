@@ -578,3 +578,15 @@
   gap: 0.5rem;
   font-weight: 600;
 }
+
+.guide-migration-results {
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+}
+
+.guide-migration-results ul {
+  max-height: 12rem;
+  overflow: auto;
+  margin-bottom: 0;
+}

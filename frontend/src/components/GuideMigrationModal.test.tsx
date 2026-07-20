@@ -25,6 +25,7 @@ const preview: api.GuideMigrationPreview = {
     missing_lcn: 0,
     missing_target: 1,
     ambiguous_target: 0,
+    unsupported_origin: 0,
   },
   rows: [
     {
@@ -36,6 +37,8 @@ const preview: api.GuideMigrationPreview = {
       lcn: '10101',
       target_epg_data_id: 22,
       target_name: 'News SD',
+      current_tvg_id: 'iptv.news',
+      target_tvg_id: '10101',
       status: 'ready',
     },
     {
@@ -47,6 +50,8 @@ const preview: api.GuideMigrationPreview = {
       lcn: '20202',
       target_epg_data_id: null,
       target_name: null,
+      current_tvg_id: 'iptv.local',
+      target_tvg_id: null,
       status: 'missing_target',
     },
   ],
@@ -58,10 +63,13 @@ describe('GuideMigrationModal', () => {
   it('requires a target, preview, and explicit confirmation before apply', async () => {
     vi.mocked(api.previewGuideMigration).mockResolvedValue(preview);
     vi.mocked(api.applyGuideMigration).mockResolvedValue({
+      mutated: 1,
       updated: 1,
+      audit_failed: 0,
       skipped: 0,
       failed: 0,
       results: [{ channel_id: 7, status: 'updated' }],
+      batch_id: 'batch01',
     });
     const onApplied = vi.fn();
     const onClose = vi.fn();
@@ -74,6 +82,11 @@ describe('GuideMigrationModal', () => {
       />
     );
 
+    const dialog = screen.getByRole('dialog', { name: 'Migrate channel guides' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    await waitFor(() =>
+      expect(screen.getByLabelText('Target EPG source')).toHaveFocus()
+    );
     const previewButton = screen.getByRole('button', { name: 'Preview migration' });
     expect(previewButton).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Target EPG source'), {
@@ -91,7 +104,12 @@ describe('GuideMigrationModal', () => {
     fireEvent.click(applyButton);
 
     await waitFor(() => expect(api.applyGuideMigration).toHaveBeenCalledWith(preview));
-    expect(onApplied).toHaveBeenCalledWith(1, 0, 0);
+    expect(onApplied).toHaveBeenCalledWith(
+      expect.objectContaining({ mutated: 1, updated: 1 })
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText('News: updated')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(onClose).toHaveBeenCalled();
   });
 

@@ -19,6 +19,8 @@ guide assignment; it does not rename, renumber, or replace the channel.
    - **LCN not found** — the current XMLTV channel has no usable station ID.
    - **No target match** — the target contains no matching station ID.
    - **Ambiguous target** — more than one target row uses that station ID.
+   - **Unsupported source type** — the current assignment belongs to a dummy
+     or unknown source. Only XMLTV and Schedules Direct origins are eligible.
 
 **Result:** You can inspect the exact ready count and every unresolved channel
 before ECM writes anything.
@@ -30,10 +32,12 @@ before ECM writes anything.
 3. Select **Apply N migrations** (the button repeats the exact ready count).
 
 **Result:** ECM changes only rows marked **Ready**. Missing and ambiguous rows
-remain untouched. If another user changes a guide after the preview, ECM skips
-that channel instead of overwriting the newer assignment. The completion
-message reports updated, skipped, and failed counts; successful changes are
-also written to the Journal.
+remain untouched. The signed preview expires after five minutes and is bound to
+the current administrator, ECM instance, target source, LCN, and exact current
+and target EPG identities. If the source mapping, EPG row, or channel assignment
+changes after preview, ECM skips that channel instead of overwriting the newer
+state. Results stay open in the dialog and report every updated, skipped, failed,
+or updated-but-not-audited row.
 
 ## Limits and recovery
 
@@ -45,3 +49,22 @@ only the remaining ready rows.
 ECM does not provide an automatic undo for a migration. To reverse it, choose
 the former source as the target, preview the reverse mapping, and confirm the
 ready rows.
+
+Preview tokens are intentionally short-lived but are not stored in a one-time
+token database. Replaying one after a successful apply is idempotent: the
+apply-time current-assignment check skips already changed channels. ECM
+serializes migration applies and refetches each channel immediately before its
+PATCH. Dispatcharr does not offer a compare-and-swap update, so another
+non-migration writer can still change a channel in the small interval between
+that refetch and the PATCH.
+
+Each successful upstream mutation is written to the Journal under a shared
+batch ID. Dispatcharr and ECM's Journal are separate systems and cannot commit
+atomically. If the channel PATCH succeeds but the Journal write fails, ECM
+reports **updated_audit_failed** and does not claim a clean audited success or
+retry the mutation automatically.
+
+XMLTV downloads use ECM's established outbound SSRF policy: HTTP(S) only,
+resolve-and-connect by validated IP, and every redirect is revalidated.
+Link-local/cloud-metadata destinations are always blocked; RFC1918 and loopback
+follow the instance's global LAN-friendly/public-only outbound setting.

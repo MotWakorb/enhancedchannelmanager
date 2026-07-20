@@ -1862,7 +1862,8 @@ export type GuideMigrationStatus =
   | 'unassigned'
   | 'missing_lcn'
   | 'missing_target'
-  | 'ambiguous_target';
+  | 'ambiguous_target'
+  | 'unsupported_origin';
 
 export interface GuideMigrationRow {
   channel_id: number;
@@ -1873,6 +1874,8 @@ export interface GuideMigrationRow {
   lcn: string | null;
   target_epg_data_id: number | null;
   target_name: string | null;
+  current_tvg_id: string | null;
+  target_tvg_id: string | null;
   status: GuideMigrationStatus;
 }
 
@@ -1894,17 +1897,24 @@ export async function previewGuideMigration(
 }
 
 export async function applyGuideMigration(preview: GuideMigrationPreview): Promise<{
+  mutated: number;
   updated: number;
+  audit_failed: number;
   skipped: number;
   failed: number;
   results: Array<{ channel_id: number; status: string }>;
+  batch_id: string;
 }> {
   const items = preview.rows
     .filter((row) => row.status === 'ready')
     .map((row) => ({
       channel_id: row.channel_id,
       current_epg_data_id: row.current_epg_data_id,
+      current_source_id: row.current_source_id,
+      current_tvg_id: row.current_tvg_id,
+      lcn: row.lcn,
       target_epg_data_id: row.target_epg_data_id,
+      target_tvg_id: row.target_tvg_id,
     }));
   return fetchJson(`${API_BASE}/epg/migration/apply`, {
     method: 'POST',

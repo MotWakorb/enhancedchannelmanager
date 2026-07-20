@@ -1269,15 +1269,15 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         isOpen={migrationOpen}
         sources={sources}
         onClose={() => setMigrationOpen(false)}
-        onApplied={(updated, skipped, failed) => {
-          if (failed > 0) {
+        onApplied={(result) => {
+          if (result.failed > 0 || result.audit_failed > 0) {
             notifications.warning(
-              `Migrated ${updated} channel guides; ${skipped} skipped and ${failed} failed.`,
+              `Migrated ${result.mutated} channel guides; ${result.skipped} skipped, ${result.failed} failed, and ${result.audit_failed} audit writes failed.`,
               'Guide Migration'
             );
           } else {
             notifications.success(
-              `Migrated ${updated} channel guides${skipped ? `; ${skipped} skipped` : ''}.`,
+              `Migrated ${result.mutated} channel guides${result.skipped ? `; ${result.skipped} skipped` : ''}.`,
               'Guide Migration'
             );
           }
