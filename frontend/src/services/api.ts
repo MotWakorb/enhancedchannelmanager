@@ -4509,8 +4509,11 @@ export async function getPendingMerges(params?: {
 }
 
 /** Admin-gated coherent snapshot used before queue-wide bulk operations. */
-export async function getPendingMergesSnapshot(): Promise<PendingMergesSnapshotResponse> {
-  return fetchJson(`${API_BASE}/channel-merges/snapshot`);
+export async function getPendingMergesSnapshot(params?: {
+  groupId?: number;
+}): Promise<PendingMergesSnapshotResponse> {
+  const query = buildQuery({ group_id: params?.groupId });
+  return fetchJson(`${API_BASE}/channel-merges/snapshot${query}`);
 }
 
 /**

@@ -63,7 +63,11 @@ function formatConfidencePercent(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
 
-export function PendingMergesPage() {
+interface PendingMergesPageProps {
+  groupId?: number;
+}
+
+export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
   const [rows, setRows] = useState<PendingMergeRecord[]>([]);
   const [totalRows, setTotalRows] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -111,9 +115,10 @@ export function PendingMergesPage() {
       // timed paginated total.
       const response =
         selectedIdsRef.current.size > 0
-          ? await api.getPendingMergesSnapshot()
+          ? await api.getPendingMergesSnapshot({ groupId })
           : await api.getPendingMerges({
               status: 'pending',
+              groupId,
               page: 1,
               pageSize: PAGE_SIZE,
             });
@@ -132,7 +137,7 @@ export function PendingMergesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [groupId]);
 
   useEffect(() => {
     loadRows();
@@ -224,7 +229,9 @@ export function PendingMergesPage() {
     setSnapshotAction('Select');
     setLoadError(null);
     try {
-      const { merges: allRows, total } = await api.getPendingMergesSnapshot();
+      const { merges: allRows, total } = await api.getPendingMergesSnapshot({
+        groupId,
+      });
       setRows(allRows);
       setTotalRows(total);
       setSelectedIds(new Set(allRows.map((row) => row.id)));
@@ -237,7 +244,7 @@ export function PendingMergesPage() {
       setLoading(false);
       setSnapshotAction(null);
     }
-  }, [actionsDisabled]);
+  }, [actionsDisabled, groupId]);
 
   const requestBulkAction = useCallback(
     async (
@@ -258,7 +265,7 @@ export function PendingMergesPage() {
         if (scope === 'all') {
           setLoading(true);
           setSnapshotAction(operation);
-          const snapshot = await api.getPendingMergesSnapshot();
+          const snapshot = await api.getPendingMergesSnapshot({ groupId });
           targets = snapshot.merges;
         }
         if (targets.length === 0) {
@@ -288,7 +295,7 @@ export function PendingMergesPage() {
         setSnapshotAction(null);
       }
     },
-    [anyRowBusy, bulkBusy, rows, selectedIds, totalRows],
+    [anyRowBusy, bulkBusy, groupId, rows, selectedIds, totalRows],
   );
 
   useEffect(() => {

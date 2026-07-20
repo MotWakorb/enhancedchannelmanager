@@ -91,6 +91,30 @@ describe('PendingMergesPage — list rendering (BD-J / bd-gfxrz)', () => {
     );
   });
 
+  it('forwards its optional group scope to list and snapshot reads', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: [makeRecord({ group_id: 17 })],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: [makeRecord({ group_id: 17 })],
+      total: 1,
+    });
+
+    render(<PendingMergesPage groupId={17} />);
+
+    await screen.findByText('ESPN HD');
+    expect(api.getPendingMerges).toHaveBeenCalledWith(
+      expect.objectContaining({ groupId: 17 }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Select all' }));
+    expect(api.getPendingMergesSnapshot).toHaveBeenCalledWith({ groupId: 17 });
+  });
+
   it('renders the empty state with the PO-ratified nudge copy when there are no rows', async () => {
     vi.mocked(api.getPendingMerges).mockResolvedValue({
       merges: [],

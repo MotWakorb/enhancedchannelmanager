@@ -357,6 +357,25 @@ class TestPendingMergesSnapshot:
         assert data["merges"][1]["trigger_context"] == "m3u_refresh"
 
     @pytest.mark.asyncio
+    async def test_optional_group_filter_scopes_complete_snapshot(
+        self, async_client, test_session
+    ):
+        in_scope = _make_pending(
+            test_session, stream_name="Sports", group_id=7, created_at=100,
+        )
+        _make_pending(
+            test_session, stream_name="News", group_id=8, created_at=200,
+        )
+
+        response = await async_client.get(
+            "/api/channel-merges/snapshot", params={"group_id": 7},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert [row["id"] for row in response.json()["merges"]] == [in_scope.id]
+
+    @pytest.mark.asyncio
     async def test_safety_cap_fails_closed(self, async_client, test_session):
         _make_pending(test_session, stream_name="One")
         _make_pending(test_session, stream_name="Two")

@@ -811,6 +811,7 @@ async def enqueue_pending_merge_endpoint(
 # ---------------------------------------------------------------------------
 @router.get("/snapshot", response_model=PendingMergesSnapshotResponse)
 async def snapshot_pending_merges(
+    group_id: Optional[int] = None,
     db: Session = Depends(get_session),
     _user=RequireAdminIfEnabled,
 ) -> PendingMergesSnapshotResponse:
@@ -820,9 +821,11 @@ async def snapshot_pending_merges(
     resolves the queue. Reading one row beyond the cap makes oversized queues
     fail closed without returning a partial target set.
     """
+    query = db.query(PendingMerge).filter(PendingMerge.status == "pending")
+    if group_id is not None:
+        query = query.filter(PendingMerge.group_id == group_id)
     rows = (
-        db.query(PendingMerge)
-        .filter(PendingMerge.status == "pending")
+        query
         .order_by(PendingMerge.created_at.desc(), PendingMerge.id.desc())
         .limit(MAX_SNAPSHOT_ROWS + 1)
         .all()

@@ -223,6 +223,20 @@ describe('API Service', () => {
     });
   });
 
+  it('scopes a pending-merges snapshot to the requested group', async () => {
+    let requestUrl = '';
+    server.use(
+      http.get('/api/channel-merges/snapshot', ({ request }) => {
+        requestUrl = request.url;
+        return HttpResponse.json({ merges: [], total: 0 });
+      }),
+    );
+
+    await getPendingMergesSnapshot({ groupId: 17 });
+
+    expect(requestUrl).toContain('group_id=17');
+  });
+
   describe('addStreamToChannel', () => {
     it('adds stream to channel', async () => {
       server.use(

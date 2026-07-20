@@ -202,7 +202,9 @@ Returns the paginated list of channel merge rows. Use the `status` query paramet
 Returns one deterministic snapshot of the complete `pending` queue for Select
 all, selected Refresh, and queue-wide confirmation. The route is read-only but
 **requires admin authorization** because it exposes the complete destructive
-action target set. It accepts no query parameters.
+action target set. Optional `group_id` scopes the snapshot to pending records
+in one channel group, matching the list endpoint's group filter. Clients must
+forward the active list scope so a bulk action cannot target another group.
 
 The database record set is read by one ordered query (`created_at DESC`,
 `id DESC`). Candidate name, number, and group enrichment follows the paginated
