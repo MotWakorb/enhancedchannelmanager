@@ -438,9 +438,10 @@ async def compute_sort(request: ComputeSortRequest):
     # Sort each channel
     results = []
     for ch in request.channels:
-        # M3U priority does not require probe stats; respect priorities even if stats are missing.
+        # Direct metadata-only sorts do not require probe stats; respect them
+        # even when the preferred stream has not been probed yet.
         deprioritize_failed = settings.deprioritize_failed_streams
-        if request.mode == "m3u_priority":
+        if request.mode in {"m3u_priority", "catchup"}:
             deprioritize_failed = False
 
         sorted_ids = smart_sort_streams(

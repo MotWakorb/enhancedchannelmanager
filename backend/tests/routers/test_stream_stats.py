@@ -439,11 +439,14 @@ class TestComputeSort:
         mock_sort.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_catchup_mode_fetches_dispatcharr_flag_and_ranks_enabled_stream(self, async_client):
+    async def test_catchup_mode_outranks_probe_status_with_default_deprioritization(
+        self, async_client, test_session,
+    ):
         """GH #652: the endpoint derives catch-up IDs from Dispatcharr's real field."""
+        _create_stream_stats(test_session, 10, resolution="1920x1080")
         mock_settings = MagicMock()
         mock_settings.m3u_account_priorities = {}
-        mock_settings.deprioritize_failed_streams = False
+        mock_settings.deprioritize_failed_streams = True
         mock_client = AsyncMock()
         mock_client.get_streams_by_ids.return_value = [
             {"id": 10, "is_catchup": False},
