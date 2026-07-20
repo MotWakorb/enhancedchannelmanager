@@ -32,8 +32,15 @@ def obfuscate_url(url: str) -> str:
     if not parsed.scheme or not parsed.hostname:
         return url
 
-    # Replace host and port
-    netloc = "example.com:80" if parsed.port else "example.com"
+    # Replace host and port. ``parsed.port`` raises ValueError for a port
+    # outside 0-65535 (or non-numeric) — hostile input we must not crash
+    # on, since this path scrubs untrusted client-reported URLs. Treat an
+    # unparseable port the same as "no port".
+    try:
+        has_port = bool(parsed.port)
+    except ValueError:
+        has_port = False
+    netloc = "example.com:80" if has_port else "example.com"
 
     # Obfuscate XtreamCodes credentials in path
     path = parsed.path
