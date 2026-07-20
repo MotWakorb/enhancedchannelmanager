@@ -35,6 +35,28 @@ class _FakeEPGHTTPClient:
             200, content=self._content_by_url[url], request=httpx.Request("GET", url)
         )
 
+    def stream(self, method, url, *args, **kwargs):
+        content = self._content_by_url[url]
+
+        class _Stream:
+            async def __aenter__(self):
+                self.response = httpx.Response(
+                    200,
+                    content=content,
+                    request=httpx.Request(method, url),
+                )
+
+                async def _aiter_raw():
+                    yield content
+
+                self.response.aiter_raw = _aiter_raw
+                return self.response
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Stream()
+
 
 def _xmltv(channels_xml: str) -> bytes:
     """Build a minimal XMLTV document. A trailing <programme> ensures the parsers
@@ -58,6 +80,156 @@ def _channels_page(channels, count=None):
     than ``len(channels)`` to simulate one page of a multi-page fleet.
     """
     return {"count": count if count is not None else len(channels), "results": channels}
+
+
+class TestGuideMigration:
+    @pytest.mark.asyncio
+    async def test_preview_uses_recorded_xml_lcn_and_returns_signed_ready_row(
+        self, async_client
+    ):
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {
+                "id": 1,
+                "name": "IPTV",
+                "source_type": "xmltv",
+                "url": "https://epg.test/iptv.xml",
+            },
+            {
+                "id": 2,
+                "name": "Gracenote",
+                "source_type": "schedules_direct",
+                "url": None,
+            },
+        ]
+        mock_client.get_channels.return_value = _channels_page(
+            [{"id": 7, "name": "News", "epg_data_id": 11}]
+        )
+        mock_client.get_epg_data.return_value = [
+            {"id": 11, "epg_source": 1, "tvg_id": "iptv.news"},
+            {"id": 22, "epg_source": 2, "tvg_id": "10101", "name": "News SD"},
+        ]
+        xml = _xmltv(
+            '<channel id="iptv.news"><display-name>News</display-name>'
+            "<lcn>10101</lcn><gnid>10101</gnid></channel>"
+        )
+        fake_http = _FakeEPGHTTPClient({"https://epg.test/iptv.xml": xml})
+
+        with patch("routers.epg.get_client", return_value=mock_client), patch(
+            "routers.epg.httpx.AsyncClient", return_value=fake_http
+        ):
+            response = await async_client.post(
+                "/api/epg/migration/preview",
+                json={"target_epg_source_id": 2},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["counts"]["ready"] == 1
+        assert body["rows"][0]["lcn"] == "10101"
+        assert body["rows"][0]["target_epg_data_id"] == 22
+        assert len(body["preview_token"]) == 64
+
+    @pytest.mark.asyncio
+    async def test_preview_rejects_channel_fleet_beyond_bound(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {
+                "id": 2,
+                "name": "Gracenote",
+                "source_type": "schedules_direct",
+                "url": None,
+            }
+        ]
+        mock_client.get_channels.return_value = _channels_page(
+            [
+                {"id": index, "name": f"Channel {index}", "epg_data_id": None}
+                for index in range(1001)
+            ]
+        )
+        with patch("routers.epg.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/epg/migration/preview",
+                json={"target_epg_source_id": 2},
+            )
+        assert response.status_code == 409
+        mock_client.get_epg_data.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_apply_updates_current_rows_and_skips_preview_drift(
+        self, async_client
+    ):
+        mock_client = AsyncMock()
+        mock_client.get_epg_sources.return_value = [
+            {
+                "id": 1,
+                "name": "IPTV",
+                "source_type": "xmltv",
+                "url": "https://epg.test/iptv.xml",
+            },
+            {
+                "id": 2,
+                "name": "Gracenote",
+                "source_type": "schedules_direct",
+                "url": None,
+            },
+        ]
+        preview_channels = [
+            {"id": 7, "name": "News", "epg_data_id": 11},
+            {"id": 8, "name": "Sports", "epg_data_id": 12},
+        ]
+        changed_channels = [
+            {"id": 7, "name": "News", "epg_data_id": 11},
+            {"id": 8, "name": "Sports", "epg_data_id": 99},
+        ]
+        mock_client.get_channels.side_effect = [
+            _channels_page(preview_channels),
+            _channels_page(changed_channels),
+        ]
+        all_epg = [
+            {"id": 11, "epg_source": 1, "tvg_id": "iptv.news"},
+            {"id": 12, "epg_source": 1, "tvg_id": "iptv.sports"},
+            {"id": 22, "epg_source": 2, "tvg_id": "10101", "name": "News SD"},
+            {"id": 23, "epg_source": 2, "tvg_id": "10102", "name": "Sports SD"},
+        ]
+        mock_client.get_epg_data.side_effect = [
+            all_epg,
+            [all_epg[2], all_epg[3]],
+        ]
+        xml = _xmltv(
+            '<channel id="iptv.news"><gnid>10101</gnid></channel>'
+            '<channel id="iptv.sports"><gnid>10102</gnid></channel>'
+        )
+        fake_http = _FakeEPGHTTPClient({"https://epg.test/iptv.xml": xml})
+        with patch("routers.epg.get_client", return_value=mock_client), patch(
+            "routers.epg.httpx.AsyncClient", return_value=fake_http
+        ), patch("routers.epg.journal"):
+            preview = await async_client.post(
+                "/api/epg/migration/preview",
+                json={"target_epg_source_id": 2},
+            )
+            ready = [
+                {
+                    "channel_id": row["channel_id"],
+                    "current_epg_data_id": row["current_epg_data_id"],
+                    "target_epg_data_id": row["target_epg_data_id"],
+                }
+                for row in preview.json()["rows"]
+                if row["status"] == "ready"
+            ]
+            applied = await async_client.post(
+                "/api/epg/migration/apply",
+                json={
+                    "target_epg_source_id": 2,
+                    "preview_token": preview.json()["preview_token"],
+                    "items": ready,
+                },
+            )
+
+        assert applied.status_code == 200
+        assert applied.json()["updated"] == 1
+        assert applied.json()["skipped"] == 1
+        mock_client.update_channel.assert_awaited_once_with(7, {"epg_data_id": 22})
 
 
 class TestGetEPGSources:

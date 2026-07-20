@@ -1856,6 +1856,66 @@ export async function getEPGLcnBatch(items: LCNLookupItem[]): Promise<{
   });
 }
 
+export type GuideMigrationStatus =
+  | 'ready'
+  | 'already_target'
+  | 'unassigned'
+  | 'missing_lcn'
+  | 'missing_target'
+  | 'ambiguous_target';
+
+export interface GuideMigrationRow {
+  channel_id: number;
+  channel_name: string;
+  current_epg_data_id: number | null;
+  current_source_id: number | null;
+  current_source_name: string | null;
+  lcn: string | null;
+  target_epg_data_id: number | null;
+  target_name: string | null;
+  status: GuideMigrationStatus;
+}
+
+export interface GuideMigrationPreview {
+  target_source_id: number;
+  target_source_name: string;
+  rows: GuideMigrationRow[];
+  counts: Record<GuideMigrationStatus, number>;
+  preview_token: string;
+}
+
+export async function previewGuideMigration(
+  targetEpgSourceId: number
+): Promise<GuideMigrationPreview> {
+  return fetchJson(`${API_BASE}/epg/migration/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ target_epg_source_id: targetEpgSourceId }),
+  });
+}
+
+export async function applyGuideMigration(preview: GuideMigrationPreview): Promise<{
+  updated: number;
+  skipped: number;
+  failed: number;
+  results: Array<{ channel_id: number; status: string }>;
+}> {
+  const items = preview.rows
+    .filter((row) => row.status === 'ready')
+    .map((row) => ({
+      channel_id: row.channel_id,
+      current_epg_data_id: row.current_epg_data_id,
+      target_epg_data_id: row.target_epg_data_id,
+    }));
+  return fetchJson(`${API_BASE}/epg/migration/apply`, {
+    method: 'POST',
+    body: JSON.stringify({
+      target_epg_source_id: preview.target_source_id,
+      preview_token: preview.preview_token,
+      items,
+    }),
+  });
+}
+
 // EPG Matching (server-side)
 export interface EPGMatchEntry {
   epg_id: number;

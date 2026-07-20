@@ -543,3 +543,38 @@
   border-radius: var(--radius-sm);
   padding: 2px;
 }
+.guide-migration-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.guide-migration-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.guide-migration-table-wrap {
+  max-height: 45vh;
+  overflow: auto;
+}
+
+.guide-migration-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.guide-migration-table-wrap th,
+.guide-migration-table-wrap td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.guide-migration-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-weight: 600;
+}

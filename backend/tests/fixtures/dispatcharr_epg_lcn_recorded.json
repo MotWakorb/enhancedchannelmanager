@@ -1,0 +1,22 @@
+{
+  "capture": {
+    "source": "Dispatcharr live XMLTV cache and /api/epg/epgdata/ response",
+    "captured_at": "2026-07-20",
+    "redaction": "Names and identifiers replaced; element names, scalar types, and nesting retained"
+  },
+  "xmltv": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><tv><channel id=\"10101\"><display-name>WXYZ Test</display-name><display-name>WXYZ</display-name><icon src=\"https://example.invalid/logo.png\"/><lcn>10101</lcn><gnid>10101</gnid></channel><programme channel=\"10101\" start=\"20260720000000 +0000\" stop=\"20260720010000 +0000\"><title>Recorded test programme</title></programme></tv>",
+  "epgdata_response": {
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "epg_source": 20,
+        "icon_url": "https://example.invalid/logo.png",
+        "id": 101,
+        "name": "WXYZ Test",
+        "tvg_id": "10101"
+      }
+    ]
+  }
+}

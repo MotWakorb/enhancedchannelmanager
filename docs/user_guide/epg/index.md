@@ -26,6 +26,7 @@ End users do not read this section, though the EPG they see in their player is t
 | `dummy-epg-overview.md` | What dummy EPG is, when to use it, the relationship between dummy EPG and "real" EPG sources. |
 | `dummy-epg-templates.md` | Authoring templates in the operator UI, with the template syntax taught at the user level. Defers to `docs/template_engine.md` for the full syntax reference. |
 | `troubleshoot-epg.md` | Common EPG issues — wrong listings, blank guide, slow refresh, channel matched to the wrong programme — and how to diagnose. |
+| [`migrate-guides.md`](migrate-guides.md) | Preview and safely apply IPTV ↔ Gracenote guide assignment migrations using LCN/Gracenote station identifiers. |
 | [`finding-mislinked-channels.md`](finding-mislinked-channels.md) | Find & fix channels sharing one EPG row (the West-shows-East mis-link) using the read-only duplicate-link audit. |
 
 ## Schedules Direct (SD)

@@ -18,6 +18,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from alert_methods import send_alert
+from auth import RequireAdminIfEnabled
 from cache import get_cache
 from config import validate_url_scheme
 from dispatcharr_client import get_client, upstream_http_exception
@@ -28,6 +29,12 @@ from epg_matching import (
     find_shared_epg_links,
 )
 import journal
+from services.epg_migration import (
+    parse_xmltv_lcn_index,
+    preview_migration,
+    sign_ready_rows,
+    verify_ready_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +58,22 @@ class LCNLookupItem(BaseModel):
 class BatchLCNRequest(BaseModel):
     """Request body for batch LCN lookup."""
     items: list[LCNLookupItem]
+
+
+class GuideMigrationPreviewRequest(BaseModel):
+    target_epg_source_id: int
+
+
+class GuideMigrationApplyItem(BaseModel):
+    channel_id: int
+    current_epg_data_id: int
+    target_epg_data_id: int
+
+
+class GuideMigrationApplyRequest(BaseModel):
+    target_epg_source_id: int
+    preview_token: str
+    items: list[GuideMigrationApplyItem]
 
 
 # ---------------------------------------------------------------------------
@@ -1036,6 +1059,260 @@ async def _fetch_all_channels(client) -> list[dict]:
             _CHANNELS_FETCH_MAX_PAGES, fetched,
         )
     return channels
+
+
+_GUIDE_MIGRATION_MAX_CHANNELS = 1000
+_GUIDE_MIGRATION_MAX_EPG_ROWS = 50000
+_XMLTV_HEADER_MAX_DOWNLOAD = 25 * 1024 * 1024
+_XMLTV_HEADER_MAX_DECOMPRESSED = 30 * 1024 * 1024
+
+
+async def _load_xmltv_migration_index(source: dict):
+    """Download only the XMLTV channel header and return its LCN index."""
+    url = source.get("url")
+    if not url:
+        raise HTTPException(
+            status_code=400,
+            detail=f"XMLTV source {source.get('id')} has no downloadable URL.",
+        )
+    compressed = url.lower().endswith(".gz")
+    downloaded = 0
+    output = bytearray()
+    decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16) if compressed else None
+    try:
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as http_client:
+            async with http_client.stream("GET", url) as response:
+                response.raise_for_status()
+                if response.headers.get("content-encoding", "").lower() == "gzip":
+                    compressed = True
+                    decompressor = decompressor or zlib.decompressobj(zlib.MAX_WBITS | 16)
+                async for chunk in response.aiter_raw():
+                    downloaded += len(chunk)
+                    if downloaded > _XMLTV_HEADER_MAX_DOWNLOAD:
+                        break
+                    if compressed and decompressor is not None:
+                        output.extend(decompressor.decompress(chunk))
+                    else:
+                        output.extend(chunk)
+                    if len(output) > _XMLTV_HEADER_MAX_DECOMPRESSED:
+                        break
+                    if b"<programme" in output:
+                        break
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "[EPG-MIGRATION] XMLTV source id=%s could not be read: %s",
+            source.get("id"),
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not read XMLTV source {source.get('id')}.",
+        ) from exc
+
+    marker = output.find(b"<programme")
+    if marker >= 0:
+        output = output[:marker]
+    if not output:
+        raise HTTPException(status_code=422, detail="XMLTV source has no readable header.")
+    # The bounded stream stops before the first programme; close the root so
+    # ElementTree can parse the complete channel header.
+    if not output.rstrip().endswith(b"</tv>"):
+        output.extend(b"</tv>")
+    try:
+        index = parse_xmltv_lcn_index(bytes(output))
+    except ET.ParseError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"XMLTV source {source.get('id')} channel header is invalid.",
+        ) from exc
+    if not index.channel_to_lcn:
+        raise HTTPException(
+            status_code=422,
+            detail=f"XMLTV source {source.get('id')} contains no LCN/Gracenote mappings.",
+        )
+    return index
+
+
+@router.post("/migration/preview")
+async def preview_guide_migration(
+    request: GuideMigrationPreviewRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Preview an LCN-based guide migration without mutating channels."""
+    client = get_client()
+    try:
+        sources = await client.get_epg_sources()
+        source_by_id = {source.get("id"): source for source in sources}
+        target = source_by_id.get(request.target_epg_source_id)
+        if target is None or target.get("source_type") not in {
+            "xmltv",
+            "schedules_direct",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="Choose an XMLTV or Schedules Direct target source.",
+            )
+
+        channels = await _fetch_all_channels(client)
+        if len(channels) > _GUIDE_MIGRATION_MAX_CHANNELS:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Guide migration is limited to {_GUIDE_MIGRATION_MAX_CHANNELS} "
+                    "channels per operation."
+                ),
+            )
+        epg_data = await client.get_epg_data()
+        if len(epg_data) > _GUIDE_MIGRATION_MAX_EPG_ROWS:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Guide migration is limited to {_GUIDE_MIGRATION_MAX_EPG_ROWS} "
+                    "EPG rows per preview."
+                ),
+            )
+
+        epg_by_id = {row.get("id"): row for row in epg_data}
+        needed_source_ids = {
+            epg_by_id[channel.get("epg_data_id")].get("epg_source")
+            for channel in channels
+            if channel.get("epg_data_id") in epg_by_id
+            and epg_by_id[channel.get("epg_data_id")].get("epg_source") is not None
+        }
+        needed_source_ids.add(request.target_epg_source_id)
+        xmltv_indexes = {}
+        for source_id in sorted(needed_source_ids):
+            source = source_by_id.get(source_id)
+            if source and source.get("source_type") == "xmltv":
+                xmltv_indexes[source_id] = await _load_xmltv_migration_index(source)
+
+        rows = preview_migration(
+            channels=channels,
+            epg_data=epg_data,
+            sources=sources,
+            target_source_id=request.target_epg_source_id,
+            xmltv_indexes=xmltv_indexes,
+        )
+        ready = [row for row in rows if row["status"] == "ready"]
+        counts = {
+            status: sum(row["status"] == status for row in rows)
+            for status in (
+                "ready",
+                "already_target",
+                "unassigned",
+                "missing_lcn",
+                "missing_target",
+                "ambiguous_target",
+            )
+        }
+        logger.info(
+            "[EPG-MIGRATION] Preview target_source=%s channels=%d ready=%d",
+            request.target_epg_source_id,
+            len(rows),
+            len(ready),
+        )
+        return {
+            "target_source_id": request.target_epg_source_id,
+            "target_source_name": target.get("name"),
+            "rows": rows,
+            "counts": counts,
+            "preview_token": sign_ready_rows(request.target_epg_source_id, ready),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[EPG-MIGRATION] Preview failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Guide migration preview failed")
+
+
+@router.post("/migration/apply")
+async def apply_guide_migration(
+    request: GuideMigrationApplyRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Apply only the signed, still-current assignments from a preview."""
+    if not request.items:
+        raise HTTPException(status_code=400, detail="No ready migrations were selected.")
+    if len(request.items) > _GUIDE_MIGRATION_MAX_CHANNELS:
+        raise HTTPException(status_code=400, detail="Too many migration items.")
+    items = [item.model_dump() for item in request.items]
+    if not verify_ready_rows(
+        request.target_epg_source_id, items, request.preview_token
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Migration preview is invalid or expired. Preview again.",
+        )
+
+    client = get_client()
+    try:
+        channels = await _fetch_all_channels(client)
+        channels_by_id = {channel.get("id"): channel for channel in channels}
+        epg_data = await client.get_epg_data(
+            epg_source=request.target_epg_source_id
+        )
+        valid_target_ids = {row.get("id") for row in epg_data}
+        results = []
+        updated = 0
+        skipped = 0
+        failed = 0
+        for item in request.items:
+            channel = channels_by_id.get(item.channel_id)
+            if channel is None:
+                results.append({"channel_id": item.channel_id, "status": "missing_channel"})
+                skipped += 1
+                continue
+            if channel.get("epg_data_id") != item.current_epg_data_id:
+                results.append({"channel_id": item.channel_id, "status": "changed_since_preview"})
+                skipped += 1
+                continue
+            if item.target_epg_data_id not in valid_target_ids:
+                results.append({"channel_id": item.channel_id, "status": "invalid_target"})
+                skipped += 1
+                continue
+            try:
+                await client.update_channel(
+                    item.channel_id, {"epg_data_id": item.target_epg_data_id}
+                )
+                journal.log_entry(
+                    category="epg",
+                    action_type="guide_migration",
+                    entity_id=item.channel_id,
+                    entity_name=channel.get("name"),
+                    description=(
+                        f"Migrated channel guide from EPG data "
+                        f"{item.current_epg_data_id} to {item.target_epg_data_id}"
+                    ),
+                    before_value={"epg_data_id": item.current_epg_data_id},
+                    after_value={"epg_data_id": item.target_epg_data_id},
+                )
+                results.append({"channel_id": item.channel_id, "status": "updated"})
+                updated += 1
+            except Exception:
+                logger.exception(
+                    "[EPG-MIGRATION] Channel update failed channel=%s",
+                    item.channel_id,
+                )
+                results.append({"channel_id": item.channel_id, "status": "failed"})
+                failed += 1
+        logger.info(
+            "[EPG-MIGRATION] Apply target_source=%s updated=%d skipped=%d failed=%d",
+            request.target_epg_source_id,
+            updated,
+            skipped,
+            failed,
+        )
+        return {
+            "updated": updated,
+            "skipped": skipped,
+            "failed": failed,
+            "results": results,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[EPG-MIGRATION] Apply failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Guide migration failed")
 
 
 @router.post("/match")
