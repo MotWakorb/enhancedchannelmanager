@@ -83,6 +83,8 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
   const activeGroupIdRef = useRef(groupId);
   activeGroupIdRef.current = groupId;
   const loadRequestTokenRef = useRef(0);
+  const snapshotRequestTokenRef = useRef(0);
+  const previousGroupIdRef = useRef(groupId);
   const [snapshotAction, setSnapshotAction] = useState<BulkOperation | 'Select' | null>(
     null,
   );
@@ -108,6 +110,15 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
   useEffect(() => {
     rowsRef.current = rows;
   }, [rows]);
+  useEffect(() => {
+    if (previousGroupIdRef.current === groupId) return;
+    previousGroupIdRef.current = groupId;
+    // Invalidate snapshot work from the previous scope and clear only its
+    // progress label. A snapshot started after this effect owns a newer token.
+    snapshotRequestTokenRef.current += 1;
+    setSnapshotAction(null);
+    bulkLockRef.current = false;
+  }, [groupId]);
 
   const loadRows = useCallback(async () => {
     const requestToken = ++loadRequestTokenRef.current;
@@ -247,6 +258,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
 
   const handleSelectAll = useCallback(async () => {
     if (actionsDisabled) return;
+    const requestToken = ++snapshotRequestTokenRef.current;
     const requestGroupId = groupId;
     setLoading(true);
     setSnapshotAction('Select');
@@ -255,18 +267,31 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
       const { merges: allRows, total } = await api.getPendingMergesSnapshot({
         groupId: requestGroupId,
       });
-      if (requestGroupId !== activeGroupIdRef.current) return;
+      if (
+        requestToken !== snapshotRequestTokenRef.current ||
+        requestGroupId !== activeGroupIdRef.current
+      ) {
+        return;
+      }
       setRows(allRows);
       setTotalRows(total);
       setSelectedIds(new Set(allRows.map((row) => row.id)));
     } catch (err) {
-      if (requestGroupId !== activeGroupIdRef.current) return;
+      if (
+        requestToken !== snapshotRequestTokenRef.current ||
+        requestGroupId !== activeGroupIdRef.current
+      ) {
+        return;
+      }
       const detail =
         err instanceof Error ? err.message : 'Failed to load all pending merges';
       logger.error('PendingMergesPage: failed to select whole queue', err);
       setLoadError(detail);
     } finally {
-      if (requestGroupId === activeGroupIdRef.current) {
+      if (
+        requestToken === snapshotRequestTokenRef.current &&
+        requestGroupId === activeGroupIdRef.current
+      ) {
         setLoading(false);
         setSnapshotAction(null);
       }
@@ -284,6 +309,8 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
       bulkTriggerRef.current = trigger ?? null;
       setBulkProgress(null);
       const requestGroupId = groupId;
+      const requestToken =
+        scope === 'all' ? ++snapshotRequestTokenRef.current : null;
 
       try {
         let targets =
@@ -296,7 +323,10 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
           const snapshot = await api.getPendingMergesSnapshot({
             groupId: requestGroupId,
           });
-          if (requestGroupId !== activeGroupIdRef.current) {
+          if (
+            requestToken !== snapshotRequestTokenRef.current ||
+            requestGroupId !== activeGroupIdRef.current
+          ) {
             bulkLockRef.current = false;
             return;
           }
@@ -319,7 +349,11 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         }
         setBulkIntent({ scope, operation, targets });
       } catch (err) {
-        if (requestGroupId !== activeGroupIdRef.current) {
+        if (
+          requestToken !== null &&
+          (requestToken !== snapshotRequestTokenRef.current ||
+            requestGroupId !== activeGroupIdRef.current)
+        ) {
           bulkLockRef.current = false;
           return;
         }
@@ -329,7 +363,11 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         setLoadError(detail);
         bulkLockRef.current = false;
       } finally {
-        if (requestGroupId === activeGroupIdRef.current) {
+        if (
+          (requestToken === null ||
+            requestToken === snapshotRequestTokenRef.current) &&
+          requestGroupId === activeGroupIdRef.current
+        ) {
           setLoading(false);
           setSnapshotAction(null);
         }

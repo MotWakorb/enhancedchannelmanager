@@ -182,6 +182,120 @@ describe('PendingMergesPage — list rendering (BD-J / bd-gfxrz)', () => {
     expect(api.acceptPendingMerge).not.toHaveBeenCalledWith(7);
   });
 
+  it('does not let stale Select all cleanup clear a newer scoped request', async () => {
+    let resolveGroup7Snapshot!: (
+      value: Awaited<ReturnType<typeof api.getPendingMergesSnapshot>>,
+    ) => void;
+    let resolveGroup8Snapshot!: (
+      value: Awaited<ReturnType<typeof api.getPendingMergesSnapshot>>,
+    ) => void;
+    const group7Snapshot = new Promise<
+      Awaited<ReturnType<typeof api.getPendingMergesSnapshot>>
+    >((resolve) => {
+      resolveGroup7Snapshot = resolve;
+    });
+    const group8Snapshot = new Promise<
+      Awaited<ReturnType<typeof api.getPendingMergesSnapshot>>
+    >((resolve) => {
+      resolveGroup8Snapshot = resolve;
+    });
+    const group7Row = makeRecord({
+      id: 7,
+      stream_name: 'Group 7 Stream',
+      group_id: 7,
+    });
+    const group8Row = makeRecord({
+      id: 8,
+      stream_name: 'Group 8 Stream',
+      group_id: 8,
+    });
+    vi.mocked(api.getPendingMerges).mockImplementation(async ({ groupId } = {}) => ({
+      merges: [groupId === 8 ? group8Row : group7Row],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    }));
+    vi.mocked(api.getPendingMergesSnapshot).mockImplementation(({ groupId } = {}) =>
+      groupId === 8 ? group8Snapshot : group7Snapshot,
+    );
+
+    const { rerender } = render(<PendingMergesPage groupId={7} />);
+    await screen.findByText('Group 7 Stream');
+    fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
+    expect(screen.getByRole('button', { name: /Loading all/i })).toBeDisabled();
+
+    rerender(<PendingMergesPage groupId={8} />);
+    await screen.findByText('Group 8 Stream');
+    fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
+    expect(screen.getByRole('button', { name: /Loading all/i })).toBeDisabled();
+
+    await act(async () => {
+      resolveGroup7Snapshot({ merges: [group7Row], total: 1 });
+      await group7Snapshot;
+    });
+
+    expect(screen.queryByText('Group 7 Stream')).toBeNull();
+    expect(screen.getByRole('button', { name: /Loading all/i })).toBeDisabled();
+
+    await act(async () => {
+      resolveGroup8Snapshot({ merges: [group8Row], total: 1 });
+      await group8Snapshot;
+    });
+
+    expect(await screen.findByText('1 selected')).toBeInTheDocument();
+    expect(screen.getByText('Group 8 Stream')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select all' })).toBeDisabled();
+  });
+
+  it('clears a stale Merge all label without opening its confirmation', async () => {
+    let resolveGroup7Snapshot!: (
+      value: Awaited<ReturnType<typeof api.getPendingMergesSnapshot>>,
+    ) => void;
+    const group7Snapshot = new Promise<
+      Awaited<ReturnType<typeof api.getPendingMergesSnapshot>>
+    >((resolve) => {
+      resolveGroup7Snapshot = resolve;
+    });
+    const group7Row = makeRecord({
+      id: 7,
+      stream_name: 'Group 7 Stream',
+      group_id: 7,
+    });
+    const group8Row = makeRecord({
+      id: 8,
+      stream_name: 'Group 8 Stream',
+      group_id: 8,
+    });
+    vi.mocked(api.getPendingMerges).mockImplementation(async ({ groupId } = {}) => ({
+      merges: [groupId === 8 ? group8Row : group7Row],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    }));
+    vi.mocked(api.getPendingMergesSnapshot).mockReturnValue(group7Snapshot);
+
+    const { rerender } = render(<PendingMergesPage groupId={7} />);
+    await screen.findByText('Group 7 Stream');
+    fireEvent.click(screen.getByRole('button', { name: 'Merge all' }));
+    expect(screen.getByRole('button', { name: /Loading all/i })).toBeDisabled();
+
+    rerender(<PendingMergesPage groupId={8} />);
+    await screen.findByText('Group 8 Stream');
+    expect(screen.getByRole('button', { name: 'Merge all' })).toBeEnabled();
+
+    await act(async () => {
+      resolveGroup7Snapshot({ merges: [group7Row], total: 1 });
+      await group7Snapshot;
+    });
+
+    expect(screen.queryByRole('dialog', { name: /Confirm bulk action/i })).toBeNull();
+    expect(screen.queryByText('Group 7 Stream')).toBeNull();
+    expect(screen.getByText('Group 8 Stream')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Merge all' })).toBeEnabled();
+  });
+
   it('renders the empty state with the PO-ratified nudge copy when there are no rows', async () => {
     vi.mocked(api.getPendingMerges).mockResolvedValue({
       merges: [],
