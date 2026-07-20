@@ -114,6 +114,7 @@ router = APIRouter(prefix="/api/channel-merges", tags=["Channel Merges"])
 DEFAULT_PAGE = 1
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200  # bound the worst-case response size — mirrors other ECM list endpoints
+MAX_SNAPSHOT_ROWS = 20_000
 
 # Status enum — matches the CHECK constraint on pending_merges.status (§D8).
 _VALID_STATUSES = ("pending", "merged", "dismissed")
@@ -213,6 +214,13 @@ class PendingMergesListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class PendingMergesSnapshotResponse(BaseModel):
+    """One coherent, bounded snapshot of the complete pending queue."""
+
+    merges: List[PendingMergeRecord]
+    total: int
 
 
 class AcceptOutcome(BaseModel):
@@ -796,6 +804,52 @@ async def enqueue_pending_merge_endpoint(
         meets_threshold=meets_threshold,
         status="pending",
     )
+
+
+# ---------------------------------------------------------------------------
+# GH #642: GET /api/channel-merges/snapshot — complete pending queue
+# ---------------------------------------------------------------------------
+@router.get("/snapshot", response_model=PendingMergesSnapshotResponse)
+async def snapshot_pending_merges(
+    db: Session = Depends(get_session),
+    _user=RequireAdminIfEnabled,
+) -> PendingMergesSnapshotResponse:
+    """Return a transactionally coherent, admin-gated pending-queue snapshot.
+
+    A single ordered SELECT avoids offset-pagination races while another actor
+    resolves the queue. Reading one row beyond the cap makes oversized queues
+    fail closed without returning a partial target set.
+    """
+    rows = (
+        db.query(PendingMerge)
+        .filter(PendingMerge.status == "pending")
+        .order_by(PendingMerge.created_at.desc(), PendingMerge.id.desc())
+        .limit(MAX_SNAPSHOT_ROWS + 1)
+        .all()
+    )
+    if len(rows) > MAX_SNAPSHOT_ROWS:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail=(
+                f"Pending merge snapshot exceeds the safety limit of "
+                f"{MAX_SNAPSHOT_ROWS} records. Nothing was changed."
+            ),
+        )
+
+    candidate_ids = {row.candidate_channel_id for row in rows}
+    channel_lookup = await _resolve_candidate_channels(candidate_ids)
+    merges: list[PendingMergeRecord] = []
+    for row in rows:
+        record_dict = _record_to_dict(row)
+        channel = channel_lookup.get(row.candidate_channel_id)
+        if channel is not None:
+            record_dict["candidate_channel_name"] = channel.get("name")
+            record_dict["candidate_channel_number"] = channel.get("channel_number")
+            record_dict["candidate_channel_group_name"] = channel.get(
+                "channel_group_name"
+            )
+        merges.append(PendingMergeRecord(**record_dict))
+    return PendingMergesSnapshotResponse(merges=merges, total=len(merges))
 
 
 # ---------------------------------------------------------------------------

@@ -80,7 +80,7 @@ The page lists all pending rows with:
 - Candidate channel name and confidence score
 - Created-at timestamp
 - Per-row action buttons: **Merge** and **Create New**
-- A checkbox plus **Select all**, **Deselect all**, **Merge selected**, **Clear selected**, **Merge all**, and **Clear all** controls
+- A checkbox plus **Select all**, **Deselect all**, **Merge selected**, **Clear selected**, **Merge all**, and **Clear all** controls. **Select all** spans the complete paginated queue, not only the rows currently visible.
 
 ### Resolving a pending merge
 
@@ -96,9 +96,11 @@ Clicking **Create New** dismisses the dedup candidate and signals that you want 
 
 ### Resolving merges in bulk
 
-Use the row checkboxes for a targeted batch, or **Merge all** / **Clear all** for the entire pending queue. Queue-wide actions reconcile every page from the beginning until two complete reads agree, so records are not skipped if the queue grows or contracts while it is being loaded. If the queue does not stabilize within the bounded safety check, ECM shows an error and changes nothing; wait for the current refresh or other operator to finish, then retry.
+Use the row checkboxes for a targeted batch, or **Merge all** / **Clear all** for the entire pending queue. ECM loads one coherent, bounded server snapshot before showing the confirmation, so the count and records you confirm are the records it processes. If the queue exceeds the safety limit, ECM shows an error and changes nothing.
 
 Every bulk action opens a confirmation dialog showing the exact record count and consequence. After confirmation, ECM processes records one at a time and keeps a live progress message visible. Choose **Stop** to finish only the request already in flight and leave every later record selected for a future retry.
+
+**Merge all is irreversible within ECM.** The confirmation dialog is the safety boundary: review its exact count before continuing. Recovery requires correcting the affected channels in Dispatcharr; ECM cannot automatically undo completed merges.
 
 One failure does not stop the rest of a batch. Successful records disappear; failed records stay visible and selected with their exact backend errors and per-row controls. You can correct the cause and retry only those selected failures.
 

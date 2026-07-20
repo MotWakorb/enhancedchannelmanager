@@ -39,12 +39,6 @@ import './PendingMergesPage.css';
 
 const PAGE_SIZE = 50;
 const EXACT_MATCH_THRESHOLD = 1.0;
-const BULK_PAGE_SIZE = 200;
-const MAX_BULK_PAGES = 100;
-const MAX_SNAPSHOT_PASSES = 4;
-const SNAPSHOT_ERROR =
-  'The pending merges queue kept changing while ECM prepared this action. Nothing was changed. Wait for the current refresh to finish, then try again.';
-
 type BulkScope = 'all' | 'selected';
 type BulkOperation = 'Merge' | 'Clear';
 
@@ -80,6 +74,10 @@ export function PendingMergesPage() {
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const selectedIdsRef = useRef(selectedIds);
+  const rowsRef = useRef(rows);
+  const [snapshotAction, setSnapshotAction] = useState<BulkOperation | 'Select' | null>(
+    null,
+  );
   const [bulkIntent, setBulkIntent] = useState<BulkIntent | null>(null);
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const bulkLockRef = useRef(false);
@@ -89,10 +87,18 @@ export function PendingMergesPage() {
   const bulkDialogRef = useRef<HTMLDivElement | null>(null);
   const bulkCancelRef = useRef<HTMLButtonElement | null>(null);
   const restoreBulkFocusRef = useRef(false);
+  const preConfirmViewRef = useRef<{
+    rows: PendingMergeRecord[];
+    total: number;
+    materializedIds: string;
+  } | null>(null);
 
   useEffect(() => {
     selectedIdsRef.current = selectedIds;
   }, [selectedIds]);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -108,27 +114,7 @@ export function PendingMergesPage() {
       // against the whole queue, not just page one. Otherwise an off-page
       // selected failure can disappear from the retry surface.
       if (selectedIdsRef.current.size > 0 && response.total > response.merges.length) {
-        const allRows = new Map<number, PendingMergeRecord>();
-        let observedTotal = response.total;
-        for (let page = 1; page <= MAX_BULK_PAGES; page += 1) {
-          const pageResponse = await api.getPendingMerges({
-            status: 'pending',
-            page,
-            pageSize: BULK_PAGE_SIZE,
-          });
-          observedTotal = Math.max(observedTotal, pageResponse.total);
-          pageResponse.merges.forEach((row) => allRows.set(row.id, row));
-          const expectedPages = Math.ceil(observedTotal / BULK_PAGE_SIZE);
-          if (
-            pageResponse.merges.length === 0 ||
-            (page >= expectedPages &&
-              (allRows.size >= observedTotal ||
-                pageResponse.merges.length < BULK_PAGE_SIZE))
-          ) {
-            break;
-          }
-        }
-        refreshedRows = [...allRows.values()];
+        refreshedRows = (await api.getPendingMergesSnapshot()).merges;
       }
       setRows(refreshedRows);
       setTotalRows(response.total);
@@ -216,68 +202,15 @@ export function PendingMergesPage() {
     });
   }, []);
 
-  const getAllPendingRows = useCallback(async (): Promise<PendingMergeRecord[]> => {
-    let previousFingerprint: string | null = null;
-
-    // Offset pagination can skip IDs when the queue contracts between pages.
-    // Re-reading from page one until two complete passes agree converts that
-    // race into either a stable snapshot or an explicit, mutation-free error.
-    for (let pass = 1; pass <= MAX_SNAPSHOT_PASSES; pass += 1) {
-      const passRows = new Map<number, PendingMergeRecord>();
-      const passTotals = new Set<number>();
-      let finalTotal = 0;
-      let complete = false;
-
-      for (let page = 1; page <= MAX_BULK_PAGES; page += 1) {
-        const response = await api.getPendingMerges({
-          status: 'pending',
-          page,
-          pageSize: BULK_PAGE_SIZE,
-        });
-        finalTotal = response.total;
-        passTotals.add(response.total);
-        response.merges.forEach((row) => passRows.set(row.id, row));
-
-        const expectedPages = Math.max(
-          1,
-          Math.ceil(response.total / BULK_PAGE_SIZE),
-        );
-        if (expectedPages > MAX_BULK_PAGES) break;
-        if (page >= expectedPages) {
-          complete =
-            passTotals.size === 1 && passRows.size === response.total;
-          break;
-        }
-      }
-
-      if (!complete) {
-        previousFingerprint = null;
-        continue;
-      }
-
-      const fingerprint = [...passRows.keys()]
-        .sort((left, right) => left - right)
-        .join(',');
-      if (
-        previousFingerprint !== null &&
-        fingerprint === previousFingerprint &&
-        passRows.size === finalTotal
-      ) {
-        return [...passRows.values()];
-      }
-      previousFingerprint = fingerprint;
-    }
-
-    throw new Error(SNAPSHOT_ERROR);
-  }, []);
-
   const handleSelectAll = useCallback(async () => {
     if (actionsDisabled) return;
     setLoading(true);
+    setSnapshotAction('Select');
     setLoadError(null);
     try {
-      const allRows = await getAllPendingRows();
+      const { merges: allRows, total } = await api.getPendingMergesSnapshot();
       setRows(allRows);
+      setTotalRows(total);
       setSelectedIds(new Set(allRows.map((row) => row.id)));
     } catch (err) {
       const detail =
@@ -286,8 +219,9 @@ export function PendingMergesPage() {
       setLoadError(detail);
     } finally {
       setLoading(false);
+      setSnapshotAction(null);
     }
-  }, [actionsDisabled, getAllPendingRows]);
+  }, [actionsDisabled]);
 
   const requestBulkAction = useCallback(
     async (
@@ -307,16 +241,22 @@ export function PendingMergesPage() {
             : rows;
         if (scope === 'all') {
           setLoading(true);
-          targets = await getAllPendingRows();
+          setSnapshotAction(operation);
+          const snapshot = await api.getPendingMergesSnapshot();
+          targets = snapshot.merges;
         }
         if (targets.length === 0) {
           bulkLockRef.current = false;
           return;
         }
         if (scope === 'all') {
-          // Materialize the stable snapshot before confirmation. This keeps
-          // progress, remaining records, cancellation, and off-page failures
-          // anchored to one visible set throughout the sweep.
+          // The server snapshot precedes confirmation so the irreversible
+          // target count and records are one coherent, reviewable set.
+          preConfirmViewRef.current = {
+            rows: rowsRef.current,
+            total: totalRows,
+            materializedIds: targets.map((row) => row.id).join(','),
+          };
           setRows(targets);
           setTotalRows(targets.length);
         }
@@ -329,9 +269,10 @@ export function PendingMergesPage() {
         bulkLockRef.current = false;
       } finally {
         setLoading(false);
+        setSnapshotAction(null);
       }
     },
-    [anyRowBusy, bulkBusy, getAllPendingRows, rows, selectedIds],
+    [anyRowBusy, bulkBusy, rows, selectedIds, totalRows],
   );
 
   useEffect(() => {
@@ -373,6 +314,7 @@ export function PendingMergesPage() {
     confirmingRef.current = true;
     stopRequestedRef.current = false;
     setBulkIntent(null);
+    preConfirmViewRef.current = null;
     const { scope, operation, targets } = intent;
     const count = targets.length;
     let completed = 0;
@@ -472,6 +414,15 @@ export function PendingMergesPage() {
   }, []);
 
   const cancelBulkIntent = useCallback(() => {
+    const previousView = preConfirmViewRef.current;
+    if (
+      previousView &&
+      rowsRef.current.map((row) => row.id).join(',') === previousView.materializedIds
+    ) {
+      setRows(previousView.rows);
+      setTotalRows(previousView.total);
+    }
+    preConfirmViewRef.current = null;
     restoreBulkFocusRef.current = true;
     setBulkIntent(null);
     bulkLockRef.current = false;
@@ -517,7 +468,7 @@ export function PendingMergesPage() {
                 (selectedIds.size === totalRows && rows.length >= totalRows)
               }
             >
-              Select all
+              {snapshotAction === 'Select' ? 'Loading all…' : 'Select all'}
             </button>
             <button
               type="button"
@@ -555,7 +506,7 @@ export function PendingMergesPage() {
               }
               disabled={actionsDisabled}
             >
-              Clear all
+              {snapshotAction === 'Clear' ? 'Loading all…' : 'Clear all'}
             </button>
             <button
               type="button"
@@ -565,7 +516,7 @@ export function PendingMergesPage() {
               }
               disabled={actionsDisabled}
             >
-              Merge all
+              {snapshotAction === 'Merge' ? 'Loading all…' : 'Merge all'}
             </button>
           </div>
         </div>

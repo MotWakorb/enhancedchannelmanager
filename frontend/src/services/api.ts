@@ -4462,6 +4462,11 @@ export interface PendingMergesListResponse {
   total_pages: number;
 }
 
+export interface PendingMergesSnapshotResponse {
+  merges: PendingMergeRecord[];
+  total: number;
+}
+
 /**
  * Flat-outcome envelope for `POST /api/channel-merges/{id}/accept` per
  * ADR-008 §D1. Mirrors the `AcceptOutcome` Pydantic model.
@@ -4501,6 +4506,11 @@ export async function getPendingMerges(params?: {
     page_size: params?.pageSize ?? 50,
   });
   return fetchJson(`${API_BASE}/channel-merges${query}`);
+}
+
+/** Admin-gated coherent snapshot used before queue-wide bulk operations. */
+export async function getPendingMergesSnapshot(): Promise<PendingMergesSnapshotResponse> {
+  return fetchJson(`${API_BASE}/channel-merges/snapshot`);
 }
 
 /**

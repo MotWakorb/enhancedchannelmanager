@@ -34,6 +34,7 @@ vi.mock('../../services/api', async () => {
   return {
     ...actual,
     getPendingMerges: vi.fn(),
+    getPendingMergesSnapshot: vi.fn(),
     acceptPendingMerge: vi.fn(),
     dismissPendingMerge: vi.fn(),
   };
@@ -60,7 +61,7 @@ function makeRecord(overrides: Partial<PendingMergeRecord> = {}): PendingMergeRe
 
 describe('PendingMergesPage — list rendering (BD-J / bd-gfxrz)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('renders one row per record with stream name and confidence badge', async () => {
@@ -304,7 +305,15 @@ describe('PendingMergesPage — per-row actions (BD-E accept/dismiss)', () => {
 
 describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    vi.mocked(api.getPendingMergesSnapshot).mockImplementation(async () => {
+      const response = await api.getPendingMerges({
+        status: 'pending',
+        page: 1,
+        pageSize: 200,
+      });
+      return { merges: response.merges, total: response.total };
+    });
   });
 
   async function startBulk(actionName: RegExp) {
@@ -475,6 +484,10 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         total_pages: 5,
       };
     });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: allRows,
+      total: allRows.length,
+    });
     vi.mocked(api.acceptPendingMerge).mockImplementation(async (id) => ({
       merged_into_channel_id: 'channel-uuid-abc',
       journal_entry_id: id,
@@ -488,16 +501,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     await startBulk(/^Merge all$/i);
 
     await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(201));
-    expect(api.getPendingMerges).toHaveBeenCalledWith({
-      status: 'pending',
-      page: 1,
-      pageSize: 200,
-    });
-    expect(api.getPendingMerges).toHaveBeenCalledWith({
-      status: 'pending',
-      page: 2,
-      pageSize: 200,
-    });
+    expect(api.getPendingMergesSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -651,6 +655,10 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         page_size: 50,
         total_pages: 5,
       };
+    });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: allRows,
+      total: allRows.length,
     });
     let resolveFirst: (() => void) | undefined;
     vi.mocked(api.acceptPendingMerge)
@@ -808,7 +816,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     );
   });
 
-  it('expands a changing page-count snapshot, deduplicates overlaps, and resolves each id once', async () => {
+  it('resolves each id from one coherent 401-row server snapshot exactly once', async () => {
     const records = Array.from({ length: 401 }, (_, index) =>
       makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
     );
@@ -837,6 +845,10 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         total_pages: 3,
       };
     });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: records,
+      total: records.length,
+    });
     const resolvedIds: number[] = [];
     vi.mocked(api.acceptPendingMerge).mockImplementation(async (id) => {
       resolvedIds.push(id);
@@ -858,7 +870,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     expect(resolvedIds).toEqual(expect.arrayContaining([1, 200, 201, 350, 401]));
   });
 
-  it('reconciles from page one after concurrent contraction before confirming all rows', async () => {
+  it('uses the coherent server snapshot when the queue contracted before confirmation', async () => {
     const original = Array.from({ length: 401 }, (_, index) =>
       makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
     );
@@ -885,6 +897,10 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         total_pages: Math.ceil(source.length / 200),
       };
     });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: contracted,
+      total: contracted.length,
+    });
 
     render(<PendingMergesPage />);
     await screen.findByText('Stream 1');
@@ -896,7 +912,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     expect(api.acceptPendingMerge).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the queue cannot stabilize within the bounded snapshot passes', async () => {
+  it('fails closed when the snapshot endpoint rejects an unstable queue', async () => {
     let pass = 0;
     vi.mocked(api.getPendingMerges).mockImplementation(async (params) => {
       if (params?.pageSize !== 200) {
@@ -922,6 +938,11 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         total_pages: 1,
       };
     });
+    vi.mocked(api.getPendingMergesSnapshot).mockRejectedValue(
+      new Error(
+        'The pending merges queue kept changing while ECM prepared this action. Nothing was changed.',
+      ),
+    );
 
     render(<PendingMergesPage />);
     await screen.findByText('ESPN HD');
@@ -933,11 +954,10 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     expect(screen.queryByRole('dialog', { name: /Confirm bulk action/i })).toBeNull();
     expect(api.acceptPendingMerge).not.toHaveBeenCalled();
     expect(api.dismissPendingMerge).not.toHaveBeenCalled();
-    expect(pass).toBe(4);
+    expect(api.getPendingMergesSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it('fails closed when the queue exceeds the bounded snapshot page cap', async () => {
-    let bulkFetches = 0;
+  it('fails closed when the snapshot endpoint enforces its row safety cap', async () => {
     vi.mocked(api.getPendingMerges).mockImplementation(async (params) => {
       if (params?.pageSize !== 200) {
         return {
@@ -948,7 +968,6 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
           total_pages: 401,
         };
       }
-      bulkFetches += 1;
       return {
         merges: [makeRecord()],
         total: 20_001,
@@ -957,15 +976,20 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         total_pages: 101,
       };
     });
+    vi.mocked(api.getPendingMergesSnapshot).mockRejectedValue(
+      new Error(
+        'Pending merge snapshot exceeds the safety limit of 20000 records. Nothing was changed.',
+      ),
+    );
 
     render(<PendingMergesPage />);
     await screen.findByText('ESPN HD');
     fireEvent.click(screen.getByRole('button', { name: /^Clear all$/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      /queue kept changing.*Nothing was changed/i,
+      /exceeds the safety limit.*Nothing was changed/i,
     );
-    expect(bulkFetches).toBe(4);
+    expect(api.getPendingMergesSnapshot).toHaveBeenCalledTimes(1);
     expect(api.dismissPendingMerge).not.toHaveBeenCalled();
   });
 
@@ -1014,5 +1038,92 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     await screen.findByText('FOX HD');
     await waitFor(() => expect(screen.queryByText(/^\d+ selected$/i)).toBeNull());
     expect(screen.getByRole('button', { name: /Merge selected/i })).toBeDisabled();
+  });
+
+  it('restores the original paginated view when a 51-row all action is cancelled', async () => {
+    const allRows = Array.from({ length: 51 }, (_, index) =>
+      makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
+    );
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: allRows.slice(0, 50), total: 51, page: 1, page_size: 50, total_pages: 2,
+    });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: allRows, total: 51,
+    });
+    render(<PendingMergesPage />);
+    await screen.findByText('Stream 1');
+    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
+    expect(screen.getByText('Stream 51')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Cancel$/i }));
+    await waitFor(() => expect(screen.queryByText('Stream 51')).toBeNull());
+    expect(screen.getAllByRole('checkbox')).toHaveLength(50);
+    expect(api.acceptPendingMerge).not.toHaveBeenCalled();
+  });
+
+  it('shows loading on the initiating all-queue control while the snapshot loads', async () => {
+    mockRows();
+    let resolveSnapshot!: (value: { merges: PendingMergeRecord[]; total: number }) => void;
+    vi.mocked(api.getPendingMergesSnapshot).mockImplementation(
+      () => new Promise((resolve) => { resolveSnapshot = resolve; }),
+    );
+    render(<PendingMergesPage />);
+    await screen.findByText('ESPN HD');
+    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
+    expect(await screen.findByRole('button', { name: /Loading all/i })).toBeDisabled();
+    await act(async () => resolveSnapshot({
+      merges: [makeRecord()], total: 1,
+    }));
+    expect(await screen.findByRole('dialog', { name: /Confirm bulk action/i }))
+      .toBeInTheDocument();
+  });
+
+  it('refreshes an active off-page selection with one coherent snapshot call', async () => {
+    const allRows = Array.from({ length: 51 }, (_, index) =>
+      makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
+    );
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: allRows.slice(0, 50), total: 51, page: 1, page_size: 50, total_pages: 2,
+    });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: allRows, total: 51,
+    });
+    render(<PendingMergesPage />);
+    await screen.findByText('Stream 1');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Stream 1' }));
+    vi.mocked(api.getPendingMergesSnapshot).mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/i }));
+    await waitFor(() => expect(api.getPendingMergesSnapshot).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('checkbox', { name: 'Select Stream 1' })).toBeChecked();
+    expect(screen.getByText('Stream 51')).toBeInTheDocument();
+  });
+
+  it('keeps a failure at id 250 visible, selected, and retryable', async () => {
+    const allRows = Array.from({ length: 260 }, (_, index) =>
+      makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
+    );
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: allRows.slice(0, 50), total: 260, page: 1, page_size: 50, total_pages: 6,
+    });
+    vi.mocked(api.getPendingMergesSnapshot).mockResolvedValue({
+      merges: allRows, total: 260,
+    });
+    vi.mocked(api.acceptPendingMerge).mockImplementation(async (id) => {
+      if (id === 250) throw new Error('Row 250 changed');
+      return {
+        merged_into_channel_id: 'channel-uuid-abc', journal_entry_id: id,
+        source_stream_id: `stream-${id}`, confidence: 0.92, status: 'merged',
+      };
+    });
+    render(<PendingMergesPage />);
+    await screen.findByText('Stream 1');
+    await startBulk(/^Merge all$/i);
+    await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(260));
+    expect(screen.getByText('Stream 250')).toBeInTheDocument();
+    expect(screen.getByText('Row 250 changed')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select Stream 250' })).toBeChecked();
+    const failedRow = screen.getByText('Stream 250').closest('.pending-merges-row')!;
+    expect(within(failedRow as HTMLElement).getByRole('button', { name: 'Merge' }))
+      .toBeEnabled();
   });
 });
