@@ -25,13 +25,10 @@
  * banner (matching the bd-7j6v1 / bd-9q9z0 pattern); the row stays in place
  * so the operator can retry or pick the other action.
  *
- * Bulk-action buttons ("Resolve All …") are deliberately NOT rendered — the
- * parent epic explicitly deferred them to backlog bead
- * `enhancedchannelmanager-qpgsx` (P3) per the PO ratification. The hard
- * confidence floor (ADR-008 §D2) is the architectural backstop against
- * mass-destruction footguns, but a low-default-threshold operator could
- * still queue many low-quality rows; a "Resolve All" button is one click
- * away from a regret. v0.17.1 ships only per-row resolution.
+ * Bulk actions (GH #642 / bead enhancedchannelmanager-ixcf1) reuse those same
+ * endpoints sequentially. Sequential execution prevents a bulk click from
+ * amplifying concurrent Dispatcharr mutations; failures do not stop later
+ * rows, and only successful rows are removed.
  */
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../../services/api';
@@ -49,6 +46,7 @@ function formatConfidencePercent(confidence: number): string {
 
 export function PendingMergesPage() {
   const [rows, setRows] = useState<PendingMergeRecord[]>([]);
+  const [totalRows, setTotalRows] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Per-row in-flight + error tracking — the operator may have multiple
@@ -56,6 +54,13 @@ export function PendingMergesPage() {
   // single page-wide "submitting" flag.
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkProgress, setBulkProgress] = useState<{
+    scope: 'all' | 'selected';
+    operation: 'Merge' | 'Clear';
+    current: number;
+    total: number;
+  } | null>(null);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -67,6 +72,12 @@ export function PendingMergesPage() {
         pageSize: PAGE_SIZE,
       });
       setRows(response.merges);
+      setTotalRows(response.total);
+      const loadedIds = new Set(response.merges.map((row) => row.id));
+      setSelectedIds((previous) => {
+        const next = new Set([...previous].filter((id) => loadedIds.has(id)));
+        return next.size === previous.size ? previous : next;
+      });
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'Failed to load pending merges';
       logger.error('PendingMergesPage: failed to load queue', err);
@@ -99,6 +110,13 @@ export function PendingMergesPage() {
         // row would not be returned on the next reload anyway. Removing it
         // here avoids a round-trip and a UI flash.
         setRows((prev) => prev.filter((r) => r.id !== rowId));
+        setTotalRows((prev) => Math.max(0, prev - 1));
+        setSelectedIds((prev) => {
+          if (!prev.has(rowId)) return prev;
+          const next = new Set(prev);
+          next.delete(rowId);
+          return next;
+        });
       } catch (err) {
         const detail =
           err instanceof Error ? err.message : `${operationLabel} failed`;
@@ -125,6 +143,134 @@ export function PendingMergesPage() {
     [handleAction],
   );
 
+  const bulkBusy = bulkProgress !== null;
+  const anyRowBusy = Object.keys(rowBusy).length > 0;
+  const actionsDisabled = loading || bulkBusy || anyRowBusy;
+
+  const toggleSelected = useCallback((rowId: number) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }, []);
+
+  const getAllPendingRows = useCallback(async (): Promise<PendingMergeRecord[]> => {
+    if (totalRows <= rows.length) return rows;
+
+    const allRows: PendingMergeRecord[] = [];
+    const pageSize = 200;
+    const totalPages = Math.ceil(totalRows / pageSize);
+    for (let page = 1; page <= totalPages; page += 1) {
+      const response = await api.getPendingMerges({
+        status: 'pending',
+        page,
+        pageSize,
+      });
+      allRows.push(...response.merges);
+    }
+    return allRows;
+  }, [rows, totalRows]);
+
+  const runBulkAction = useCallback(
+    async (
+      scope: 'all' | 'selected',
+      operation: 'Merge' | 'Clear',
+      action: (id: number) => Promise<unknown>,
+    ) => {
+      if (bulkBusy || anyRowBusy) return;
+
+      let targets =
+        scope === 'selected'
+          ? rows.filter((row) => selectedIds.has(row.id))
+          : rows;
+      if (targets.length === 0) return;
+
+      if (scope === 'all' && totalRows > rows.length) {
+        setLoading(true);
+        try {
+          targets = await getAllPendingRows();
+        } catch (err) {
+          const detail =
+            err instanceof Error ? err.message : 'Failed to load all pending merges';
+          logger.error('PendingMergesPage: failed to prepare bulk action', err);
+          setLoadError(detail);
+          return;
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      const count = targets.length;
+      const scopeLabel = scope === 'selected' ? ' selected' : '';
+      const consequence =
+        operation === 'Merge'
+          ? 'This will attach each incoming stream to its candidate channel.'
+          : 'This will dismiss each candidate so it can be created as a new channel.';
+      if (
+        !window.confirm(
+          `${operation} ${count}${scopeLabel} pending merge${count === 1 ? '' : 's'}? ${consequence}`,
+        )
+      ) {
+        return;
+      }
+
+      setBulkProgress({ scope, operation, current: 1, total: count });
+      setRowErrors((previous) => {
+        const next = { ...previous };
+        targets.forEach((row) => delete next[row.id]);
+        return next;
+      });
+      setRowBusy((previous) => ({
+        ...previous,
+        ...Object.fromEntries(targets.map((row) => [row.id, true])),
+      }));
+
+      for (let index = 0; index < targets.length; index += 1) {
+        const row = targets[index];
+        setBulkProgress({ scope, operation, current: index + 1, total: count });
+        try {
+          await action(row.id);
+          setRows((previous) => previous.filter((item) => item.id !== row.id));
+          setTotalRows((previous) => Math.max(0, previous - 1));
+          setSelectedIds((previous) => {
+            if (!previous.has(row.id)) return previous;
+            const next = new Set(previous);
+            next.delete(row.id);
+            return next;
+          });
+        } catch (err) {
+          const detail =
+            err instanceof Error ? err.message : `${operation} failed`;
+          logger.error(
+            'PendingMergesPage: bulk %s failed for row %s',
+            operation,
+            row.id,
+            err,
+          );
+          setRowErrors((previous) => ({ ...previous, [row.id]: detail }));
+          setSelectedIds((previous) => new Set(previous).add(row.id));
+        }
+      }
+
+      setRowBusy((previous) => {
+        const next = { ...previous };
+        targets.forEach((row) => delete next[row.id]);
+        return next;
+      });
+      setBulkProgress(null);
+    },
+    [
+      anyRowBusy,
+      bulkBusy,
+      getAllPendingRows,
+      rows,
+      selectedIds,
+      totalRows,
+    ],
+  );
+
   return (
     <div className="pending-merges-page">
       <div className="pending-merges-header">
@@ -133,13 +279,85 @@ export function PendingMergesPage() {
           type="button"
           className="btn-secondary"
           onClick={loadRows}
-          disabled={loading}
+          disabled={actionsDisabled}
           title="Reload pending merges"
         >
           <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
           Refresh
         </button>
       </div>
+
+      {rows.length > 0 && (
+        <div className="pending-merges-bulk-toolbar" aria-label="Bulk actions">
+          <span className="pending-merges-selection-count" aria-live="polite">
+            {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select pending merges'}
+          </span>
+          <div className="pending-merges-bulk-buttons">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setSelectedIds(new Set(rows.map((row) => row.id)))}
+              disabled={actionsDisabled || selectedIds.size === rows.length}
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setSelectedIds(new Set())}
+              disabled={actionsDisabled || selectedIds.size === 0}
+            >
+              Deselect all
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() =>
+                runBulkAction('selected', 'Clear', api.dismissPendingMerge)
+              }
+              disabled={actionsDisabled || selectedIds.size === 0}
+            >
+              {bulkProgress?.operation === 'Clear' &&
+              bulkProgress.scope === 'selected'
+                ? `Clearing ${bulkProgress.current} of ${bulkProgress.total}`
+                : 'Clear selected'}
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() =>
+                runBulkAction('selected', 'Merge', api.acceptPendingMerge)
+              }
+              disabled={actionsDisabled || selectedIds.size === 0}
+            >
+              {bulkProgress?.operation === 'Merge' &&
+              bulkProgress.scope === 'selected'
+                ? `Merging ${bulkProgress.current} of ${bulkProgress.total}`
+                : 'Merge selected'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => runBulkAction('all', 'Clear', api.dismissPendingMerge)}
+              disabled={actionsDisabled}
+            >
+              {bulkProgress?.operation === 'Clear' && bulkProgress.scope === 'all'
+                ? `Clearing ${bulkProgress.current} of ${bulkProgress.total}`
+                : 'Clear all'}
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => runBulkAction('all', 'Merge', api.acceptPendingMerge)}
+              disabled={actionsDisabled}
+            >
+              {bulkProgress?.operation === 'Merge' && bulkProgress.scope === 'all'
+                ? `Merging ${bulkProgress.current} of ${bulkProgress.total}`
+                : 'Merge all'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {loadError && (
         <div className="error-banner" role="alert">
@@ -168,6 +386,14 @@ export function PendingMergesPage() {
             return (
               <li key={row.id} className="pending-merges-row">
                 <div className="pending-merges-row-main">
+                  <input
+                    type="checkbox"
+                    className="pending-merges-select"
+                    checked={selectedIds.has(row.id)}
+                    onChange={() => toggleSelected(row.id)}
+                    disabled={actionsDisabled}
+                    aria-label={`Select ${row.stream_name}`}
+                  />
                   <div className="pending-merges-stream">
                     <label className="pending-merges-label">Incoming stream</label>
                     <span className="pending-merges-stream-name">{row.stream_name}</span>
@@ -227,7 +453,7 @@ export function PendingMergesPage() {
                       type="button"
                       className="btn-secondary"
                       onClick={() => handleCreateNew(row.id)}
-                      disabled={busy}
+                      disabled={busy || bulkBusy}
                     >
                       Create New
                     </button>
@@ -239,7 +465,7 @@ export function PendingMergesPage() {
                           : 'btn-secondary pending-merges-merge-btn'
                       }
                       onClick={() => handleMerge(row.id)}
-                      disabled={busy}
+                      disabled={busy || bulkBusy}
                     >
                       {busy ? 'Working...' : 'Merge'}
                     </button>
