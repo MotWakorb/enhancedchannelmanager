@@ -68,8 +68,10 @@ its refetch and PATCH.
 Each attempted audit uses a shared batch ID: 128 random bits displayed as 32
 lowercase hexadecimal characters. Polling state is process-local, is never
 expired while running, and remains available for 30 minutes after the job
-becomes terminal. Only the administrator who accepted the job can poll it;
-authorization is not continuously rechecked while it runs.
+becomes terminal. Only the same immutable account identity (provider plus
+numeric/synthetic ID) that accepted the job can poll it; renaming that account
+does not break access, and foreign jobs look identical to missing jobs.
+Authorization is not continuously rechecked while the job runs.
 
 A restart removes the progress envelope. Dispatcharr and ECM's Journal are
 separate systems and cannot commit atomically. If the channel PATCH succeeds

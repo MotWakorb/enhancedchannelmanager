@@ -537,11 +537,13 @@ Only one migration apply may run at a time; another POST receives
 also receive `409` and must be previewed again. Job polling state is
 process-local, is never pruned while running, and is retained for 30 minutes
 measured from terminal completion. Status reads also perform expiry cleanup.
-Poll access is bound to the administrator who accepted the job (auth-disabled
-mode intentionally treats operators as equivalent); authorization is checked
-at acceptance and polling, not continuously during execution. Batch IDs must
-be exactly 32 lowercase hexadecimal characters. Malformed, expired, and
-unknown IDs return the same not-found response.
+Poll access is bound to the immutable provider-kind and numeric/synthetic ID of
+the administrator who accepted the job (renaming a user does not break polling;
+the static MCP principal has its stable synthetic ID; auth-disabled mode
+intentionally treats operators as equivalent). Authorization is checked at
+acceptance and polling, not continuously during execution. Batch IDs must be
+exactly 32 lowercase hexadecimal characters. Malformed, expired, unknown, and
+foreign-owned IDs all return the same not-found response.
 
 The process-local envelope and active-job marker are lost on restart.
 Dispatcharr PATCH and ECM Journal commit are separate operations: cancellation,

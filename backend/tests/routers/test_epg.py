@@ -103,6 +103,22 @@ async def _poll_migration(async_client, accepted):
 
 
 class TestGuideMigration:
+    def test_migration_actor_has_stable_auth_disabled_and_mcp_identities(self):
+        from routers.epg import _migration_actor
+
+        assert _migration_actor(None) == "auth-disabled"
+        before = type(
+            "Actor",
+            (),
+            {"id": -100, "username": "mcp-service", "auth_provider": "mcp"},
+        )()
+        renamed = type(
+            "Actor",
+            (),
+            {"id": -100, "username": "renamed", "auth_provider": "mcp"},
+        )()
+        assert _migration_actor(before) == _migration_actor(renamed) == "mcp:-100"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "path,payload",
@@ -927,27 +943,47 @@ class TestGuideMigration:
             epg._GUIDE_MIGRATION_JOBS.pop(batch_id, None)
 
     @pytest.mark.asyncio
-    async def test_poll_is_bound_to_accepting_actor(self, async_client):
+    async def test_poll_ownership_uses_provider_and_id_not_mutable_username(
+        self, async_client
+    ):
         from auth import RequireAdminIfEnabled as admin_dependency
         from main import app
         from routers import epg
 
         batch_id = "b" * 32
-        epg._GUIDE_MIGRATION_JOBS[batch_id] = epg._GuideMigrationJob(1, "1:alice")
+        epg._GUIDE_MIGRATION_JOBS[batch_id] = epg._GuideMigrationJob(1, "local:1")
+
+        async def renamed_actor_a():
+            return type(
+                "Actor",
+                (),
+                {"id": 1, "username": "alice-renamed", "auth_provider": "local"},
+            )()
 
         async def actor_b():
-            return type("Actor", (), {"id": 2, "username": "bob"})()
+            return type(
+                "Actor",
+                (),
+                {"id": 2, "username": "bob", "auth_provider": "local"},
+            )()
 
-        app.dependency_overrides[admin_dependency.dependency] = actor_b
+        app.dependency_overrides[admin_dependency.dependency] = renamed_actor_a
         try:
-            response = await async_client.get(
+            renamed_owner_response = await async_client.get(
+                f"/api/epg/migration/apply/{batch_id}"
+            )
+            app.dependency_overrides[admin_dependency.dependency] = actor_b
+            foreign_response = await async_client.get(
                 f"/api/epg/migration/apply/{batch_id}"
             )
         finally:
             app.dependency_overrides.pop(admin_dependency.dependency, None)
             epg._GUIDE_MIGRATION_JOBS.pop(batch_id, None)
-        assert response.status_code == 403
-        assert response.json()["detail"] == "Guide migration job access denied."
+        assert renamed_owner_response.status_code == 200
+        assert foreign_response.status_code == 404
+        assert foreign_response.json() == {
+            "detail": "Guide migration job not found."
+        }
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1146,6 +1182,11 @@ class TestGuideMigration:
             "updated_audit_failed",
         ]
         assert terminal["result"]["audit_failed"] == 2
+        assert terminal["result"]["mutated"] == 2
+        assert terminal["result"]["updated"] == 0
+        assert terminal["processed"] == 2
+        assert terminal["result"]["skipped"] == 0
+        assert terminal["result"]["failed"] == 0
         assert client.update_channel.await_count == 2
         for session in sessions:
             session.rollback.assert_called_once_with()

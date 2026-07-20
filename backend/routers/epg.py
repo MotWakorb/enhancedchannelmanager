@@ -1251,7 +1251,9 @@ def _invalid_live_target_channels(
 def _migration_actor(admin: Any) -> str:
     if admin is None:
         return "auth-disabled"
-    return f"{getattr(admin, 'id', 'unknown')}:{getattr(admin, 'username', 'unknown')}"
+    provider = str(getattr(admin, "auth_provider", "unknown") or "unknown")
+    principal_id = str(getattr(admin, "id", "unknown"))
+    return f"{provider}:{principal_id}"
 
 
 def _migration_issuer(secret: str) -> str:
@@ -1562,7 +1564,7 @@ async def get_guide_migration_status(
     if job is None:
         raise HTTPException(status_code=404, detail="Guide migration job not found.")
     if job.actor != _migration_actor(_admin):
-        raise HTTPException(status_code=403, detail="Guide migration job access denied.")
+        raise HTTPException(status_code=404, detail="Guide migration job not found.")
     envelope = {
         "batch_id": batch_id,
         "status": job.status,
