@@ -79,6 +79,7 @@ export function PendingMergesPage() {
   const [snapshotAction, setSnapshotAction] = useState<BulkOperation | 'Select' | null>(
     null,
   );
+  const [renderPage, setRenderPage] = useState(0);
   const [bulkIntent, setBulkIntent] = useState<BulkIntent | null>(null);
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const bulkLockRef = useRef(false);
@@ -197,7 +198,16 @@ export function PendingMergesPage() {
   // but bound DOM work at the server safety ceiling. As successful leading
   // rows are removed, later records naturally move into this visible window;
   // failed records remain in rows and therefore become reachable for retry.
-  const renderedRows = rows.slice(0, MAX_RENDERED_ROWS);
+  const renderPageCount = Math.max(1, Math.ceil(rows.length / MAX_RENDERED_ROWS));
+  const boundedRenderPage = Math.min(renderPage, renderPageCount - 1);
+  const renderStart = boundedRenderPage * MAX_RENDERED_ROWS;
+  const renderedRows = rows.slice(renderStart, renderStart + MAX_RENDERED_ROWS);
+
+  useEffect(() => {
+    if (renderPage >= renderPageCount) {
+      setRenderPage(renderPageCount - 1);
+    }
+  }, [renderPage, renderPageCount]);
 
   const toggleSelected = useCallback((rowId: number) => {
     setSelectedIds((previous) => {
@@ -587,6 +597,37 @@ export function PendingMergesPage() {
       )}
 
       {rows.length > 0 && (
+        <>
+        {renderPageCount > 1 && (
+          <nav
+            className="pending-merges-window-nav"
+            aria-label="Pending merges queue pages"
+          >
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setRenderPage((page) => Math.max(0, page - 1))}
+              disabled={boundedRenderPage === 0}
+            >
+              Previous rows
+            </button>
+            <span role="status" aria-live="polite">
+              Rows {renderStart + 1}–
+              {Math.min(renderStart + MAX_RENDERED_ROWS, rows.length)} of{' '}
+              {rows.length}
+            </span>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() =>
+                setRenderPage((page) => Math.min(renderPageCount - 1, page + 1))
+              }
+              disabled={boundedRenderPage >= renderPageCount - 1}
+            >
+              Next rows
+            </button>
+          </nav>
+        )}
         <ul className="pending-merges-list" aria-label="Pending merges">
           {renderedRows.map((row) => {
             const isExact = row.confidence >= EXACT_MATCH_THRESHOLD;
@@ -693,6 +734,7 @@ export function PendingMergesPage() {
             );
           })}
         </ul>
+        </>
       )}
 
       {bulkIntent && (

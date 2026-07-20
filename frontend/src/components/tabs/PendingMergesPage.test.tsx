@@ -1118,14 +1118,19 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     });
     render(<PendingMergesPage />);
     await screen.findByText('Stream 1');
-    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
-    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
-    expect(within(dialog).getByText(/20000 pending merges/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Select all$/i }));
+    expect(await screen.findByText('20000 selected')).toBeInTheDocument();
     expect(screen.getAllByRole('checkbox')).toHaveLength(200);
     expect(screen.queryByText('Stream 201')).toBeNull();
+    const next = screen.getByRole('button', { name: /Next rows/i });
+    next.focus();
+    fireEvent.click(next);
+    expect(next).toHaveFocus();
+    expect(screen.getByText('Stream 201')).toBeInTheDocument();
+    expect(screen.getByText(/Rows 201.*400 of 20000/i)).toBeInTheDocument();
   });
 
-  it('keeps a failure at id 250 visible, selected, and retryable', async () => {
+  it('makes id 250 reachable and retryable after more than 200 earlier failures', async () => {
     const allRows = Array.from({ length: 260 }, (_, index) =>
       makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
     );
@@ -1136,6 +1141,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
       merges: allRows, total: 260,
     });
     vi.mocked(api.acceptPendingMerge).mockImplementation(async (id) => {
+      if (id <= 201) throw new Error(`Earlier failure ${id}`);
       if (id === 250) throw new Error('Row 250 changed');
       return {
         merged_into_channel_id: 'channel-uuid-abc', journal_entry_id: id,
@@ -1146,6 +1152,8 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     await screen.findByText('Stream 1');
     await startBulk(/^Merge all$/i);
     await waitFor(() => expect(api.acceptPendingMerge).toHaveBeenCalledTimes(260));
+    expect(screen.queryByText('Stream 250')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Next rows/i }));
     expect(screen.getByText('Stream 250')).toBeInTheDocument();
     expect(screen.getByText('Row 250 changed')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Select Stream 250' })).toBeChecked();
