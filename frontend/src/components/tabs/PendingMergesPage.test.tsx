@@ -22,6 +22,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { PendingMergesPage } from './PendingMergesPage';
 import type { PendingMergeRecord } from '../../services/api';
 import * as api from '../../services/api';
@@ -307,11 +308,15 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
   });
 
   async function startBulk(actionName: RegExp) {
-    fireEvent.click(screen.getByRole('button', { name: actionName }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: actionName }));
+    });
     const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
-    fireEvent.click(
-      within(dialog).getByRole('button', { name: /^Confirm (merge|clear)$/i }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: /^Confirm (merge|clear)$/i }),
+      );
+    });
   }
 
   function mockRows() {
@@ -851,6 +856,143 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     await waitFor(() => expect(resolvedIds).toHaveLength(401));
     expect(new Set(resolvedIds).size).toBe(401);
     expect(resolvedIds).toEqual(expect.arrayContaining([1, 200, 201, 350, 401]));
+  });
+
+  it('reconciles from page one after concurrent contraction before confirming all rows', async () => {
+    const original = Array.from({ length: 401 }, (_, index) =>
+      makeRecord({ id: index + 1, stream_name: `Stream ${index + 1}` }),
+    );
+    const contracted = original.slice(100);
+    let bulkPageCalls = 0;
+    vi.mocked(api.getPendingMerges).mockImplementation(async (params) => {
+      if (params?.pageSize !== 200) {
+        return {
+          merges: original.slice(0, 50),
+          total: 401,
+          page: 1,
+          page_size: 50,
+          total_pages: 9,
+        };
+      }
+      bulkPageCalls += 1;
+      const page = params.page ?? 1;
+      const source = bulkPageCalls === 1 ? original : contracted;
+      return {
+        merges: source.slice((page - 1) * 200, page * 200),
+        total: source.length,
+        page,
+        page_size: 200,
+        total_pages: Math.ceil(source.length / 200),
+      };
+    });
+
+    render(<PendingMergesPage />);
+    await screen.findByText('Stream 1');
+    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
+    expect(within(dialog).getByText(/301 pending merges/i)).toBeInTheDocument();
+    expect(screen.getByText('Stream 250')).toBeInTheDocument();
+    expect(api.acceptPendingMerge).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the queue cannot stabilize within the bounded snapshot passes', async () => {
+    let pass = 0;
+    vi.mocked(api.getPendingMerges).mockImplementation(async (params) => {
+      if (params?.pageSize !== 200) {
+        return {
+          merges: [makeRecord()],
+          total: 2,
+          page: 1,
+          page_size: 50,
+          total_pages: 1,
+        };
+      }
+      pass += 1;
+      return {
+        merges: [
+          makeRecord({
+            id: pass % 2 === 0 ? 2 : 1,
+            stream_name: pass % 2 === 0 ? 'Stream 2' : 'Stream 1',
+          }),
+        ],
+        total: 1,
+        page: 1,
+        page_size: 200,
+        total_pages: 1,
+      };
+    });
+
+    render(<PendingMergesPage />);
+    await screen.findByText('ESPN HD');
+    fireEvent.click(screen.getByRole('button', { name: /^Merge all$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /queue kept changing.*Nothing was changed/i,
+    );
+    expect(screen.queryByRole('dialog', { name: /Confirm bulk action/i })).toBeNull();
+    expect(api.acceptPendingMerge).not.toHaveBeenCalled();
+    expect(api.dismissPendingMerge).not.toHaveBeenCalled();
+    expect(pass).toBe(4);
+  });
+
+  it('fails closed when the queue exceeds the bounded snapshot page cap', async () => {
+    let bulkFetches = 0;
+    vi.mocked(api.getPendingMerges).mockImplementation(async (params) => {
+      if (params?.pageSize !== 200) {
+        return {
+          merges: [makeRecord()],
+          total: 20_001,
+          page: 1,
+          page_size: 50,
+          total_pages: 401,
+        };
+      }
+      bulkFetches += 1;
+      return {
+        merges: [makeRecord()],
+        total: 20_001,
+        page: 1,
+        page_size: 200,
+        total_pages: 101,
+      };
+    });
+
+    render(<PendingMergesPage />);
+    await screen.findByText('ESPN HD');
+    fireEvent.click(screen.getByRole('button', { name: /^Clear all$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /queue kept changing.*Nothing was changed/i,
+    );
+    expect(bulkFetches).toBe(4);
+    expect(api.dismissPendingMerge).not.toHaveBeenCalled();
+  });
+
+  it('focuses Cancel, traps Tab both ways, cancels on Escape, and restores the trigger', async () => {
+    mockRows();
+    const user = userEvent.setup();
+    render(<PendingMergesPage />);
+    await screen.findByText('ESPN HD');
+    const trigger = screen.getByRole('button', { name: /^Clear all$/i });
+
+    await user.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
+    const close = within(dialog).getByRole('button', { name: /^Close$/i });
+    const cancel = within(dialog).getByRole('button', { name: /^Cancel$/i });
+    const confirm = within(dialog).getByRole('button', { name: /^Confirm clear$/i });
+    expect(cancel).toHaveFocus();
+
+    confirm.focus();
+    await user.tab();
+    expect(close).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+    expect(api.dismissPendingMerge).not.toHaveBeenCalled();
   });
 
   it('drops stale selections after a refresh replaces the loaded rows', async () => {

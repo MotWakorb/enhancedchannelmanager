@@ -96,7 +96,7 @@ Clicking **Create New** dismisses the dedup candidate and signals that you want 
 
 ### Resolving merges in bulk
 
-Use the row checkboxes for a targeted batch, or **Merge all** / **Clear all** for the entire pending queue. Queue-wide actions load a stable snapshot of every page before anything is changed, so records are not skipped as successful rows disappear.
+Use the row checkboxes for a targeted batch, or **Merge all** / **Clear all** for the entire pending queue. Queue-wide actions reconcile every page from the beginning until two complete reads agree, so records are not skipped if the queue grows or contracts while it is being loaded. If the queue does not stabilize within the bounded safety check, ECM shows an error and changes nothing; wait for the current refresh or other operator to finish, then retry.
 
 Every bulk action opens a confirmation dialog showing the exact record count and consequence. After confirmation, ECM processes records one at a time and keeps a live progress message visible. Choose **Stop** to finish only the request already in flight and leave every later record selected for a future retry.
 
