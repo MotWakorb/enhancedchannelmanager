@@ -6,7 +6,7 @@
  * sections, keyboard navigation, and the Escape-clears-selection contract.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SelectionActionBar } from './SelectionActionBar';
 
@@ -143,8 +143,8 @@ describe('SelectionActionBar', () => {
 
     await user.click(screen.getByRole('menuitem', { name: /Move to group/ }));
 
-    const submenu = screen.getByRole('menu', { name: 'Move to group' });
-    const labels = Array.from(submenu.querySelectorAll('[role="menuitem"]')).map(
+    const submenu = screen.getByRole('dialog', { name: 'Move to group' });
+    const labels = Array.from(submenu.querySelectorAll('.selection-bar-menu-item--sub')).map(
       (el) => el.textContent?.replace(/^(folder_off|folder|create_new_folder)/, ''),
     );
     expect(labels).toEqual(['Uncategorized', 'News', 'Sports', 'New group…']);
@@ -156,7 +156,7 @@ describe('SelectionActionBar', () => {
     await openMoreMenu(user);
     await user.click(screen.getByRole('menuitem', { name: /Move to group/ }));
 
-    await user.click(screen.getByRole('menuitem', { name: /Sports/ }));
+    await user.click(screen.getByRole('button', { name: /Sports/ }));
 
     expect(props.onMoveToGroup).toHaveBeenCalledWith(20);
     expect(screen.queryByRole('menu', { name: 'More selection actions' })).not.toBeInTheDocument();
@@ -167,12 +167,12 @@ describe('SelectionActionBar', () => {
     const { props } = renderBar();
     await openMoreMenu(user);
     await user.click(screen.getByRole('menuitem', { name: /Move to group/ }));
-    await user.click(screen.getByRole('menuitem', { name: /Uncategorized/ }));
+    await user.click(screen.getByRole('button', { name: /Uncategorized/ }));
     expect(props.onMoveToGroup).toHaveBeenCalledWith(null);
 
     await openMoreMenu(user);
     await user.click(screen.getByRole('menuitem', { name: /Move to group/ }));
-    await user.click(screen.getByRole('menuitem', { name: /New group/ }));
+    await user.click(screen.getByRole('button', { name: /New group/ }));
     expect(props.onNewGroup).toHaveBeenCalledTimes(1);
   });
 
@@ -260,15 +260,260 @@ describe('SelectionActionBar', () => {
     await user.keyboard('{ArrowUp}');
     expect(moveItem).toHaveFocus();
 
+    // ArrowDown to reach the Sort Streams submenu trigger (a plain menuitem
+    // submenu, unaffected by the Move filter input — see the dedicated
+    // "Move-to-group type-to-filter" describe block below for that
+    // submenu's ArrowRight-focuses-the-input behavior): Normalize Names,
+    // Set Logo from M3U, Set Logo from EPG, Sort Streams.
+    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}');
+    const sortItem = screen.getByRole('menuitem', { name: /Sort Streams/ });
+    expect(sortItem).toHaveFocus();
+
     // ArrowRight opens the submenu and focuses its first item.
     await user.keyboard('{ArrowRight}');
     await waitFor(() =>
-      expect(screen.getByRole('menuitem', { name: /Uncategorized/ })).toHaveFocus(),
+      expect(screen.getByRole('menuitem', { name: /Smart Sort/ })).toHaveFocus(),
     );
 
     // ArrowLeft closes the submenu and restores focus to the trigger.
     await user.keyboard('{ArrowLeft}');
-    expect(screen.queryByRole('menu', { name: 'Move to group' })).not.toBeInTheDocument();
-    expect(moveItem).toHaveFocus();
+    expect(screen.queryByRole('menu', { name: 'Sort streams' })).not.toBeInTheDocument();
+    expect(sortItem).toHaveFocus();
+  });
+
+  describe('Move-to-group type-to-filter (bead hzzcv)', () => {
+    function manyGroups(count: number) {
+      return Array.from({ length: count }, (_, i) => ({ id: i + 1, name: `Group ${i + 1}` }));
+    }
+
+    async function openMoveSubmenu(user: ReturnType<typeof userEvent.setup>) {
+      await openMoreMenu(user);
+      await user.click(screen.getByRole('menuitem', { name: /Move to group/ }));
+      return screen.getByRole('dialog', { name: 'Move to group' });
+    }
+
+    it('focuses the filter input as soon as the submenu opens (click)', async () => {
+      const user = userEvent.setup();
+      renderBar();
+
+      await openMoveSubmenu(user);
+
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Filter groups' })).toHaveFocus());
+    });
+
+    it('focuses the filter input when the submenu opens via ArrowRight, not the first menu item', async () => {
+      const user = userEvent.setup();
+      renderBar();
+      await openMoreMenu(user);
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: /Move to group/ })).toHaveFocus());
+
+      await user.keyboard('{ArrowRight}');
+
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Filter groups' })).toHaveFocus());
+    });
+
+    it('narrows the list to groups whose name contains the query, case-insensitively', async () => {
+      const user = userEvent.setup();
+      renderBar({ groups: [{ id: 1, name: 'Sports HD' }, { id: 2, name: 'News' }, { id: 3, name: 'Kids Sport' }] });
+      await openMoveSubmenu(user);
+
+      await user.type(screen.getByRole('textbox', { name: 'Filter groups' }), 'SPORT');
+
+      expect(screen.getByRole('button', { name: /Sports HD/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Kids Sport/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^News$/ })).not.toBeInTheDocument();
+      // Pinned entries stay reachable regardless of the filter text.
+      expect(screen.getByRole('button', { name: /Uncategorized/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /New group/ })).toBeInTheDocument();
+    });
+
+    it('shows an empty-state message when the filter matches no groups, and clears it on Clear', async () => {
+      const user = userEvent.setup();
+      renderBar({ groups: [{ id: 1, name: 'Sports' }, { id: 2, name: 'News' }] });
+      await openMoveSubmenu(user);
+
+      await user.type(screen.getByRole('textbox', { name: 'Filter groups' }), 'zzz-nomatch');
+
+      expect(screen.getByText('No groups match "zzz-nomatch"')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Sports/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /News/ })).not.toBeInTheDocument();
+      // Pinned entries still reachable even with a zero-match filter.
+      expect(screen.getByRole('button', { name: /Uncategorized/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /New group/ })).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Clear group filter' }));
+
+      expect(screen.getByRole('textbox', { name: 'Filter groups' })).toHaveValue('');
+      expect(screen.queryByText('No groups match "zzz-nomatch"')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Sports/ })).toBeInTheDocument();
+    });
+
+    it('ArrowDown from the filter input moves focus into the filtered results, and Enter activates the focused group', async () => {
+      const user = userEvent.setup();
+      const { props } = renderBar({ groups: manyGroups(50) });
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      await waitFor(() => expect(input).toHaveFocus());
+
+      // "Group 23" is a unique substring among "Group 1".."Group 50" (no
+      // "Group 230" etc. exists), isolating a single filtered result so
+      // focus movement is deterministic.
+      await user.type(input, 'Group 23');
+      expect(screen.getAllByRole('button', { name: /^Group 23$/ })).toHaveLength(1);
+
+      // ArrowDown from the input lands on the first reachable item
+      // (Uncategorized is pinned ahead of the filtered results).
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('button', { name: /Uncategorized/ })).toHaveFocus();
+
+      // Arrow further down onto the sole filtered group and activate it.
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('button', { name: /^Group 23$/ })).toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(props.onMoveToGroup).toHaveBeenCalledWith(23);
+    });
+
+    it('keeps ArrowUp and ArrowDown scoped to the Move-to-group submenu boundaries', async () => {
+      const user = userEvent.setup();
+      renderBar({ groups: [{ id: 1, name: 'Sports' }] });
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      const firstItem = screen.getByRole('button', { name: /Uncategorized/ });
+      const lastItem = screen.getByRole('button', { name: /New group/ });
+      await waitFor(() => expect(input).toHaveFocus());
+
+      await user.keyboard('{ArrowDown}');
+      expect(firstItem).toHaveFocus();
+
+      await user.keyboard('{ArrowUp}');
+      expect(input).toHaveFocus();
+
+      lastItem.focus();
+      await user.keyboard('{ArrowDown}');
+      expect(lastItem).toHaveFocus();
+    });
+
+    it('preserves normal Left, Right, Home, and End text editing in the filter input', async () => {
+      const user = userEvent.setup();
+      renderBar();
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' }) as HTMLInputElement;
+      await user.type(input, 'Sports');
+
+      // jsdom does not implement the browser's default caret movement, so
+      // verify directly that none of these native editing events is canceled.
+      for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
+        expect(fireEvent.keyDown(input, { key })).toBe(true);
+      }
+      expect(input).toHaveFocus();
+      expect(screen.getByRole('dialog', { name: 'Move to group' })).toBeInTheDocument();
+    });
+
+    it('announces filtered and zero-result counts politely', async () => {
+      const user = userEvent.setup();
+      renderBar({ groups: [{ id: 1, name: 'Sports HD' }, { id: 2, name: 'News' }, { id: 3, name: 'Kids Sport' }] });
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      const status = screen.getByRole('status');
+
+      await user.type(input, 'sport');
+      expect(status).toHaveTextContent('2 groups found');
+
+      await user.clear(input);
+      await user.type(input, 'zzz');
+      expect(status).toHaveTextContent('No groups found');
+    });
+
+    it('makes the clear control keyboard reachable and restores focus to the input after clearing', async () => {
+      const user = userEvent.setup();
+      renderBar();
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      await user.type(input, 'Sports');
+
+      await user.tab();
+      const clearButton = screen.getByRole('button', { name: 'Clear group filter' });
+      expect(clearButton).toHaveFocus();
+
+      await user.keyboard('{Enter}');
+      expect(input).toHaveValue('');
+      expect(input).toHaveFocus();
+    });
+
+    it('contains chooser navigation and Escape when the clear control has focus', async () => {
+      const user = userEvent.setup();
+      renderBar();
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      await user.type(input, 'Sports');
+      await user.tab();
+      const clearButton = screen.getByRole('button', { name: 'Clear group filter' });
+
+      await user.keyboard('{ArrowUp}');
+      expect(input).toHaveFocus();
+      clearButton.focus();
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('button', { name: /Uncategorized/ })).toHaveFocus();
+      clearButton.focus();
+      await user.keyboard('{Home}');
+      expect(input).toHaveFocus();
+      clearButton.focus();
+      await user.keyboard('{End}');
+      expect(screen.getByRole('button', { name: /New group/ })).toHaveFocus();
+
+      clearButton.focus();
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: 'Move to group' })).not.toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /Move to group/ })).toHaveFocus();
+    });
+
+    it('supports Space to clear and Escape from a destination', async () => {
+      const user = userEvent.setup();
+      renderBar();
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      await user.type(input, 'Sports');
+      await user.tab();
+      await user.keyboard(' ');
+      expect(input).toHaveValue('');
+      expect(input).toHaveFocus();
+
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('button', { name: /Uncategorized/ })).toHaveFocus();
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: 'Move to group' })).not.toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /Move to group/ })).toHaveFocus();
+    });
+
+    it('Escape closes the submenu (not the whole menu, not the selection) and returns focus to the trigger', async () => {
+      const user = userEvent.setup();
+      const { props } = renderBar();
+      await openMoveSubmenu(user);
+      const input = screen.getByRole('textbox', { name: 'Filter groups' });
+      await waitFor(() => expect(input).toHaveFocus());
+      await user.type(input, 'Sports');
+
+      await user.keyboard('{Escape}');
+
+      expect(screen.queryByRole('dialog', { name: 'Move to group' })).not.toBeInTheDocument();
+      // The outer More menu is still open — Escape only closed the submenu.
+      expect(screen.getByRole('menu', { name: 'More selection actions' })).toBeInTheDocument();
+      expect(props.onClear).not.toHaveBeenCalled();
+      expect(screen.getByRole('menuitem', { name: /Move to group/ })).toHaveFocus();
+    });
+
+    it('resets the filter when the submenu is closed and reopened', async () => {
+      const user = userEvent.setup();
+      renderBar({ groups: [{ id: 1, name: 'Sports' }, { id: 2, name: 'News' }] });
+      await openMoveSubmenu(user);
+      await user.type(screen.getByRole('textbox', { name: 'Filter groups' }), 'Sports');
+      expect(screen.queryByRole('button', { name: /News/ })).not.toBeInTheDocument();
+
+      await user.keyboard('{Escape}'); // closes submenu only
+      await user.click(screen.getByRole('menuitem', { name: /Move to group/ }));
+
+      expect(screen.getByRole('textbox', { name: 'Filter groups' })).toHaveValue('');
+      expect(screen.getByRole('button', { name: /News/ })).toBeInTheDocument();
+    });
   });
 });
