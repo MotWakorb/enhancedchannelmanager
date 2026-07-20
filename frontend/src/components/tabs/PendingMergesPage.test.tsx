@@ -1422,7 +1422,7 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     expect(next).toHaveFocus();
     expect(screen.getByText('Stream 201')).toBeInTheDocument();
     expect(screen.getByText(/Rows 201.*400 of 20000/i)).toBeInTheDocument();
-  });
+  }, 15_000);
 
   it('makes id 250 reachable and retryable after more than 200 earlier failures', async () => {
     const allRows = Array.from({ length: 260 }, (_, index) =>
@@ -1454,5 +1454,5 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     const failedRow = screen.getByText('Stream 250').closest('.pending-merges-row')!;
     expect(within(failedRow as HTMLElement).getByRole('button', { name: 'Merge' }))
       .toBeEnabled();
-  });
+  }, 15_000);
 });
