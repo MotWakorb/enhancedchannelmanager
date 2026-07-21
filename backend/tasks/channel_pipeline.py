@@ -236,20 +236,6 @@ class ChannelPipelineTask(TaskScheduler):
                 r for r in event_sync_candidates
                 if (r.get_event_sync_config() or {}).get("auto_run") is True
             ]
-            date_gated_standard = session.query(ChannelPipelineRule).filter(
-                ChannelPipelineRule.enabled == True,
-                ChannelPipelineRule.run_on_refresh == True,
-                ChannelPipelineRule.event_sync_config.is_(None),
-            ).count() > len(rules_to_run)
-            all_event_sync_candidates = session.query(ChannelPipelineRule).filter(
-                ChannelPipelineRule.enabled == True,
-                ChannelPipelineRule.event_sync_config.isnot(None),
-            ).all()
-            date_gated_event_sync = any(
-                (r.get_event_sync_config() or {}).get("auto_run") is True
-                for r in all_event_sync_candidates
-                if r not in event_sync_candidates
-            )
             rule_ids = (
                 [r.id for r in rules_to_run]
                 + [r.id for r in event_sync_to_run]
@@ -258,6 +244,30 @@ class ChannelPipelineTask(TaskScheduler):
                 [r.name for r in rules_to_run]
                 + [r.name for r in event_sync_to_run]
             )
+            # These extra queries exist only to explain an otherwise-empty
+            # eligible set. Keep them off the happy path (and legacy mock
+            # paths) where their results are never consumed.
+            date_gated_standard = False
+            date_gated_event_sync = False
+            if not rule_ids:
+                standard_candidate_count = session.query(ChannelPipelineRule).filter(
+                    ChannelPipelineRule.enabled == True,
+                    ChannelPipelineRule.run_on_refresh == True,
+                    ChannelPipelineRule.event_sync_config.is_(None),
+                ).count()
+                date_gated_standard = (
+                    isinstance(standard_candidate_count, int)
+                    and standard_candidate_count > len(rules_to_run)
+                )
+                all_event_sync_candidates = session.query(ChannelPipelineRule).filter(
+                    ChannelPipelineRule.enabled == True,
+                    ChannelPipelineRule.event_sync_config.isnot(None),
+                ).all()
+                date_gated_event_sync = any(
+                    (r.get_event_sync_config() or {}).get("auto_run") is True
+                    for r in all_event_sync_candidates
+                    if r not in event_sync_candidates
+                )
         finally:
             session.close()
 
