@@ -2226,7 +2226,14 @@ class ChannelPipelineExecution(Base):
     duration_seconds = Column(Float, nullable=True)
 
     # Status
-    status = Column(String(20), nullable=False, default="pending")  # pending, running, completed, failed, rolled_back
+    # Allowed terminal/lifecycle values: pending, running, completed, failed,
+    # rolled_back, capped, completed_with_errors. Widened to String(32) in
+    # Alembic 0039 (y3m6o.1 / GH #720): build 0.17.6-0152 added the terminal
+    # status 'completed_with_errors' (21 chars), which overflowed the previous
+    # String(20). 32 comfortably covers the current set plus near-future
+    # statuses. SQLite ignores VARCHAR width, but a width-enforcing backend
+    # (Postgres) would truncate/reject — keep this contract honest.
+    status = Column(String(32), nullable=False, default="pending")
     error_message = Column(Text, nullable=True)  # Error details if failed
 
     # Statistics
