@@ -1998,9 +1998,10 @@ class TestImportYAML:
         ("2026-09-01", "null"),
     ])
     async def test_imports_quoted_unquoted_and_open_active_windows(
-        self, async_client, start, end
+        self, async_client, test_session, start, end
     ):
-        content = f"""rules:\n  - name: Window {start} {end}\n    conditions: [{{type: always}}]\n    actions: [{{type: skip}}]\n    active_from: {start}\n    active_until: {end}\n"""
+        rule_name = f"Window {start} {end}"
+        content = f"""rules:\n  - name: {rule_name}\n    conditions: [{{type: always}}]\n    actions: [{{type: skip}}]\n    active_from: {start}\n    active_until: {end}\n"""
         mock_client = AsyncMock()
         mock_client.get_channel_groups.return_value = []
         mock_client.get_m3u_accounts.return_value = []
@@ -2010,6 +2011,73 @@ class TestImportYAML:
             response = await async_client.post("/api/auto-creation/import/yaml", json={"yaml_content": content})
         assert response.status_code == 200, response.text
         assert response.json()["errors"] == []
+        test_session.expire_all()
+        stored = test_session.query(ChannelPipelineRule).filter_by(name=rule_name).one()
+        expected_start = None if start == "null" else date(2026, 9, 1)
+        expected_end = None if end == "null" else date(2027, 2, 15)
+        assert stored.active_from == expected_start
+        assert stored.active_until == expected_end
+
+    @pytest.mark.asyncio
+    async def test_export_import_round_trip_persists_both_bounds(
+        self, async_client, test_session
+    ):
+        import yaml
+
+        source = _create_rule(
+            test_session, name="Round-trip source",
+            active_from=date(2026, 9, 1), active_until=date(2027, 2, 15),
+        )
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = []
+        mock_client.get_m3u_accounts.return_value = []
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
+            exported = await async_client.get("/api/auto-creation/export/yaml")
+        assert exported.status_code == 200
+
+        document = yaml.safe_load(exported.text)
+        document["rules"][0]["name"] = "Round-trip target"
+        test_session.delete(source)
+        test_session.commit()
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client), \
+             patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            imported = await async_client.post("/api/auto-creation/import/yaml", json={
+                "yaml_content": yaml.safe_dump(document, sort_keys=False),
+            })
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["errors"] == []
+        test_session.expire_all()
+        target = test_session.query(ChannelPipelineRule).filter_by(
+            name="Round-trip target"
+        ).one()
+        assert target.active_from == date(2026, 9, 1)
+        assert target.active_until == date(2027, 2, 15)
+
+    @pytest.mark.asyncio
+    async def test_valid_overwrite_persists_changed_active_window(
+        self, async_client, test_session
+    ):
+        existing = _create_rule(
+            test_session, name="Overwrite window",
+            active_from=date(2026, 1, 1), active_until=date(2026, 6, 1),
+        )
+        content = """rules:\n  - name: Overwrite window\n    conditions: [{type: always}]\n    actions: [{type: skip}]\n    active_from: 2026-09-01\n    active_until: 2027-02-15\n"""
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = []
+        mock_client.get_m3u_accounts.return_value = []
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client), \
+             patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            response = await async_client.post("/api/auto-creation/import/yaml", json={
+                "yaml_content": content, "overwrite": True,
+            })
+        assert response.status_code == 200, response.text
+        assert response.json()["errors"] == []
+        test_session.expire_all()
+        stored = test_session.get(ChannelPipelineRule, existing.id)
+        assert stored.active_from == date(2026, 9, 1)
+        assert stored.active_until == date(2027, 2, 15)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("start,end", [
