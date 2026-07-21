@@ -6,8 +6,8 @@
  * The keydown handler is bound on the container, so search-input keystrokes
  * bubble up to it; Space must only open/select when the trigger is focused.
  */
-import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi, beforeAll } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CustomSelect, type SelectOption } from './CustomSelect';
 
@@ -15,6 +15,18 @@ import { CustomSelect, type SelectOption } from './CustomSelect';
 // highlighted option changes. Stub it so keyboard-driven highlighting works.
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
+});
+
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    x: 24, y: 100, top: 100, right: 244, bottom: 136, left: 24, width: 220, height: 36,
+    toJSON: () => ({}),
+  } as DOMRect);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
 });
 
 const OPTIONS: SelectOption[] = [
@@ -81,5 +93,40 @@ describe('CustomSelect — searchable space handling (GH #489)', () => {
 
     // Search input only renders once the menu is open.
     expect(screen.getByPlaceholderText('Search...')).toBeInTheDocument();
+  });
+});
+
+describe('CustomSelect — viewport placement', () => {
+  it('opens upward near the bottom of the viewport and clamps to its 250px cap', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
+      x: 24, y: 500, top: 500, right: 244, bottom: 536, left: 24, width: 220, height: 36,
+      toJSON: () => ({}),
+    } as DOMRect);
+    renderSelect();
+
+    await user.click(screen.getByRole('button'));
+
+    await waitFor(() => expect(document.querySelector('.custom-select-menu')).toHaveStyle({
+      top: '246px',
+      maxHeight: '250px',
+    }));
+  });
+
+  it('connects the trigger to the portaled listbox and restores focus on Escape', async () => {
+    const user = userEvent.setup();
+    renderSelect();
+    const trigger = screen.getByRole('button');
+
+    await user.click(trigger);
+
+    const listbox = screen.getByRole('listbox');
+    expect(trigger).toHaveAttribute('aria-controls', listbox.id);
+    expect(screen.getByRole('textbox', { name: 'Search options' })).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

@@ -25,8 +25,9 @@
  * open state and outside-click/Escape handling instead, following the same
  * approach `CustomSelect.tsx` already uses for its portaled menu.
  */
-import { useState, useRef, useEffect, useMemo, useId } from 'react';
+import { useState, useRef, useEffect, useMemo, useId, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useDropdownViewport } from '../hooks/useDropdownViewport';
 import './GroupMultiSelectDropdown.css';
 
 export interface GroupMultiSelectOption {
@@ -60,6 +61,11 @@ export interface GroupMultiSelectDropdownProps {
   className?: string;
 }
 
+const MENU_MAX_HEIGHT_PX = 300;
+// Search + Select/Clear chrome (~84px) plus one full checkbox option and
+// breathing room. Below this, the menu is visually open but not operable.
+const MENU_MIN_USABLE_HEIGHT_PX = 124;
+
 export function GroupMultiSelectDropdown({
   options,
   selectedIds,
@@ -75,22 +81,20 @@ export function GroupMultiSelectDropdown({
   const reactId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [menuStyle, setMenuStyle] = useState({ top: 0, left: 0, width: 0 });
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Position the portaled menu under the trigger button. Recomputed only on
-  // open (matches CustomSelect's existing behavior/limitation -- the menu
-  // does not track the trigger during a background scroll while open).
-  useEffect(() => {
-    if (isOpen && buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setMenuStyle({ top: rect.bottom + 4, left: rect.left, width: rect.width });
-    }
-  }, [isOpen]);
+  const closeForUnavailablePlacement = useCallback(() => setIsOpen(false), []);
+  const menuStyle = useDropdownViewport({
+    isOpen,
+    triggerRef: buttonRef,
+    desiredHeight: MENU_MAX_HEIGHT_PX,
+    minimumUsableHeight: MENU_MIN_USABLE_HEIGHT_PX,
+    onPlacementUnavailable: closeForUnavailablePlacement,
+  });
 
   useEffect(() => {
     if (isOpen) {
@@ -197,7 +201,17 @@ export function GroupMultiSelectDropdown({
         <div
           ref={menuRef}
           className="filter-dropdown-menu group-multiselect-menu"
-          style={{ position: 'fixed', top: menuStyle.top, left: menuStyle.left, width: menuStyle.width }}
+          style={{
+            position: 'fixed',
+            top: menuStyle.top,
+            left: menuStyle.left,
+            width: menuStyle.width,
+            maxHeight: menuStyle.maxHeight,
+            // The shared in-flow dropdown rule adds margin-top: 4px. This
+            // portaled menu already budgets its 4px gap in `top`; retaining
+            // that margin would double the gap and defeat viewport clamping.
+            marginTop: 0,
+          }}
         >
           <div className="filter-dropdown-search">
             <span className="material-icons search-icon" aria-hidden="true">search</span>
