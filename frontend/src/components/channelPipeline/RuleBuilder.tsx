@@ -632,7 +632,7 @@ export function RuleBuilder({
                 {errors.activeWindow}
               </div>
             )}
-            <span className="form-hint">The rule runs only on dates inside this inclusive window. Leaving a date blank keeps that side open.</span>
+            <span className="form-hint">Dates are inclusive UTC calendar days. Leaving a date blank keeps that side open; expiry stops future runs but does not undo prior changes.</span>
           </fieldset>
         </div>
 

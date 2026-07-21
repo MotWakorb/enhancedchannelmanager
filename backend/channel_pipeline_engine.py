@@ -351,7 +351,7 @@ class ChannelPipelineEngine:
                     "admits only the refresh-watermark trigger"
                 )
             else:
-                message = "No enabled rules to process"
+                message = "No active enabled rules to process"
             logger.info("[AUTO-CREATE-ENGINE] %s", message)
             # If a pre-created execution exists, mark it completed so it does
             # not stay in "running" forever (otherwise the frontend poll would

@@ -151,7 +151,7 @@ class TestPass12Exclusion:
             result = asyncio.get_event_loop().run_until_complete(
                 self.engine.run_pipeline(dry_run=True)
             )
-        assert result["message"] == "No enabled rules to process"
+        assert result["message"] == "No active enabled rules to process"
 
     def test_mixed_rules_only_standard_rules_are_processed(self, test_session):
         """With one standard + one event_sync rule, _process_streams must

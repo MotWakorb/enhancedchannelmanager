@@ -1375,7 +1375,7 @@ export function EventSyncRuleEditor({
                       />
                     </div>
                   </div>
-                  <span className="form-hint">This rule runs only inside the inclusive date window. Blank dates are open-ended.</span>
+                  <span className="form-hint">Dates are inclusive UTC calendar days. Blank dates are open-ended; expiry stops future runs but does not undo prior changes.</span>
                 </fieldset>
               </div>
 

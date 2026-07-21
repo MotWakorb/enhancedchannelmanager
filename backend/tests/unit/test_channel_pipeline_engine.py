@@ -335,7 +335,7 @@ class TestChannelPipelineEngineRunPipeline:
         )
 
         assert result["success"] is True
-        assert result["message"] == "No enabled rules to process"
+        assert result["message"] == "No active enabled rules to process"
         assert result["streams_evaluated"] == 0
 
     def test_selected_expired_rule_is_noop_without_undo_or_writes(self, test_session):
@@ -355,7 +355,7 @@ class TestChannelPipelineEngineRunPipeline:
                 self.engine.run_pipeline(rule_ids=[rule.id], triggered_by="manual")
             )
 
-        assert result["message"] == "No enabled rules to process"
+        assert result["message"] == "No active enabled rules to process"
         self.client.create_channel.assert_not_awaited()
         for method_name in ("update_channel", "delete_channel"):
             method = getattr(self.client, method_name, None)
@@ -425,7 +425,7 @@ class TestChannelPipelineEngineRunPipeline:
         )
 
         assert result["success"] is True
-        assert result["message"] == "No enabled rules to process"
+        assert result["message"] == "No active enabled rules to process"
 
 
 def _route_rollback_queries(mock_session, mock_execution):

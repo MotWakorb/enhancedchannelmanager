@@ -2032,6 +2032,8 @@ describe('EventSyncRuleEditor', () => {
       };
       render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
 
+      expect(screen.getByText(/Dates are inclusive UTC calendar days/)).toBeInTheDocument();
+      expect(screen.getByText(/does not undo prior changes/)).toBeInTheDocument();
       expect(screen.getByLabelText('Start date')).toHaveValue('2026-09-01');
       expect(screen.getByLabelText('End date')).toHaveValue('2027-02-15');
       await user.click(screen.getByRole('button', { name: 'Save' }));
