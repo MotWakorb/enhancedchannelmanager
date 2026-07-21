@@ -20,7 +20,7 @@ kind — the fail-safe direction: still excluded from execution).
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -144,6 +144,26 @@ class TestDbasRestoreRoundTrip:
             "as a standard rule with dormant actions live"
         )
         assert restored.get_event_sync_config() == _event_sync_config()
+
+    def test_backup_restore_round_trip_preserves_active_window(self, test_session):
+        """The full DBAS to_dict → delete/recreate path retains both dates."""
+        from routers.backup import _restore_auto_creation_rules
+
+        rule = _create_rule(
+            test_session, name="Seasonal DBAS",
+            active_from=date(2026, 9, 1), active_until=date(2027, 2, 15),
+        )
+        exported = rule.to_dict()
+        assert exported["active_from"] == "2026-09-01"
+        assert exported["active_until"] == "2027-02-15"
+        with patch("routers.backup.get_session", return_value=test_session):
+            result = _restore_auto_creation_rules([exported])
+        assert result["warnings"] == []
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Seasonal DBAS"
+        ).one()
+        assert restored.active_from == date(2026, 9, 1)
+        assert restored.active_until == date(2027, 2, 15)
 
     def test_provider_scoped_config_round_trips(self, test_session):
         """bead 1bftz: a PROVIDER-SCOPED config survives DBAS restore with the

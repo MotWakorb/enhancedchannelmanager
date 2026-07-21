@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 import journal
+from sqlalchemy import or_
 from config import get_settings, save_settings
 from dispatcharr_client import get_client
 from log_throttle import should_log
@@ -213,14 +214,23 @@ class ChannelPipelineTask(TaskScheduler):
         self._set_progress(status="loading_rules")
         session = get_session()
         try:
+            today = datetime.utcnow().date()
+            active_window = (
+                or_(ChannelPipelineRule.active_from.is_(None),
+                    ChannelPipelineRule.active_from <= today),
+                or_(ChannelPipelineRule.active_until.is_(None),
+                    ChannelPipelineRule.active_until >= today),
+            )
             rules_to_run = session.query(ChannelPipelineRule).filter(
                 ChannelPipelineRule.enabled == True,
                 ChannelPipelineRule.run_on_refresh == True,
                 ChannelPipelineRule.event_sync_config.is_(None),
+                *active_window,
             ).all()
             event_sync_candidates = session.query(ChannelPipelineRule).filter(
                 ChannelPipelineRule.enabled == True,
                 ChannelPipelineRule.event_sync_config.isnot(None),
+                *active_window,
             ).all()
             event_sync_to_run = [
                 r for r in event_sync_candidates
@@ -234,10 +244,35 @@ class ChannelPipelineTask(TaskScheduler):
                 [r.name for r in rules_to_run]
                 + [r.name for r in event_sync_to_run]
             )
+            # These extra queries exist only to explain an otherwise-empty
+            # eligible set. Keep them off the happy path (and legacy mock
+            # paths) where their results are never consumed.
+            date_gated_standard = False
+            date_gated_event_sync = False
+            if not rule_ids:
+                standard_candidate_count = session.query(ChannelPipelineRule).filter(
+                    ChannelPipelineRule.enabled == True,
+                    ChannelPipelineRule.run_on_refresh == True,
+                    ChannelPipelineRule.event_sync_config.is_(None),
+                ).count()
+                date_gated_standard = (
+                    isinstance(standard_candidate_count, int)
+                    and standard_candidate_count > len(rules_to_run)
+                )
+                all_event_sync_candidates = session.query(ChannelPipelineRule).filter(
+                    ChannelPipelineRule.enabled == True,
+                    ChannelPipelineRule.event_sync_config.isnot(None),
+                ).all()
+                date_gated_event_sync = any(
+                    (r.get_event_sync_config() or {}).get("auto_run") is True
+                    for r in all_event_sync_candidates
+                    if r not in event_sync_candidates
+                )
         finally:
             session.close()
 
         if not rule_ids:
+            date_gated = date_gated_standard or date_gated_event_sync
             # A refresh watermark IS pending (we passed the ``refresh_at >
             # consumed_at`` gate above) but no rule is eligible for the
             # unattended path, so matching will NOT run for this refresh.
@@ -245,7 +280,18 @@ class ChannelPipelineTask(TaskScheduler):
             # after the refresh?" is answerable from the logs instead of being
             # DEBUG-only (vkktd.1). The throttled-off ticks keep the original
             # DEBUG so debug-level readers still see every tick.
-            if should_log("no_run_on_refresh_rule:%s" % self.task_id):
+            if date_gated and should_log(
+                "date_gated_refresh:%s" % self.task_id
+            ):
+                logger.info(
+                    "[%s] Refresh watermark %s is pending, but all enabled "
+                    "run_on_refresh/auto_run rules are outside their active UTC "
+                    "date windows — matching will resume when a rule is in-window",
+                    self.task_id, refresh_at,
+                )
+            elif not date_gated and should_log(
+                "no_run_on_refresh_rule:%s" % self.task_id
+            ):
                 logger.info(
                     "[%s] Refresh watermark %s is pending but NO enabled "
                     "run_on_refresh rule (or auto_run event_sync rule) exists — "
@@ -258,7 +304,11 @@ class ChannelPipelineTask(TaskScheduler):
                     "— skipping auto-fire", self.task_id,
                 )
             return TaskResult(
-                success=True, message="No auto-creation rules with run_on_refresh enabled",
+                success=True, message=(
+                    "No run_on_refresh rules are active in their UTC date windows"
+                    if date_gated else
+                    "No auto-creation rules with run_on_refresh enabled"
+                ),
                 started_at=started_at, completed_at=datetime.utcnow(), total_items=0,
             )
 

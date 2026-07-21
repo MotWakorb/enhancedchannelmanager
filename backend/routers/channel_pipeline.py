@@ -10,7 +10,7 @@ import logging
 import tarfile
 import time
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional
 
 import httpx
@@ -68,6 +68,8 @@ class CreateChannelPipelineRuleRequest(BaseModel):
     description: Optional[str] = None
     enabled: bool = True
     priority: int = 0
+    active_from: Optional[date] = None
+    active_until: Optional[date] = None
     m3u_account_id: Optional[int] = None
     target_group_id: Optional[int] = None
     conditions: list
@@ -104,6 +106,16 @@ class CreateChannelPipelineRuleRequest(BaseModel):
     # by channel_pipeline_schema.validate_event_sync_config().
     event_sync_config: Optional[dict] = None
 
+    @model_validator(mode="after")
+    def validate_active_window(self):
+        if (
+            self.active_from is not None
+            and self.active_until is not None
+            and self.active_until < self.active_from
+        ):
+            raise ValueError("active_until must be on or after active_from")
+        return self
+
 
 class UpdateChannelPipelineRuleRequest(BaseModel):
     """Request to update an auto-creation rule."""
@@ -111,6 +123,8 @@ class UpdateChannelPipelineRuleRequest(BaseModel):
     description: Optional[str] = None
     enabled: Optional[bool] = None
     priority: Optional[int] = None
+    active_from: Optional[date] = None
+    active_until: Optional[date] = None
     m3u_account_id: Optional[int] = None
     target_group_id: Optional[int] = None
     conditions: Optional[list] = None
@@ -143,6 +157,16 @@ class UpdateChannelPipelineRuleRequest(BaseModel):
     # "field present" from "field absent" via ``model_fields_set`` — the same
     # convention as match_scope_group_id above.
     event_sync_config: Optional[dict] = None
+
+    @model_validator(mode="after")
+    def validate_submitted_active_window(self):
+        if (
+            self.active_from is not None
+            and self.active_until is not None
+            and self.active_until < self.active_from
+        ):
+            raise ValueError("active_until must be on or after active_from")
+        return self
 
 
 class BulkUpdateChannelPipelineRulesRequest(UpdateChannelPipelineRuleRequest):
@@ -250,6 +274,10 @@ def _apply_rule_scalar_updates(
         _set("enabled", request.enabled)
     if request.priority is not None:
         _set("priority", request.priority)
+    if "active_from" in request.model_fields_set:
+        _set("active_from", request.active_from)
+    if "active_until" in request.model_fields_set:
+        _set("active_until", request.active_until)
     if request.m3u_account_id is not None:
         _set("m3u_account_id", request.m3u_account_id)
     if request.target_group_id is not None:
@@ -302,6 +330,37 @@ def _apply_rule_scalar_updates(
         _set("fold_match_key", request.fold_match_key)
 
     return diff
+
+
+def _validate_persisted_active_window(rule) -> None:
+    """Validate the effective window after partial or bulk updates."""
+    active_from = rule.active_from
+    active_until = rule.active_until
+    if (
+        isinstance(active_from, date)
+        and isinstance(active_until, date)
+        and active_until < active_from
+    ):
+        raise HTTPException(status_code=400, detail={
+            "message": "Invalid rule configuration",
+            "errors": ["active_until must be on or after active_from"],
+        })
+
+
+def _parse_yaml_active_date(value, field_name: str) -> Optional[date]:
+    """Parse a YAML calendar date without depending on scalar quoting."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        raise ValueError(f"{field_name} must be a YYYY-MM-DD calendar date")
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            pass
+    raise ValueError(f"{field_name} must be a valid YYYY-MM-DD date")
 
 
 def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
@@ -790,6 +849,8 @@ async def create_auto_creation_rule(request: CreateChannelPipelineRuleRequest, _
                 description=request.description,
                 enabled=request.enabled,
                 priority=priority,
+                active_from=request.active_from,
+                active_until=request.active_until,
                 m3u_account_id=request.m3u_account_id,
                 target_group_id=request.target_group_id,
                 conditions=json.dumps(request.conditions),
@@ -864,6 +925,7 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateChannelPipeline
             )
 
             _apply_rule_scalar_updates(rule, request)
+            _validate_persisted_active_window(rule)
 
             # Validate and update conditions/actions if provided
             conditions = request.conditions if request.conditions is not None else rule.get_conditions()
@@ -1002,6 +1064,7 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateChannelPipelineRule
             scalar_diff: dict = {}
             if payload:
                 scalar_diff = _apply_rule_scalar_updates(rule, scalar_update)
+                _validate_persisted_active_window(rule)
 
             merge_before = None
             merge_after = None
@@ -1199,6 +1262,8 @@ async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnable
                 description=rule.description,
                 enabled=False,  # Disabled by default
                 priority=rule.priority + 1,
+                active_from=rule.active_from,
+                active_until=rule.active_until,
                 m3u_account_id=rule.m3u_account_id,
                 target_group_id=rule.target_group_id,
                 conditions=rule.conditions,
@@ -1929,6 +1994,14 @@ async def export_auto_creation_rules_yaml():
                     "description": rule.description,
                     "enabled": rule.enabled,
                     "priority": rule.priority,
+                    "active_from": (
+                        rule.active_from.isoformat()
+                        if isinstance(rule.active_from, date) else None
+                    ),
+                    "active_until": (
+                        rule.active_until.isoformat()
+                        if isinstance(rule.active_until, date) else None
+                    ),
                     "m3u_account_id": rule.m3u_account_id,
                     "m3u_account_name": m3u_id_to_name.get(rule.m3u_account_id),
                     "target_group_id": rule.target_group_id,
@@ -2113,6 +2186,29 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         })
                         continue
 
+                try:
+                    active_from = _parse_yaml_active_date(
+                        rule_data.get("active_from"), "active_from"
+                    )
+                    active_until = _parse_yaml_active_date(
+                        rule_data.get("active_until"), "active_until"
+                    )
+                    if (
+                        active_from is not None
+                        and active_until is not None
+                        and active_until < active_from
+                    ):
+                        raise ValueError(
+                            "active_until must be on or after active_from"
+                        )
+                except ValueError as exc:
+                    errors.append({
+                        "rule_index": i,
+                        "rule_name": rule_data.get("name", f"Rule {i}"),
+                        "errors": [str(exc)],
+                    })
+                    continue
+
                 # Check if rule with same name exists
                 existing = session.query(ChannelPipelineRule).filter(
                     ChannelPipelineRule.name == rule_data.get("name")
@@ -2124,6 +2220,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         existing.description = rule_data.get("description")
                         existing.enabled = rule_data.get("enabled", True)
                         existing.priority = rule_data.get("priority", 0)
+                        existing.active_from = active_from
+                        existing.active_until = active_until
                         existing.m3u_account_id = rule_data.get("m3u_account_id")
                         existing.target_group_id = rule_data.get("target_group_id")
                         existing.conditions = json.dumps(conditions)
@@ -2169,6 +2267,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         description=rule_data.get("description"),
                         enabled=rule_data.get("enabled", True),
                         priority=rule_data.get("priority", 0),
+                        active_from=active_from,
+                        active_until=active_until,
                         m3u_account_id=rule_data.get("m3u_account_id"),
                         target_group_id=rule_data.get("target_group_id"),
                         conditions=json.dumps(conditions),

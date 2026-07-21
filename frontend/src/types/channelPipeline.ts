@@ -234,6 +234,9 @@ export interface ChannelPipelineRule {
   description?: string;
   enabled: boolean;
   priority: number;
+  /** Inclusive UTC calendar-date bounds; absent/null means open-ended. */
+  active_from?: string | null;
+  active_until?: string | null;
   conditions: Condition[];
   actions: Action[];
   m3u_account_id?: number;
@@ -296,6 +299,8 @@ export interface CreateRuleData {
   description?: string;
   enabled?: boolean;
   priority?: number;
+  active_from?: string | null;
+  active_until?: string | null;
   conditions: Condition[];
   actions: Action[];
   m3u_account_id?: number;
