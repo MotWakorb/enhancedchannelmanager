@@ -232,6 +232,10 @@ export function GroupMultiSelectDropdown({
             left: menuStyle.left,
             width: menuStyle.width,
             maxHeight: menuStyle.maxHeight,
+            // The shared in-flow dropdown rule adds margin-top: 4px. This
+            // portaled menu already budgets its 4px gap in `top`; retaining
+            // that margin would double the gap and defeat viewport clamping.
+            marginTop: 0,
           }}
         >
           <div className="filter-dropdown-search">

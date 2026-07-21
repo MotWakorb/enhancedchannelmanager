@@ -4,6 +4,7 @@
  * lists at ActionEditor / RuleBuilder / BulkRuleSettingsModal.
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GroupMultiSelectDropdown, type GroupMultiSelectOption } from './GroupMultiSelectDropdown';
@@ -93,6 +94,23 @@ describe('GroupMultiSelectDropdown', () => {
     await waitFor(() => expect(getMenu()).toHaveStyle({ top: '140px', maxHeight: '300px' }));
   });
 
+  it('does not add the shared dropdown margin on top of the measured portal gap', async () => {
+    const user = userEvent.setup();
+    setViewportHeight(800);
+    setTriggerRect({ top: 100, bottom: 136 });
+    renderDropdown();
+
+    await user.click(screen.getByRole('button', { name: 'Exclude target groups' }));
+
+    await waitFor(() => {
+      const menu = getMenu();
+      const inheritedMargin = Number.parseFloat(getComputedStyle(menu).marginTop || '0');
+      expect(menu.style.marginTop).toBe('0px');
+      expect(inheritedMargin).toBe(0);
+      expect(Number.parseFloat(menu.style.top) + inheritedMargin).toBe(140);
+    });
+  });
+
   it('opens above the trigger when the full menu does not fit below and more room is available above', async () => {
     const user = userEvent.setup();
     setViewportHeight(600);
@@ -130,6 +148,50 @@ describe('GroupMultiSelectDropdown', () => {
     } as DOMRect);
     fireEvent.scroll(document, { target: { scrollTop: 1 } });
     await waitFor(() => expect(getMenu()).toHaveStyle({ top: '396px', maxHeight: '300px' }));
+  });
+
+  it('keeps the final option reachable and updates the summary in an overflowing many-option menu', async () => {
+    const user = userEvent.setup();
+    const manyOptions = Array.from({ length: 20 }, (_, index) => ({
+      id: index + 1,
+      name: `Normalization group ${String(index + 1).padStart(2, '0')}`,
+    }));
+
+    function ControlledDropdown() {
+      const [selectedIds, setSelectedIds] = useState<number[]>([]);
+      return (
+        <GroupMultiSelectDropdown
+          options={manyOptions}
+          selectedIds={selectedIds}
+          onChange={setSelectedIds}
+          label="Normalization Groups"
+        />
+      );
+    }
+
+    setViewportHeight(600);
+    setTriggerRect({ top: 500, bottom: 536 });
+    render(<ControlledDropdown />);
+    const trigger = screen.getByRole('button', { name: 'Normalization Groups' });
+    await user.click(trigger);
+
+    const optionsPane = await screen.findByRole('group', { name: 'Normalization Groups' });
+    Object.defineProperties(optionsPane, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 800 },
+    });
+    expect(optionsPane.scrollHeight).toBeGreaterThan(optionsPane.clientHeight);
+
+    optionsPane.scrollTop = optionsPane.scrollHeight - optionsPane.clientHeight;
+    fireEvent.scroll(optionsPane);
+    expect(optionsPane.scrollTop).toBe(600);
+
+    const finalOption = within(optionsPane).getByText('Normalization group 20');
+    await user.click(finalOption);
+
+    const checkboxes = within(optionsPane).getAllByRole('checkbox');
+    expect(checkboxes[checkboxes.length - 1]).toBeChecked();
+    expect(trigger).toHaveTextContent('1 group selected');
   });
 
   it('reflects selectedIds as checked checkboxes in option order', async () => {
