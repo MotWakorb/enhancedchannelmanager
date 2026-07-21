@@ -912,3 +912,80 @@ class TestDummyEpgCoversPromoted:
         ))
         entries = {e["entity_id"] for e in summary["assign_entries"]}
         assert entries == {100}
+
+
+class TestEventSyncAssignChannelProfile:
+    """GH #720 / y3m6o.1 Finding 4 (0152): a configured assign_channel_profile
+    action on an event_sync rule takes effect via the REAL production path
+    (run_pipeline -> _run_event_sync_rules -> execute_event_sync_rule ->
+    promotion, then _apply_event_sync_profile_action), applying exclusive
+    channel-profile membership to the channels the rule touched this run.
+
+    This is the GENUINE production-path regression the 0151 pass faked: it
+    invokes execute_event_sync_rule against real secondary streams, not the
+    synthetic no-streams path that manually called the generic action.
+    """
+
+    def _add_profile_rule(self, session_factory, config, profile_ids):
+        session = session_factory()
+        try:
+            rule = ChannelPipelineRule(
+                name="Event Rule", enabled=True, priority=0,
+                conditions=json.dumps([{"type": "always"}]),
+                actions=json.dumps([
+                    {"type": "assign_channel_profile",
+                     "channel_profile_ids": profile_ids},
+                ]),
+                event_sync_config=json.dumps(config),
+            )
+            session.add(rule)
+            session.commit()
+            session.refresh(rule)
+            return rule.id
+        finally:
+            session.close()
+
+    def test_promoted_channel_gets_exclusive_profile_membership(
+        self, db_session_factory
+    ):
+        self._add_profile_rule(db_session_factory, _promote_config(), [1])
+        state = _promote_state()
+        client = make_promote_client(state)
+        client.get_channel_profiles = AsyncMock(
+            return_value=[{"id": 1}, {"id": 2}, {"id": 3}]
+        )
+        client.update_profile_channel = AsyncMock()
+
+        result, _ = _manual_run(client, db_session_factory)
+
+        # The production path promoted the unmatched Fury event to a NEW channel.
+        promoted = [cid for cid in state.channels if cid >= 900]
+        assert len(promoted) == 1
+        promoted_id = promoted[0]
+
+        # #720: the promoted (new) channel — which Dispatcharr auto-joins to ALL
+        # profiles — is reconciled to EXACTLY profile 1 (enabled in 1, disabled
+        # in 2 and 3). This proves the rule's assign_channel_profile action
+        # actually executed on the event_sync path, not enable-only or no-op.
+        per_channel: dict[int, dict[int, bool]] = {}
+        for c in client.update_profile_channel.call_args_list:
+            pid, channel_id, body = c.args[0], c.args[1], c.args[2]
+            per_channel.setdefault(channel_id, {})[pid] = body["enabled"]
+        assert per_channel.get(promoted_id) == {1: True, 2: False, 3: False}
+
+        # The rule's event_sync summary records the profile step, and the run is
+        # a clean success (all profile writes landed).
+        summary = result["event_sync"][0]
+        assert summary["assign_channel_profile"]["succeeded"] >= 1
+        assert result["success"] is True
+
+    def test_no_profile_action_makes_no_profile_writes(self, db_session_factory):
+        """Control: an event_sync rule WITHOUT an assign_channel_profile action
+        performs no profile writes — byte-identical to pre-feature behavior."""
+        _add_rule(db_session_factory, _promote_config())  # actions = [skip]
+        client = make_promote_client(_promote_state())
+        client.update_profile_channel = AsyncMock()
+
+        _manual_run(client, db_session_factory)
+
+        client.update_profile_channel.assert_not_called()

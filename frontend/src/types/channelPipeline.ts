@@ -397,12 +397,17 @@ export type AnalyzeRuleBodyRequest = Partial<CreateRuleData>;
 /**
  * Status of a pipeline execution.
  *
- * Terminal statuses: completed, failed, rolled_back, capped, abandoned.
+ * Terminal statuses: completed, completed_with_errors, failed, rolled_back,
+ * capped, abandoned.
  * - capped: the pipeline hit the per-run created-channel cap and stopped early.
+ * - completed_with_errors: the run finished but at least one executed action
+ *   failed (e.g. exclusive channel-profile membership could not be enforced —
+ *   GH #720 / y3m6o.1). Distinct from green ``completed``; some channels may
+ *   still have succeeded. Safe to retry by rerunning the pipeline.
  * - abandoned: the pipeline was abandoned (e.g. OOM crash); trips the
  *   run-on-refresh circuit breaker until an operator resets it.
  */
-export type ExecutionStatus = 'running' | 'completed' | 'failed' | 'rolled_back' | 'capped' | 'abandoned';
+export type ExecutionStatus = 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'rolled_back' | 'capped' | 'abandoned';
 
 /**
  * How a pipeline was triggered.

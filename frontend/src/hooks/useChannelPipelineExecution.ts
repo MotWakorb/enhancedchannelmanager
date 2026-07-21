@@ -135,7 +135,7 @@ export function useChannelPipelineExecution(
     // Tunables — small and steady; backend status writes are cheap GETs.
     const POLL_INTERVAL_MS = 1000;
     const MAX_POLL_DURATION_MS = 30 * 60 * 1000; // 30 minutes safety cap
-    const TERMINAL: ExecutionStatus[] = ['completed', 'failed', 'rolled_back', 'capped', 'abandoned'];
+    const TERMINAL: ExecutionStatus[] = ['completed', 'completed_with_errors', 'failed', 'rolled_back', 'capped', 'abandoned'];
     const startedAt = Date.now();
 
     while (true) {
@@ -247,9 +247,13 @@ export function useChannelPipelineExecution(
   const canRollback = useCallback((id: number): boolean => {
     const execution = executions.find(e => e.id === id);
     if (!execution) return false;
+    // y3m6o.1 (0152): completed_with_errors runs still mutated channels (some
+    // actions succeeded), so they are rollbackable — matches the rollback
+    // button gating in ChannelPipelineTab.
     return (
       execution.mode === 'execute' &&
-      execution.status === 'completed'
+      (execution.status === 'completed' ||
+        execution.status === 'completed_with_errors')
     );
   }, [executions]);
 

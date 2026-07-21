@@ -451,37 +451,65 @@ class ChannelPipelineTask(TaskScheduler):
                 for s in result.get("event_sync", [])
             )
 
-            # Notify: completed
-            parts = []
-            if created:
-                parts.append(f"{created} created")
-            if updated:
-                parts.append(f"{updated} updated")
-            if pending_merges:
-                parts.append(f"{pending_merges} pending merge{'s' if pending_merges != 1 else ''} queued")
-            if event_sync_attached:
-                parts.append(
-                    f"{event_sync_attached} event stream"
-                    f"{'s' if event_sync_attached != 1 else ''} attached"
-                )
-            if event_sync_review_queued:
-                parts.append(
-                    f"{event_sync_review_queued} event match"
-                    f"{'es' if event_sync_review_queued != 1 else ''} "
-                    f"queued for review"
-                )
-            title = f"Auto-Creation: {', '.join(parts)}" if parts else "Auto-Creation: No changes"
-            ntype = "success" if parts else "info"
-
-            await create_notification_internal(
-                notification_type=ntype,
-                title=title,
-                message=f"Ran {len(rule_ids)} rule(s) after M3U refresh. "
-                        f"{matched}/{evaluated} streams matched.",
-                source="auto_creation",
-                source_id="m3u_refresh",
-                send_alerts=False,
+            # y3m6o.1 (0152): an UNATTENDED run in which any executed action
+            # FAILED must NOT notify green nor return a green success TaskResult
+            # (the GH #720 hidden-failure class on the 3 AM path). The engine
+            # finalizes such a run as ``completed_with_errors`` and reports
+            # ``status`` + ``failed_action_count`` on the result (its top-level
+            # ``success`` is ``not failed_actions``); the persisted
+            # ``execution.status`` stays the honest ``completed_with_errors``.
+            #
+            # Per PO decision, the task-layer envelope reports COMPLETED WITH
+            # WARNINGS (not a hard failure): we return ``TaskResult(success=True,
+            # failed_count=N)`` below, which makes the task engine emit a single
+            # "Task Completed with Warnings" warning — with external alerts,
+            # gated on the task's ``alert_on_warning`` (default ON) — exactly the
+            # established stream_probe partial-failure path. To keep it to ONE
+            # coherent warning (no green success toast, no competing second
+            # toast), the auto-creation-specific completion notification below is
+            # SUPPRESSED on a failed-action run; the per-run failed-action
+            # summary lives on the execution record (Execution History).
+            failed_action_count = result.get("failed_action_count", 0) or len(
+                result.get("failed_actions") or []
             )
+            has_failed_actions = (
+                result.get("status") == "completed_with_errors"
+                or bool(failed_action_count)
+            )
+
+            # Notify: completed — clean / partial-info runs only. A failed-action
+            # run defers its single warning to the task-engine layer (above).
+            if not has_failed_actions:
+                parts = []
+                if created:
+                    parts.append(f"{created} created")
+                if updated:
+                    parts.append(f"{updated} updated")
+                if pending_merges:
+                    parts.append(f"{pending_merges} pending merge{'s' if pending_merges != 1 else ''} queued")
+                if event_sync_attached:
+                    parts.append(
+                        f"{event_sync_attached} event stream"
+                        f"{'s' if event_sync_attached != 1 else ''} attached"
+                    )
+                if event_sync_review_queued:
+                    parts.append(
+                        f"{event_sync_review_queued} event match"
+                        f"{'es' if event_sync_review_queued != 1 else ''} "
+                        f"queued for review"
+                    )
+                title = f"Auto-Creation: {', '.join(parts)}" if parts else "Auto-Creation: No changes"
+                ntype = "success" if parts else "info"
+
+                await create_notification_internal(
+                    notification_type=ntype,
+                    title=title,
+                    message=f"Ran {len(rule_ids)} rule(s) after M3U refresh. "
+                            f"{matched}/{evaluated} streams matched.",
+                    source="auto_creation",
+                    source_id="m3u_refresh",
+                    send_alerts=False,
+                )
 
             # ti939.3.1: event_sync warnings from an unattended run (attach
             # cap overage, pre-flight failures) must notify — no operator is
@@ -513,19 +541,44 @@ class ChannelPipelineTask(TaskScheduler):
                 )
 
             self._set_progress(
-                status="completed",
+                status="completed_with_errors" if has_failed_actions else "completed",
                 total=evaluated,
                 success_count=created,
+                failed_count=failed_action_count,
             )
 
+            summary = (
+                f"Auto-creation after M3U refresh: {evaluated} streams evaluated, "
+                f"{matched} matched, {created} channels created, {updated} updated"
+            )
+            if has_failed_actions:
+                summary += (
+                    f"; {failed_action_count} action"
+                    f"{'s' if failed_action_count != 1 else ''} failed"
+                )
+
             return TaskResult(
+                # y3m6o.1 (0152) / PO decision: a failed-action run is COMPLETED
+                # WITH WARNINGS, not a hard failure. ``success`` stays True and
+                # ``failed_count`` carries the action-failure count, so the task
+                # engine emits ONE "Task Completed with Warnings" warning (with
+                # alerts) rather than a red "Task Failed" error. The engine
+                # pipeline result (``success=not failed_actions``) and the
+                # persisted ``execution.status='completed_with_errors'`` remain
+                # the honest record; only this task envelope is warnings-not-fail.
                 success=True,
-                message=f"Auto-creation after M3U refresh: {evaluated} streams evaluated, "
-                        f"{matched} matched, {created} channels created, {updated} updated",
+                message=summary,
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
                 total_items=evaluated,
                 success_count=created + updated,
+                # Defensive: a completed_with_errors run ALWAYS reports at least
+                # one failure so the task engine takes its warning branch, never
+                # green. This decouples the task layer from the engine invariant
+                # that status="completed_with_errors" implies failed_action_count
+                # > 0 — if that coupling ever broke, a count of 0 must not let a
+                # failed run report green (the exact class this bead kills).
+                failed_count=max(failed_action_count, 1) if has_failed_actions else 0,
                 details={
                     "execution_id": result.get("execution_id"),
                     "mode": "execute",
@@ -539,6 +592,8 @@ class ChannelPipelineTask(TaskScheduler):
                     "pending_merges_added": pending_merges,
                     "conflicts": len(result.get("conflicts", [])),
                     "capped": bool(result.get("capped")),
+                    "status": result.get("status"),
+                    "failed_action_count": failed_action_count,
                 },
             )
 

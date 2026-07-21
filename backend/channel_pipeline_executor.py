@@ -63,6 +63,14 @@ class ActionResult:
     error: Optional[str] = None
     details: list[str] = field(default_factory=list)  # Additional context (normalization, group, etc.)
     deferred: bool = False  # True if action will be retried after EPG refresh
+    # y3m6o.1 Finding 6 (0152): whether this modification can be reversed from
+    # its recorded ``previous_state``. assign_channel_profile changes channel
+    # *profile membership* — a mutation the ActionResult carries NO
+    # previous_state for and that neither the legacy per-run rollback (restores
+    # channel fields) nor the pre-run snapshot (captures channel<->stream state)
+    # can reverse. Such results set this False so add_result does NOT record a
+    # misleading modified/rollback entity claiming the change is reversible.
+    rollbackable: bool = True
 
 
 @dataclass
@@ -171,12 +179,19 @@ class ExecutionContext:
                     self.channels_updated += 1
             elif result.entity_type == "stream" and result.action_type == "remove_from_channel":
                 self.streams_removed += 1
-            self.modified_entities.append({
-                "type": result.entity_type,
-                "id": result.entity_id,
-                "name": result.entity_name,
-                "previous": result.previous_state
-            })
+            # y3m6o.1 Finding 6 (0152): a non-rollbackable modification (e.g.
+            # assign_channel_profile — profile membership with no reversible
+            # previous_state) is still COUNTED as an update but is NOT recorded
+            # as a rollback entity, so rollback/restore never claims to reverse
+            # a change it cannot. The channel's OTHER actions (merges, field
+            # updates) still record their own rollback entities independently.
+            if result.rollbackable:
+                self.modified_entities.append({
+                    "type": result.entity_type,
+                    "id": result.entity_id,
+                    "name": result.entity_name,
+                    "previous": result.previous_state
+                })
 
         if result.skipped:
             self.streams_skipped += 1
@@ -2772,16 +2787,6 @@ class ActionExecutor:
                 error="Missing channel_profile_ids"
             )
 
-        if exec_ctx.dry_run:
-            return ActionResult(
-                success=True,
-                action_type=action.type,
-                description=f"Would assign {len(channel_profile_ids)} channel profile(s)",
-                entity_type="channel",
-                entity_id=exec_ctx.current_channel_id,
-                modified=True
-            )
-
         # Enforcing exclusive membership requires a KNOWN profile universe — we
         # must know which profiles to DISABLE. ``None`` means the universe is
         # UNAVAILABLE (the engine's get_channel_profiles() fetch raised), so
@@ -2789,6 +2794,12 @@ class ActionExecutor:
         # report-success, which would recreate GH #720 during a transient read
         # failure (y3m6o.1 Bug 2). A genuinely-empty universe (``[]``) is a
         # real, known fact and degrades to enable-selected-only as before.
+        #
+        # y3m6o.1 Bug 2 (0152): this check runs BEFORE the dry-run preview so a
+        # DRY RUN whose universe is unavailable returns an explicit blocking
+        # outcome instead of a rosy "Would assign N…" that the live run cannot
+        # honor. The engine attempts the profile fetch during dry-run too, so
+        # the executor knows the universe availability at preview time.
         if self._all_profile_ids is None:
             logger.warning(
                 "[AUTO-CREATE-EXEC] Cannot assign channel profiles for channel %s: "
@@ -2801,10 +2812,24 @@ class ActionExecutor:
                 description="Cannot assign channel profiles: profile universe unavailable",
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
+                # No writes happen (dry-run or live), so nothing was modified —
+                # do NOT let add_result fabricate an update count / rollback
+                # entry for a no-op.
+                modified=False,
                 error=(
                     "Channel profile universe unavailable (fetch failed); exclusive "
                     "membership cannot be enforced. Retry once profiles are reachable."
                 ),
+            )
+
+        if exec_ctx.dry_run:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Would assign {len(channel_profile_ids)} channel profile(s)",
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                modified=True
             )
 
         try:
@@ -2830,6 +2855,17 @@ class ActionExecutor:
                     "channel %s: failed to update profile(s) %s",
                     exec_ctx.current_channel_id, failed_str,
                 )
+                # y3m6o.1 Bug 3 (0152): ``modified`` reflects whether ANY write
+                # actually landed. A TOTAL write failure (every enable/disable
+                # PATCH raised — enabled_count == disabled_count == 0) changed
+                # nothing, so it must NOT be ``modified`` — otherwise
+                # add_result increments the updated-channel count and records a
+                # rollback/modified entity for a no-op. A PARTIAL success (some
+                # PATCHes landed) stays ``modified`` so the real writes are
+                # counted and reversible.
+                any_write_landed = bool(
+                    membership.enabled_count or membership.disabled_count
+                )
                 return ActionResult(
                     success=False,
                     action_type=action.type,
@@ -2841,7 +2877,10 @@ class ActionExecutor:
                     ),
                     entity_type="channel",
                     entity_id=exec_ctx.current_channel_id,
-                    modified=True,
+                    modified=any_write_landed,
+                    # Profile membership carries no reversible previous_state
+                    # (Finding 6) — never recorded as a rollback entity.
+                    rollbackable=False,
                     error=f"Failed to update channel profile(s): {failed_str}",
                 )
 
@@ -2854,7 +2893,10 @@ class ActionExecutor:
                 ),
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
-                modified=True
+                modified=True,
+                # Profile membership carries no reversible previous_state
+                # (Finding 6) — never recorded as a rollback entity.
+                rollbackable=False,
             )
         except Exception as e:
             return ActionResult(
@@ -2863,6 +2905,58 @@ class ActionExecutor:
                 description="Failed to assign channel profile(s)",
                 error=str(e)
             )
+
+    async def apply_channel_profile_to_channels(
+        self, action: Action | dict, channel_ids: list[int],
+        exec_ctx: ExecutionContext,
+    ) -> list[ActionResult]:
+        """Apply an ``assign_channel_profile`` action to an EXPLICIT set of
+        channel ids (the event_sync execution path — GH #720 / y3m6o.1 Finding
+        4).
+
+        The standard Pass 1/2 path runs ``assign_channel_profile`` per matched
+        stream against ``exec_ctx.current_channel_id``. event_sync rules do NOT
+        flow through per-stream action evaluation — the dedicated attach phase
+        (:meth:`execute_event_sync_rule`) resolves and attaches streams
+        directly — so a configured ``assign_channel_profile`` on an event_sync
+        rule never fired before. This helper closes that gap WITHOUT routing
+        event_sync through the standard passes: the engine hands it the channels
+        the rule touched this run (newly-attached masters + promoted channels)
+        and it applies exclusive membership to each.
+
+        It reuses :meth:`_execute_assign_channel_profile` unchanged by rebinding
+        ``exec_ctx.current_channel_id`` per channel, so the truthful-status,
+        exclusive-membership, universe-availability, and modified-flag semantics
+        are BYTE-IDENTICAL to the standard path. Each result funnels through the
+        shared ``add_result`` chokepoint exactly as the standard path's
+        ``execute`` does, so channels_updated / modified_entities stay
+        consistent. A dummy StreamContext is passed because
+        ``_execute_assign_channel_profile`` reads only ``current_channel_id``.
+        """
+        if isinstance(action, dict):
+            action = Action.from_dict(action)
+
+        results: list[ActionResult] = []
+        # De-dupe while preserving order — a channel touched by several attaches
+        # this run gets its membership reconciled ONCE.
+        ordered_ids = list(dict.fromkeys(channel_ids))
+        dummy_ctx = StreamContext(
+            stream_id=None,
+            stream_name="[event_sync assign_channel_profile]",
+            m3u_account_id=None,
+        )
+        saved_channel_id = exec_ctx.current_channel_id
+        try:
+            for channel_id in ordered_ids:
+                exec_ctx.current_channel_id = channel_id
+                result = await self._execute_assign_channel_profile(
+                    action, dummy_ctx, exec_ctx
+                )
+                exec_ctx.add_result(result)
+                results.append(result)
+        finally:
+            exec_ctx.current_channel_id = saved_channel_id
+        return results
 
     async def _execute_set_channel_number(self, action: Action, stream_ctx: StreamContext,
                                            exec_ctx: ExecutionContext) -> ActionResult:
@@ -3577,6 +3671,23 @@ class ActionExecutor:
         membership = await self._apply_exclusive_profile_membership(
             channel_id, list(self._settings.default_channel_profile_ids)
         )
+
+        # y3m6o.1 Finding 5 (0152): default-profile assignment stays best-effort
+        # (a failed PATCH never aborts channel creation), but a partial/total
+        # failure must not be SILENT — surface the failed profile ids so an
+        # operator can see that the new channel's default-profile membership is
+        # incomplete. Purely additive: the return description is unchanged.
+        if membership.failed_profile_ids:
+            failed_str = ", ".join(
+                str(p) for p in membership.failed_profile_ids
+            )
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Channel %s: default-profile assignment "
+                "incomplete — enabled in %s, disabled in %s; failed to update "
+                "profile(s): %s (best-effort, channel creation unaffected)",
+                channel_id, membership.enabled_count,
+                membership.disabled_count, failed_str,
+            )
 
         if membership.enabled_count or membership.disabled_count:
             desc = (

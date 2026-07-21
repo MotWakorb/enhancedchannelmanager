@@ -471,6 +471,13 @@ class ChannelPipelineEngine:
         # record (and the UI/alerts that read it) surface "capped at N of M"
         # rather than masquerading as a clean completion. error_message carries
         # the would-have-been M so the operator sees the full picture.
+        # y3m6o.1 (0152): a run in which any executed action FAILED must not
+        # finalize as green ``completed``. ``completed_with_errors`` is a
+        # distinct terminal outcome — deliberately NOT a blanket ``failed``,
+        # because other channels/actions in the same run may have succeeded.
+        # ``capped`` takes precedence (it is already a non-green terminal state
+        # and carries its own operator guidance).
+        failed_actions = results.get("failed_actions", [])
         if results.get("capped"):
             execution.status = "capped"
             would = results.get("channels_created", 0) + results.get("cap_would_create", 0)
@@ -481,6 +488,11 @@ class ChannelPipelineEngine:
                 f"Auto-creation is idempotent — run it again to continue from "
                 f"where it stopped (the already-created channels persist), or "
                 f"raise the cap in Settings > Auto Creation."
+            )
+        elif failed_actions:
+            execution.status = "completed_with_errors"
+            execution.error_message = self._summarize_failed_actions(
+                failed_actions
             )
         else:
             execution.status = "completed"
@@ -555,7 +567,14 @@ class ChannelPipelineEngine:
         )
 
         return {
-            "success": True,
+            # y3m6o.1 (0152): the top-level API result reflects action-level
+            # failures — a run with any failed action is NOT a success, so
+            # callers (MCP tools, tasks) and the executions UI cannot read it
+            # as green. ``failed_action_count`` gives a cheap severity signal
+            # without walking the (bounded) execution log.
+            "success": not failed_actions,
+            "status": execution.status,
+            "failed_action_count": len(failed_actions),
             "execution_id": execution.id,
             "mode": execution.mode,
             "duration_seconds": execution.duration_seconds,
@@ -1825,6 +1844,61 @@ class ChannelPipelineEngine:
     # Stream Processing
     # =========================================================================
 
+    @staticmethod
+    def _record_failed_action(
+        results: dict, rule_id, rule_name, stream_id, stream_name,
+        action_result,
+    ) -> None:
+        """Record one failed action into ``results["failed_actions"]`` (y3m6o.1
+        / 0152).
+
+        A compact, serializable record — enough to identify WHICH rule, stream
+        and action failed and WHY — so run finalization can set
+        ``completed_with_errors`` with a short summary and the executions UI /
+        API can surface the failure count. Called from both the standard Pass 2
+        loop and the event_sync profile step so every action-failure path funnels
+        through one shape.
+        """
+        results.setdefault("failed_actions", []).append({
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "stream_id": stream_id,
+            "stream_name": stream_name,
+            "action_type": action_result.action_type,
+            "entity_id": action_result.entity_id,
+            "error": action_result.error or action_result.description,
+        })
+
+    @staticmethod
+    def _summarize_failed_actions(failed_actions: list[dict]) -> str:
+        """Build a short operator-facing summary of failed actions for the
+        execution record's ``error_message`` (y3m6o.1 / 0152).
+
+        States the failure count and names a bounded sample (rule + action
+        type) so the operator can identify the failures without opening the
+        full execution log, plus the retry guidance the individual action
+        errors carry (rerunning the pipeline is safe — every action path is
+        idempotent).
+        """
+        count = len(failed_actions)
+        # Group by (rule_name, action_type) for a compact, deterministic sample.
+        seen: list[str] = []
+        for fa in failed_actions:
+            label = f"{fa.get('rule_name')!r} {fa.get('action_type')}"
+            if label not in seen:
+                seen.append(label)
+        SAMPLE = 5
+        sample = "; ".join(seen[:SAMPLE])
+        if len(seen) > SAMPLE:
+            sample += f"; +{len(seen) - SAMPLE} more"
+        return (
+            f"{count} action(s) failed during this run ({sample}). Some "
+            f"channels may have been left in an inconsistent state (e.g. "
+            f"exclusive channel-profile membership not fully enforced). It is "
+            f"safe to retry manually by rerunning the pipeline — every action "
+            f"path is idempotent."
+        )
+
     async def _process_streams(
         self,
         streams: list[StreamContext],
@@ -2069,6 +2143,15 @@ class ChannelPipelineEngine:
             )),
             "capped": False,
             "cap_would_create": 0,
+            # y3m6o.1 (0152): run-level aggregation of FAILED actions. Any
+            # executed action returning success=False is recorded here (rule +
+            # stream + action + error). A non-empty list finalizes the run as
+            # ``completed_with_errors`` (distinct from green ``completed``) so
+            # an operator-visible failure can never masquerade as success —
+            # e.g. an ``assign_channel_profile`` that could not enforce
+            # exclusive membership (GH #720). Standard Pass 2 actions AND the
+            # event_sync profile step both funnel through _record_failed_action.
+            "failed_actions": [],
         }
 
         # Track which streams have been processed by which rules
@@ -2393,6 +2476,17 @@ class ChannelPipelineEngine:
                 if action_result.details:
                     action_entry["details"] = action_result.details
                 actions_log.append(action_entry)
+
+                # y3m6o.1 (0152): aggregate any FAILED action at run level so
+                # finalization can surface a non-green outcome. Skipped actions
+                # report success=True, so this fires only on genuine failures
+                # (e.g. an assign_channel_profile that could not enforce
+                # exclusive membership — GH #720).
+                if not action_result.success:
+                    self._record_failed_action(
+                        results, winning_rule.id, winning_rule.name,
+                        stream.stream_id, stream.stream_name, action_result,
+                    )
 
                 # Check for stop_processing action.
                 # NOTE: by the time we reach Pass 2, Pass 1 has already
@@ -3898,6 +3992,19 @@ class ChannelPipelineEngine:
                 if epg_summary is not None:
                     summary["dummy_epg"] = epg_summary
 
+            # GH #720 / y3m6o.1 Finding 4 (0152): a configured
+            # assign_channel_profile action on an event_sync rule must take
+            # effect. event_sync does NOT flow through Pass 1/2 action
+            # evaluation, so this dedicated step applies exclusive profile
+            # membership to the channels this rule touched this run — newly
+            # attached master channels + promoted channels — mirroring the
+            # dummy-EPG step's shape. No-op for rules without such an action.
+            profile_summary = await self._apply_event_sync_profile_action(
+                rule, executor, exec_ctx, results, dry_run, summary,
+            )
+            if profile_summary is not None:
+                summary["assign_channel_profile"] = profile_summary
+
             results["event_sync"].append(summary)
 
     async def _assign_event_sync_dummy_epg(
@@ -4052,6 +4159,162 @@ class ChannelPipelineEngine:
             }],
         })
         return epg_summary
+
+    async def _apply_event_sync_profile_action(
+        self,
+        rule,
+        executor: "ActionExecutor",
+        exec_ctx: "ExecutionContext",
+        results: dict,
+        dry_run: bool,
+        summary: dict,
+    ) -> Optional[dict]:
+        """Apply the rule's ``assign_channel_profile`` action to the channels an
+        event_sync rule touched this run (GH #720 / y3m6o.1 Finding 4 — 0152).
+
+        event_sync rules are excluded from Pass 1/2 action evaluation, so a
+        configured ``assign_channel_profile`` action never fired on them before
+        this. Root cause of #720: Dispatcharr auto-joins every new channel to
+        ALL profiles, so honoring a profile selection is SUBTRACTIVE. This step
+        reconciles exclusive membership on the channels this rule actually
+        managed this run:
+
+        * master channels that received a NEW attach (``merged_channel_ids`` —
+          populated by the shared add_result chokepoint, live AND dry-run), and
+        * promoted channels (the ONE event_sync channel-creation path — the
+          exact "new channel joined to all profiles" case #720 describes).
+
+        Idempotent no-op runs (nothing newly attached, no promotion) touch no
+        channels, so steady-state runs perform NO profile writes — the action
+        never churns Dispatcharr-owned masters it did not act on this run.
+
+        Returns a step summary folded onto the rule's event_sync summary, or
+        None when the rule carries no ``assign_channel_profile`` action (the
+        common case — byte-identical to pre-feature behavior).
+        """
+        profile_actions = [
+            a for a in rule.get_actions()
+            if a.get("type") == "assign_channel_profile"
+        ]
+        if not profile_actions:
+            return None
+
+        # Channels this rule touched this run: newly-attached masters + promoted
+        # channels. dict.fromkeys de-dupes while preserving order.
+        touched: list[int] = [
+            cid for cid in exec_ctx.merged_channel_ids if cid is not None
+        ]
+        promotion = summary.get("promotion")
+        if promotion is not None:
+            touched.extend(
+                cid for cid in promotion.get("channel_ids", [])
+                if cid is not None
+            )
+        touched_ids = list(dict.fromkeys(touched))
+
+        step = {
+            "rule_id": rule.id,
+            "rule_name": rule.name,
+            "channels_targeted": len(touched_ids),
+            "succeeded": 0,
+            "failed": 0,
+            "channel_profile_ids": list(
+                profile_actions[0].get("channel_profile_ids", [])
+            ),
+        }
+        if not touched_ids:
+            # Nothing to reconcile (idempotent no-op run). Still return the step
+            # so the summary records that the action was configured but had no
+            # in-scope channels this run.
+            return step
+
+        # Delta-fold counters: the attach phase already folded this exec_ctx's
+        # totals into results, so only what THIS step adds may be folded again
+        # (mirrors _assign_event_sync_dummy_epg).
+        modified_before = len(exec_ctx.modified_entities)
+        updated_before = exec_ctx.channels_updated
+
+        # One action drives all touched channels; multiple assign_channel_profile
+        # actions (rare) apply in order, last-wins per channel — same semantics
+        # as a standard rule with repeated actions.
+        step_results = []
+        for action in profile_actions:
+            step_results.extend(
+                await executor.apply_channel_profile_to_channels(
+                    action, touched_ids, exec_ctx,
+                )
+            )
+
+        results["modified_entities"].extend(
+            exec_ctx.modified_entities[modified_before:]
+        )
+        results["channels_updated"] += (
+            exec_ctx.channels_updated - updated_before
+        )
+
+        for result in step_results:
+            if result.success:
+                step["succeeded"] += 1
+            else:
+                step["failed"] += 1
+                # Surface at run level so a failed event_sync profile
+                # assignment finalizes the run as completed_with_errors.
+                self._record_failed_action(
+                    results, rule.id, rule.name, None,
+                    f"[EVENT-SYNC] {rule.name}", result,
+                )
+            results["execution_log"].append({
+                "stream_id": None,
+                "stream_name": (
+                    f"[EVENT-SYNC PROFILE] channel {result.entity_id}"
+                ),
+                "m3u_account_id": None,
+                "rules_evaluated": [],
+                "actions_executed": [{
+                    "type": "assign_channel_profile",
+                    "description": result.description,
+                    "success": result.success,
+                    "entity_id": result.entity_id,
+                    "error": result.error,
+                }],
+            })
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": None,
+                    "stream_name": (
+                        f"[EVENT-SYNC PROFILE] channel {result.entity_id}"
+                    ),
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "action": result.description,
+                    "would_create": False,
+                    "would_modify": result.modified,
+                })
+
+        profile_line = (
+            f"event_sync channel profiles: {step['succeeded']} reconciled, "
+            f"{step['failed']} failed across {step['channels_targeted']} "
+            f"channel(s)"
+        )
+        step["summary_line"] = profile_line
+        logger.info(
+            "[EVENT-SYNC] Rule '%s' (id=%s): %s",
+            rule.name, rule.id, profile_line,
+        )
+        results["execution_log"].append({
+            "stream_id": None,
+            "stream_name": f"[EVENT-SYNC PROFILE] {rule.name}",
+            "m3u_account_id": None,
+            "rules_evaluated": [],
+            "actions_executed": [{
+                "type": "event_sync_assign_channel_profile_summary",
+                "description": profile_line,
+                "success": step["failed"] == 0,
+                "entity_id": None,
+                "error": None,
+            }],
+        })
+        return step
 
     # =========================================================================
     # Pass 6: Batch probe streams queued by probe_streams actions

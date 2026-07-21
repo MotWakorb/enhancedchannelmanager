@@ -2763,6 +2763,138 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
         assert {entry["batch_id"] for entry in entries} == {"1"}
 
 
+class TestRunLevelFailedActionStatus:
+    """y3m6o.1 (0152) — THE core regression the first pass MISSED.
+
+    A run in which an executed action FAILS must finalize as
+    ``completed_with_errors`` (a distinct terminal outcome, NOT green
+    ``completed``) AND the top-level API result must be non-success. Drives the
+    REAL pipeline end to end (run_pipeline -> _process_streams ->
+    executor.execute -> _execute_assign_channel_profile) with a rule whose
+    assign_channel_profile action fails a profile update — this is a run-level
+    assertion on both the stored ``execution.status`` and the returned dict, not
+    a unit probe of the action result (which the 0151 pass mistook for
+    coverage)."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_channel_groups = AsyncMock(return_value=[])
+        self.client.update_channel = AsyncMock()
+        self.client.get_channel_profiles = AsyncMock(
+            return_value=[{"id": 1}, {"id": 2}, {"id": 3}]
+        )
+        # Disabling profile 2 fails => assign_channel_profile returns a partial
+        # failure (success=False) for the created channel.
+        def _update_profile(pid, channel_id, body):
+            if pid == 2:
+                raise RuntimeError("profile 2 patch failed")
+            return None
+        self.client.update_profile_channel = AsyncMock(side_effect=_update_profile)
+        self._next_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _make_rule(self):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Profile Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([
+            {"type": "create_channel", "name_template": "{stream_name}"},
+            {"type": "assign_channel_profile", "channel_profile_ids": [1]},
+        ])
+        return rule
+
+    def _run(self, rule, streams, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_failed_action_finalizes_completed_with_errors(self):
+        rule = self._make_rule()
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        # (1) the STORED execution row status is the new errored terminal state.
+        assert self.exec_mock.status == "completed_with_errors"
+        # (2) the top-level API result is non-success.
+        assert result["success"] is False
+        assert result["status"] == "completed_with_errors"
+        assert result["failed_action_count"] >= 1
+        # The error_message summary names the failure + safe-retry guidance.
+        msg = (self.exec_mock.error_message or "").lower()
+        assert "failed" in msg
+        assert "retry" in msg
+
+    def test_clean_run_finalizes_completed(self):
+        """Control: same rule but all profile writes succeed => green
+        ``completed`` + success True. Proves the errored status is not applied
+        spuriously."""
+        self.client.update_profile_channel = AsyncMock()  # all succeed
+        rule = self._make_rule()
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        assert self.exec_mock.status == "completed"
+        assert result["success"] is True
+        assert result["failed_action_count"] == 0
+
+    def test_dry_run_unavailable_universe_finalizes_completed_with_errors(self):
+        """y3m6o.1 Finding 2 (0152) at run level: a DRY RUN whose profile-universe
+        fetch FAILS must surface the blocking preview as completed_with_errors,
+        not a rosy green preview. The dry-run assign action returns the
+        universe-unavailable failure, which aggregates into failed_actions."""
+        self.client.get_channel_profiles = AsyncMock(
+            side_effect=RuntimeError("dispatcharr down")
+        )
+        rule = self._make_rule()
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=True)
+
+        assert self.exec_mock.status == "completed_with_errors"
+        assert result["success"] is False
+        assert result["failed_action_count"] >= 1
+        # Nothing was written even in the failure preview.
+        self.client.update_profile_channel.assert_not_called()
+
+
 class TestEngineFoldMatchKeyPassThrough:
     """GH #645 / bead enhancedchannelmanager-0vao3: the engine must thread the
     rule's ``fold_match_key`` flag into every executor.execute call, the same

@@ -344,7 +344,7 @@ interface MockChannelPipelineExecution {
   started_at: string
   completed_at: string | null
   duration_seconds: number | null
-  status: 'running' | 'completed' | 'failed' | 'rolled_back' | 'capped' | 'abandoned'
+  status: 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'rolled_back' | 'capped' | 'abandoned'
   streams_evaluated: number
   streams_matched: number
   channels_created: number

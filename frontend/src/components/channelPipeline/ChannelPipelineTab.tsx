@@ -40,6 +40,10 @@ const getStatusBadgeClass = (status: string) => {
     disabled: '', failed: 'badge-error',
     running: 'badge-info', rolled_back: 'badge-warning',
     capped: 'badge-warning', abandoned: 'badge-error',
+    // y3m6o.1 (0152): a run in which an action failed is amber/warning — some
+    // channels may have succeeded, so it is not a full error, but it is
+    // clearly distinct from green ``completed``.
+    completed_with_errors: 'badge-warning',
   };
   return `badge badge-sm badge-uppercase ${map[status] || ''}`;
 };
@@ -49,6 +53,7 @@ const EXECUTION_STATUS_LABEL: Partial<Record<string, string>> = {
   rolled_back: 'Rolled Back',
   capped: 'Capped',
   abandoned: 'Abandoned',
+  completed_with_errors: 'Completed with Errors',
 };
 
 /**
@@ -588,6 +593,12 @@ export function ChannelPipelineTab() {
         const created = response.channels_created ?? 0;
         const status = response.status;
         const succeeded = status === 'completed';
+        // y3m6o.1 (0152): a run whose actions partly failed is a non-green
+        // WARNING outcome, not a clean success and not a hard failure — some
+        // channels were still modified. It surfaces an amber toast with the
+        // run's error_message (the failed-action summary) and, like a clean
+        // run, still refreshes the channel/group panes below.
+        const completedWithErrors = status === 'completed_with_errors';
         // Event Sync runs attach streams rather than create channels, so the
         // "Created N channels" figure is always 0 and reads as "nothing
         // happened". When every targeted rule is an event_sync rule, point the
@@ -623,6 +634,12 @@ export function ChannelPipelineTab() {
               'Channel Pipeline',
             );
           }
+        } else if (completedWithErrors) {
+          notifications.warning(
+            response.error_message ||
+              'Pipeline completed with errors — some actions failed. See Execution History.',
+            'Channel Pipeline',
+          );
         } else {
           notifications.error(
             response.error_message || msg,
@@ -634,8 +651,9 @@ export function ChannelPipelineTab() {
         // (last_run_at / match_count) live on a separate endpoint.
         await fetchExecutions();
         await fetchRules();
-        // Notify other panes to refresh (channels/groups may have changed)
-        if (!dryRun && succeeded) {
+        // Notify other panes to refresh (channels/groups may have changed).
+        // completed_with_errors still mutated channels, so it refreshes too.
+        if (!dryRun && (succeeded || completedWithErrors)) {
           window.dispatchEvent(new CustomEvent('channels-changed'));
         }
       }
@@ -1291,7 +1309,7 @@ export function ChannelPipelineTab() {
                     >
                       <span className="material-icons">info</span>
                     </button>
-                    {execution.status === 'completed' && execution.mode === 'execute' && (
+                    {(execution.status === 'completed' || execution.status === 'completed_with_errors') && execution.mode === 'execute' && (
                       <button
                         className="action-btn danger"
                         onClick={() => handleRollbackClick(execution)}
@@ -1310,7 +1328,7 @@ export function ChannelPipelineTab() {
                         when has_snapshot=true; hidden for dry runs, legacy runs,
                         and already-reverted executions so the operator always
                         knows what will happen. */}
-                    {execution.has_snapshot && execution.status === 'completed' && execution.mode === 'execute' && (
+                    {execution.has_snapshot && (execution.status === 'completed' || execution.status === 'completed_with_errors') && execution.mode === 'execute' && (
                       <button
                         className="action-btn action-btn-revert"
                         onClick={() => handleRevertClick(execution)}
@@ -1326,7 +1344,7 @@ export function ChannelPipelineTab() {
                         <span className="material-icons">settings_backup_restore</span>
                       </button>
                     )}
-                    {!execution.has_snapshot && execution.mode === 'execute' && execution.status === 'completed' && (
+                    {!execution.has_snapshot && execution.mode === 'execute' && (execution.status === 'completed' || execution.status === 'completed_with_errors') && (
                       <span
                         className="execution-no-snapshot"
                         title="No pre-run snapshot — only legacy rollback is available for this run"

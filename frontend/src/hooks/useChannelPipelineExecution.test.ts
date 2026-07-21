@@ -588,6 +588,22 @@ describe('useChannelPipelineExecution', () => {
       expect(result.current.canRollback(execution.id)).toBe(true);
     });
 
+    it('returns true for completed_with_errors execute mode execution', async () => {
+      const execution = createMockChannelPipelineExecution({
+        status: 'completed_with_errors',
+        mode: 'execute',
+      });
+      mockDataStore.channelPipelineExecutions.push(execution);
+
+      const { result } = renderHook(() => useChannelPipelineExecution());
+
+      await act(async () => {
+        await result.current.fetchExecutions();
+      });
+
+      expect(result.current.canRollback(execution.id)).toBe(true);
+    });
+
     it('returns false for dry_run execution', async () => {
       const execution = createMockChannelPipelineExecution({
         status: 'completed',
