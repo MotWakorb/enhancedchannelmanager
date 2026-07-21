@@ -93,6 +93,35 @@ def event_sync_trigger_allowed(triggered_by: str, config: dict | None) -> bool:
         return bool(config) and config.get("auto_run") is True
     return False
 
+
+def build_channel_profile_membership(
+    profiles: list[dict],
+) -> dict[int, set[int]]:
+    """Invert a Dispatcharr ``get_channel_profiles()`` response into a
+    ``channel_id -> set(profile_ids the channel is ENABLED in)`` map
+    (y3m6o.1 review follow-up).
+
+    CONTRACT (proven against a live v0.27.x instance and pinned by
+    ``tests/fixtures/y3m6o1/dispatcharr_channel_profiles_mixed_membership.json``):
+    each profile's ``channels`` list enumerates EXACTLY the channels ENABLED in
+    that profile — a channel disabled in a profile is ABSENT from that profile's
+    ``channels`` (verified by mixed enable/disable writes on one channel). So a
+    channel absent from every ``channels`` list is enabled in zero profiles, and
+    ``assign_channel_profile`` may safely diff against this map (skip no-op
+    writes) WITHOUT recreating the GH #720 over-inclusion regression.
+
+    This is the ONE builder the engine and the fixture-backed contract test both
+    use, so the premise the optimization rests on is exercised by real data — a
+    future serializer change that stops enumerating enabled membership breaks the
+    fixture test, not production silently.
+    """
+    membership: dict[int, set[int]] = {}
+    for p in profiles:
+        pid = p["id"]
+        for cid in (p.get("channels") or []):
+            membership.setdefault(cid, set()).add(pid)
+    return membership
+
 # Upper bound on secondary streams fetched per event_sync rule — a fetch
 # guard, not a decision knob (per-stream decisions are independent, so
 # truncation only defers later streams to the next idempotent run; it is
@@ -2127,10 +2156,9 @@ class ChannelPipelineEngine:
             try:
                 profiles = await self.client.get_channel_profiles()
                 all_profile_ids = [p["id"] for p in profiles]
-                for p in profiles:
-                    pid = p["id"]
-                    for cid in (p.get("channels") or []):
-                        channel_profile_membership.setdefault(cid, set()).add(pid)
+                channel_profile_membership = build_channel_profile_membership(
+                    profiles
+                )
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel profiles: %s", e)
                 all_profile_ids = None
@@ -4687,6 +4715,15 @@ class ChannelPipelineEngine:
         except Exception as e:
             db.rollback()
             logger.error("[AUTO-CREATE-ENGINE] Pass 5: failed to update profile groups: %s", e)
+            # y3m6o.1 review (WARN #2): a failed profile-group update leaves the
+            # dummy EPG profile without the run's target groups, so the deferred
+            # guide-data assignments will not resolve — escalate so the run
+            # finalizes completed_with_errors instead of silently green.
+            self._record_failed_phase(
+                results, phase="dummy_epg_refresh",
+                stream_name="[Pass 5] Update Profile Groups",
+                error=f"Failed to update dummy EPG profile groups: {e}",
+            )
         finally:
             db.close()
 
@@ -4769,7 +4806,8 @@ class ChannelPipelineEngine:
                     "would_create": False,
                     "would_modify": True
                 })
-            else:
+            refresh_error: str | None = None
+            if not dry_run:
                 try:
                     from tasks.dummy_epg_refresh import wait_for_epg_source_refresh
                     await wait_for_epg_source_refresh(
@@ -4781,7 +4819,26 @@ class ChannelPipelineEngine:
                         "[AUTO-CREATE-ENGINE] Pass 5: failed to refresh source %s: %s",
                         source_name, e
                     )
+                    refresh_error = str(e)
+                    # y3m6o.1 review (WARN #3): a failed source refresh means the
+                    # dummy guide data may not be current when the deferred
+                    # assignments retry — escalate so the run is not green.
+                    self._record_failed_phase(
+                        results, phase="refresh_epg_source", entity_id=src_id,
+                        stream_name="[Pass 5] Refresh EPG Source",
+                        error=(
+                            f"Failed to refresh EPG source '{source_name}' "
+                            f"(id={src_id}): {e}"
+                        ),
+                    )
 
+            # y3m6o.1 review (WARN #3): the execution-log entry must reflect the
+            # ACTUAL outcome — it previously recorded success=True even when the
+            # refresh raised.
+            succeeded = dry_run or refresh_error is None
+            verb = "Would refresh" if dry_run else (
+                "Refreshed" if succeeded else "Failed to refresh"
+            )
             results["execution_log"].append({
                 "stream_id": None,
                 "stream_name": f"[Pass 5] Refresh EPG Source",
@@ -4789,11 +4846,10 @@ class ChannelPipelineEngine:
                 "rules_evaluated": [],
                 "actions_executed": [{
                     "type": "refresh_epg_source",
-                    "description": ("Would refresh" if dry_run else "Refreshed")
-                                   + f" EPG source '{source_name}' (id={src_id})",
-                    "success": True,
+                    "description": f"{verb} EPG source '{source_name}' (id={src_id})",
+                    "success": succeeded,
                     "entity_id": src_id,
-                    "error": None
+                    "error": refresh_error,
                 }]
             })
 

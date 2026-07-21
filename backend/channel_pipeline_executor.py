@@ -151,7 +151,7 @@ class ExecutionContext:
     # profile-write path can be missed; the engine folds these across the run
     # and persists a disclosure warning so rollback/undo never claims to restore
     # channel-profile membership it cannot.
-    non_reversible_channel_ids: set = field(default_factory=set)
+    non_reversible_channel_ids: set[int] = field(default_factory=set)
 
     # y3m6o.1 review (Finding 1 reversal): default-profile assignment failures.
     # Each entry {channel_id, failed_profile_ids} for a newly-created channel
@@ -159,7 +159,7 @@ class ExecutionContext:
     # Default assignment stays best-effort for the CREATE (never aborts it), but
     # the PO decision escalates the failure into the run-level aggregation via
     # the engine, so such a run finalizes completed_with_errors, not green.
-    default_profile_failures: list = field(default_factory=list)
+    default_profile_failures: list[dict] = field(default_factory=list)
 
     # BD-F (bd-a5lb2): per-stream count of pending_merges rows
     # enqueued by the bulk-M3U dedup hook (ADR-008 §D1). One per

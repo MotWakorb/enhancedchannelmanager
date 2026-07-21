@@ -3156,7 +3156,7 @@ class TestPass5DeferredEpgRetryFailureAggregation:
     green. Drives the real ``_refresh_dummy_epg_and_retry`` retry loop with a
     failing ``_execute_assign_epg``."""
 
-    def _run_pass5(self, retry_result):
+    def _run_pass5(self, retry_result, *, source_refresh=None, query_raises=False):
         from channel_pipeline_executor import ActionResult  # noqa: F401
 
         client = MagicMock()
@@ -3183,19 +3183,34 @@ class TestPass5DeferredEpgRetryFailureAggregation:
         fake_task = MagicMock()
         fake_task._regenerate_xmltv = AsyncMock(return_value=1)
         sess = MagicMock()
-        sess.query.return_value.filter.return_value.all.return_value = []
+        if query_raises:
+            # WARN #2: Step 1 profile-group update raises.
+            sess.query.side_effect = RuntimeError("profile group update boom")
+        else:
+            sess.query.return_value.filter.return_value.all.return_value = []
+        refresh_mock = (
+            AsyncMock(side_effect=source_refresh) if callable(source_refresh)
+            else AsyncMock()
+        )
         with patch("channel_pipeline_engine.get_session", return_value=sess), \
                 patch("database.get_session", return_value=sess), \
                 patch("tasks.dummy_epg_refresh.DummyEPGRefreshTask",
                       return_value=fake_task), \
                 patch("tasks.dummy_epg_refresh.wait_for_epg_source_refresh",
-                      new=AsyncMock()):
+                      new=refresh_mock):
             asyncio.get_event_loop().run_until_complete(
                 engine._refresh_dummy_epg_and_retry(
                     executor, results, epg_sources, dry_run=False
                 )
             )
         return results
+
+    @staticmethod
+    def _log_entries(results, type_):
+        return [
+            a for e in results["execution_log"]
+            for a in e["actions_executed"] if a["type"] == type_
+        ]
 
     def test_failed_retry_aggregates(self):
         from channel_pipeline_executor import ActionResult
@@ -3219,6 +3234,49 @@ class TestPass5DeferredEpgRetryFailureAggregation:
         )
         results = self._run_pass5(ok)
         assert not results.get("failed_actions")
+
+    def _ok_retry(self):
+        from channel_pipeline_executor import ActionResult
+        return ActionResult(
+            success=True, action_type="assign_epg", description="assigned",
+            entity_id=100,
+        )
+
+    def test_profile_group_update_failure_aggregates(self):
+        """y3m6o.1 review (WARN #2): a Pass 5 profile-group update failure now
+        escalates so the run finalizes completed_with_errors, not green."""
+        results = self._run_pass5(self._ok_retry(), query_raises=True)
+        failed = results.get("failed_actions", [])
+        assert any(fa["action_type"] == "dummy_epg_refresh" for fa in failed)
+
+    def test_source_refresh_failure_aggregates_and_logs_honestly(self):
+        """y3m6o.1 review (WARN #3): a Pass 5 source-refresh failure escalates
+        AND its execution-log entry reflects the actual failure (previously it
+        recorded success=True even when the refresh raised)."""
+        def _boom(*a, **k):
+            raise RuntimeError("refresh timed out")
+        results = self._run_pass5(self._ok_retry(), source_refresh=_boom)
+
+        # Escalated into aggregation.
+        failed = results.get("failed_actions", [])
+        assert any(fa["action_type"] == "refresh_epg_source" for fa in failed)
+        # And the execution-log entry is honest (success=False + error).
+        entries = self._log_entries(results, "refresh_epg_source")
+        assert entries and entries[0]["success"] is False
+        assert entries[0]["error"] is not None
+        assert "Failed to refresh" in entries[0]["description"]
+
+    def test_source_refresh_success_logs_success_and_no_failure(self):
+        """Control: a healthy source refresh logs success=True and aggregates
+        nothing."""
+        results = self._run_pass5(self._ok_retry())
+        entries = self._log_entries(results, "refresh_epg_source")
+        assert entries and entries[0]["success"] is True
+        assert entries[0]["error"] is None
+        assert not any(
+            fa["action_type"] == "refresh_epg_source"
+            for fa in results.get("failed_actions", [])
+        )
 
 
 class TestEngineFoldMatchKeyPassThrough:
