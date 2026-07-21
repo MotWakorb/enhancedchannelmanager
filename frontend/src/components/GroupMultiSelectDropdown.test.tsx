@@ -3,8 +3,8 @@
  * / GH #677): collapsed multi-select replacing unbounded inline checkbox
  * lists at ActionEditor / RuleBuilder / BulkRuleSettingsModal.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GroupMultiSelectDropdown, type GroupMultiSelectOption } from './GroupMultiSelectDropdown';
 
@@ -13,6 +13,11 @@ const OPTIONS: GroupMultiSelectOption[] = [
   { id: 2, name: 'News' },
   { id: 3, name: 'Movies' },
 ];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
+});
 
 function renderDropdown(props: Partial<React.ComponentProps<typeof GroupMultiSelectDropdown>> = {}) {
   const onChange = vi.fn();
@@ -29,6 +34,27 @@ function renderDropdown(props: Partial<React.ComponentProps<typeof GroupMultiSel
 }
 
 describe('GroupMultiSelectDropdown', () => {
+  const setViewportHeight = (height: number) => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+  };
+
+  const setTriggerRect = (rect: Partial<DOMRect>) => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 24,
+      y: 100,
+      top: 100,
+      right: 244,
+      bottom: 136,
+      left: 24,
+      width: 220,
+      height: 36,
+      toJSON: () => ({}),
+      ...rect,
+    } as DOMRect);
+  };
+
+  const getMenu = () => document.querySelector('.group-multiselect-menu') as HTMLElement;
+
   it('renders collapsed with a placeholder and no visible options', () => {
     renderDropdown({ placeholder: 'No groups excluded' });
 
@@ -54,6 +80,56 @@ describe('GroupMultiSelectDropdown', () => {
     expect(within(group).getByText('Sports')).toBeInTheDocument();
     expect(within(group).getByText('News')).toBeInTheDocument();
     expect(within(group).getByText('Movies')).toBeInTheDocument();
+  });
+
+  it('opens below the trigger when the viewport has enough room', async () => {
+    const user = userEvent.setup();
+    setViewportHeight(800);
+    setTriggerRect({ top: 100, bottom: 136 });
+    renderDropdown();
+
+    await user.click(screen.getByRole('button', { name: 'Exclude target groups' }));
+
+    await waitFor(() => expect(getMenu()).toHaveStyle({ top: '140px', maxHeight: '300px' }));
+  });
+
+  it('opens above the trigger when the full menu does not fit below and more room is available above', async () => {
+    const user = userEvent.setup();
+    setViewportHeight(600);
+    setTriggerRect({ top: 500, bottom: 536 });
+    renderDropdown();
+
+    await user.click(screen.getByRole('button', { name: 'Exclude target groups' }));
+
+    await waitFor(() => expect(getMenu()).toHaveStyle({ top: '196px', maxHeight: '300px' }));
+  });
+
+  it('clamps the menu height to viewport space and recomputes on resize and capture scroll', async () => {
+    const user = userEvent.setup();
+    setViewportHeight(220);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 24, y: 100, top: 100, right: 244, bottom: 136, left: 24, width: 220, height: 36,
+      toJSON: () => ({}),
+    } as DOMRect);
+    renderDropdown();
+
+    await user.click(screen.getByRole('button', { name: 'Exclude target groups' }));
+    await waitFor(() => expect(getMenu()).toHaveStyle({ top: '8px', maxHeight: '88px' }));
+
+    setViewportHeight(800);
+    rectSpy.mockReturnValue({
+      x: 24, y: 300, top: 300, right: 244, bottom: 336, left: 24, width: 220, height: 36,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => expect(getMenu()).toHaveStyle({ top: '340px', maxHeight: '300px' }));
+
+    rectSpy.mockReturnValue({
+      x: 24, y: 700, top: 700, right: 244, bottom: 736, left: 24, width: 220, height: 36,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.scroll(document, { target: { scrollTop: 1 } });
+    await waitFor(() => expect(getMenu()).toHaveStyle({ top: '396px', maxHeight: '300px' }));
   });
 
   it('reflects selectedIds as checked checkboxes in option order', async () => {
