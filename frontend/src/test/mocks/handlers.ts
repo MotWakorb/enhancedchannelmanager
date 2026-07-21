@@ -137,6 +137,8 @@ export function createMockChannelPipelineRule(overrides: Partial<MockChannelPipe
     description: overrides.description ?? 'A test channel pipeline rule',
     enabled: overrides.enabled ?? true,
     priority: overrides.priority ?? id,
+    active_from: overrides.active_from ?? null,
+    active_until: overrides.active_until ?? null,
     conditions: overrides.conditions ?? [{ type: 'stream_name_contains', value: 'test' }],
     actions: overrides.actions ?? [{ type: 'create_channel', name_template: '{stream_name}' }],
     m3u_account_id: overrides.m3u_account_id ?? null,
@@ -309,6 +311,8 @@ interface MockChannelPipelineRule {
   description: string | null
   enabled: boolean
   priority: number
+  active_from?: string | null
+  active_until?: string | null
   conditions: object[]
   actions: object[]
   m3u_account_id: number | null

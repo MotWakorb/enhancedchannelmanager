@@ -347,6 +347,22 @@ def _validate_persisted_active_window(rule) -> None:
         })
 
 
+def _parse_yaml_active_date(value, field_name: str) -> Optional[date]:
+    """Parse a YAML calendar date without depending on scalar quoting."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        raise ValueError(f"{field_name} must be a YYYY-MM-DD calendar date")
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            pass
+    raise ValueError(f"{field_name} must be a valid YYYY-MM-DD date")
+
+
 def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
     """Resolve normalization_group_ids from rule data, with backward compat for normalize_names."""
     norm_ids = rule_data.get("normalization_group_ids")
@@ -1978,6 +1994,14 @@ async def export_auto_creation_rules_yaml():
                     "description": rule.description,
                     "enabled": rule.enabled,
                     "priority": rule.priority,
+                    "active_from": (
+                        rule.active_from.isoformat()
+                        if isinstance(rule.active_from, date) else None
+                    ),
+                    "active_until": (
+                        rule.active_until.isoformat()
+                        if isinstance(rule.active_until, date) else None
+                    ),
                     "m3u_account_id": rule.m3u_account_id,
                     "m3u_account_name": m3u_id_to_name.get(rule.m3u_account_id),
                     "target_group_id": rule.target_group_id,
@@ -2162,6 +2186,29 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         })
                         continue
 
+                try:
+                    active_from = _parse_yaml_active_date(
+                        rule_data.get("active_from"), "active_from"
+                    )
+                    active_until = _parse_yaml_active_date(
+                        rule_data.get("active_until"), "active_until"
+                    )
+                    if (
+                        active_from is not None
+                        and active_until is not None
+                        and active_until < active_from
+                    ):
+                        raise ValueError(
+                            "active_until must be on or after active_from"
+                        )
+                except ValueError as exc:
+                    errors.append({
+                        "rule_index": i,
+                        "rule_name": rule_data.get("name", f"Rule {i}"),
+                        "errors": [str(exc)],
+                    })
+                    continue
+
                 # Check if rule with same name exists
                 existing = session.query(ChannelPipelineRule).filter(
                     ChannelPipelineRule.name == rule_data.get("name")
@@ -2173,14 +2220,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         existing.description = rule_data.get("description")
                         existing.enabled = rule_data.get("enabled", True)
                         existing.priority = rule_data.get("priority", 0)
-                        existing.active_from = (
-                            date.fromisoformat(rule_data["active_from"])
-                            if rule_data.get("active_from") else None
-                        )
-                        existing.active_until = (
-                            date.fromisoformat(rule_data["active_until"])
-                            if rule_data.get("active_until") else None
-                        )
+                        existing.active_from = active_from
+                        existing.active_until = active_until
                         existing.m3u_account_id = rule_data.get("m3u_account_id")
                         existing.target_group_id = rule_data.get("target_group_id")
                         existing.conditions = json.dumps(conditions)
@@ -2226,14 +2267,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         description=rule_data.get("description"),
                         enabled=rule_data.get("enabled", True),
                         priority=rule_data.get("priority", 0),
-                        active_from=(
-                            date.fromisoformat(rule_data["active_from"])
-                            if rule_data.get("active_from") else None
-                        ),
-                        active_until=(
-                            date.fromisoformat(rule_data["active_until"])
-                            if rule_data.get("active_until") else None
-                        ),
+                        active_from=active_from,
+                        active_until=active_until,
                         m3u_account_id=rule_data.get("m3u_account_id"),
                         target_group_id=rule_data.get("target_group_id"),
                         conditions=json.dumps(conditions),

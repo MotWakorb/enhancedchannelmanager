@@ -7,6 +7,7 @@ pipeline, coordinating rules, streams, and executions.
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta
 import asyncio
+import json
 import pytest
 
 from channel_pipeline_engine import (
@@ -336,6 +337,30 @@ class TestChannelPipelineEngineRunPipeline:
         assert result["success"] is True
         assert result["message"] == "No enabled rules to process"
         assert result["streams_evaluated"] == 0
+
+    def test_selected_expired_rule_is_noop_without_undo_or_writes(self, test_session):
+        """Expiry gates execution; it never reverses effects from prior runs."""
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule(
+            name="Expired selected rule", enabled=True, priority=0,
+            active_until=datetime.utcnow().date() - timedelta(days=1),
+            conditions=json.dumps([{"type": "always"}]),
+            actions=json.dumps([{"type": "create_channel", "name_template": "x"}]),
+        )
+        test_session.add(rule)
+        test_session.commit()
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
+            result = asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(rule_ids=[rule.id], triggered_by="manual")
+            )
+
+        assert result["message"] == "No enabled rules to process"
+        self.client.create_channel.assert_not_awaited()
+        for method_name in ("update_channel", "delete_channel"):
+            method = getattr(self.client, method_name, None)
+            if method is not None:
+                method.assert_not_called()
 
     @patch("channel_pipeline_engine.get_session")
     def test_run_pipeline_dry_run(self, mock_get_session):

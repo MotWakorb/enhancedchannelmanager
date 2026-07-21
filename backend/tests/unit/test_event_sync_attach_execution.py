@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1489,7 +1490,9 @@ def _watermark_settings():
 
 
 def _add_rule(session_factory, *, name: str, run_on_refresh: bool = False,
-              enabled: bool = True, es_config: dict | None = None) -> int:
+              enabled: bool = True, es_config: dict | None = None,
+              active_from: date | None = None,
+              active_until: date | None = None) -> int:
     session = session_factory()
     try:
         rule = ChannelPipelineRule(
@@ -1497,6 +1500,8 @@ def _add_rule(session_factory, *, name: str, run_on_refresh: bool = False,
             conditions=json.dumps([{"type": "always"}]),
             actions=json.dumps([{"type": "skip"}]),
             run_on_refresh=run_on_refresh,
+            active_from=active_from,
+            active_until=active_until,
             event_sync_config=(
                 json.dumps(es_config) if es_config is not None else None
             ),
@@ -1576,6 +1581,27 @@ class TestWatermarkTaskAutoRunInclusion:
         kwargs = run_pipeline.call_args.kwargs
         assert sorted(kwargs["rule_ids"]) == sorted([standard_id, opted_id])
         assert kwargs["triggered_by"] == "m3u_refresh"
+
+    def test_inactive_standard_and_event_sync_rules_are_excluded(
+        self, db_session_factory
+    ):
+        active_standard = _add_rule(
+            db_session_factory, name="Active standard", run_on_refresh=True,
+        )
+        _add_rule(
+            db_session_factory, name="Expired standard", run_on_refresh=True,
+            active_until=date(2000, 1, 1),
+        )
+        _add_rule(
+            db_session_factory, name="Future event", es_config=_config(auto_run=True),
+            active_from=date(2999, 1, 1),
+        )
+        result, run_pipeline, _ = _execute_watermark_task(
+            db_session_factory, _ENGINE_NOOP_RESULT
+        )
+        assert result.success is True
+        run_pipeline.assert_awaited_once()
+        assert run_pipeline.call_args.kwargs["rule_ids"] == [active_standard]
 
     def test_opted_in_event_sync_rule_alone_fires_the_watermark_run(
         self, db_session_factory
