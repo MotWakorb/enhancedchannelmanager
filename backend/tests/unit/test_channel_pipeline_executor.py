@@ -4372,10 +4372,11 @@ class TestAssignChannelProfileAction:
         # 5 enabled (from selection), 1 and 2 disabled (known universe).
         assert self._calls(self.client) == {5: True, 1: False, 2: False}
 
-    def test_empty_all_profile_ids_degrades_to_enable_selected_only(self):
-        """When the profile universe is empty (fetch failed / none configured),
-        the action enables the selected profiles and performs no disables —
-        never worse than the pre-fix behavior."""
+    def test_genuinely_empty_universe_degrades_to_enable_selected_only(self):
+        """A GENUINELY-empty universe ([] — zero profiles configured, a known
+        fact) enables the selected profiles and performs no disables. This is a
+        real, known universe, distinct from an UNAVAILABLE one (None), so it
+        still reports success — never worse than the pre-fix behavior."""
         executor = self._make_executor(all_profile_ids=[])
         exec_ctx = ExecutionContext()
         exec_ctx.current_channel_id = 99
@@ -4385,6 +4386,37 @@ class TestAssignChannelProfileAction:
 
         assert result.success is True
         assert self._calls(self.client) == {1: True, 2: True}
+
+    def test_unavailable_universe_fails_and_makes_no_calls(self):
+        """Bug 2 regression: an UNAVAILABLE universe (None sentinel — the engine
+        could not fetch the profile list) must NOT silently degrade to
+        enable-only-and-report-success. Exclusive membership is unprovable, so
+        the action FAILS and performs no profile writes (GH #720 / y3m6o.1)."""
+        executor = self._make_executor(all_profile_ids=None)
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1, 2]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is False
+        assert result.modified is False
+        assert "unavailable" in (result.error or "").lower()
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_default_construct_without_universe_fails(self):
+        """Constructing the executor WITHOUT a profile universe leaves the
+        universe unknown (None) — assign_channel_profile cannot prove
+        exclusivity and must fail rather than enable-only."""
+        executor = ActionExecutor(self.client)  # no all_profile_ids
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is False
+        self.client.update_profile_channel.assert_not_called()
 
     def test_dry_run_makes_no_client_calls(self):
         executor = self._make_executor(all_profile_ids=[1, 2, 3])
@@ -4419,8 +4451,11 @@ class TestAssignChannelProfileAction:
         assert result.success is False
         self.client.update_profile_channel.assert_not_called()
 
-    def test_one_failing_profile_does_not_abort_the_rest(self):
-        """A per-profile update failure is logged and skipped, not fatal."""
+    def test_failing_disable_does_not_abort_but_reports_partial_failure(self):
+        """Bug 1 regression: a per-profile DISABLE failure is best-effort
+        continued (every other profile is still attempted) BUT the action no
+        longer reports success — the failed profile id is surfaced so the
+        incomplete reconciliation is observable and retryable (GH #720)."""
         def side_effect(pid, channel_id, body):
             if pid == 2:
                 raise RuntimeError("boom")
@@ -4434,8 +4469,108 @@ class TestAssignChannelProfileAction:
 
         result = self._run(executor, action, exec_ctx)
 
-        # Overall still succeeds; profiles 1 and 3 were still attempted.
+        # Best-effort continuation: profiles 1, 2, and 3 were all attempted.
+        attempted = {c.args[0] for c in self.client.update_profile_channel.call_args_list}
+        assert {1, 2, 3} == attempted
+        # But exclusivity is UNPROVEN — the disable of profile 2 failed.
+        assert result.success is False
+        assert "2" in (result.error or "")
+
+    def test_failing_enable_reports_partial_failure(self):
+        """Bug 1 regression: a failing ENABLE (of a selected profile) likewise
+        yields a non-success result surfacing the failed id."""
+        def side_effect(pid, channel_id, body):
+            if pid == 1:  # 1 is the SELECTED (enable) profile
+                raise RuntimeError("enable boom")
+            return None
+        self.client.update_profile_channel = AsyncMock(side_effect=side_effect)
+
+        executor = self._make_executor(all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is False
+        assert "1" in (result.error or "")
+        # Still modified — the successful disables of 2 and 3 did land.
+        assert result.modified is True
+
+    def test_total_failure_reports_not_success(self):
+        """Bug 1 regression: when EVERY profile update fails the action reports
+        failure with all failed ids surfaced."""
+        self.client.update_profile_channel = AsyncMock(
+            side_effect=RuntimeError("all boom")
+        )
+
+        executor = self._make_executor(all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is False
+        for pid in ("1", "2", "3"):
+            assert pid in (result.error or "")
+
+    def test_all_succeed_reports_success_with_counts(self):
+        """The happy path is unchanged: all profile updates succeed => success
+        with correct enabled/disabled counts in the description."""
+        executor = self._make_executor(all_profile_ids=[1, 2, 3, 4])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1, 2]}
+
+        result = self._run(executor, action, exec_ctx)
+
         assert result.success is True
+        assert "enabled in 2" in result.description
+        assert "disabled in 2" in result.description
+
+    def test_helper_none_universe_coerces_to_empty_enables_selected_only(self):
+        """Nit #2(a): pin the defensive None -> [] coercion INSIDE the helper.
+
+        Callers gate on availability before invoking the helper, so it is never
+        reached with None in practice — but if it is, it must not crash: it
+        coerces the unavailable universe to an empty one, enables the selected
+        profiles only (nothing to disable), and returns a ProfileMembershipResult
+        with no failures."""
+        from channel_pipeline_executor import ProfileMembershipResult
+
+        executor = self._make_executor(all_profile_ids=None)
+        result = asyncio.get_event_loop().run_until_complete(
+            executor._apply_exclusive_profile_membership(99, [1, 2])
+        )
+
+        assert isinstance(result, ProfileMembershipResult)
+        assert result.enabled_count == 2
+        assert result.disabled_count == 0
+        assert result.failed_profile_ids == []
+        assert self._calls(self.client) == {1: True, 2: True}
+
+    def test_both_enable_and_disable_failing_surfaces_all_failed_ids(self):
+        """Nit #2(b): a mixed failure where BOTH an enable (selected id 1) and a
+        disable (unselected id 3) raise in the same invocation — both ids appear
+        in the failure surface and the action reports non-success."""
+        def side_effect(pid, channel_id, body):
+            if pid in (1, 3):  # 1 = selected (enable), 3 = unselected (disable)
+                raise RuntimeError("boom")
+            return None
+        self.client.update_profile_channel = AsyncMock(side_effect=side_effect)
+
+        executor = self._make_executor(all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is False
+        assert "1" in (result.error or "")
+        assert "3" in (result.error or "")
+        # All three were still attempted (best-effort continuation).
         attempted = {c.args[0] for c in self.client.update_profile_channel.call_args_list}
         assert {1, 2, 3} == attempted
 
@@ -4468,6 +4603,40 @@ class TestAssignDefaultProfiles:
         settings = MagicMock()
         settings.default_channel_profile_ids = []
         executor = ActionExecutor(client, settings=settings, all_profile_ids=[1, 2, 3])
+
+        desc = asyncio.get_event_loop().run_until_complete(
+            executor._assign_default_profiles(99)
+        )
+
+        assert desc == ""
+        client.update_profile_channel.assert_not_called()
+
+    def test_unavailable_universe_is_benign_noop(self):
+        """Default-profile assignment is a best-effort enhancement, NOT the
+        user's explicit rule action: an unavailable universe (None) must stay a
+        benign no-op here (return ""), never a hard failure — unlike the
+        explicit assign_channel_profile action, which fails on None."""
+        client = MagicMock()
+        client.update_profile_channel = AsyncMock()
+        settings = MagicMock()
+        settings.default_channel_profile_ids = [1, 3]
+        executor = ActionExecutor(client, settings=settings, all_profile_ids=None)
+
+        desc = asyncio.get_event_loop().run_until_complete(
+            executor._assign_default_profiles(99)
+        )
+
+        assert desc == ""
+        client.update_profile_channel.assert_not_called()
+
+    def test_genuinely_empty_universe_is_benign_noop(self):
+        """A genuinely-empty universe ([]) is likewise a benign no-op for
+        default-profile assignment."""
+        client = MagicMock()
+        client.update_profile_channel = AsyncMock()
+        settings = MagicMock()
+        settings.default_channel_profile_ids = [1, 3]
+        executor = ActionExecutor(client, settings=settings, all_profile_ids=[])
 
         desc = asyncio.get_event_loop().run_until_complete(
             executor._assign_default_profiles(99)
