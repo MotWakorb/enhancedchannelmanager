@@ -25,8 +25,9 @@
  * open state and outside-click/Escape handling instead, following the same
  * approach `CustomSelect.tsx` already uses for its portaled menu.
  */
-import { useState, useRef, useEffect, useMemo, useId, useCallback, useLayoutEffect } from 'react';
+import { useState, useRef, useEffect, useMemo, useId, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useDropdownViewport } from '../hooks/useDropdownViewport';
 import './GroupMultiSelectDropdown.css';
 
 export interface GroupMultiSelectOption {
@@ -60,9 +61,10 @@ export interface GroupMultiSelectDropdownProps {
   className?: string;
 }
 
-const MENU_GAP_PX = 4;
-const VIEWPORT_MARGIN_PX = 8;
 const MENU_MAX_HEIGHT_PX = 300;
+// Search + Select/Clear chrome (~84px) plus one full checkbox option and
+// breathing room. Below this, the menu is visually open but not operable.
+const MENU_MIN_USABLE_HEIGHT_PX = 124;
 
 export function GroupMultiSelectDropdown({
   options,
@@ -79,47 +81,20 @@ export function GroupMultiSelectDropdown({
   const reactId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [menuStyle, setMenuStyle] = useState({ top: 0, left: 0, width: 0, maxHeight: MENU_MAX_HEIGHT_PX });
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const updateMenuPosition = useCallback(() => {
-    if (!isOpen || !buttonRef.current) return;
-
-    const rect = buttonRef.current.getBoundingClientRect();
-    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - MENU_GAP_PX - VIEWPORT_MARGIN_PX);
-    const spaceAbove = Math.max(0, rect.top - MENU_GAP_PX - VIEWPORT_MARGIN_PX);
-    const openAbove = spaceBelow < MENU_MAX_HEIGHT_PX && spaceAbove > spaceBelow;
-    const availableHeight = openAbove ? spaceAbove : spaceBelow;
-    const maxHeight = Math.min(MENU_MAX_HEIGHT_PX, availableHeight);
-    const top = openAbove
-      ? Math.max(VIEWPORT_MARGIN_PX, rect.top - MENU_GAP_PX - maxHeight)
-      : rect.bottom + MENU_GAP_PX;
-
-    setMenuStyle({ top, left: rect.left, width: rect.width, maxHeight });
-  }, [isOpen]);
-
-  // The menu is portaled to document.body, so it must be positioned against
-  // the browser viewport rather than the modal's scroll box. Layout effect
-  // prevents a visible frame at the initial 0,0 position.
-  useLayoutEffect(() => {
-    updateMenuPosition();
-  }, [updateMenuPosition]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    window.addEventListener('resize', updateMenuPosition);
-    // Capture scrolls from the modal body as well as the window itself.
-    window.addEventListener('scroll', updateMenuPosition, true);
-    return () => {
-      window.removeEventListener('resize', updateMenuPosition);
-      window.removeEventListener('scroll', updateMenuPosition, true);
-    };
-  }, [isOpen, updateMenuPosition]);
+  const closeForUnavailablePlacement = useCallback(() => setIsOpen(false), []);
+  const menuStyle = useDropdownViewport({
+    isOpen,
+    triggerRef: buttonRef,
+    desiredHeight: MENU_MAX_HEIGHT_PX,
+    minimumUsableHeight: MENU_MIN_USABLE_HEIGHT_PX,
+    onPlacementUnavailable: closeForUnavailablePlacement,
+  });
 
   useEffect(() => {
     if (isOpen) {

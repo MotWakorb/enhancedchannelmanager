@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
+import { useDropdownViewport } from '../hooks/useDropdownViewport';
 import './CustomSelect.css';
 
 export interface SelectOption {
@@ -29,10 +30,10 @@ export function CustomSelect({
   searchable = false,
   searchPlaceholder = 'Search...',
 }: CustomSelectProps) {
+  const listboxId = `${useId()}-custom-select-listbox`;
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
-  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -66,17 +67,20 @@ export function CustomSelect({
     }
   }, [isOpen]);
 
-  // Calculate menu position when opening
-  useEffect(() => {
-    if (isOpen && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      setMenuPosition({
-        top: rect.bottom + 4,
-        left: rect.left,
-        width: rect.width,
-      });
-    }
-  }, [isOpen]);
+  const closeForUnavailablePlacement = useCallback(() => {
+    setIsOpen(false);
+    setSearchQuery('');
+    setHighlightedIndex(-1);
+  }, []);
+  const menuPosition = useDropdownViewport({
+    isOpen,
+    triggerRef,
+    desiredHeight: 250,
+    // Search chrome plus one complete option; non-searchable menus need less,
+    // but using the stronger bound keeps placement stable if search is toggled.
+    minimumUsableHeight: searchable ? 88 : 40,
+    onPlacementUnavailable: closeForUnavailablePlacement,
+  });
 
   // Focus search input when dropdown opens
   useEffect(() => {
@@ -145,6 +149,7 @@ export function CustomSelect({
         setIsOpen(false);
         setSearchQuery('');
         setHighlightedIndex(-1);
+        triggerRef.current?.focus();
         break;
       case 'ArrowDown':
         event.preventDefault();
@@ -213,6 +218,7 @@ export function CustomSelect({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
+        aria-controls={isOpen ? listboxId : undefined}
       >
         <span className="custom-select-value">
           {selectedOption ? selectedOption.label : placeholder}
@@ -226,12 +232,14 @@ export function CustomSelect({
         <div
           ref={menuRef}
           className="custom-select-menu"
+          id={listboxId}
           role="listbox"
           style={{
             position: 'fixed',
             top: menuPosition.top,
             left: menuPosition.left,
             width: menuPosition.width,
+            maxHeight: menuPosition.maxHeight,
             minWidth: 200,
           }}
         >
@@ -247,6 +255,7 @@ export function CustomSelect({
                   setHighlightedIndex(0);
                 }}
                 placeholder={searchPlaceholder}
+                aria-label="Search options"
                 onClick={(e) => e.stopPropagation()}
               />
               {searchQuery && (

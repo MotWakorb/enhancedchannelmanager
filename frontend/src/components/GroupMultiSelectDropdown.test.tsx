@@ -3,7 +3,7 @@
  * / GH #677): collapsed multi-select replacing unbounded inline checkbox
  * lists at ActionEditor / RuleBuilder / BulkRuleSettingsModal.
  */
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -14,6 +14,13 @@ const OPTIONS: GroupMultiSelectOption[] = [
   { id: 2, name: 'News' },
   { id: 3, name: 'Movies' },
 ];
+
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    x: 24, y: 100, top: 100, right: 244, bottom: 136, left: 24, width: 220, height: 36,
+    toJSON: () => ({}),
+  } as DOMRect);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -40,7 +47,7 @@ describe('GroupMultiSelectDropdown', () => {
   };
 
   const setTriggerRect = (rect: Partial<DOMRect>) => {
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
       x: 24,
       y: 100,
       top: 100,
@@ -94,7 +101,7 @@ describe('GroupMultiSelectDropdown', () => {
     await waitFor(() => expect(getMenu()).toHaveStyle({ top: '140px', maxHeight: '300px' }));
   });
 
-  it('does not add the shared dropdown margin on top of the measured portal gap', async () => {
+  it('neutralizes the shared dropdown margin and keeps one measured 4px portal gap', async () => {
     const user = userEvent.setup();
     setViewportHeight(800);
     setTriggerRect({ top: 100, bottom: 136 });
@@ -104,10 +111,8 @@ describe('GroupMultiSelectDropdown', () => {
 
     await waitFor(() => {
       const menu = getMenu();
-      const inheritedMargin = Number.parseFloat(getComputedStyle(menu).marginTop || '0');
       expect(menu.style.marginTop).toBe('0px');
-      expect(inheritedMargin).toBe(0);
-      expect(Number.parseFloat(menu.style.top) + inheritedMargin).toBe(140);
+      expect(Number.parseFloat(menu.style.top) - 136).toBe(4);
     });
   });
 
@@ -122,35 +127,51 @@ describe('GroupMultiSelectDropdown', () => {
     await waitFor(() => expect(getMenu()).toHaveStyle({ top: '196px', maxHeight: '300px' }));
   });
 
-  it('clamps the menu height to viewport space and recomputes on resize and capture scroll', async () => {
+  it('uses the short viewport so menu chrome still leaves room for options', async () => {
     const user = userEvent.setup();
     setViewportHeight(220);
-    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
       x: 24, y: 100, top: 100, right: 244, bottom: 136, left: 24, width: 220, height: 36,
       toJSON: () => ({}),
     } as DOMRect);
     renderDropdown();
 
     await user.click(screen.getByRole('button', { name: 'Exclude target groups' }));
-    await waitFor(() => expect(getMenu()).toHaveStyle({ top: '8px', maxHeight: '88px' }));
+    await waitFor(() => expect(getMenu()).toHaveStyle({ top: '8px', maxHeight: '204px' }));
 
+    const optionsPane = screen.getByRole('group', { name: 'Exclude target groups' });
+    expect(Number.parseFloat(getMenu().style.maxHeight)).toBeGreaterThanOrEqual(124);
+    expect(optionsPane).toHaveClass('filter-dropdown-options');
+  });
+
+  it('recomputes on resize and capture scroll', async () => {
+    const user = userEvent.setup();
     setViewportHeight(800);
-    rectSpy.mockReturnValue({
+    const rectSpy = vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
       x: 24, y: 300, top: 300, right: 244, bottom: 336, left: 24, width: 220, height: 36,
       toJSON: () => ({}),
     } as DOMRect);
-    fireEvent(window, new Event('resize'));
+    renderDropdown();
+
+    await user.click(screen.getByRole('button', { name: 'Exclude target groups' }));
     await waitFor(() => expect(getMenu()).toHaveStyle({ top: '340px', maxHeight: '300px' }));
 
     rectSpy.mockReturnValue({
       x: 24, y: 700, top: 700, right: 244, bottom: 736, left: 24, width: 220, height: 36,
       toJSON: () => ({}),
     } as DOMRect);
-    fireEvent.scroll(document, { target: { scrollTop: 1 } });
+    fireEvent(window, new Event('resize'));
     await waitFor(() => expect(getMenu()).toHaveStyle({ top: '396px', maxHeight: '300px' }));
+
+    rectSpy.mockReturnValue({
+      x: 24, y: 200, top: 200, right: 244, bottom: 236, left: 24, width: 220, height: 36,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.scroll(document, { target: { scrollTop: 1 } });
+    await waitFor(() => expect(getMenu()).toHaveStyle({ top: '240px', maxHeight: '300px' }));
   });
 
-  it('keeps the final option reachable and updates the summary in an overflowing many-option menu', async () => {
+  it('wires selection through an overflowed options pane and updates the summary', async () => {
     const user = userEvent.setup();
     const manyOptions = Array.from({ length: 20 }, (_, index) => ({
       id: index + 1,
@@ -192,6 +213,29 @@ describe('GroupMultiSelectDropdown', () => {
     const checkboxes = within(optionsPane).getAllByRole('checkbox');
     expect(checkboxes[checkboxes.length - 1]).toBeChecked();
     expect(trigger).toHaveTextContent('1 group selected');
+  });
+
+  it.each([
+    { top: -80, bottom: -20 },
+    { top: 820, bottom: 856 },
+  ])('closes when capture scroll moves the trigger fully out of view ($top)', async ({ top, bottom }) => {
+    const user = userEvent.setup();
+    setViewportHeight(800);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 24, y: 100, top: 100, right: 244, bottom: 136, left: 24, width: 220, height: 36,
+      toJSON: () => ({}),
+    } as DOMRect);
+    renderDropdown();
+    await user.click(screen.getByRole('button', { name: 'Exclude target groups' }));
+    expect(getMenu()).toBeInTheDocument();
+
+    rectSpy.mockReturnValue({
+      x: 24, y: top, top, right: 244, bottom, left: 24, width: 220, height: 36,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.scroll(document);
+
+    await waitFor(() => expect(document.querySelector('.group-multiselect-menu')).not.toBeInTheDocument());
   });
 
   it('reflects selectedIds as checked checkboxes in option order', async () => {
