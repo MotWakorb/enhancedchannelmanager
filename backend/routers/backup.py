@@ -17,7 +17,7 @@ import stat
 import tempfile
 import time
 import zipfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -76,7 +76,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.17.6-0146"
+APP_VERSION = "0.17.6-0147"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2510,6 +2510,10 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 description=item.get("description"),
                 enabled=item.get("enabled", True),
                 priority=item.get("priority", 0),
+                active_from=(date.fromisoformat(item["active_from"])
+                             if item.get("active_from") else None),
+                active_until=(date.fromisoformat(item["active_until"])
+                              if item.get("active_until") else None),
                 m3u_account_id=item.get("m3u_account_id"),
                 target_group_id=item.get("target_group_id"),
                 conditions=json.dumps(item["conditions"]) if item.get("conditions") else "[]",

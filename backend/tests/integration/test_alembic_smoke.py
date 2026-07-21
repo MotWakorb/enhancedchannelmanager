@@ -1789,6 +1789,14 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_rules "
                     "ADD COLUMN fold_match_key BOOLEAN NOT NULL DEFAULT 0"
                 ))
+                # 0038 (GH #646 / enhancedchannelmanager-6lhmb): optional
+                # inclusive UTC date bounds on rules.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules ADD COLUMN active_from DATE"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules ADD COLUMN active_until DATE"
+                ))
                 # 0033 (enhancedchannelmanager-7wuhd): persisted event_sync run
                 # summary + pure-event_sync kind flag on the pre-0005
                 # auto_creation_executions table — create_all() can't add

@@ -5,7 +5,9 @@ Tests the ChannelPipelineEngine class which orchestrates the entire auto-creatio
 pipeline, coordinating rules, streams, and executions.
 """
 from unittest.mock import MagicMock, AsyncMock, patch
+from datetime import datetime, timedelta
 import asyncio
+import json
 import pytest
 
 from channel_pipeline_engine import (
@@ -138,7 +140,7 @@ class TestChannelPipelineEngineLoadRules:
         self.client = MagicMock()
         self.engine = ChannelPipelineEngine(self.client)
 
-    def _make_rule(self, name: str, priority: int, enabled: bool = True):
+    def _make_rule(self, name: str, priority: int, enabled: bool = True, **kwargs):
         """Create a minimal ChannelPipelineRule for seeding."""
         from models import ChannelPipelineRule
         import json
@@ -148,7 +150,29 @@ class TestChannelPipelineEngineLoadRules:
             priority=priority,
             conditions=json.dumps([]),
             actions=json.dumps([]),
+            **kwargs,
         )
+
+    def test_load_rules_only_inside_inclusive_active_window(self, test_session):
+        today = datetime.utcnow().date()
+        rules = [
+            self._make_rule("No window", 0),
+            self._make_rule("Starts today", 1, active_from=today),
+            self._make_rule("Ends today", 2, active_until=today),
+            self._make_rule("Future", 3, active_from=today + timedelta(days=1)),
+            self._make_rule("Expired", 4, active_until=today - timedelta(days=1)),
+        ]
+        test_session.add_all(rules)
+        test_session.commit()
+
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
+            loaded = asyncio.get_event_loop().run_until_complete(
+                self.engine._load_rules()
+            )
+
+        assert [rule.name for rule in loaded] == [
+            "No window", "Starts today", "Ends today"
+        ]
 
     def test_load_rules_all_enabled(self, test_session):
         """Loads only enabled rules, sorted by priority ascending.
@@ -311,8 +335,32 @@ class TestChannelPipelineEngineRunPipeline:
         )
 
         assert result["success"] is True
-        assert result["message"] == "No enabled rules to process"
+        assert result["message"] == "No active enabled rules to process"
         assert result["streams_evaluated"] == 0
+
+    def test_selected_expired_rule_is_noop_without_undo_or_writes(self, test_session):
+        """Expiry gates execution; it never reverses effects from prior runs."""
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule(
+            name="Expired selected rule", enabled=True, priority=0,
+            active_until=datetime.utcnow().date() - timedelta(days=1),
+            conditions=json.dumps([{"type": "always"}]),
+            actions=json.dumps([{"type": "create_channel", "name_template": "x"}]),
+        )
+        test_session.add(rule)
+        test_session.commit()
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
+            result = asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(rule_ids=[rule.id], triggered_by="manual")
+            )
+
+        assert result["message"] == "No active enabled rules to process"
+        self.client.create_channel.assert_not_awaited()
+        for method_name in ("update_channel", "delete_channel"):
+            method = getattr(self.client, method_name, None)
+            if method is not None:
+                method.assert_not_called()
 
     @patch("channel_pipeline_engine.get_session")
     def test_run_pipeline_dry_run(self, mock_get_session):
@@ -377,7 +425,7 @@ class TestChannelPipelineEngineRunPipeline:
         )
 
         assert result["success"] is True
-        assert result["message"] == "No enabled rules to process"
+        assert result["message"] == "No active enabled rules to process"
 
 
 def _route_rollback_queries(mock_session, mock_execution):

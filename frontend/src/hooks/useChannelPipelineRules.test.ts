@@ -446,6 +446,8 @@ describe('useChannelPipelineRules', () => {
         normalization_group_ids: [1, 2, 3],
         skip_struck_streams: true,
         orphan_action: 'delete',
+        active_from: '2026-09-01',
+        active_until: '2027-02-15',
       });
       mockDataStore.channelPipelineRules.push(original);
 
@@ -475,6 +477,8 @@ describe('useChannelPipelineRules', () => {
       expect(duplicate!.normalization_group_ids).toEqual([1, 2, 3]);
       expect(duplicate!.skip_struck_streams).toBe(true);
       expect(duplicate!.orphan_action).toBe('delete');
+      expect(duplicate!.active_from).toBe('2026-09-01');
+      expect(duplicate!.active_until).toBe('2027-02-15');
       expect(result.current.rules).toHaveLength(2);
     });
 

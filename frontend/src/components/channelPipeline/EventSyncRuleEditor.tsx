@@ -287,6 +287,8 @@ export function EventSyncRuleEditor({
   const [name, setName] = useState(rule?.name || '');
   const [description, setDescription] = useState(rule?.description || '');
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
+  const [activeFrom, setActiveFrom] = useState(rule?.active_from ?? '');
+  const [activeUntil, setActiveUntil] = useState(rule?.active_until ?? '');
 
   // Scoping (bead 38dzi): provider-scoped master + secondary. Initialize from
   // the nested `master` / `secondary` when present; otherwise migrate the flat
@@ -587,6 +589,9 @@ export function EventSyncRuleEditor({
   }, [masterScope, secondaryScopes, groupName]);
 
   const validationError: string | null = (() => {
+    if (activeFrom && activeUntil && activeUntil < activeFrom) {
+      return 'End date must be on or after start date';
+    }
     if (masterScope == null) return 'Pick a master group first';
     // bead 3ux85: no separate secondary is required when the master group is
     // itself the stream source (include_master_group_streams) — the
@@ -847,6 +852,9 @@ export function EventSyncRuleEditor({
         name: name.trim(),
         description: description.trim() || undefined,
         enabled,
+        ...(activeFrom || activeUntil || rule?.active_from != null || rule?.active_until != null
+          ? { active_from: activeFrom || null, active_until: activeUntil || null }
+          : {}),
         // Placeholder condition/action: the engine ignores both for the
         // event_sync kind, but the rule schema requires at least one of each
         // (same convention as the backend's own event_sync tests).
@@ -927,6 +935,8 @@ export function EventSyncRuleEditor({
       name !== (rule?.name || '') ||
       description !== (rule?.description || '') ||
       enabled !== (rule?.enabled ?? true) ||
+      activeFrom !== (rule?.active_from ?? '') ||
+      activeUntil !== (rule?.active_until ?? '') ||
       !sameScope(masterScope, initialMasterScope(config)) ||
       !sameScopes(secondaryScopes, initialSecondaryScopes(config)) ||
       !sameIds(selectedPatternIds, initial.patternIds) ||
@@ -948,7 +958,7 @@ export function EventSyncRuleEditor({
       streamSortOrder !== (rule?.stream_sort_order === 'asc' ? 'asc' : 'desc')
     );
   }, [
-    name, description, enabled, masterScope, secondaryScopes, selectedPatternIds,
+    name, description, enabled, activeFrom, activeUntil, masterScope, secondaryScopes, selectedPatternIds,
     customShared, groupOverrides, timeWindowText, thresholdText, enforceTimeWindow,
     autoRun, refreshProvidersBeforeRun, includeMasterGroupStreams, assumeCurrentDate,
     demoteStaleDateless, parseMasterFromStream, promoteUnmatched,
@@ -1340,6 +1350,33 @@ export function EventSyncRuleEditor({
                   />
                   <span>Enabled</span>
                 </label>
+                <fieldset className="rule-active-window">
+                  <legend>Active date window (optional, UTC)</legend>
+                  <div className="rule-active-window-fields">
+                    <div className="form-group">
+                      <label htmlFor={`${id}-active-from`}>Start date</label>
+                      <input
+                        id={`${id}-active-from`}
+                        type="date"
+                        value={activeFrom}
+                        onChange={e => setActiveFrom(e.target.value)}
+                        disabled={isLoading}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor={`${id}-active-until`}>End date</label>
+                      <input
+                        id={`${id}-active-until`}
+                        type="date"
+                        value={activeUntil}
+                        min={activeFrom || undefined}
+                        onChange={e => setActiveUntil(e.target.value)}
+                        disabled={isLoading}
+                      />
+                    </div>
+                  </div>
+                  <span className="form-hint">Dates are inclusive UTC calendar days. Blank dates are open-ended; expiry stops future runs but does not undo prior changes.</span>
+                </fieldset>
               </div>
 
               {/* Group visibility (bead x82s3): shared toggle for both the

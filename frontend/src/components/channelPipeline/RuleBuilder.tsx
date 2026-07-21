@@ -49,6 +49,7 @@ export interface RuleBuilderProps {
 
 interface ValidationErrors {
   name?: string;
+  activeWindow?: string;
   conditions?: string;
   actions?: string;
 }
@@ -147,6 +148,8 @@ export function RuleBuilder({
   const [description, setDescription] = useState(rule?.description || '');
   const [priority, ] = useState(rule?.priority ?? 0);
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
+  const [activeFrom, setActiveFrom] = useState(rule?.active_from ?? '');
+  const [activeUntil, setActiveUntil] = useState(rule?.active_until ?? '');
   const [runOnRefresh, setRunOnRefresh] = useState(rule?.run_on_refresh ?? false);
   const [stopOnFirstMatch, setStopOnFirstMatch] = useState(rule?.stop_on_first_match ?? true);
   const [sortField, setSortField] = useState(rule?.sort_field ?? '');
@@ -247,6 +250,9 @@ export function RuleBuilder({
     description: description.trim() || undefined,
     enabled,
     priority,
+    ...(activeFrom || activeUntil || rule?.active_from != null || rule?.active_until != null
+      ? { active_from: activeFrom || null, active_until: activeUntil || null }
+      : {}),
     conditions,
     actions,
     run_on_refresh: runOnRefresh,
@@ -267,11 +273,11 @@ export function RuleBuilder({
     allow_manual_channel_merge: allowManualChannelMerge,
     fold_match_key: foldMatchKey,
   }), [
-    name, description, enabled, priority, conditions, actions, runOnRefresh,
+    name, description, enabled, priority, activeFrom, activeUntil, conditions, actions, runOnRefresh,
     stopOnFirstMatch, sortField, sortOrder, probeOnSort, sortRegex, streamSortField,
     streamSortOrder, qualityTieBreakOrder, qualityM3uTieBreakEnabled, normalizationGroupIds,
     skipStruckStreams, orphanAction, matchScopeTargetGroup, matchScopeGroupId,
-    allowManualChannelMerge, foldMatchKey,
+    allowManualChannelMerge, foldMatchKey, rule,
   ]);
 
   // FULL-FIELD dirty check (bead m1s38.3 data-loss fix). Replaces the old
@@ -320,6 +326,9 @@ export function RuleBuilder({
     if (!name.trim()) {
       newErrors.name = 'Name is required';
     }
+    if (activeFrom && activeUntil && activeUntil < activeFrom) {
+      newErrors.activeWindow = 'End date must be on or after start date';
+    }
 
     if (conditions.length === 0) {
       newErrors.conditions = 'At least one condition is required';
@@ -352,7 +361,7 @@ export function RuleBuilder({
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0 ? null : newErrors;
-  }, [name, conditions, actions]);
+  }, [name, activeFrom, activeUntil, conditions, actions]);
 
   // Advisory-only save hint shown in the rail. Deliberately NOT tied to the
   // Save button's disabled state (Save stays clickable and validates on click).
@@ -525,11 +534,14 @@ export function RuleBuilder({
         {foldMatchKey && <> Merge matching ignores spacing &amp; case differences.</>}
         {stopOnFirstMatch && <> <strong>Stops after the first matching rule.</strong></>}
         {runOnRefresh && <> Runs automatically after each M3U refresh.</>}
+        {(activeFrom || activeUntil) && (
+          <> Active {activeFrom ? `from ${activeFrom}` : 'immediately'} through {activeUntil || 'no end date'} (UTC).</>
+        )}
       </>
     );
   }, [
     conditions, actions, sortField, streamSortField, orphansDeleted, orphanAction,
-    allowManualChannelMerge, foldMatchKey, stopOnFirstMatch, runOnRefresh,
+    allowManualChannelMerge, foldMatchKey, stopOnFirstMatch, runOnRefresh, activeFrom, activeUntil,
   ]);
 
   return (
@@ -588,6 +600,40 @@ export function RuleBuilder({
               aria-label="Description"
             />
           </div>
+          <fieldset className="rule-active-window">
+            <legend>Active date window (optional, UTC)</legend>
+            <div className="rule-active-window-fields">
+              <div className="form-field">
+                <label htmlFor={`${id}-active-from`}>Start date</label>
+                <input
+                  id={`${id}-active-from`}
+                  type="date"
+                  value={activeFrom}
+                  onChange={e => setActiveFrom(e.target.value)}
+                  disabled={isLoading}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor={`${id}-active-until`}>End date</label>
+                <input
+                  id={`${id}-active-until`}
+                  type="date"
+                  value={activeUntil}
+                  min={activeFrom || undefined}
+                  onChange={e => setActiveUntil(e.target.value)}
+                  disabled={isLoading}
+                  aria-invalid={!!errors.activeWindow}
+                  aria-describedby={errors.activeWindow ? `${id}-active-window-error` : undefined}
+                />
+              </div>
+            </div>
+            {errors.activeWindow && (
+              <div id={`${id}-active-window-error`} className="field-error" role="alert">
+                {errors.activeWindow}
+              </div>
+            )}
+            <span className="form-hint">Dates are inclusive UTC calendar days. Leaving a date blank keeps that side open; expiry stops future runs but does not undo prior changes.</span>
+          </fieldset>
         </div>
 
         {/* True step wizard strip (bead 09x38.10) — pills drive the single
