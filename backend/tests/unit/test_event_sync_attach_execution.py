@@ -1606,6 +1606,9 @@ class TestWatermarkTaskAutoRunInclusion:
     def test_only_date_gated_rules_logs_window_guidance(
         self, db_session_factory, caplog
     ):
+        from log_throttle import reset
+
+        reset("date_gated_refresh:auto_creation")
         _add_rule(
             db_session_factory, name="Expired standard", run_on_refresh=True,
             active_until=date(2000, 1, 1),
@@ -1614,9 +1617,14 @@ class TestWatermarkTaskAutoRunInclusion:
             result, run_pipeline, _ = _execute_watermark_task(
                 db_session_factory, _ENGINE_NOOP_RESULT
             )
+            second, second_run, _ = _execute_watermark_task(
+                db_session_factory, _ENGINE_NOOP_RESULT
+            )
         run_pipeline.assert_not_awaited()
+        second_run.assert_not_awaited()
         assert "active in their UTC date windows" in result.message
-        assert "outside their active UTC date windows" in caplog.text
+        assert "active in their UTC date windows" in second.message
+        assert caplog.text.count("outside their active UTC date windows") == 1
         assert "enable run_on_refresh" not in caplog.text
 
     def test_opted_in_event_sync_rule_alone_fires_the_watermark_run(

@@ -270,14 +270,18 @@ class ChannelPipelineTask(TaskScheduler):
             # after the refresh?" is answerable from the logs instead of being
             # DEBUG-only (vkktd.1). The throttled-off ticks keep the original
             # DEBUG so debug-level readers still see every tick.
-            if date_gated:
+            if date_gated and should_log(
+                "date_gated_refresh:%s" % self.task_id
+            ):
                 logger.info(
                     "[%s] Refresh watermark %s is pending, but all enabled "
                     "run_on_refresh/auto_run rules are outside their active UTC "
                     "date windows — matching will resume when a rule is in-window",
                     self.task_id, refresh_at,
                 )
-            elif should_log("no_run_on_refresh_rule:%s" % self.task_id):
+            elif not date_gated and should_log(
+                "no_run_on_refresh_rule:%s" % self.task_id
+            ):
                 logger.info(
                     "[%s] Refresh watermark %s is pending but NO enabled "
                     "run_on_refresh rule (or auto_run event_sync rule) exists — "
