@@ -2751,15 +2751,22 @@ class ActionExecutor:
             )
 
         try:
-            for profile_id in channel_profile_ids:
-                await self.client.update_profile_channel(
-                    profile_id, exec_ctx.current_channel_id, {"enabled": True}
-                )
+            # Dispatcharr auto-joins every newly-created channel to ALL channel
+            # profiles by default, so honoring a selection is SUBTRACTIVE: enable
+            # the selected profiles AND disable the channel in every OTHER known
+            # profile. An enable-only loop is a no-op — the channel stays in
+            # every profile (GH #720 / y3m6o).
+            enabled_count, disabled_count = await self._apply_exclusive_profile_membership(
+                exec_ctx.current_channel_id, channel_profile_ids
+            )
 
             return ActionResult(
                 success=True,
                 action_type=action.type,
-                description=f"Assigned {len(channel_profile_ids)} channel profile(s) to channel",
+                description=(
+                    f"Assigned channel profiles: enabled in {enabled_count}, "
+                    f"disabled in {disabled_count}"
+                ),
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
                 modified=True
@@ -3399,6 +3406,50 @@ class ActionExecutor:
             logger.debug("[AUTO-CREATE-EXEC] '%s' -> '%s'", channel_name, result)
         return result
 
+    async def _apply_exclusive_profile_membership(
+        self, channel_id: int, selected_ids: list[int]
+    ) -> tuple[int, int]:
+        """Make ``channel_id`` a member of exactly ``selected_ids``.
+
+        Dispatcharr auto-joins every newly-created channel to ALL channel
+        profiles, so honoring a profile selection is SUBTRACTIVE: for each
+        profile id in the FULL known universe, enable it if selected and
+        disable it otherwise. Returns ``(enabled_count, disabled_count)``.
+
+        The iteration order is the de-duplicated union of the known profile
+        universe and the selection, so selected profiles are always
+        (re)enabled — even if the fetched profile list is stale and missing
+        one — while every OTHER known profile is disabled. When
+        ``self._all_profile_ids`` is empty (fetch failed / no profiles), this
+        degrades to enabling the selected only — never worse than an
+        enable-only loop. A single failing profile is logged and skipped so
+        one bad update does not abort the rest.
+        """
+        selected = set(selected_ids)
+        ordered_ids = list(dict.fromkeys(list(self._all_profile_ids) + list(selected_ids)))
+
+        # These are "succeeded" counts, not "attempted" — they only increment
+        # when the per-profile update_profile_channel call returns without
+        # raising, so a run with a failing profile under-reports total intended
+        # membership. Callers use them for the human-readable description only.
+        enabled_count = 0
+        disabled_count = 0
+        for pid in ordered_ids:
+            enable = pid in selected
+            try:
+                await self.client.update_profile_channel(pid, channel_id, {"enabled": enable})
+                if enable:
+                    enabled_count += 1
+                else:
+                    disabled_count += 1
+            except Exception as e:
+                logger.warning(
+                    "[AUTO-CREATE-EXEC] Failed to update profile %s for channel %s: %s",
+                    pid, channel_id, e,
+                )
+
+        return enabled_count, disabled_count
+
     async def _assign_default_profiles(self, channel_id: int) -> str:
         """Assign default channel profiles to a newly created channel.
 
@@ -3410,20 +3461,15 @@ class ActionExecutor:
         if not self._all_profile_ids:
             return ""
 
-        default_ids = set(self._settings.default_channel_profile_ids)
-        enabled_count = 0
-        disabled_count = 0
-
-        for pid in self._all_profile_ids:
-            try:
-                if pid in default_ids:
-                    await self.client.update_profile_channel(pid, channel_id, {"enabled": True})
-                    enabled_count += 1
-                else:
-                    await self.client.update_profile_channel(pid, channel_id, {"enabled": False})
-                    disabled_count += 1
-            except Exception as e:
-                logger.warning("[AUTO-CREATE-EXEC] Failed to update profile %s for channel %s: %s", pid, channel_id, e)
+        # Intended behavior via the shared helper: a configured default id that
+        # is absent from the fetched profile universe is now (re)enabled rather
+        # than silently skipped (the pre-refactor loop only iterated the fetched
+        # universe). This is benign — arguably more correct, since an operator's
+        # explicit default should be honored even if the universe fetch is
+        # stale — and matches the union semantics used for per-rule selections.
+        enabled_count, disabled_count = await self._apply_exclusive_profile_membership(
+            channel_id, list(self._settings.default_channel_profile_ids)
+        )
 
         if enabled_count or disabled_count:
             desc = f"profiles: enabled in {enabled_count}, disabled in {disabled_count}"

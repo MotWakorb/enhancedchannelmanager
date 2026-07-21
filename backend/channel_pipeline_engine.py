@@ -1923,9 +1923,21 @@ class ChannelPipelineEngine:
         evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups,
                                        normalization_engine=norm_engine)
 
-        # Fetch all profile IDs if default profiles are configured
+        # Fetch all profile IDs if default profiles are configured OR any rule
+        # uses an assign_channel_profile action. Honoring a per-rule profile
+        # selection is subtractive (enable selected, disable the rest — GH #720
+        # / y3m6o), so the disable loop needs the full profile universe even
+        # when no GLOBAL default is set. Event-sync rules are in scope and are
+        # ChannelPipelineRule instances too, so their actions are checked the
+        # same way. Mirrors the needs_epg detection idiom below (dict vs object
+        # action shapes).
+        needs_profiles = bool(settings.default_channel_profile_ids) or any(
+            (a.get("type") if isinstance(a, dict) else getattr(a, "type", "")) == "assign_channel_profile"
+            for r in list(rules) + list(event_sync_rules or [])
+            for a in r.get_actions()
+        )
         all_profile_ids = []
-        if settings.default_channel_profile_ids:
+        if needs_profiles:
             try:
                 profiles = await self.client.get_channel_profiles()
                 all_profile_ids = [p["id"] for p in profiles]
