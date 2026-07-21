@@ -4916,6 +4916,119 @@ class TestProfileMembershipDiffOnlyWrites:
         assert results[1].modified is True   # channel 51
 
 
+class TestAssignChannelProfileProvenanceMarker:
+    """GH #720 Part B (decision 2b): assign_channel_profile stamps a durable
+    provenance marker into the channel's Dispatcharr custom_properties so the
+    group-level profile reconcile excludes it (pipeline action > group
+    selection). These tests pin that the marker is written, merged over
+    existing custom_properties, and never written in a dry run."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_profile_channel = AsyncMock()
+        self.client.update_channel = AsyncMock()
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="ESPN2 HD",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            group_name="Sports",
+        )
+
+    def _run(self, executor, action, exec_ctx):
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+    def _marker(self):
+        from services.profile_reconcile import (
+            PIPELINE_OWNERSHIP_MARKER_KEY,
+            PIPELINE_OWNERSHIP_MARKER_VALUE,
+        )
+        return PIPELINE_OWNERSHIP_MARKER_KEY, PIPELINE_OWNERSHIP_MARKER_VALUE
+
+    def test_marker_written_on_assign(self):
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is True
+        self.client.update_channel.assert_called_once()
+        cid, body = self.client.update_channel.call_args.args
+        assert cid == 99
+        key, value = self._marker()
+        assert body["custom_properties"][key] == value
+
+    def test_marker_merges_over_existing_custom_properties(self):
+        existing = [
+            {"id": 99, "name": "ESPN2 HD", "custom_properties": {"custom_epg_id": 7}}
+        ]
+        executor = ActionExecutor(
+            self.client, existing_channels=existing, all_profile_ids=[1, 2]
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        self._run(executor, action, exec_ctx)
+
+        _cid, body = self.client.update_channel.call_args.args
+        key, value = self._marker()
+        # Pre-existing key preserved, marker added.
+        assert body["custom_properties"]["custom_epg_id"] == 7
+        assert body["custom_properties"][key] == value
+
+    def test_marker_skipped_when_already_marked(self):
+        """Idempotent: a channel already carrying the ownership marker must NOT
+        trigger a redundant update_channel PATCH (decision 2b — the stamp is
+        write-once)."""
+        key, value = self._marker()
+        existing = [
+            {
+                "id": 99,
+                "name": "ESPN2 HD",
+                "custom_properties": {key: value, "custom_epg_id": 7},
+            }
+        ]
+        executor = ActionExecutor(
+            self.client, existing_channels=existing, all_profile_ids=[1, 2]
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is True
+        # Already marked — no marker write is issued.
+        self.client.update_channel.assert_not_called()
+
+    def test_no_marker_write_in_dry_run(self):
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2])
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        self._run(executor, action, exec_ctx)
+
+        self.client.update_channel.assert_not_called()
+
+    def test_marker_write_failure_does_not_fail_assignment(self):
+        self.client.update_channel = AsyncMock(side_effect=RuntimeError("boom"))
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        # Profiles were still applied; the marker failure is swallowed.
+        assert result.success is True
+
+
 class TestAssignDefaultProfiles:
     """Guards the _assign_default_profiles refactor (shared helper) — still
     enables the configured defaults and disables every other known profile."""

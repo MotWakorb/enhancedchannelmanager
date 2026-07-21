@@ -252,6 +252,17 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
 
+                # GH #720 Part B (bead y3m6o): reinforcing instant reconcile.
+                # An ECM-triggered refresh may have created auto-sync channels;
+                # re-apply each group's channel_profile_ids selection so the
+                # operator's choice takes effect immediately (the change monitor
+                # is the converging backbone). Best-effort — never fail refresh.
+                try:
+                    from services.profile_reconcile import reconcile_all_selected_groups
+                    await reconcile_all_selected_groups(client)
+                except Exception as e:
+                    logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, e)
+
                 # Send immediate digest if configured
                 try:
                     await send_immediate_digest(account_id)
@@ -292,6 +303,17 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
 
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
+
+                # GH #720 Part B (bead y3m6o): reinforcing instant reconcile.
+                # An ECM-triggered refresh may have created auto-sync channels;
+                # re-apply each group's channel_profile_ids selection so the
+                # operator's choice takes effect immediately (the change monitor
+                # is the converging backbone). Best-effort — never fail refresh.
+                try:
+                    from services.profile_reconcile import reconcile_all_selected_groups
+                    await reconcile_all_selected_groups(client)
+                except Exception as e:
+                    logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, e)
 
                 # Send immediate digest if configured
                 try:
@@ -1076,6 +1098,29 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         result = await client.update_m3u_group_settings(account_id, data)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[M3U] Updated group settings for account %s in %.1fms", account_id, elapsed_ms)
+
+        # GH #720 Part B (bead y3m6o, decision 3a): instant apply on save.
+        # Reconcile every edited group that carries a channel_profile_ids
+        # selection so the operator's profile choice takes effect immediately,
+        # without waiting for the next sync. Fetch group settings fresh (needed
+        # for Channel Group Override resolution). Best-effort — a reconcile
+        # failure must not fail the save the operator just made.
+        try:
+            from services.profile_reconcile import reconcile_group_profiles
+            edited_gids = [
+                gs.get("channel_group")
+                for gs in (data.get("group_settings") or [])
+                if isinstance(gs, dict) and gs.get("channel_group") is not None
+            ]
+            if edited_gids:
+                # Fetch fresh so Channel Group Override resolution and the
+                # stored selection reflect the just-saved state. reconcile_group_
+                # profiles no-ops any group without a selection (decision 1a).
+                fresh_settings = await client.get_all_m3u_group_settings()
+                for gid in edited_gids:
+                    await reconcile_group_profiles(client, fresh_settings, gid)
+        except Exception as e:
+            logger.warning("[M3U] Profile reconcile after group-settings save failed: %s", e)
 
         # Log to journal - compare before/after states for all settings
         group_settings = data.get("group_settings", [])

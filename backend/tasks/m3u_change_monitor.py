@@ -190,6 +190,27 @@ class M3UChangeMonitorTask(TaskScheduler):
             finally:
                 db.close()
 
+            # GH #720 Part B (bead y3m6o): converging backbone. Any M3U change
+            # — ECM- OR Dispatcharr-triggered — may have created auto-sync
+            # channels that Dispatcharr joined to EVERY profile. Re-apply each
+            # group's stored channel_profile_ids selection subtractively so the
+            # operator's choice sticks and profile drift self-heals. Idempotent
+            # and best-effort: a reconcile failure never fails the monitor poll.
+            if changes_detected > 0 and not self._cancel_requested:
+                try:
+                    from services.profile_reconcile import reconcile_all_selected_groups
+                    self._set_progress(status="reconciling_profiles")
+                    recon = await reconcile_all_selected_groups(client)
+                    if recon.get("groups_reconciled"):
+                        logger.info(
+                            "[%s] Profile reconcile: %s group(s), %s channel(s) scoped",
+                            self.task_id,
+                            recon.get("groups_reconciled"),
+                            recon.get("channels_scoped"),
+                        )
+                except Exception as e:
+                    logger.warning("[%s] Profile reconcile failed: %s", self.task_id, e)
+
             self._set_progress(
                 success_count=changes_detected,
                 status="completed" if not self._cancel_requested else "cancelled",

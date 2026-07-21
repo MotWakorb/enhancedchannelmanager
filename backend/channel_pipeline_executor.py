@@ -2941,6 +2941,12 @@ class ActionExecutor:
                 # NON-success (still ``modified``: the successful enable/disable
                 # calls did land) with the failed ids surfaced so the run is
                 # observable and retryable (y3m6o.1 Bug 1).
+                #
+                # GH #720 Part B (decision 2b): the ownership marker is
+                # deliberately NOT stamped here. Exclusive membership is
+                # unproven, so we do not yet claim pipeline ownership — the run
+                # reports failure and is retried, and the successful retry (full
+                # membership) stamps the marker below.
                 failed_str = ", ".join(str(p) for p in membership.failed_profile_ids)
                 logger.warning(
                     "[AUTO-CREATE-EXEC] Incomplete channel-profile assignment for "
@@ -2970,6 +2976,23 @@ class ActionExecutor:
                     rollbackable=False,
                     error=f"Failed to update channel profile(s): {failed_str}",
                 )
+
+            # GH #720 Part B (decision 2b): exclusive membership fully applied
+            # (no failed profiles), so stamp a durable provenance marker on the
+            # channel — the group-level reconcile (services.profile_reconcile)
+            # EXCLUDES marked channels because the pipeline's explicit profile
+            # choice outranks a group auto-sync selection (pipeline action >
+            # group selection > global default). This is the single chokepoint
+            # for exclusive membership set by an assign_channel_profile rule:
+            # the event_sync path (apply_channel_profile_to_channels) reuses
+            # this very method per channel, so it stamps here too — one DRY call
+            # site covers BOTH the standard and event_sync pipeline paths.
+            # Reached only on a non-dry run (dry_run early-returned above) and
+            # only after enforcement succeeded. Best-effort: a marker-write
+            # failure must NOT fail the assignment (profiles are already
+            # applied). The default-profile path (_assign_default_profiles) is a
+            # global default and is intentionally NOT stamped.
+            await self._mark_channel_profile_ownership(exec_ctx.current_channel_id)
 
             # y3m6o.1 review follow-up: ``modified`` is True only when at least
             # one profile's enabled-state actually flipped. An idempotent
@@ -3758,6 +3781,47 @@ class ActionExecutor:
             self._run_start_channel_ids.add(channel_id)
 
         return ProfileMembershipResult(enabled_count, disabled_count, failed_profile_ids)
+
+    async def _mark_channel_profile_ownership(self, channel_id: int) -> None:
+        """Stamp the pipeline-ownership provenance marker on a channel.
+
+        GH #720 Part B (decision 2b): records — in the channel's Dispatcharr
+        ``custom_properties`` — that this channel's profile membership was set
+        by a pipeline ``assign_channel_profile`` rule (standard OR event_sync
+        path — both funnel through ``_execute_assign_channel_profile``), so
+        ``services.profile_reconcile`` excludes it from group auto-sync
+        reconciliation (pipeline action > group selection). The marker is
+        MERGED over the channel's current ``custom_properties`` (Dispatcharr's
+        channel PATCH replaces the dict wholesale, so any other keys must be
+        preserved). Idempotent: an already-marked channel is skipped without a
+        write. Best-effort: failures are logged and swallowed — the profile
+        assignment has already succeeded and must not be reverted by a
+        marker-write error.
+        """
+        from services.profile_reconcile import (
+            PIPELINE_OWNERSHIP_MARKER_KEY,
+            PIPELINE_OWNERSHIP_MARKER_VALUE,
+        )
+
+        try:
+            cached = self._channel_by_id.get(channel_id) or {}
+            current_cp = cached.get("custom_properties")
+            merged_cp = dict(current_cp) if isinstance(current_cp, dict) else {}
+            if merged_cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) == PIPELINE_OWNERSHIP_MARKER_VALUE:
+                return  # Already marked — idempotent, skip the write.
+            merged_cp[PIPELINE_OWNERSHIP_MARKER_KEY] = PIPELINE_OWNERSHIP_MARKER_VALUE
+            await self.client.update_channel(
+                channel_id, {"custom_properties": merged_cp}
+            )
+            # Keep the in-run cache consistent so a later action in the same run
+            # sees the marker.
+            if isinstance(cached, dict):
+                cached["custom_properties"] = merged_cp
+        except Exception as e:
+            logger.warning(
+                "[CHANNEL-PIPELINE-EXEC] Failed to mark profile ownership for "
+                "channel %s: %s", channel_id, e,
+            )
 
     def _current_profile_membership(self, channel_id: int) -> set[int]:
         """The set of profile ids ``channel_id`` is CURRENTLY enabled in.
