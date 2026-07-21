@@ -964,14 +964,16 @@ class TestEventSyncAssignChannelProfile:
         promoted_id = promoted[0]
 
         # #720: the promoted (new) channel — which Dispatcharr auto-joins to ALL
-        # profiles — is reconciled to EXACTLY profile 1 (enabled in 1, disabled
-        # in 2 and 3). This proves the rule's assign_channel_profile action
-        # actually executed on the event_sync path, not enable-only or no-op.
+        # profiles — is reconciled to EXACTLY profile 1. The diff-aware reconcile
+        # (y3m6o.1 review follow-up) DISABLES the unselected profiles 2 and 3 and
+        # SKIPS the redundant enable of the already-auto-joined profile 1, so the
+        # end state is exactly {1}. This proves the rule's assign_channel_profile
+        # action actually executed on the event_sync path, not enable-only/no-op.
         per_channel: dict[int, dict[int, bool]] = {}
         for c in client.update_profile_channel.call_args_list:
             pid, channel_id, body = c.args[0], c.args[1], c.args[2]
             per_channel.setdefault(channel_id, {})[pid] = body["enabled"]
-        assert per_channel.get(promoted_id) == {1: True, 2: False, 3: False}
+        assert per_channel.get(promoted_id) == {2: False, 3: False}
 
         # The rule's event_sync summary records the profile step, and the run is
         # a clean success (all profile writes landed).

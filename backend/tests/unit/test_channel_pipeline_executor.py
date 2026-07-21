@@ -4471,7 +4471,8 @@ class TestAssignChannelProfileAction:
         result = self._run(executor, action, exec_ctx)
 
         assert result.success is True
-        assert "Would assign" in result.description
+        # Diff-aware dry-run wording (y3m6o.1 review follow-up).
+        assert "Would change channel-profile membership" in result.description
         self.client.update_profile_channel.assert_not_called()
 
     def test_no_channel_context_fails(self):
@@ -4639,8 +4640,8 @@ class TestAssignChannelProfileAction:
         self.client.update_profile_channel.assert_not_called()
 
     def test_dry_run_known_universe_still_previews(self):
-        """Contrast: a KNOWN universe (even empty) still previews 'Would assign'
-        in dry-run and makes no writes."""
+        """Contrast: a KNOWN universe (even empty) still previews the change in
+        dry-run and makes no writes."""
         executor = self._make_executor(all_profile_ids=[1, 2, 3])
         exec_ctx = ExecutionContext(dry_run=True)
         exec_ctx.current_channel_id = 99
@@ -4649,7 +4650,7 @@ class TestAssignChannelProfileAction:
         result = self._run(executor, action, exec_ctx)
 
         assert result.success is True
-        assert "Would assign" in result.description
+        assert "Would change channel-profile membership" in result.description
         self.client.update_profile_channel.assert_not_called()
 
     def test_total_write_failure_is_not_modified(self):
@@ -4758,6 +4759,161 @@ class TestAssignChannelProfileAction:
         assert len(results) == 1
         touched = {c.args[1] for c in self.client.update_profile_channel.call_args_list}
         assert touched == {50}
+
+
+class TestProfileMembershipDiffOnlyWrites:
+    """y3m6o.1 review follow-up: assign_channel_profile PATCHes ONLY the profiles
+    whose enabled-state actually flips, given the run-start membership snapshot,
+    so an idempotent reconcile makes zero writes and is not counted as a channel
+    update (no channels_updated inflation)."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_profile_channel = AsyncMock()
+        self.stream_ctx = StreamContext(
+            stream_id=1, stream_name="ESPN", m3u_account_id=1, m3u_account_name="P",
+        )
+
+    def _executor(self, *, universe, membership):
+        """Executor with an EXPLICIT membership map so the diff engages. Every
+        channel id in ``membership`` is treated as EXISTING at run start."""
+        existing = [{"id": cid, "name": f"ch-{cid}"} for cid in membership]
+        return ActionExecutor(
+            self.client, existing_channels=existing,
+            all_profile_ids=universe, channel_profile_membership=membership,
+        )
+
+    def _assign(self, executor, channel_id, selected, dry_run=False):
+        exec_ctx = ExecutionContext(dry_run=dry_run)
+        exec_ctx.current_channel_id = channel_id
+        action = {"type": "assign_channel_profile",
+                  "channel_profile_ids": list(selected)}
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+        return result, exec_ctx
+
+    def _calls(self):
+        return {c.args[0]: c.args[2]["enabled"]
+                for c in self.client.update_profile_channel.call_args_list}
+
+    def test_idempotent_reconcile_writes_nothing(self):
+        """Channel already in EXACTLY the selected profiles -> ZERO PATCH calls,
+        modified=False, channels_updated NOT incremented, success (green)."""
+        executor = self._executor(universe=[1, 2, 3], membership={99: {1}})
+        result, exec_ctx = self._assign(executor, 99, selected=(1,))
+
+        assert result.success is True
+        assert result.modified is False
+        self.client.update_profile_channel.assert_not_called()
+        assert exec_ctx.channels_updated == 0
+        assert exec_ctx.modified_entities == []
+        # No non-reversible flag either — nothing actually changed.
+        assert exec_ctx.non_reversible_channel_ids == set()
+
+    def test_real_change_patches_only_flips(self):
+        """Only the profiles whose state flips are PATCHed. Channel in {1,2,3},
+        select {1} -> disable 2,3 only (1 already enabled)."""
+        executor = self._executor(universe=[1, 2, 3], membership={99: {1, 2, 3}})
+        result, exec_ctx = self._assign(executor, 99, selected=(1,))
+
+        assert result.success is True
+        assert result.modified is True
+        assert self._calls() == {2: False, 3: False}  # NOT {1: True, ...}
+        assert exec_ctx.channels_updated == 1
+
+    def test_real_change_enable_and_disable_flips(self):
+        """Channel in {2,3}, select {1} -> enable 1 (flip) AND disable 2,3 (flips)."""
+        executor = self._executor(universe=[1, 2, 3], membership={99: {2, 3}})
+        result, _ = self._assign(executor, 99, selected=(1,))
+
+        assert result.success is True
+        assert self._calls() == {1: True, 2: False, 3: False}
+
+    def test_failure_on_needed_flip_still_non_success(self):
+        """A failed PATCH on a NEEDED flip still surfaces the failed id +
+        non-success (truthful-failure preserved)."""
+        def _fail_2(pid, cid, body):
+            if pid == 2:
+                raise RuntimeError("disable 2 failed")
+            return None
+        self.client.update_profile_channel = AsyncMock(side_effect=_fail_2)
+        executor = self._executor(universe=[1, 2, 3], membership={99: {1, 2, 3}})
+        result, _ = self._assign(executor, 99, selected=(1,))
+
+        assert result.success is False
+        assert "2" in (result.error or "")
+
+    def test_no_op_profile_cannot_fail(self):
+        """A profile that does not need changing is never PATCHed, so it can
+        never fail: an idempotent reconcile stays green even if the client would
+        raise on any write."""
+        self.client.update_profile_channel = AsyncMock(
+            side_effect=RuntimeError("must not be called")
+        )
+        executor = self._executor(universe=[1, 2, 3], membership={99: {1}})
+        result, _ = self._assign(executor, 99, selected=(1,))
+
+        assert result.success is True
+        assert result.modified is False
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_second_reconcile_same_run_is_noop(self):
+        """After a reconcile, a SECOND reconcile of the same channel this run
+        diffs against the freshly-updated membership -> zero writes."""
+        executor = self._executor(universe=[1, 2, 3], membership={99: {1, 2, 3}})
+        self._assign(executor, 99, selected=(1,))
+        first = self.client.update_profile_channel.call_count
+        assert first == 2  # disabled 2, 3
+
+        self.client.update_profile_channel.reset_mock()
+        result, exec_ctx = self._assign(executor, 99, selected=(1,))
+        assert result.modified is False
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_created_this_run_channel_disables_auto_joined_profiles(self):
+        """A channel NOT in the run-start snapshot is treated as created this run
+        -> Dispatcharr auto-joined it to ALL profiles -> select {1} disables the
+        rest (verified live auto-join behavior)."""
+        executor = self._executor(universe=[1, 2, 3], membership={})  # empty map
+        result, _ = self._assign(executor, 500, selected=(1,))
+
+        assert result.success is True
+        assert self._calls() == {2: False, 3: False}
+
+    def test_idempotent_dry_run_reports_no_change(self):
+        """Dry-run of an already-correct channel reports modified=False and no
+        writes (honest preview)."""
+        executor = self._executor(universe=[1, 2, 3], membership={99: {1}})
+        result, _ = self._assign(executor, 99, selected=(1,), dry_run=True)
+
+        assert result.success is True
+        assert result.modified is False
+        assert "already correct" in result.description.lower()
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_event_sync_path_diffs_and_noops_when_correct(self):
+        """The event_sync entry point (apply_channel_profile_to_channels) inherits
+        the diff: a channel already correctly reconciled makes zero writes."""
+        executor = self._executor(
+            universe=[1, 2, 3], membership={50: {1}, 51: {1, 2, 3}},
+        )
+        exec_ctx = ExecutionContext()
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+        results = asyncio.get_event_loop().run_until_complete(
+            executor.apply_channel_profile_to_channels(action, [50, 51], exec_ctx)
+        )
+
+        assert [r.success for r in results] == [True, True]
+        # Channel 50 already correct (no writes); channel 51 disables 2, 3.
+        per_channel = {}
+        for c in self.client.update_profile_channel.call_args_list:
+            per_channel.setdefault(c.args[1], {})[c.args[0]] = c.args[2]["enabled"]
+        assert per_channel == {51: {2: False, 3: False}}
+        # Only channel 51 counted as updated (50 was a no-op).
+        assert exec_ctx.channels_updated == 1
+        assert results[0].modified is False  # channel 50
+        assert results[1].modified is True   # channel 51
 
 
 class TestAssignDefaultProfiles:

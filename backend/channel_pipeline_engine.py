@@ -2117,13 +2117,24 @@ class ChannelPipelineEngine:
         # keep "unavailable" distinct from "genuinely empty" and avoid silently
         # recreating GH #720 during a transient read failure (y3m6o.1 Bug 2).
         all_profile_ids: list[int] | None = []
+        # y3m6o.1 review follow-up: build the current per-channel membership map
+        # from the SAME fetch (the profile payload's ``channels`` list is the
+        # enabled member set), so assign_channel_profile can PATCH only the
+        # profiles whose enabled-state actually flips (no channels_updated
+        # inflation on an idempotent reconcile). Zero extra API reads.
+        channel_profile_membership: dict[int, set[int]] = {}
         if needs_profiles:
             try:
                 profiles = await self.client.get_channel_profiles()
                 all_profile_ids = [p["id"] for p in profiles]
+                for p in profiles:
+                    pid = p["id"]
+                    for cid in (p.get("channels") or []):
+                        channel_profile_membership.setdefault(cid, set()).add(pid)
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel profiles: %s", e)
                 all_profile_ids = None
+                channel_profile_membership = {}
 
         # Pre-fetch EPG data and sources if any rule uses assign_epg —
         # including event_sync rules whose config opts into dummy EPG
@@ -2180,6 +2191,10 @@ class ChannelPipelineEngine:
             # operator a queryable (channel_id, stream_id) audit trail to
             # recover from a bad run via get_journal(batch_id=...).
             execution_id=execution.id,
+            # y3m6o.1 review follow-up: run-start channel-profile membership so
+            # assign_channel_profile writes only actual flips (no channels_updated
+            # inflation on idempotent reconciles).
+            channel_profile_membership=channel_profile_membership,
         )
 
         # Results tracking

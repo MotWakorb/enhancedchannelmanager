@@ -3613,6 +3613,9 @@ class TestProfileUniverseSentinelBehavioral:
             inst = RealActionExecutor(*args, **kwargs)
             captured["executor"] = inst
             captured["all_profile_ids"] = kwargs.get("all_profile_ids", "MISSING")
+            captured["channel_profile_membership"] = kwargs.get(
+                "channel_profile_membership", "MISSING"
+            )
             return inst
 
         mock_execution = MagicMock()
@@ -3660,7 +3663,11 @@ class TestProfileUniverseSentinelBehavioral:
 
     def test_standard_rule_fetch_success_assign_enforces_exclusivity(self):
         """Contrast: a healthy fetch => the executor performs real exclusive
-        membership (enable selected, disable the rest) and reports success."""
+        membership and reports success. Channel 99 is created this run, so
+        Dispatcharr auto-joined it to ALL profiles; the diff-aware reconcile
+        DISABLES the unselected profiles (2, 3) and skips the redundant enable of
+        the already-joined selected profile (1) — end state = exactly {1}
+        (y3m6o.1 review follow-up: no phantom enable write)."""
         get_profiles = AsyncMock(return_value=[{"id": 1}, {"id": 2}, {"id": 3}])
         client, engine = self._make_engine(get_profiles)
         rule = self._standard_rule(
@@ -3674,7 +3681,8 @@ class TestProfileUniverseSentinelBehavioral:
         assert result.success is True
         calls = {c.args[0]: c.args[2]["enabled"]
                  for c in client.update_profile_channel.call_args_list}
-        assert calls == {1: True, 2: False, 3: False}
+        # Only the unselected profiles flip (disable); enable-1 is a no-op.
+        assert calls == {2: False, 3: False}
 
     def test_event_sync_rule_assign_fetches_and_enforces_exclusivity(self):
         """Acceptance (b): an EVENT-SYNC rule carrying assign_channel_profile
@@ -3694,7 +3702,29 @@ class TestProfileUniverseSentinelBehavioral:
         assert result.success is True
         calls = {c.args[0]: c.args[2]["enabled"]
                  for c in client.update_profile_channel.call_args_list}
-        assert calls == {2: True, 1: False, 3: False}
+        # Channel 99 auto-joined to all; only the unselected profiles flip
+        # (disable 1, 3), enable-2 is a redundant no-op that is skipped.
+        assert calls == {1: False, 3: False}
+
+    def test_engine_builds_membership_map_from_profile_channels(self):
+        """y3m6o.1 review follow-up: the engine inverts the profile payload's
+        ``channels`` (enabled member ids) into a channel_id -> {profile_ids} map
+        and threads it to the executor, so assign_channel_profile can diff and
+        skip no-op writes. Zero extra API reads (same get_channel_profiles fetch)."""
+        get_profiles = AsyncMock(return_value=[
+            {"id": 1, "channels": [50, 51]},
+            {"id": 2, "channels": [51]},
+            {"id": 3, "channels": []},
+        ])
+        client, engine = self._make_engine(get_profiles)
+        rule = self._standard_rule(
+            [{"type": "assign_channel_profile", "channel_profile_ids": [1]}]
+        )
+
+        captured = self._run_and_capture_executor(engine, rules=[rule])
+
+        assert captured["all_profile_ids"] == [1, 2, 3]
+        assert captured["channel_profile_membership"] == {50: {1}, 51: {1, 2}}
 
     def test_event_sync_rule_fetch_failure_fails_assign_action(self):
         """Event-sync path, fetch failure => None sentinel => assign FAILS,
