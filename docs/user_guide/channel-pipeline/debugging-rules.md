@@ -16,7 +16,7 @@ into one of two categories:
 
 2. **Runtime mismatch** — the rule is structurally sound but the streams
    arriving at runtime do not match the conditions. Diagnosing this requires
-   running a dry-run (see [test-a-rule.md](test-a-rule.md) — planned).
+   running a dry-run (see test-a-rule.md — planned).
 
 The **rule analyzer** catches category 1 without running anything. It reads
 your saved rules and checks them for known bad patterns, then tells you exactly
@@ -413,7 +413,7 @@ The current analyzer (Phase 1) checks static configuration. It does not:
   follow-up).
 - Offer auto-fix actions ("click here to change Contains → Begins With").
 
-For the per-rule dry-run, see [test-a-rule.md](test-a-rule.md) (planned).
+For the per-rule dry-run, see test-a-rule.md (planned).
 
 ---
 
