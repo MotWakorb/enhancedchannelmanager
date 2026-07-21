@@ -31,6 +31,23 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ProfileMembershipResult:
+    """Outcome of an exclusive channel-profile reconciliation.
+
+    ``enabled_count`` / ``disabled_count`` are SUCCEEDED counts — they only
+    increment when the per-profile ``update_profile_channel`` call returned
+    without raising. ``failed_profile_ids`` carries every profile id whose
+    enable/disable PATCH raised. A NON-EMPTY ``failed_profile_ids`` means
+    exclusive membership was NOT fully achieved, so the caller must not report
+    plain success (GH #720 / y3m6o.1) — the channel may be left in a profile it
+    should not be in, which is the exact invariant #720 protects.
+    """
+    enabled_count: int
+    disabled_count: int
+    failed_profile_ids: list[int] = field(default_factory=list)
+
+
+@dataclass
 class ActionResult:
     """Result of executing a single action."""
     success: bool
@@ -176,7 +193,7 @@ class ActionExecutor:
     """
 
     def __init__(self, client, existing_channels: list = None, existing_groups: list = None,
-                 normalization_engine=None, settings=None, all_profile_ids: list = None,
+                 normalization_engine=None, settings=None, all_profile_ids: list[int] | None = None,
                  epg_data: list = None, epg_sources: list = None,
                  triggered_by: str = "manual", execution_id: int | None = None):
         """
@@ -188,7 +205,11 @@ class ActionExecutor:
             existing_groups: List of existing groups (for lookup)
             normalization_engine: Optional NormalizationEngine for name normalization
             settings: DispatcharrSettings instance for channel naming/profile defaults
-            all_profile_ids: All channel profile IDs (for default profile assignment)
+            all_profile_ids: The known channel-profile universe. A list (incl.
+                ``[]`` = genuinely zero profiles configured) is treated as known;
+                ``None`` (the default) is an explicit "universe unavailable /
+                unknown" sentinel — assign_channel_profile fails on it rather
+                than degrading to enable-only (GH #720 / y3m6o.1).
             epg_data: EPG data entries from Dispatcharr (for assign_epg resolution)
             epg_sources: EPG source dicts from Dispatcharr (for dummy EPG detection)
             triggered_by: The engine-side ``triggered_by`` string (e.g.
@@ -212,7 +233,18 @@ class ActionExecutor:
         self.existing_groups = existing_groups or []
         self._normalization_engine = normalization_engine
         self._settings = settings
-        self._all_profile_ids = all_profile_ids or []
+        # ``all_profile_ids`` carries a THREE-way availability signal, kept
+        # DISTINCT (do NOT coerce ``None`` -> ``[]`` here):
+        #   * a list (incl. ``[]``) -> the KNOWN profile universe; ``[]`` means
+        #     genuinely zero channel profiles are configured (a real fact).
+        #   * ``None`` -> the universe is UNAVAILABLE / unknown: the engine's
+        #     ``get_channel_profiles()`` fetch raised, or a direct-construct
+        #     caller never supplied it. Exclusive membership CANNOT be proven.
+        # ``assign_channel_profile`` fails when the universe is unavailable
+        # rather than silently degrading to enable-only-and-report-success
+        # (GH #720 / y3m6o.1). Default-profile assignment treats both ``None``
+        # and ``[]`` as a benign no-op via its own falsy guard.
+        self._all_profile_ids = all_profile_ids
         self._triggered_by = triggered_by
         self._execution_id = execution_id
 
@@ -2750,22 +2782,75 @@ class ActionExecutor:
                 modified=True
             )
 
+        # Enforcing exclusive membership requires a KNOWN profile universe — we
+        # must know which profiles to DISABLE. ``None`` means the universe is
+        # UNAVAILABLE (the engine's get_channel_profiles() fetch raised), so
+        # exclusivity is unprovable: FAIL rather than silently enable-only-and-
+        # report-success, which would recreate GH #720 during a transient read
+        # failure (y3m6o.1 Bug 2). A genuinely-empty universe (``[]``) is a
+        # real, known fact and degrades to enable-selected-only as before.
+        if self._all_profile_ids is None:
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Cannot assign channel profiles for channel %s: "
+                "profile universe unavailable",
+                exec_ctx.current_channel_id,
+            )
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="Cannot assign channel profiles: profile universe unavailable",
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                error=(
+                    "Channel profile universe unavailable (fetch failed); exclusive "
+                    "membership cannot be enforced. Retry once profiles are reachable."
+                ),
+            )
+
         try:
             # Dispatcharr auto-joins every newly-created channel to ALL channel
             # profiles by default, so honoring a selection is SUBTRACTIVE: enable
             # the selected profiles AND disable the channel in every OTHER known
             # profile. An enable-only loop is a no-op — the channel stays in
             # every profile (GH #720 / y3m6o).
-            enabled_count, disabled_count = await self._apply_exclusive_profile_membership(
+            membership = await self._apply_exclusive_profile_membership(
                 exec_ctx.current_channel_id, channel_profile_ids
             )
+
+            if membership.failed_profile_ids:
+                # Best-effort continuation already attempted every profile, but
+                # some PATCHes failed, so exclusive membership is UNPROVEN — the
+                # channel may still be in a profile it shouldn't be. Report a
+                # NON-success (still ``modified``: the successful enable/disable
+                # calls did land) with the failed ids surfaced so the run is
+                # observable and retryable (y3m6o.1 Bug 1).
+                failed_str = ", ".join(str(p) for p in membership.failed_profile_ids)
+                logger.warning(
+                    "[AUTO-CREATE-EXEC] Incomplete channel-profile assignment for "
+                    "channel %s: failed to update profile(s) %s",
+                    exec_ctx.current_channel_id, failed_str,
+                )
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=(
+                        f"Incomplete channel-profile assignment: enabled in "
+                        f"{membership.enabled_count}, disabled in "
+                        f"{membership.disabled_count}; failed to update "
+                        f"profile(s): {failed_str}"
+                    ),
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                    modified=True,
+                    error=f"Failed to update channel profile(s): {failed_str}",
+                )
 
             return ActionResult(
                 success=True,
                 action_type=action.type,
                 description=(
-                    f"Assigned channel profiles: enabled in {enabled_count}, "
-                    f"disabled in {disabled_count}"
+                    f"Assigned channel profiles: enabled in {membership.enabled_count}, "
+                    f"disabled in {membership.disabled_count}"
                 ),
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
@@ -3408,32 +3493,45 @@ class ActionExecutor:
 
     async def _apply_exclusive_profile_membership(
         self, channel_id: int, selected_ids: list[int]
-    ) -> tuple[int, int]:
+    ) -> ProfileMembershipResult:
         """Make ``channel_id`` a member of exactly ``selected_ids``.
 
         Dispatcharr auto-joins every newly-created channel to ALL channel
         profiles, so honoring a profile selection is SUBTRACTIVE: for each
         profile id in the FULL known universe, enable it if selected and
-        disable it otherwise. Returns ``(enabled_count, disabled_count)``.
+        disable it otherwise.
+
+        Returns a :class:`ProfileMembershipResult` carrying the SUCCEEDED
+        enable/disable counts AND ``failed_profile_ids`` — the ids of any
+        profile whose update raised. Callers inspect ``failed_profile_ids`` to
+        detect incomplete exclusivity: a per-profile failure is logged and
+        SKIPPED (best-effort continuation — one bad update must not abort the
+        rest) but is NOT swallowed, so the caller can report a non-success and
+        the incomplete reconciliation stays observable/retryable (GH #720 /
+        y3m6o.1).
 
         The iteration order is the de-duplicated union of the known profile
         universe and the selection, so selected profiles are always
-        (re)enabled — even if the fetched profile list is stale and missing
-        one — while every OTHER known profile is disabled. When
-        ``self._all_profile_ids`` is empty (fetch failed / no profiles), this
-        degrades to enabling the selected only — never worse than an
-        enable-only loop. A single failing profile is logged and skipped so
-        one bad update does not abort the rest.
-        """
-        selected = set(selected_ids)
-        ordered_ids = list(dict.fromkeys(list(self._all_profile_ids) + list(selected_ids)))
+        (re)enabled — even if the fetched profile list is stale and missing one
+        — while every OTHER known profile is disabled.
 
-        # These are "succeeded" counts, not "attempted" — they only increment
-        # when the per-profile update_profile_channel call returns without
-        # raising, so a run with a failing profile under-reports total intended
-        # membership. Callers use them for the human-readable description only.
+        A ``None`` ``self._all_profile_ids`` (universe unavailable) is coerced
+        to an empty universe HERE only defensively: callers that require a
+        known universe to prove exclusivity (``_execute_assign_channel_profile``)
+        gate on availability BEFORE calling this helper, and
+        ``_assign_default_profiles`` returns early on a falsy universe — so this
+        helper is never reached with ``None`` in practice.
+        """
+        universe = self._all_profile_ids if self._all_profile_ids is not None else []
+        selected = set(selected_ids)
+        ordered_ids = list(dict.fromkeys(list(universe) + list(selected_ids)))
+
+        # enabled_count / disabled_count are "succeeded" counts, not
+        # "attempted" — they only increment when update_profile_channel returns
+        # without raising. failed_profile_ids captures the ids that raised.
         enabled_count = 0
         disabled_count = 0
+        failed_profile_ids: list[int] = []
         for pid in ordered_ids:
             enable = pid in selected
             try:
@@ -3447,8 +3545,9 @@ class ActionExecutor:
                     "[AUTO-CREATE-EXEC] Failed to update profile %s for channel %s: %s",
                     pid, channel_id, e,
                 )
+                failed_profile_ids.append(pid)
 
-        return enabled_count, disabled_count
+        return ProfileMembershipResult(enabled_count, disabled_count, failed_profile_ids)
 
     async def _assign_default_profiles(self, channel_id: int) -> str:
         """Assign default channel profiles to a newly created channel.
@@ -3458,6 +3557,14 @@ class ActionExecutor:
         """
         if not self._settings or not self._settings.default_channel_profile_ids:
             return ""
+        # Default-profile assignment is a best-effort ENHANCEMENT, not the
+        # user's explicit rule action — so a falsy universe stays a benign
+        # no-op here, never a hard failure. This deliberately treats BOTH the
+        # unavailable sentinel (``None``) and a genuinely-empty universe
+        # (``[]``) the same way: absent a known universe there is nothing to
+        # reconcile against, and silently skipping a best-effort default is
+        # correct (unlike the explicit assign_channel_profile action, which
+        # FAILS on an unavailable universe — GH #720 / y3m6o.1).
         if not self._all_profile_ids:
             return ""
 
@@ -3467,12 +3574,15 @@ class ActionExecutor:
         # universe). This is benign — arguably more correct, since an operator's
         # explicit default should be honored even if the universe fetch is
         # stale — and matches the union semantics used for per-rule selections.
-        enabled_count, disabled_count = await self._apply_exclusive_profile_membership(
+        membership = await self._apply_exclusive_profile_membership(
             channel_id, list(self._settings.default_channel_profile_ids)
         )
 
-        if enabled_count or disabled_count:
-            desc = f"profiles: enabled in {enabled_count}, disabled in {disabled_count}"
+        if membership.enabled_count or membership.disabled_count:
+            desc = (
+                f"profiles: enabled in {membership.enabled_count}, "
+                f"disabled in {membership.disabled_count}"
+            )
             logger.info("[AUTO-CREATE-EXEC] Channel %s: %s", channel_id, desc)
             return desc
         return ""

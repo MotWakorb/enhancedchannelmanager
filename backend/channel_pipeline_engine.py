@@ -1936,13 +1936,25 @@ class ChannelPipelineEngine:
             for r in list(rules) + list(event_sync_rules or [])
             for a in r.get_actions()
         )
-        all_profile_ids = []
+        # all_profile_ids carries a THREE-way availability signal consumed by
+        # the executor (see ActionExecutor.__init__ / _execute_assign_channel_
+        # profile):
+        #   * a list (incl. []) => the KNOWN profile universe; [] = genuinely
+        #     zero profiles configured, or profiles simply not needed.
+        #   * None               => the universe is UNAVAILABLE (fetch raised).
+        # assign_channel_profile enforces exclusive membership subtractively and
+        # MUST NOT report success when the universe is unavailable (it cannot
+        # know what to DISABLE), so a fetch failure yields None — NOT [] — to
+        # keep "unavailable" distinct from "genuinely empty" and avoid silently
+        # recreating GH #720 during a transient read failure (y3m6o.1 Bug 2).
+        all_profile_ids: list[int] | None = []
         if needs_profiles:
             try:
                 profiles = await self.client.get_channel_profiles()
                 all_profile_ids = [p["id"] for p in profiles]
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel profiles: %s", e)
+                all_profile_ids = None
 
         # Pre-fetch EPG data and sources if any rule uses assign_epg —
         # including event_sync rules whose config opts into dummy EPG

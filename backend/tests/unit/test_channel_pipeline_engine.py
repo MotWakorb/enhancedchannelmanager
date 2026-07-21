@@ -23,7 +23,7 @@ from channel_pipeline_engine import (
 )
 from channel_pipeline_evaluator import StreamContext
 from channel_pipeline_evaluator import StreamContext
-from channel_pipeline_executor import ActionExecutor
+from channel_pipeline_executor import ActionExecutor, ExecutionContext
 
 
 class TestChannelPipelineEngineInit:
@@ -3086,3 +3086,171 @@ class TestProfileFetchGate:
         )
 
         get_profiles.assert_not_called()
+
+
+class TestProfileUniverseSentinelBehavioral:
+    """GH #720 / y3m6o.1 — behavioral JOIN of the engine fetch-gate and the
+    executor's exclusive-membership half.
+
+    These tests do NOT inject ``all_profile_ids`` directly. They drive the real
+    ``_process_streams`` fetch-gate (which fetches the profile universe, or on
+    failure produces the ``None`` "unavailable" sentinel) and capture the REAL
+    ``ActionExecutor`` the engine constructs from that outcome, then exercise
+    that same executor's ``assign_channel_profile`` path. This proves the two
+    halves are wired together: a fetch failure at the engine layer makes the
+    executor's assign action FAIL rather than silently enable-only-and-succeed.
+    """
+
+    def _make_engine(self, get_channel_profiles):
+        client = MagicMock()
+        client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        client.get_channel_profiles = get_channel_profiles
+        client.update_profile_channel = AsyncMock()
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = []
+        engine._existing_groups = []
+        engine._reconcile_orphans = AsyncMock()
+        engine._update_rule_stats = AsyncMock()
+        engine._refresh_dummy_epg_and_retry = AsyncMock()
+        engine._run_event_sync_rules = AsyncMock()
+        engine._reorder_channel_streams = AsyncMock()
+        return client, engine
+
+    @staticmethod
+    def _standard_rule(actions):
+        from models import ChannelPipelineRule
+        return ChannelPipelineRule(
+            name="Profile Rule", enabled=True, priority=0,
+            conditions=json.dumps([{"type": "always"}]),
+            actions=json.dumps(actions),
+        )
+
+    @staticmethod
+    def _event_rule(actions, rule_id=9):
+        """An event_sync-kind rule carrying regular actions (Part A's gate
+        iterates event_sync rules' actions too)."""
+        rule = MagicMock()
+        rule.id = rule_id
+        rule.name = "Event Profile Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.is_event_sync.return_value = True
+        rule.get_actions.return_value = list(actions)
+        rule.get_normalization_group_ids.return_value = []
+        rule.get_conditions.return_value = [{"type": "always"}]
+        rule.get_event_sync_config.return_value = {
+            "master_group_id": 10, "secondary_group_ids": [20], "enabled": True,
+        }
+        rule.stream_sort_field = None
+        return rule
+
+    def _run_and_capture_executor(self, engine, *, rules=None, event_sync_rules=None):
+        """Run ``_process_streams`` with empty streams and capture the real
+        ActionExecutor the engine builds (with the real profile-universe
+        outcome plumbed in)."""
+        from channel_pipeline_executor import ActionExecutor as RealActionExecutor
+        captured = {}
+
+        def _spy(*args, **kwargs):
+            inst = RealActionExecutor(*args, **kwargs)
+            captured["executor"] = inst
+            captured["all_profile_ids"] = kwargs.get("all_profile_ids", "MISSING")
+            return inst
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+        with patch("channel_pipeline_engine.get_session", return_value=MagicMock()), \
+             patch("channel_pipeline_engine.ActionExecutor", side_effect=_spy):
+            asyncio.get_event_loop().run_until_complete(
+                engine._process_streams(
+                    [], rules or [], mock_execution, dry_run=False,
+                    event_sync_rules=event_sync_rules,
+                )
+            )
+        return captured
+
+    @staticmethod
+    def _assign(executor, channel_id=99, selected=(1,)):
+        stream = StreamContext(
+            stream_id=1, stream_name="ESPN", m3u_account_id=1, m3u_account_name="P",
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = channel_id
+        action = {"type": "assign_channel_profile",
+                  "channel_profile_ids": list(selected)}
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream, exec_ctx)
+        )
+
+    def test_standard_rule_fetch_failure_fails_assign_action(self):
+        """Acceptance (a): a standard rule with assign_channel_profile — when the
+        profile-universe fetch RAISES, the engine hands the executor the None
+        sentinel and the executor's assign action FAILS (not enable-only)."""
+        get_profiles = AsyncMock(side_effect=RuntimeError("dispatcharr down"))
+        client, engine = self._make_engine(get_profiles)
+        rule = self._standard_rule(
+            [{"type": "assign_channel_profile", "channel_profile_ids": [1]}]
+        )
+
+        captured = self._run_and_capture_executor(engine, rules=[rule])
+
+        get_profiles.assert_awaited_once()
+        assert captured["all_profile_ids"] is None  # engine produced the sentinel
+        result = self._assign(captured["executor"])
+        assert result.success is False
+        client.update_profile_channel.assert_not_called()
+
+    def test_standard_rule_fetch_success_assign_enforces_exclusivity(self):
+        """Contrast: a healthy fetch => the executor performs real exclusive
+        membership (enable selected, disable the rest) and reports success."""
+        get_profiles = AsyncMock(return_value=[{"id": 1}, {"id": 2}, {"id": 3}])
+        client, engine = self._make_engine(get_profiles)
+        rule = self._standard_rule(
+            [{"type": "assign_channel_profile", "channel_profile_ids": [1]}]
+        )
+
+        captured = self._run_and_capture_executor(engine, rules=[rule])
+
+        assert captured["all_profile_ids"] == [1, 2, 3]
+        result = self._assign(captured["executor"], selected=(1,))
+        assert result.success is True
+        calls = {c.args[0]: c.args[2]["enabled"]
+                 for c in client.update_profile_channel.call_args_list}
+        assert calls == {1: True, 2: False, 3: False}
+
+    def test_event_sync_rule_assign_fetches_and_enforces_exclusivity(self):
+        """Acceptance (b): an EVENT-SYNC rule carrying assign_channel_profile
+        forces the profile fetch (Part A's gate honors both paths) AND the real
+        executor honors exclusive membership for it."""
+        get_profiles = AsyncMock(return_value=[{"id": 1}, {"id": 2}, {"id": 3}])
+        client, engine = self._make_engine(get_profiles)
+        rule = self._event_rule(
+            [{"type": "assign_channel_profile", "channel_profile_ids": [2]}]
+        )
+
+        captured = self._run_and_capture_executor(engine, event_sync_rules=[rule])
+
+        get_profiles.assert_awaited_once()  # event-sync path honored by the gate
+        assert captured["all_profile_ids"] == [1, 2, 3]
+        result = self._assign(captured["executor"], selected=(2,))
+        assert result.success is True
+        calls = {c.args[0]: c.args[2]["enabled"]
+                 for c in client.update_profile_channel.call_args_list}
+        assert calls == {2: True, 1: False, 3: False}
+
+    def test_event_sync_rule_fetch_failure_fails_assign_action(self):
+        """Event-sync path, fetch failure => None sentinel => assign FAILS,
+        never silently enable-only."""
+        get_profiles = AsyncMock(side_effect=RuntimeError("dispatcharr down"))
+        client, engine = self._make_engine(get_profiles)
+        rule = self._event_rule(
+            [{"type": "assign_channel_profile", "channel_profile_ids": [2]}]
+        )
+
+        captured = self._run_and_capture_executor(engine, event_sync_rules=[rule])
+
+        get_profiles.assert_awaited_once()
+        assert captured["all_profile_ids"] is None
+        result = self._assign(captured["executor"], selected=(2,))
+        assert result.success is False
+        client.update_profile_channel.assert_not_called()
