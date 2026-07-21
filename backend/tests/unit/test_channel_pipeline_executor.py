@@ -4291,3 +4291,187 @@ class TestCreateChannelFoldMatchKey:
         found = executor._find_channel_by_name("eurosport 2", fold_key=True)
         assert found is not None
         assert found["id"] == 11
+
+
+class TestAssignChannelProfileAction:
+    """Tests for the assign_channel_profile action (GH #720 / y3m6o).
+
+    Dispatcharr auto-joins every newly-created channel to ALL channel
+    profiles, so honoring a per-rule profile selection is SUBTRACTIVE: the
+    selected profiles must be enabled AND every other known profile disabled.
+    The pre-fix enable-only loop was a no-op — the channel stayed in every
+    profile. These tests lock in the exclusive-membership behavior.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_profile_channel = AsyncMock()
+
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="ESPN2 HD",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            group_name="Sports",
+        )
+
+    def _make_executor(self, all_profile_ids):
+        return ActionExecutor(self.client, all_profile_ids=all_profile_ids)
+
+    def _run(self, executor, action, exec_ctx):
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+    @staticmethod
+    def _calls(client):
+        """Return {profile_id: enabled} from every update_profile_channel call."""
+        out = {}
+        for call in client.update_profile_channel.call_args_list:
+            pid = call.args[0]
+            body = call.args[2]
+            out[pid] = body["enabled"]
+        return out
+
+    def test_selecting_one_profile_disables_the_rest(self):
+        """The #720 regression: selecting profile 1 out of {1,2,3} must ENABLE 1
+        and DISABLE 2 and 3 — not enable-only."""
+        executor = self._make_executor(all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is True
+        assert self._calls(self.client) == {1: True, 2: False, 3: False}
+
+    def test_selecting_multiple_profiles(self):
+        """Enabling a subset disables the complement."""
+        executor = self._make_executor(all_profile_ids=[1, 2, 3, 4])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1, 3]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is True
+        assert self._calls(self.client) == {1: True, 2: False, 3: True, 4: False}
+
+    def test_selected_profile_outside_known_universe_still_enabled(self):
+        """A selected profile id missing from a stale fetched list is still
+        (re)enabled — the union order guarantees selections are honored."""
+        executor = self._make_executor(all_profile_ids=[1, 2])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [5]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is True
+        # 5 enabled (from selection), 1 and 2 disabled (known universe).
+        assert self._calls(self.client) == {5: True, 1: False, 2: False}
+
+    def test_empty_all_profile_ids_degrades_to_enable_selected_only(self):
+        """When the profile universe is empty (fetch failed / none configured),
+        the action enables the selected profiles and performs no disables —
+        never worse than the pre-fix behavior."""
+        executor = self._make_executor(all_profile_ids=[])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1, 2]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is True
+        assert self._calls(self.client) == {1: True, 2: True}
+
+    def test_dry_run_makes_no_client_calls(self):
+        executor = self._make_executor(all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is True
+        assert "Would assign" in result.description
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_no_channel_context_fails(self):
+        executor = self._make_executor(all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()  # no current_channel_id
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is False
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_empty_channel_profile_ids_fails(self):
+        executor = self._make_executor(all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": []}
+
+        result = self._run(executor, action, exec_ctx)
+
+        assert result.success is False
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_one_failing_profile_does_not_abort_the_rest(self):
+        """A per-profile update failure is logged and skipped, not fatal."""
+        def side_effect(pid, channel_id, body):
+            if pid == 2:
+                raise RuntimeError("boom")
+            return None
+        self.client.update_profile_channel = AsyncMock(side_effect=side_effect)
+
+        executor = self._make_executor(all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx)
+
+        # Overall still succeeds; profiles 1 and 3 were still attempted.
+        assert result.success is True
+        attempted = {c.args[0] for c in self.client.update_profile_channel.call_args_list}
+        assert {1, 2, 3} == attempted
+
+
+class TestAssignDefaultProfiles:
+    """Guards the _assign_default_profiles refactor (shared helper) — still
+    enables the configured defaults and disables every other known profile."""
+
+    def test_enables_defaults_disables_the_rest(self):
+        client = MagicMock()
+        client.update_profile_channel = AsyncMock()
+        settings = MagicMock()
+        settings.default_channel_profile_ids = [1, 3]
+        executor = ActionExecutor(client, settings=settings, all_profile_ids=[1, 2, 3])
+
+        desc = asyncio.get_event_loop().run_until_complete(
+            executor._assign_default_profiles(99)
+        )
+
+        calls = {}
+        for call in client.update_profile_channel.call_args_list:
+            calls[call.args[0]] = call.args[2]["enabled"]
+        assert calls == {1: True, 2: False, 3: True}
+        assert "enabled in 2" in desc
+        assert "disabled in 1" in desc
+
+    def test_no_defaults_configured_returns_empty_no_calls(self):
+        client = MagicMock()
+        client.update_profile_channel = AsyncMock()
+        settings = MagicMock()
+        settings.default_channel_profile_ids = []
+        executor = ActionExecutor(client, settings=settings, all_profile_ids=[1, 2, 3])
+
+        desc = asyncio.get_event_loop().run_until_complete(
+            executor._assign_default_profiles(99)
+        )
+
+        assert desc == ""
+        client.update_profile_channel.assert_not_called()

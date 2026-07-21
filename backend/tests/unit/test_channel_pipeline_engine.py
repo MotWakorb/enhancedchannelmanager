@@ -2992,3 +2992,97 @@ class TestAutoChannelNumberSkipsRenumberPass:
             "channel_number 'auto' must skip the rule-level renumber pass "
             "(bead bn0wa pins this intentional behavior)"
         )
+
+
+class TestProfileFetchGate:
+    """GH #720 / y3m6o — the load-bearing half of the fix.
+
+    The bug was that the channel-profile universe was never *fetched* (empty
+    list) when a rule used ``assign_channel_profile`` but no global
+    ``default_channel_profile_ids`` was set — the executor then correctly
+    degrades to enable-only, reproducing the bug. These tests pin the
+    ``needs_profiles`` gate in ``_process_streams`` (channel_pipeline_engine):
+    ``get_channel_profiles`` MUST be called when a rule carries an
+    ``assign_channel_profile`` action even with no global default, and MUST
+    NOT be called when neither is present.
+
+    Real ``ChannelPipelineRule`` objects are used (not MagicMock rules) so the
+    real ``get_actions()`` JSON-parse and the gate's dict-shape branch are
+    genuinely exercised. Streams are empty so no action is ever *executed* —
+    the test isolates the fetch decision, which happens before Pass 1.
+    """
+
+    def _make_engine(self, get_channel_profiles):
+        client = MagicMock()
+        client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        client.get_channel_profiles = get_channel_profiles
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = []
+        engine._existing_groups = []
+        # Downstream passes are irrelevant to the fetch decision; stub the
+        # async collaborators so the empty-stream run completes cleanly.
+        engine._reconcile_orphans = AsyncMock()
+        engine._update_rule_stats = AsyncMock()
+        engine._refresh_dummy_epg_and_retry = AsyncMock()
+        return client, engine
+
+    @staticmethod
+    def _rule(actions):
+        from models import ChannelPipelineRule
+        return ChannelPipelineRule(
+            name="Profile Rule", enabled=True, priority=0,
+            conditions=json.dumps([{"type": "always"}]),
+            actions=json.dumps(actions),
+        )
+
+    @patch("channel_pipeline_engine.get_session")
+    def test_fetches_profiles_for_assign_channel_profile_rule_without_global_default(
+        self, mock_get_session
+    ):
+        """A rule with an assign_channel_profile action forces the profile
+        fetch even when no global default is configured (the #720 regression
+        half)."""
+        from config import get_settings
+        # Precondition: no global default — the action is the ONLY reason to fetch.
+        assert not get_settings().default_channel_profile_ids
+
+        mock_get_session.return_value = MagicMock()
+        get_profiles = AsyncMock(return_value=[{"id": 1}, {"id": 2}, {"id": 3}])
+        client, engine = self._make_engine(get_profiles)
+
+        rule = self._rule(
+            [{"type": "assign_channel_profile", "channel_profile_ids": [1]}]
+        )
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        asyncio.get_event_loop().run_until_complete(
+            engine._process_streams([], [rule], mock_execution, dry_run=True)
+        )
+
+        get_profiles.assert_awaited_once()
+
+    @patch("channel_pipeline_engine.get_session")
+    def test_does_not_fetch_profiles_without_default_or_assign_action(
+        self, mock_get_session
+    ):
+        """No global default and no assign_channel_profile action => the
+        profile universe is never fetched."""
+        from config import get_settings
+        assert not get_settings().default_channel_profile_ids
+
+        mock_get_session.return_value = MagicMock()
+        get_profiles = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
+        client, engine = self._make_engine(get_profiles)
+
+        rule = self._rule(
+            [{"type": "create_channel", "name_template": "{stream_name}"}]
+        )
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        asyncio.get_event_loop().run_until_complete(
+            engine._process_streams([], [rule], mock_execution, dry_run=True)
+        )
+
+        get_profiles.assert_not_called()
