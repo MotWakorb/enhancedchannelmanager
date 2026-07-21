@@ -1,0 +1,109 @@
+site_name: Enhanced Channel Manager — User Guide
+site_description: Operator and end-user documentation for ECM (Enhanced Channel Manager).
+site_url: https://motwakorb.github.io/enhancedchannelmanager/
+repo_url: https://github.com/MotWakorb/enhancedchannelmanager
+repo_name: MotWakorb/enhancedchannelmanager
+edit_uri: edit/dev/docs/
+
+docs_dir: docs
+
+# Publish ONLY the user-facing guide. Developer/internal docs (architecture,
+# ADRs, security threat models, SRE, runbooks, shipping, testing, commands) are
+# deliberately kept OUT of the public site per COMPONENTS.md (docs tier note).
+# New top-level *.md files are auto-excluded by /*.md; if a new INTERNAL
+# top-level directory is ever added under docs/, add it to this list too.
+exclude_docs: |
+  /*.md
+  !/index.md
+  /adr/
+  /commands/
+  /runbooks/
+  /security/
+  /sre/
+  /testing/
+  /user_guide/README.md
+  /requirements-docs.txt
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - user_guide/getting-started/index.md
+      - Set Up Your First Channels: user_guide/getting-started/your-first-channels.md
+  - Channels & Streams:
+      - user_guide/channels-streams/index.md
+      - Stream Deduplication: user_guide/channels-streams/stream-dedup.md
+  - Channel Pipeline:
+      - user_guide/channel-pipeline/index.md
+      - Debugging Rules: user_guide/channel-pipeline/debugging-rules.md
+      - Fuzzy Matching for Local / OTA Channels: user_guide/channel-pipeline/fuzzy-locals-matching.md
+      - Runaway Safety Cap: user_guide/channel-pipeline/runaway-safety-cap.md
+      - Channel Sort vs. Channel Numbering: user_guide/channel-pipeline/sort-vs-numbering.md
+  - EPG:
+      - user_guide/epg/index.md
+      - Finding & Fixing Mis-linked Channels: user_guide/epg/finding-mislinked-channels.md
+  - Normalization: user_guide/normalization/index.md
+  - Stats:
+      - user_guide/stats/index.md
+      - Users Panel: user_guide/stats/users-panel.md
+      - Metric Glossary: user_guide/stats/metric-glossary.md
+      - Stats v2 History Cutover: user_guide/stats/stats-v2-history-cutover.md
+  - Backup & Restore:
+      - user_guide/backup-restore/index.md
+      - Overview: user_guide/backup-restore/backup-overview.md
+      - Take a Backup: user_guide/backup-restore/take-a-backup.md
+      - Verify a Backup: user_guide/backup-restore/verify-a-backup.md
+      - Restore a Backup: user_guide/backup-restore/restore-a-backup.md
+      - Configure Cloud Destinations: user_guide/backup-restore/configure-cloud-destinations.md
+      - Cross-Instance Sync: user_guide/backup-restore/cross-instance-sync.md
+      - Migrate to a New Install: user_guide/backup-restore/migrate-to-a-new-install.md
+      - Troubleshoot a Restore: user_guide/backup-restore/troubleshoot-restore.md
+  - Notifications & Alerts: user_guide/notifications/index.md
+  - Integrations:
+      - user_guide/integrations/index.md
+      - Emby: user_guide/integrations/emby.md
+      - MCP — Claude AI: user_guide/integrations/mcp.md
+  - Troubleshooting: user_guide/troubleshooting/index.md
+  - Error Telemetry & Opt-out: user_guide/error-telemetry-opt-out.md

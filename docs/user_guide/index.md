@@ -77,16 +77,16 @@ section that owns (or will own) its "Common tasks" tutorials.
 
 | Tab | Tutorials live in |
 |-|-|
-| M3U Manager | [`m3u-manager/`](m3u-manager/index.md) — **Planned** |
+| M3U Manager | `m3u-manager/` — **Planned** |
 | EPG Manager | [EPG](epg/index.md) |
 | Channel Manager | [Channels & Streams](channels-streams/index.md) |
-| Guide | [`guide/`](guide/index.md) — **Planned** |
-| Logo Manager | [`logo-manager/`](logo-manager/index.md) — **Planned** |
-| M3U Changes | [`m3u-changes/`](m3u-changes/index.md) — **Planned** |
+| Guide | `guide/` — **Planned** |
+| Logo Manager | `logo-manager/` — **Planned** |
+| M3U Changes | `m3u-changes/` — **Planned** |
 | Channel Pipeline | [Channel Pipeline](channel-pipeline/index.md) |
-| Journal | [`journal/`](journal/index.md) — **Planned** |
+| Journal | `journal/` — **Planned** |
 | Stats | [Stats](stats/index.md) |
-| Settings | [`settings/`](settings/index.md) — **Planned** |
+| Settings | `settings/` — **Planned** |
 
 Settings is one tab but many pages: some of its subsections already have a
 home in an existing section — Normalization ([`normalization/`](normalization/index.md)),
