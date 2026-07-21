@@ -188,3 +188,39 @@ class TestRunPipelineSurfacesWarnings:
 
         assert result["success"] is True
         assert result.get("normalization_warnings", []) == []
+
+
+class TestNonReversibleProfileChangeDisclosure:
+    """y3m6o.1 review (Finding 3): ChannelPipelineExecution.to_dict derives
+    ``has_non_reversible_profile_changes`` from the persisted
+    ``non_reversible_profile_changes`` warning, so the executions UI can
+    disclose that rollback/undo will not restore channel-profile membership."""
+
+    def test_to_dict_flags_when_warning_present(self):
+        ex = ChannelPipelineExecution(
+            mode="execute", triggered_by="manual",
+            started_at=__import__("datetime").datetime.utcnow(),
+        )
+        ex.set_warnings([
+            {"type": "non_reversible_profile_changes", "count": 2,
+             "channel_ids": [10, 11], "message": "..."},
+        ])
+        d = ex.to_dict()
+        assert d["has_non_reversible_profile_changes"] is True
+
+    def test_to_dict_false_without_warning(self):
+        ex = ChannelPipelineExecution(
+            mode="execute", triggered_by="manual",
+            started_at=__import__("datetime").datetime.utcnow(),
+        )
+        ex.set_warnings([{"type": "disabled_normalization_group", "rule_name": "X"}])
+        d = ex.to_dict()
+        assert d["has_non_reversible_profile_changes"] is False
+
+    def test_to_dict_false_with_no_warnings(self):
+        ex = ChannelPipelineExecution(
+            mode="execute", triggered_by="manual",
+            started_at=__import__("datetime").datetime.utcnow(),
+        )
+        d = ex.to_dict()
+        assert d["has_non_reversible_profile_changes"] is False

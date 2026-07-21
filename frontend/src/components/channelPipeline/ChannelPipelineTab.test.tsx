@@ -952,6 +952,56 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
+    // y3m6o.1 review (Finding 3): rollback/undo must DISCLOSE that
+    // channel-profile membership will not be restored when the run mutated it.
+    it('discloses non-reversible profile changes in the rollback confirm', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          status: 'completed_with_errors',
+          mode: 'execute',
+          has_non_reversible_profile_changes: true,
+        })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      const rollbackBtn = await screen.findByRole('button', { name: /rollback/i });
+      // Tooltip discloses membership will not be restored.
+      expect(rollbackBtn.title).toMatch(/channel-profile membership.*not be restored/i);
+
+      await user.click(rollbackBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('rollback-profile-disclosure')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('rollback-profile-disclosure').textContent)
+        .toMatch(/channel-profile membership/i);
+    });
+
+    it('omits the profile disclosure when the run made no profile changes', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          status: 'completed',
+          mode: 'execute',
+          has_non_reversible_profile_changes: false,
+        })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      const rollbackBtn = await screen.findByRole('button', { name: /rollback/i });
+      expect(rollbackBtn.title).not.toMatch(/channel-profile membership/i);
+
+      await user.click(rollbackBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText(/confirm.*rollback/i)).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('rollback-profile-disclosure')).toBeNull();
+    });
+
     it('disables rollback for dry-run executions', async () => {
       mockDataStore.channelPipelineExecutions.push(
         createMockChannelPipelineExecution({ status: 'completed', mode: 'dry_run' })

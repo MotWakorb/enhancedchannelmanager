@@ -85,6 +85,13 @@ class TaskResult:
     skipped_count: int = 0
     error: Optional[str] = None
     details: dict = field(default_factory=dict)
+    # y3m6o.1 review (Finding 2): when True, the task engine SKIPS its generic
+    # completion notification (the "Task Completed"/"...with Warnings" toast +
+    # alert) because the task body already emitted ONE coherent notification for
+    # this run. Journal + success-gauge stamping still happen. Used by the
+    # channel-pipeline post-refresh path when a run is BOTH capped AND has
+    # failed actions, to avoid emitting two separate warnings.
+    suppress_completion_notification: bool = False
 
     @property
     def duration_seconds(self) -> Optional[float]:

@@ -176,6 +176,54 @@ async def test_completed_with_errors_status_without_count_still_non_green():
     assert "success" not in types
 
 
+_CAPPED_FAILED_RESULT = {
+    # y3m6o.1 review (Finding 2): a run that was BOTH capped AND had failed
+    # actions. The task must emit ONE coherent warning (cap + failed-action
+    # guidance) and suppress the task-engine's generic warning.
+    "status": "capped",
+    "capped": True,
+    "cap_would_create": 5,
+    "failed_action_count": 2,
+    "failed_actions": [
+        {"action": "assign_channel_profile"},
+        {"action": "event_sync_attach"},
+    ],
+    "channels_created": 3,
+    "channels_updated": 1,
+    "streams_matched": 4,
+    "streams_evaluated": 6,
+    "execution_id": 102,
+}
+
+
+@pytest.mark.asyncio
+async def test_capped_plus_failed_emits_one_combined_warning():
+    """y3m6o.1 review (Finding 2): a compound capped + failed-action run emits
+    ONE coherent warning carrying BOTH the cap info and the failed-action
+    recovery guidance — not a cap warning plus a separate engine warning."""
+    result, notify = await _run_autofire_capture(_CAPPED_FAILED_RESULT)
+    completion = _completion_notification(notify)
+    assert completion is not None
+    assert completion["notification_type"] == "warning"
+    # ONE message carries BOTH conditions.
+    msg = completion["message"].lower()
+    assert "cap" in msg
+    assert "action" in msg and "failed" in msg
+    # And the returned envelope tells the task engine to skip its own warning.
+    assert result.suppress_completion_notification is True
+
+
+@pytest.mark.asyncio
+async def test_capped_without_failed_does_not_suppress_engine_notification():
+    """Control: a capped run with NO failed actions keeps the standard behavior
+    — it does not suppress the task engine's completion path."""
+    capped_only = dict(_CAPPED_FAILED_RESULT)
+    capped_only["failed_action_count"] = 0
+    capped_only["failed_actions"] = []
+    result, _ = await _run_autofire_capture(capped_only)
+    assert result.suppress_completion_notification is False
+
+
 @pytest.mark.asyncio
 async def test_clean_run_emits_green_completion_and_stays_success():
     result, notify = await _run_autofire_capture(_CLEAN_RESULT)
@@ -284,3 +332,85 @@ async def test_partial_failure_result_emits_warning_completion_with_alerts(
     assert kwargs["title"].startswith("Task Completed with Warnings")
     # External alerts fire on the 3 AM path.
     assert kwargs["send_alerts"] is True
+
+
+class _SuppressedCompletionTask(TaskScheduler):
+    task_id = "test_y3m6o1_suppressed_completion"
+    task_name = "Y3M6O1 Suppressed Completion Test"
+    task_description = "Synthetic task — success=True, failed_count>0, suppressed."
+    default_enabled = False
+
+    async def execute(self) -> TaskResult:
+        now = datetime.utcnow()
+        return TaskResult(
+            success=True,
+            message="Capped and had failures; one combined warning already sent.",
+            started_at=now,
+            completed_at=now,
+            total_items=6,
+            success_count=4,
+            failed_count=2,
+            # y3m6o.1 review (Finding 2): the task already emitted ONE coherent
+            # warning, so the engine must NOT emit a second.
+            suppress_completion_notification=True,
+        )
+
+
+@pytest.fixture
+def _registered_suppressed_completion_task():
+    registry = task_registry.get_registry()
+    registry.register(_SuppressedCompletionTask)
+    registry._instances[_SuppressedCompletionTask.task_id] = _SuppressedCompletionTask(
+        ScheduleConfig(schedule_type=ScheduleType.MANUAL)
+    )
+    yield registry
+    registry.unregister(_SuppressedCompletionTask.task_id)
+    registry._instances.pop(_SuppressedCompletionTask.task_id, None)
+
+
+@pytest.mark.asyncio
+async def test_suppress_flag_skips_engine_completion_notification(
+    test_engine, monkeypatch, _registered_suppressed_completion_task
+):
+    """y3m6o.1 review (Finding 2): suppress_completion_notification makes the
+    task engine emit NO completion notification (the task already sent one
+    combined warning), avoiding two separate warnings for one run."""
+    SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=test_engine, expire_on_commit=False
+    )
+    monkeypatch.setattr(database, "_SessionLocal", SessionLocal)
+
+    s = SessionLocal()
+    try:
+        s.query(ScheduledTask).filter(
+            ScheduledTask.task_id == _SuppressedCompletionTask.task_id
+        ).delete()
+        s.add(ScheduledTask(
+            task_id=_SuppressedCompletionTask.task_id,
+            task_name=_SuppressedCompletionTask.task_name,
+            description=_SuppressedCompletionTask.task_description,
+            enabled=True,
+            schedule_type="manual",
+            send_alerts=True,
+            alert_on_warning=True,
+            show_notifications=True,
+        ))
+        s.commit()
+    finally:
+        s.close()
+
+    engine = TaskEngine()
+    engine._create_notification_callback = AsyncMock(return_value={"id": 1})
+    engine._update_notification_callback = AsyncMock()
+    engine._delete_notification_callback = AsyncMock()
+
+    notify = AsyncMock(return_value={"id": 2})
+    with patch("services.notification_service.create_notification_internal", new=notify):
+        result = await engine._execute_task(
+            task_id=_SuppressedCompletionTask.task_id, triggered_by="test"
+        )
+
+    # No completion notification emitted by the engine layer.
+    assert notify.await_count == 0
+    # The run still persisted its result (success stays True).
+    assert result.success is True

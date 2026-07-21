@@ -277,6 +277,22 @@ ChannelPipelineEngine.run_pipeline() / run_rule()
 
 `ChannelPipelineEngine` has exactly three production collaborators: `ConditionEvaluator`, `ActionExecutor`, and `init_channel_pipeline_engine`. Everything else in its call graph is tests.
 
+### Run terminal status & failure aggregation (y3m6o.1 / GH #720 Part 1)
+
+A run finalizes to exactly one terminal `ChannelPipelineExecution.status`:
+
+| Status | Meaning |
+|-|-|
+| `completed` | Every executed action succeeded (green). |
+| `completed_with_errors` | ≥1 executed action/phase FAILED, but the run was not wholly aborted — some channels/actions may have succeeded. Distinct from a blanket `failed`. The top-level `run_pipeline` result reports `success=False` and `failed_action_count`. |
+| `capped` | The created-channel cap was hit. Takes precedence over `completed_with_errors`, but a compound capped+failed run persists BOTH the cap info AND the failed-action summary in `error_message`, and the result still reports `success=False`. |
+
+**One aggregation chokepoint.** Every executed-action/phase failure is recorded into `results["failed_actions"]` — the ONE list finalization keys on. Per-stream Pass 2 action failures funnel through `_record_failed_action`; the non-Pass-2 phases (Event Sync attach, Event Sync dummy-EPG, Pass 5 deferred-EPG retry, default-profile assignment) funnel through `_record_failed_phase`. Default-profile assignment is best-effort for the channel CREATE (a failed profile PATCH never aborts it) but its failure now escalates into aggregation, so such a run is not green.
+
+**Direct-run vs task success semantics.** The engine's `run_pipeline` result is the honest record: `success = not failed_actions`, and `execution.status` persists `completed_with_errors`. The *task envelope* is intentionally softer (PO decision): the unattended `ChannelPipelineTask` returns `TaskResult(success=True, failed_count=N)` on a failed-action run, so the task engine emits ONE "Completed with Warnings" (with external alerts) rather than a hard "failed". Task History renders `failed_count>0` as an amber warning, never solid green.
+
+**Non-rollbackable profile recovery.** `assign_channel_profile` mutates channel-profile membership, which has no reversible previous-state — so it is never recorded as a rollback/snapshot entity. A run that mutated membership persists a `non_reversible_profile_changes` warning; `to_dict` exposes `has_non_reversible_profile_changes`, and the executions UI's Rollback/Undo affordances disclose that membership will NOT be restored. Recovery is manual: re-run the rule (all profile-write paths are idempotent) or fix membership by hand.
+
 ## Stream Deduplication Pipeline (v0.17.1)
 
 The interactive stream-to-channel deduplication feature (ADR-008) intercepts three trigger paths — drag-drop, "Add Stream" button, and bulk M3U refresh — and offers the operator a choice to **merge into an existing channel** rather than creating a duplicate.

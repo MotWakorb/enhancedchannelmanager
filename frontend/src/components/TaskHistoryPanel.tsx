@@ -9,10 +9,18 @@ interface TaskHistoryPanelProps {
   visible: boolean;
 }
 
-function StatusBadge({ status, success }: { status: string; success: boolean | null }) {
+function StatusBadge({ status, success, failedCount = 0 }: { status: string; success: boolean | null; failedCount?: number }) {
+  // y3m6o.1 review (Finding 4): a task that reports success=True but had
+  // failures (e.g. a channel-pipeline post-refresh run with a failed action —
+  // the PO-chosen "Completed with Warnings" envelope) must NOT render solid
+  // green. Derive an amber warning indicator from failed_count>0 so the History
+  // surface is honest about partial failures.
+  const completedWithWarnings = success === true && status !== 'running' && failedCount > 0;
+
   const getColor = () => {
     if (status === 'running') return '#3498db';
     if (status === 'cancelled') return '#f39c12';
+    if (completedWithWarnings) return '#f39c12';
     if (success === true) return '#2ecc71';
     if (success === false) return '#e74c3c';
     return 'var(--text-muted)';
@@ -21,18 +29,28 @@ function StatusBadge({ status, success }: { status: string; success: boolean | n
   const getIcon = () => {
     if (status === 'running') return 'sync';
     if (status === 'cancelled') return 'cancel';
+    if (completedWithWarnings) return 'warning';
     if (success === true) return 'check_circle';
     if (success === false) return 'error';
     return 'help';
   };
 
+  const getLabel = () => {
+    if (completedWithWarnings) return 'Completed with warnings';
+    return status;
+  };
+
   return (
-    <span style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '0.25rem',
-      color: getColor(),
-    }}>
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.25rem',
+        color: getColor(),
+      }}
+      data-testid={completedWithWarnings ? 'status-completed-with-warnings' : undefined}
+      title={completedWithWarnings ? `Completed with ${failedCount} failure${failedCount !== 1 ? 's' : ''}` : undefined}
+    >
       <span
         className="material-icons"
         style={{
@@ -42,7 +60,7 @@ function StatusBadge({ status, success }: { status: string; success: boolean | n
       >
         {getIcon()}
       </span>
-      <span style={{ textTransform: 'capitalize' }}>{status}</span>
+      <span style={{ textTransform: 'capitalize' }}>{getLabel()}</span>
     </span>
   );
 }
@@ -74,7 +92,7 @@ function ExecutionRow({ execution, isExpanded, onToggle }: {
         <td style={{ padding: '0.5rem 1rem' }}>{formatDateTime(execution.started_at)}</td>
         <td style={{ padding: '0.5rem 1rem' }}>{formatDuration(execution.duration_seconds)}</td>
         <td style={{ padding: '0.5rem 1rem' }}>
-          <StatusBadge status={execution.status} success={execution.success} />
+          <StatusBadge status={execution.status} success={execution.success} failedCount={execution.failed_count} />
         </td>
         <td style={{ padding: '0.5rem 1rem' }}>
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>

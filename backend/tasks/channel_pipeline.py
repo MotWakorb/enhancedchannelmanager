@@ -524,17 +524,35 @@ class ChannelPipelineTask(TaskScheduler):
                 )
 
             # bd-h2xnl: a capped run must NOT be silent — warn with the N-of-M.
+            # y3m6o.1 review (Finding 2): a compound capped + failed-action run
+            # must emit ONE coherent warning carrying BOTH the cap info and the
+            # failed-action recovery guidance — not the cap warning here plus a
+            # separate "Task Completed with Warnings" from the task engine. When
+            # both conditions hold, this notification carries both and the
+            # returned TaskResult suppresses the engine's generic warning.
             if result.get("capped"):
                 would = created + result.get("cap_would_create", 0)
+                cap_msg = (
+                    f"Auto-creation capped at {created} of ~{would} would-create "
+                    f"channels. It is idempotent — run auto-creation again to "
+                    f"continue (created channels persist), or raise the cap in "
+                    f"Settings > Auto Creation."
+                )
+                if has_failed_actions:
+                    cap_msg += (
+                        f" Additionally, {failed_action_count} action"
+                        f"{'s' if failed_action_count != 1 else ''} failed this "
+                        f"run — see the run's Execution History for details; "
+                        f"rerunning the pipeline is safe (every action path is "
+                        f"idempotent)."
+                    )
                 await create_notification_internal(
                     notification_type="warning",
-                    title="Auto-Creation: Capped",
-                    message=(
-                        f"Auto-creation capped at {created} of ~{would} would-create "
-                        f"channels. It is idempotent — run auto-creation again to "
-                        f"continue (created channels persist), or raise the cap in "
-                        f"Settings > Auto Creation."
+                    title=(
+                        "Auto-Creation: Capped, with errors"
+                        if has_failed_actions else "Auto-Creation: Capped"
                     ),
+                    message=cap_msg,
                     source="auto_creation",
                     source_id="capped",
                     send_alerts=True,
@@ -579,6 +597,14 @@ class ChannelPipelineTask(TaskScheduler):
                 # > 0 — if that coupling ever broke, a count of 0 must not let a
                 # failed run report green (the exact class this bead kills).
                 failed_count=max(failed_action_count, 1) if has_failed_actions else 0,
+                # y3m6o.1 review (Finding 2): a compound capped + failed-action
+                # run already emitted ONE combined warning above (cap info +
+                # failed-action recovery guidance), so tell the task engine to
+                # skip its generic "Task Completed with Warnings" — otherwise the
+                # unattended path emits two separate warnings for one run.
+                suppress_completion_notification=bool(
+                    result.get("capped") and has_failed_actions
+                ),
                 details={
                     "execution_id": result.get("execution_id"),
                     "mode": "execute",

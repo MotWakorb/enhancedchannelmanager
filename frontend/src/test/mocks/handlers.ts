@@ -189,6 +189,7 @@ export function createMockChannelPipelineExecution(overrides: Partial<MockChanne
     rolled_back_by: overrides.rolled_back_by ?? undefined,
     error: overrides.error ?? undefined,
     has_snapshot: overrides.has_snapshot ?? false,
+    has_non_reversible_profile_changes: overrides.has_non_reversible_profile_changes ?? false,
     warnings: overrides.warnings ?? undefined,
     is_event_sync: overrides.is_event_sync ?? false,
     event_sync_summary: overrides.event_sync_summary ?? undefined,
@@ -361,6 +362,8 @@ interface MockChannelPipelineExecution {
   error?: string
   /** ADR-010 §D6 — true when a pre-run ChannelPipelineSnapshot row exists. */
   has_snapshot?: boolean
+  /** y3m6o.1 review Finding 3 — run mutated channel-profile membership non-reversibly. */
+  has_non_reversible_profile_changes?: boolean
   /** enhancedchannelmanager-e8p1h — disabled-normalization-group warnings. */
   warnings?: {
     rule_id: number

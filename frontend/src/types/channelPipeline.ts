@@ -476,6 +476,15 @@ export interface ChannelPipelineExecution {
    * runs.
    */
   event_sync_summary?: EventSyncExecutionSummary[];
+  /**
+   * True when this run mutated channel-profile membership non-reversibly
+   * (assign_channel_profile carries no reversible previous state — y3m6o.1
+   * Finding 6). Rollback and Undo will NOT restore that membership, so the
+   * rollback/undo affordances disclose it (y3m6o.1 review Finding 3). Derived
+   * by the backend from the persisted non_reversible_profile_changes warning.
+   * Absent/false for runs that changed no profile membership.
+   */
+  has_non_reversible_profile_changes?: boolean;
 }
 
 /**

@@ -1318,7 +1318,10 @@ export function ChannelPipelineTab() {
                           'Rollback — deletes the channel(s) this run created and reverts the ' +
                           "channel(s) it modified, using this run's own recorded changes. This is " +
                           'the legacy per-run undo; it does not use the full pre-run snapshot ' +
-                          '(see "Undo this run").'
+                          '(see "Undo this run").' +
+                          (execution.has_non_reversible_profile_changes
+                            ? ' Note: channel-profile membership changed this run will NOT be restored.'
+                            : '')
                         }
                       >
                         <span className="material-icons">undo</span>
@@ -1334,10 +1337,13 @@ export function ChannelPipelineTab() {
                         onClick={() => handleRevertClick(execution)}
                         aria-label="Undo this run"
                         title={
-                          'Undo this run — restores ALL affected channels to their exact state ' +
+                          'Undo this run — restores affected channels to their exact stream state ' +
                           'from the pre-run snapshot, overwriting any changes made since ' +
                           '(including edits made after this run). Unlike Rollback, this is a ' +
-                          "full snapshot restore, not just this run's own changes."
+                          "full snapshot restore, not just this run's own changes." +
+                          (execution.has_non_reversible_profile_changes
+                            ? ' Note: channel-profile membership is not captured by the snapshot and will NOT be restored.'
+                            : '')
                         }
                         data-testid="revert-btn"
                       >
@@ -1586,6 +1592,15 @@ export function ChannelPipelineTab() {
                 For a complete restore to the exact pre-run state (including edits made after
                 this run), cancel and use &quot;Undo this run&quot; instead.
               </p>
+              {showRollbackConfirm.has_non_reversible_profile_changes && (
+                <p className="revert-warning-detail" data-testid="rollback-profile-disclosure">
+                  <span className="material-icons revert-warning-icon">warning</span>{' '}
+                  This run changed <strong>channel-profile membership</strong>, which has no
+                  reversible previous state. Rollback will <strong>not</strong> restore it —
+                  only the stream and field changes this run made are reverted. Profile
+                  membership must be corrected manually.
+                </p>
+              )}
             </div>
             <div className="modal-footer">
               <button
@@ -1635,6 +1650,15 @@ export function ChannelPipelineTab() {
                 Unlike Rollback, this restores every affected channel to the pre-run snapshot —
                 not just the changes this run itself made.
               </p>
+              {showRevertConfirm.has_non_reversible_profile_changes && (
+                <p className="revert-warning-detail" data-testid="revert-profile-disclosure">
+                  <span className="material-icons revert-warning-icon">warning</span>{' '}
+                  Note: this run changed <strong>channel-profile membership</strong>, which the
+                  pre-run snapshot does not capture. Undo restores stream assignments but will
+                  <strong> not</strong> restore channel-profile membership — correct it manually
+                  if needed.
+                </p>
+              )}
             </div>
             <div className="modal-footer">
               <button

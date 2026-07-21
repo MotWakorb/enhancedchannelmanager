@@ -108,6 +108,50 @@ class TestExecutionContext:
         assert ctx.created_entities[0]["type"] == "channel"
         assert ctx.created_entities[0]["id"] == 1
 
+    def test_add_result_tracks_non_reversible_channel(self):
+        """y3m6o.1 review (Finding 3): a modified-but-non-rollbackable channel
+        result (assign_channel_profile) is recorded on
+        non_reversible_channel_ids at the add_result chokepoint and NOT as a
+        rollback/modified entity."""
+        ctx = ExecutionContext()
+        result = ActionResult(
+            success=True,
+            action_type="assign_channel_profile",
+            description="Assigned channel profiles",
+            entity_type="channel",
+            entity_id=42,
+            entity_name="ESPN",
+            modified=True,
+            rollbackable=False,
+        )
+        ctx.add_result(result)
+
+        assert ctx.non_reversible_channel_ids == {42}
+        # A non-rollbackable change is NOT counted as a reversible modified entity.
+        assert ctx.modified_entities == []
+        # It is still counted as a channel update.
+        assert ctx.channels_updated == 1
+
+    def test_add_result_reversible_channel_not_flagged_non_reversible(self):
+        """Control: a normal rollbackable channel modification is a modified
+        entity and is NOT flagged non-reversible."""
+        ctx = ExecutionContext()
+        result = ActionResult(
+            success=True,
+            action_type="assign_logo",
+            description="Assigned logo",
+            entity_type="channel",
+            entity_id=7,
+            entity_name="ESPN",
+            modified=True,
+            rollbackable=True,
+            previous_state={"logo": None},
+        )
+        ctx.add_result(result)
+
+        assert ctx.non_reversible_channel_ids == set()
+        assert len(ctx.modified_entities) == 1
+
     def test_add_result_group_created(self):
         """add_result tracks created groups."""
         ctx = ExecutionContext()

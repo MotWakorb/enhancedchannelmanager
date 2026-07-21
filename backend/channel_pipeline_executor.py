@@ -131,6 +131,23 @@ class ExecutionContext:
     # how many matched streams in this run resolved to that group.
     sort_group_requests: dict[int, dict] = field(default_factory=dict)
 
+    # y3m6o.1 review (Finding 3): channel ids whose profile membership was
+    # mutated NON-reversibly this run — a modified result flagged
+    # rollbackable=False (assign_channel_profile carries no reversible
+    # previous_state). Populated at the add_result chokepoint so no
+    # profile-write path can be missed; the engine folds these across the run
+    # and persists a disclosure warning so rollback/undo never claims to restore
+    # channel-profile membership it cannot.
+    non_reversible_channel_ids: set = field(default_factory=set)
+
+    # y3m6o.1 review (Finding 1 reversal): default-profile assignment failures.
+    # Each entry {channel_id, failed_profile_ids} for a newly-created channel
+    # whose configured default-profile membership could not be fully enforced.
+    # Default assignment stays best-effort for the CREATE (never aborts it), but
+    # the PO decision escalates the failure into the run-level aggregation via
+    # the engine, so such a run finalizes completed_with_errors, not green.
+    default_profile_failures: list = field(default_factory=list)
+
     # BD-F (bd-a5lb2): per-stream count of pending_merges rows
     # enqueued by the bulk-M3U dedup hook (ADR-008 §D1). One per
     # would-be channel creation deferred to operator review. The
@@ -192,6 +209,14 @@ class ExecutionContext:
                     "name": result.entity_name,
                     "previous": result.previous_state
                 })
+            elif result.entity_type == "channel" and result.entity_id is not None:
+                # y3m6o.1 review (Finding 3): a modified-but-non-rollbackable
+                # channel change (assign_channel_profile — profile membership
+                # with no reversible previous_state) is recorded HERE so the run
+                # can DISCLOSE that rollback/undo will not restore it. Same
+                # chokepoint that counts the update, so no profile-write path
+                # (standard Pass 2 OR event_sync) can be missed.
+                self.non_reversible_channel_ids.add(result.entity_id)
 
         if result.skipped:
             self.streams_skipped += 1
@@ -1319,7 +1344,9 @@ class ActionExecutor:
             exec_ctx.created_channel_ids.add(new_channel["id"])
 
             # Assign default channel profiles if configured
-            profile_desc = await self._assign_default_profiles(new_channel["id"])
+            profile_desc = await self._assign_default_profiles(
+                new_channel["id"], exec_ctx
+            )
 
             desc = f"Created channel '{channel_name}' (#{channel_number}) in group {group_label}"
             if profile_desc:
@@ -3643,11 +3670,19 @@ class ActionExecutor:
 
         return ProfileMembershipResult(enabled_count, disabled_count, failed_profile_ids)
 
-    async def _assign_default_profiles(self, channel_id: int) -> str:
+    async def _assign_default_profiles(
+        self, channel_id: int, exec_ctx: "ExecutionContext | None" = None,
+    ) -> str:
         """Assign default channel profiles to a newly created channel.
 
         Enables channel in default profiles, disables in non-default profiles.
         Returns a description string for logging, or empty string if no profiles configured.
+
+        ``exec_ctx`` (y3m6o.1 review — Finding 1 reversal): when supplied, a
+        partial/total default-profile write failure is recorded on the context
+        (``default_profile_failures``) so the engine can escalate it into the
+        run-level failure aggregation. Optional so direct-construct callers/tests
+        that never pass a context keep the log-only behavior.
         """
         if not self._settings or not self._settings.default_channel_profile_ids:
             return ""
@@ -3672,11 +3707,14 @@ class ActionExecutor:
             channel_id, list(self._settings.default_channel_profile_ids)
         )
 
-        # y3m6o.1 Finding 5 (0152): default-profile assignment stays best-effort
-        # (a failed PATCH never aborts channel creation), but a partial/total
-        # failure must not be SILENT — surface the failed profile ids so an
-        # operator can see that the new channel's default-profile membership is
-        # incomplete. Purely additive: the return description is unchanged.
+        # y3m6o.1 review (Finding 1 reversal, was Finding 5 in 0152):
+        # default-profile assignment stays best-effort for the CREATE (a failed
+        # PATCH never aborts channel creation), but the prior log-only behavior
+        # is REVERSED — a partial/total failure now ESCALATES through the run's
+        # failure aggregation (via exec_ctx.default_profile_failures) so a run
+        # that could not enforce a new channel's configured default membership
+        # finalizes completed_with_errors, not green. Still logged for the ops
+        # trail; the return description stays unchanged.
         if membership.failed_profile_ids:
             failed_str = ", ".join(
                 str(p) for p in membership.failed_profile_ids
@@ -3684,10 +3722,16 @@ class ActionExecutor:
             logger.warning(
                 "[AUTO-CREATE-EXEC] Channel %s: default-profile assignment "
                 "incomplete — enabled in %s, disabled in %s; failed to update "
-                "profile(s): %s (best-effort, channel creation unaffected)",
+                "profile(s): %s (channel creation unaffected; escalated to the "
+                "run's failed-action aggregation)",
                 channel_id, membership.enabled_count,
                 membership.disabled_count, failed_str,
             )
+            if exec_ctx is not None:
+                exec_ctx.default_profile_failures.append({
+                    "channel_id": channel_id,
+                    "failed_profile_ids": list(membership.failed_profile_ids),
+                })
 
         if membership.enabled_count or membership.disabled_count:
             desc = (
