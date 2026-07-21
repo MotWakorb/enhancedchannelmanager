@@ -1951,6 +1951,10 @@ class ChannelPipelineRule(Base):
     description = Column(Text, nullable=True)  # User notes about this rule
     enabled = Column(Boolean, default=True, nullable=False)
     priority = Column(Integer, default=0, nullable=False)  # Lower = runs first
+    # Optional inclusive calendar-date window. Null bounds are open-ended.
+    # Evaluated against the backend's UTC date before a rule can execute.
+    active_from = Column(Date, nullable=True)
+    active_until = Column(Date, nullable=True)
 
     # Scope - which streams this rule applies to
     m3u_account_id = Column(Integer, nullable=True)  # Null = all accounts
@@ -2162,6 +2166,8 @@ class ChannelPipelineRule(Base):
             "description": self.description,
             "enabled": self.enabled,
             "priority": self.priority,
+            "active_from": self.active_from.isoformat() if self.active_from else None,
+            "active_until": self.active_until.isoformat() if self.active_until else None,
             "m3u_account_id": self.m3u_account_id,
             "target_group_id": self.target_group_id,
             "conditions": self.get_conditions(),

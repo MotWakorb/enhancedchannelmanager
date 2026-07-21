@@ -2019,5 +2019,28 @@ describe('EventSyncRuleEditor', () => {
       // not lose it (inert while off; backend validates shape only).
       expect(config.promote_target_group_id).toBe(40);
     });
+
+    it('round-trips the rule active date window', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      const rule = {
+        ...EXISTING_RULE,
+        active_from: '2026-09-01',
+        active_until: '2027-02-15',
+      };
+      render(<EventSyncRuleEditor rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      expect(screen.getByLabelText('Start date')).toHaveValue('2026-09-01');
+      expect(screen.getByLabelText('End date')).toHaveValue('2027-02-15');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0]).toEqual(expect.objectContaining({
+        active_from: '2026-09-01',
+        active_until: '2027-02-15',
+      }));
+    });
   });
 });

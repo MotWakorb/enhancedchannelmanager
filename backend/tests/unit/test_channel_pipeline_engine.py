@@ -5,6 +5,7 @@ Tests the ChannelPipelineEngine class which orchestrates the entire auto-creatio
 pipeline, coordinating rules, streams, and executions.
 """
 from unittest.mock import MagicMock, AsyncMock, patch
+from datetime import datetime, timedelta
 import asyncio
 import pytest
 
@@ -138,7 +139,7 @@ class TestChannelPipelineEngineLoadRules:
         self.client = MagicMock()
         self.engine = ChannelPipelineEngine(self.client)
 
-    def _make_rule(self, name: str, priority: int, enabled: bool = True):
+    def _make_rule(self, name: str, priority: int, enabled: bool = True, **kwargs):
         """Create a minimal ChannelPipelineRule for seeding."""
         from models import ChannelPipelineRule
         import json
@@ -148,7 +149,29 @@ class TestChannelPipelineEngineLoadRules:
             priority=priority,
             conditions=json.dumps([]),
             actions=json.dumps([]),
+            **kwargs,
         )
+
+    def test_load_rules_only_inside_inclusive_active_window(self, test_session):
+        today = datetime.utcnow().date()
+        rules = [
+            self._make_rule("No window", 0),
+            self._make_rule("Starts today", 1, active_from=today),
+            self._make_rule("Ends today", 2, active_until=today),
+            self._make_rule("Future", 3, active_from=today + timedelta(days=1)),
+            self._make_rule("Expired", 4, active_until=today - timedelta(days=1)),
+        ]
+        test_session.add_all(rules)
+        test_session.commit()
+
+        with patch("channel_pipeline_engine.get_session", return_value=test_session):
+            loaded = asyncio.get_event_loop().run_until_complete(
+                self.engine._load_rules()
+            )
+
+        assert [rule.name for rule in loaded] == [
+            "No window", "Starts today", "Ends today"
+        ]
 
     def test_load_rules_all_enabled(self, test_session):
         """Loads only enabled rules, sorted by priority ascending.

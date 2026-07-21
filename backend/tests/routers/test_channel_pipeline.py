@@ -141,6 +141,34 @@ class TestCreateChannelPipelineRule:
         assert data["enabled"] is True
 
     @pytest.mark.asyncio
+    async def test_round_trips_active_date_window(self, async_client):
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            response = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Football season",
+                "conditions": [{"type": "always"}],
+                "actions": [{"type": "skip"}],
+                "active_from": "2026-09-01",
+                "active_until": "2027-02-15",
+            })
+
+        assert response.status_code == 200, response.text
+        assert response.json()["active_from"] == "2026-09-01"
+        assert response.json()["active_until"] == "2027-02-15"
+
+    @pytest.mark.asyncio
+    async def test_rejects_active_window_with_end_before_start(self, async_client):
+        response = await async_client.post("/api/auto-creation/rules", json={
+            "name": "Invalid season",
+            "conditions": [{"type": "always"}],
+            "actions": [{"type": "skip"}],
+            "active_from": "2027-02-15",
+            "active_until": "2026-09-01",
+        })
+
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_rejects_invalid_rule(self, async_client):
         """Returns 400 for invalid rule configuration."""
         with patch("channel_pipeline_schema.validate_rule", return_value={

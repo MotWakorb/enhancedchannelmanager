@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 import journal
+from sqlalchemy import or_
 from config import get_settings, save_settings
 from dispatcharr_client import get_client
 from log_throttle import should_log
@@ -213,14 +214,23 @@ class ChannelPipelineTask(TaskScheduler):
         self._set_progress(status="loading_rules")
         session = get_session()
         try:
+            today = datetime.utcnow().date()
+            active_window = (
+                or_(ChannelPipelineRule.active_from.is_(None),
+                    ChannelPipelineRule.active_from <= today),
+                or_(ChannelPipelineRule.active_until.is_(None),
+                    ChannelPipelineRule.active_until >= today),
+            )
             rules_to_run = session.query(ChannelPipelineRule).filter(
                 ChannelPipelineRule.enabled == True,
                 ChannelPipelineRule.run_on_refresh == True,
                 ChannelPipelineRule.event_sync_config.is_(None),
+                *active_window,
             ).all()
             event_sync_candidates = session.query(ChannelPipelineRule).filter(
                 ChannelPipelineRule.enabled == True,
                 ChannelPipelineRule.event_sync_config.isnot(None),
+                *active_window,
             ).all()
             event_sync_to_run = [
                 r for r in event_sync_candidates

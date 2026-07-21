@@ -186,6 +186,8 @@ export function useChannelPipelineRules(
       description: originalRule.description,
       enabled: false, // Disabled by default (safety: avoid duplicate processing)
       priority: maxPriority + 1,
+      active_from: originalRule.active_from ?? null,
+      active_until: originalRule.active_until ?? null,
       conditions: originalRule.conditions,
       actions: originalRule.actions,
       m3u_account_id: originalRule.m3u_account_id,

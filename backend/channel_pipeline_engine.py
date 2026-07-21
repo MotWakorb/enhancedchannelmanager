@@ -20,6 +20,7 @@ from typing import Optional
 
 import safe_regex
 import journal
+from sqlalchemy import or_
 from config import (
     DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN,
     DEFAULT_MAX_AUTO_CREATION_LOG_ENTRIES,
@@ -1075,11 +1076,20 @@ class ChannelPipelineEngine:
             self._existing_groups = []
 
     async def _load_rules(self, rule_ids: list[int] = None) -> list[ChannelPipelineRule]:
-        """Load enabled rules sorted by priority."""
+        """Load enabled rules active on today's UTC calendar date."""
         session = get_session()
         try:
+            today = datetime.utcnow().date()
             query = session.query(ChannelPipelineRule).filter(
-                ChannelPipelineRule.enabled == True
+                ChannelPipelineRule.enabled == True,
+                or_(
+                    ChannelPipelineRule.active_from.is_(None),
+                    ChannelPipelineRule.active_from <= today,
+                ),
+                or_(
+                    ChannelPipelineRule.active_until.is_(None),
+                    ChannelPipelineRule.active_until >= today,
+                ),
             )
 
             if rule_ids:
