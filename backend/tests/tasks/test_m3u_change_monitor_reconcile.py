@@ -44,6 +44,28 @@ async def test_monitor_runs_sweep_when_no_changes_detected(test_session):
 
 
 @pytest.mark.asyncio
+async def test_monitor_runs_sweep_even_with_no_accounts_to_check(test_session):
+    """Finding: even when account filtering yields NO accounts, the profile
+    sweep still runs (it is the durable convergence backbone, independent of
+    change monitoring)."""
+    client = AsyncMock()
+    client.get_m3u_accounts.return_value = []  # no accounts pass the filter
+    fake_sweep = AsyncMock(return_value={
+        "groups_reconciled": 1, "groups_partial_failure": 0, "groups_degraded": 0,
+        "groups_with_selection": 1, "channels_scoped": 1,
+    })
+    task = M3UChangeMonitorTask()
+
+    with patch("tasks.m3u_change_monitor.get_client", return_value=client), \
+         patch("tasks.m3u_change_monitor.get_session", return_value=test_session), \
+         patch("services.profile_reconcile.reconcile_all_selected_groups", fake_sweep):
+        result = await task.execute()
+
+    assert result.success
+    fake_sweep.assert_awaited_once()  # sweep ran despite zero accounts
+
+
+@pytest.mark.asyncio
 async def test_monitor_reflects_reconcile_degraded_as_warning(test_session):
     """Blocker 3c: a sweep that ended with degraded/partial_failure groups is
     reflected in the TaskResult (failed_count > 0 -> 'completed with warnings')
@@ -58,6 +80,7 @@ async def test_monitor_reflects_reconcile_degraded_as_warning(test_session):
 
     fake_sweep = AsyncMock(return_value={
         "groups_reconciled": 1, "groups_partial_failure": 1, "groups_degraded": 1,
+        "groups_with_selection": 3, "accounts_normalize_failed": 0,
         "channels_scoped": 3,
     })
     task = M3UChangeMonitorTask()

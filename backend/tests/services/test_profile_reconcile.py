@@ -50,8 +50,10 @@ def _reset_group_locks():
     event loop) so a module-level lock from a prior loop is never reused."""
     import services.profile_reconcile as pr
     pr._group_locks.clear()
+    pr._sweep_in_progress = False
     yield
     pr._group_locks.clear()
+    pr._sweep_in_progress = False
 
 
 def _channel(cid: int, *, group: int = 100, owned: bool = False,
@@ -95,6 +97,8 @@ class FakeClient:
         fail_profiles=None,
         raise_on_profiles=False,
         raise_on_channels=False,
+        recheck_channels_by_gid=None,
+        raise_on_get_channel=False,
     ):
         self.channels_by_gid = channels_by_gid
         self.profiles = profiles
@@ -106,6 +110,13 @@ class FakeClient:
         # When True, get_channel_profiles raises — models an unreachable
         # Dispatcharr so the universe fetch fails (universe-fetch-failure path).
         self.raise_on_profiles = raise_on_profiles
+        # gid -> channels returned by the SECOND get_channels fetch for that gid
+        # (the reconcile's pre-write ownership RE-CHECK — Blocker 2a) so a channel
+        # can "become pipeline-owned" between the snapshot and the re-check.
+        self.recheck_channels_by_gid = recheck_channels_by_gid or {}
+        self._fetch_counts: dict[int, int] = {}
+        # When True, get_channel raises — models a failed fresh read (Blocker 5).
+        self.raise_on_get_channel = raise_on_get_channel
         self.bulk_calls: list[tuple[int, tuple, bool]] = []
         self.get_channels_gids: list[int] = []
         self.update_channel_calls: list[tuple[int, dict]] = []
@@ -113,7 +124,14 @@ class FakeClient:
         # custom_properties write between the reconcile snapshot and the PATCH).
         self.fresh_cp_by_id: dict[int, dict] = {}
 
+    async def get_m3u_accounts(self):
+        # Normalize (Blocker 3b) queries this; unit tests exercise the reconcile
+        # path, not enforced-global propagation, so return no accounts (no-op).
+        return []
+
     async def get_channel(self, channel_id):
+        if self.raise_on_get_channel:
+            raise RuntimeError("get_channel boom")
         if channel_id in self.fresh_cp_by_id:
             return {"id": channel_id, "custom_properties": self.fresh_cp_by_id[channel_id]}
         for rows in self.channels_by_gid.values():
@@ -125,8 +143,17 @@ class FakeClient:
     async def get_channels(self, page=1, page_size=100, search=None, channel_group=None):
         if self.raise_on_channels:
             raise RuntimeError("get_channels boom")
+        if page == 1:
+            self._fetch_counts[channel_group] = self._fetch_counts.get(channel_group, 0) + 1
         self.get_channels_gids.append(channel_group)
-        rows = list(self.channels_by_gid.get(channel_group, []))
+        # The reconcile fetches a group's channels TWICE (classification, then
+        # the pre-write ownership re-check). Serve the re-check override on the
+        # 2nd fetch so a channel can flip to pipeline-owned in between.
+        if (self._fetch_counts.get(channel_group, 0) >= 2
+                and channel_group in self.recheck_channels_by_gid):
+            rows = list(self.recheck_channels_by_gid[channel_group])
+        else:
+            rows = list(self.channels_by_gid.get(channel_group, []))
         # Paginate deterministically using this client's configured page size.
         start = (page - 1) * self.page_size
         chunk = rows[start:start + self.page_size]
@@ -484,6 +511,229 @@ async def test_reconcile_acquires_effective_group_lock(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Blocker 2a — pre-write ownership re-check (pipeline vs reconcile)
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pre_write_recheck_drops_channel_that_became_pipeline_owned():
+    """Blocker 2a: a channel that was UNOWNED at the initial snapshot but became
+    pipeline-owned (a concurrent assign_channel_profile stamped it) BEFORE the
+    destructive writes must be DROPPED by the pre-write ownership re-check — its
+    membership is NOT overwritten."""
+    initial = [_channel(10, group=100)]  # unowned at snapshot
+    recheck = [_channel(10, group=100, owned=True, rule_id=_RULE_ID)]  # now owned
+    client = FakeClient(
+        {100: initial}, profiles=[1, 2],
+        recheck_channels_by_gid={100: recheck},
+    )
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    result = await reconcile_group_profiles(
+        client, settings, 100, live_rule_ids={_RULE_ID}
+    )
+
+    # Channel 10 was dropped before any write — membership untouched.
+    assert client.bulk_calls == []
+    assert result["status"] == "no_channels"
+    assert result["channels_excluded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_recheck_fetch_failure_fails_closed_degraded():
+    """If the pre-write ownership re-check fetch FAILS, fail closed (no writes),
+    degraded — never risk clobbering a possibly-owned channel."""
+    class _RecheckFails(FakeClient):
+        async def get_channels(self, page=1, page_size=100, search=None, channel_group=None):
+            self._fetch_counts[channel_group] = self._fetch_counts.get(channel_group, 0) + (1 if page == 1 else 0)
+            if self._fetch_counts.get(channel_group, 0) >= 2:
+                raise RuntimeError("recheck boom")
+            self.get_channels_gids.append(channel_group)
+            return {"count": 1, "next": None, "previous": None,
+                    "results": list(self.channels_by_gid.get(channel_group, []))}
+
+    client = _RecheckFails({100: [_channel(10, group=100)]}, profiles=[1, 2])
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    result = await reconcile_group_profiles(client, settings, 100, live_rule_ids=set())
+
+    assert result["status"] == "degraded"
+    assert client.bulk_calls == []
+
+
+# --------------------------------------------------------------------------
+# Blocker 4 — fail closed on lock / revalidation failure
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_revalidation_fetch_failure_fails_closed_no_writes():
+    """Blocker 4: if the post-lock revalidation fetch FAILS, issue NO writes and
+    return degraded (the scheduled sweep retries)."""
+    client = FakeClient({100: [_channel(10, group=100)]}, profiles=[1, 2])
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    async def _boom():
+        raise RuntimeError("revalidation boom")
+
+    result = await reconcile_group_profiles(
+        client, settings, 100, live_rule_ids=set(), settings_provider=_boom
+    )
+
+    assert result["status"] == "degraded"
+    assert client.bulk_calls == []
+    assert client.get_channels_gids == []  # never even enumerated
+
+
+@pytest.mark.asyncio
+async def test_continuous_retarget_fails_closed_no_writes():
+    """Blocker 4: if a concurrent override retarget keeps moving the effective
+    group under the lock past the bound, fail closed (no writes, degraded)."""
+    client = FakeClient({100: [_channel(10, group=100)], 200: [], 300: []},
+                        profiles=[1, 2])
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    # Each revalidation returns a DIFFERENT override target, so the effective
+    # group never stabilises.
+    targets = iter([200, 300, 400, 500, 600])
+
+    async def _retarget_provider():
+        t = next(targets)
+        return {100: _setting(channel_profile_ids=[1], group_override=t)}
+
+    result = await reconcile_group_profiles(
+        client, settings, 100, live_rule_ids=set(),
+        settings_provider=_retarget_provider,
+    )
+
+    assert result["status"] == "degraded"
+    assert client.bulk_calls == []
+
+
+# --------------------------------------------------------------------------
+# Blocker 5 — no stale whole-value write on failed fresh read
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_marker_clear_skipped_on_failed_fresh_read():
+    """Blocker 5: when clearing a released channel's marker, a FAILED fresh read
+    must SKIP the write entirely (no PATCH from stale snapshot)."""
+    ch = _channel(11, group=100, owned=True, rule_id=_RULE_ID)
+    client = FakeClient({100: [ch]}, profiles=[1, 2], raise_on_get_channel=True)
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    # rule 7 not live -> channel is "released" -> _clear_ownership_marker runs,
+    # but its fresh read fails -> no update_channel PATCH issued.
+    await reconcile_group_profiles(client, settings, 100, live_rule_ids=set())
+
+    assert client.update_channel_calls == []  # no stale write
+
+
+# --------------------------------------------------------------------------
+# Blocker 3b — normalize divergent sibling rows every sweep
+# --------------------------------------------------------------------------
+
+class _NormalizeClient(FakeClient):
+    """FakeClient that also serves get_m3u_accounts for the normalize path and
+    records group-settings PATCHes."""
+
+    def __init__(self, *args, accounts=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._accounts = accounts or []
+        self.group_settings_writes: list[tuple[int, list]] = []
+
+    async def get_m3u_accounts(self):
+        return self._accounts
+
+    async def update_m3u_group_settings(self, account_id, data):
+        self.group_settings_writes.append((account_id, data.get("group_settings", [])))
+        return {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_normalize_converges_divergent_sibling(monkeypatch):
+    """Blocker 3b: the sweep NORMALIZES a divergent sibling row (account 2 has
+    [9] while the winning selection is [1]) even though nothing changed this
+    request."""
+    async def _no_live_rules():
+        return set()
+    monkeypatch.setattr(
+        "services.profile_reconcile._resolve_live_rule_ids", _no_live_rules
+    )
+    accounts = [
+        {"id": 1, "channel_groups": [
+            {"channel_group": 100, "custom_properties": {"channel_profile_ids": [1]}}]},
+        {"id": 2, "channel_groups": [
+            {"channel_group": 100, "custom_properties": {"channel_profile_ids": [9]}}]},
+    ]
+    client = _NormalizeClient({100: [_channel(10, group=100)]}, profiles=[1, 2],
+                              accounts=accounts)
+    settings = {100: _setting(channel_profile_ids=[1])}  # winner = [1]
+
+    result = await reconcile_all_selected_groups(client, settings)
+
+    # Account 2's divergent row was rewritten to the winning [1].
+    assert result["accounts_normalized"] == 1
+    writes = [w for w in client.group_settings_writes if w[0] == 2]
+    assert writes
+    row = writes[0][1][0]
+    assert row["custom_properties"]["channel_profile_ids"] == [1]
+
+
+# --------------------------------------------------------------------------
+# Findings — coalesce redundant sweeps; cancel during long phases
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_redundant_sweep_is_coalesced(monkeypatch):
+    """Finding: a sweep already in flight coalesces a second concurrent sweep."""
+    import services.profile_reconcile as pr
+
+    async def _no_live_rules():
+        return set()
+    monkeypatch.setattr(pr, "_resolve_live_rule_ids", _no_live_rules)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _SlowClient(FakeClient):
+        async def get_channels(self, page=1, page_size=100, search=None, channel_group=None):
+            started.set()
+            await release.wait()
+            return await super().get_channels(page, page_size, search, channel_group)
+
+    client = _SlowClient({100: [_channel(10, group=100)]}, profiles=[1, 2])
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    first = asyncio.create_task(reconcile_all_selected_groups(client, settings))
+    await started.wait()  # first sweep is mid-flight (blocked in get_channels)
+    second = await reconcile_all_selected_groups(client, settings)  # should coalesce
+    release.set()
+    await first
+
+    assert second.get("coalesced") is True
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_write_phase_aborts_degraded():
+    """Finding: cancellation during the profile-write phase aborts promptly with
+    a degraded (cancelled) result — not a clean success."""
+    client = FakeClient({100: [_channel(10, group=100)]}, profiles=[1, 2, 3])
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    # Cancel fires after the first bulk write so we abort mid-phase.
+    calls = {"n": 0}
+
+    def _cancel():
+        calls["n"] += 1
+        return calls["n"] > 2  # allow a couple of checks, then cancel
+
+    result = await reconcile_group_profiles(
+        client, settings, 100, live_rule_ids=set(), cancel_check=_cancel
+    )
+
+    assert result["status"] == "degraded"
+
+
+# --------------------------------------------------------------------------
 # Decision 2b — pipeline-ownership exclusion + HANDOFF (Blocker 2)
 # --------------------------------------------------------------------------
 
@@ -803,7 +1053,10 @@ async def test_sweep_dedupes_override_source_and_target_by_effective_group(monke
     result = await reconcile_all_selected_groups(client, settings)
 
     assert result["groups_reconciled"] == 1
-    assert client.get_channels_gids.count(200) == 1
+    # Dedup: only the TARGET (200) is enumerated; the source (100) never is.
+    # (The target is fetched twice per reconcile — once for classification, once
+    # for the pre-write ownership re-check — so assert membership, not count.)
+    assert 200 in client.get_channels_gids
     assert 100 not in client.get_channels_gids
     assert client.enabled_map() == {2: True, 1: False}
 

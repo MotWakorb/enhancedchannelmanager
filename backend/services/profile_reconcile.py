@@ -70,6 +70,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from services.event_sync_preflight import resolve_effective_master_group_id
 
@@ -88,6 +89,11 @@ _group_locks: dict[int, asyncio.Lock] = {}
 # the effective group under us (Should-Fix 2) — avoids a pathological flip-flop.
 _LOCK_REACQUIRE_MAX = 3
 
+# Coalescing guard: a full selected-group sweep already running short-circuits a
+# redundant queued one (the monitor fires every pass; an equivalent sweep in
+# flight makes another a no-op) — Finding: coalesce redundant sweeps.
+_sweep_in_progress = False
+
 
 def _get_group_lock(effective_gid: int) -> asyncio.Lock:
     lock = _group_locks.get(effective_gid)
@@ -95,6 +101,18 @@ def _get_group_lock(effective_gid: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _group_locks[effective_gid] = lock
     return lock
+
+
+@asynccontextmanager
+async def acquire_effective_group_locks(effective_gids):
+    """Acquire the per-effective-group locks for a SET of groups in a
+    deadlock-free (sorted) order — the enforced-global cascade / normalize hold
+    several at once while every reconcile holds exactly one, so a global sort
+    order prevents any cycle."""
+    async with AsyncExitStack() as stack:
+        for gid in sorted(set(effective_gids)):
+            await stack.enter_async_context(_get_group_lock(gid))
+        yield
 
 # Provenance marker (decision 2b). Written into a channel's Dispatcharr
 # ``custom_properties`` by the pipeline ``assign_channel_profile`` action; read
@@ -121,11 +139,33 @@ _MAX_CHANNEL_PAGES = 1000
 _UNSET = object()
 
 
+def coerce_profile_id(value):
+    """Coerce a single profile id to ``int``, or return ``None`` if it is not a
+    valid integer id.
+
+    Canonical type is INTEGER (Blocker 1). For legacy back-compat we also accept
+    a NUMERIC STRING (``"12"`` -> ``12``) — early builds of the Auto-Sync modal
+    stored the selection as strings. ``bool`` is rejected (it is an int subclass
+    but not a profile id); a non-numeric string is invalid.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if s.lstrip("-").isdigit():
+            return int(s)
+    return None
+
+
 def _selection_from_setting(setting: dict | None) -> list[int] | None:
     """Return the ``channel_profile_ids`` selection for a group setting row.
 
     Returns ``None`` when the selection is absent/unset/empty (decision 1a —
-    the caller treats this as a NO-OP). Non-int entries are dropped defensively.
+    the caller treats this as a NO-OP). Values are coerced to int (numeric
+    strings accepted for legacy back-compat); genuinely non-numeric entries are
+    dropped with a warning so a corrupt id can never silently strand the group.
     """
     if not isinstance(setting, dict):
         return None
@@ -135,8 +175,16 @@ def _selection_from_setting(setting: dict | None) -> list[int] | None:
     raw = cp.get("channel_profile_ids")
     if not isinstance(raw, list) or not raw:
         return None
-    # Keep genuine ints only (bool is an int subclass but is not a profile id).
-    selection = [pid for pid in raw if isinstance(pid, int) and not isinstance(pid, bool)]
+    selection = []
+    for pid in raw:
+        coerced = coerce_profile_id(pid)
+        if coerced is None:
+            logger.warning(
+                "[PROFILE-RECONCILE] dropping non-integer channel_profile_id %r",
+                pid,
+            )
+        else:
+            selection.append(coerced)
     return selection or None
 
 
@@ -254,19 +302,20 @@ async def _clear_ownership_marker(client, channel: dict) -> None:
     cid = channel.get("id")
     if cid is None:
         return
-    # Fresh-fetch the current custom_properties right before the PATCH; fall
-    # back to the snapshot only if the refetch fails.
-    cp = channel.get("custom_properties")
+    # Fresh-fetch the current custom_properties right before the PATCH. Blocker
+    # 5: if the fresh read FAILS, do NOT write from the stale snapshot (a
+    # wholesale PATCH from stale data would re-introduce lost-update). SKIP the
+    # clear entirely — the release retries on the next sweep.
     try:
         fresh = await client.get_channel(cid)
-        fresh_cp = fresh.get("custom_properties") if isinstance(fresh, dict) else None
-        if isinstance(fresh_cp, dict):
-            cp = fresh_cp
-    except Exception as e:  # noqa: BLE001 - fall back to snapshot below
+    except Exception as e:  # noqa: BLE001 - fail closed (no write from stale)
         logger.warning(
-            "[PROFILE-RECONCILE] channel %s: could not refetch custom_properties "
-            "before marker clear (using snapshot): %s", cid, e,
+            "[PROFILE-RECONCILE] channel %s: fresh custom_properties read FAILED "
+            "(%s) — SKIPPING the marker clear rather than writing from stale "
+            "snapshot; will retry on the next sweep", cid, e,
         )
+        return
+    cp = fresh.get("custom_properties") if isinstance(fresh, dict) else None
     if not isinstance(cp, dict):
         return
     if (PIPELINE_OWNERSHIP_MARKER_KEY not in cp
@@ -286,16 +335,30 @@ async def _clear_ownership_marker(client, channel: dict) -> None:
         )
 
 
-async def _fetch_group_channels(client, group_id: int) -> list[dict]:
+class _ReconcileCancelled(Exception):
+    """Raised when ``cancel_check`` fires during a long in-group operation
+    (pagination / profile writes) so the group aborts promptly and cleanly
+    (reported ``degraded``, not errored) — Finding: cancel during long phases."""
+
+
+def _check_cancel(cancel_check):
+    if cancel_check is not None and cancel_check():
+        raise _ReconcileCancelled()
+
+
+async def _fetch_group_channels(client, group_id: int, cancel_check=None) -> list[dict]:
     """Enumerate every channel in ``group_id`` via paginated ``get_channels``.
 
     ``get_channels`` filters by group NAME under the hood (it translates the
     id), so this returns every channel whose group name matches — consistent
     with the global-by-name selection semantics documented at module level.
+    ``cancel_check`` is polled between pages so a long enumeration aborts
+    promptly on cancellation.
     """
     channels: list[dict] = []
     page = 1
     while page <= _MAX_CHANNEL_PAGES:
+        _check_cancel(cancel_check)
         response = await client.get_channels(
             page=page, page_size=_CHANNEL_PAGE_SIZE, channel_group=group_id
         )
@@ -334,7 +397,7 @@ def _result(status: str, group_id: int, *, effective_gid=None, scoped=0,
 
 async def reconcile_group_profiles(
     client, all_settings: dict, group_id: int, live_rule_ids=_UNSET,
-    settings_provider=None,
+    settings_provider=None, cancel_check=None,
 ) -> dict:
     """Apply a group's stored profile selection to its channels (idempotent).
 
@@ -369,36 +432,67 @@ async def reconcile_group_profiles(
     # task holds the new group's lock, interleaving enable/disable and stranding
     # channels. So: revalidate, and if the effective group changed, RELEASE and
     # RE-ACQUIRE under the new key. Bounded to avoid a pathological flip-flop.
+    #
+    # Blocker 4 (FAIL CLOSED): if the lock key can't be stabilised within the
+    # bound, OR the post-lock revalidation fetch fails, do NOT issue any
+    # membership writes — return ``degraded`` and let the scheduled sweep retry.
+    # Proceeding under a stale/unstable key could destructively interleave or
+    # overwrite newer desired state.
     for _attempt in range(_LOCK_REACQUIRE_MAX):
         lock_key = resolve_effective_master_group_id(all_settings, group_id)
         async with _get_group_lock(lock_key):
             if settings_provider is not None:
                 try:
                     all_settings = await settings_provider()
-                except Exception as e:  # noqa: BLE001 - fall back to snapshot
+                except Exception as e:  # noqa: BLE001 - fail closed
                     logger.warning(
-                        "[PROFILE-RECONCILE] group=%s: revalidation fetch failed, "
-                        "using snapshot: %s", group_id, e,
+                        "[PROFILE-RECONCILE] group=%s: post-lock revalidation "
+                        "fetch FAILED (%s) — failing closed (no writes), degraded",
+                        group_id, e,
+                    )
+                    return _result(
+                        "degraded", group_id, effective_gid=lock_key,
+                        error="revalidation fetch failed; no writes issued",
                     )
             effective_gid = resolve_effective_master_group_id(all_settings, group_id)
-            if effective_gid == lock_key or _attempt == _LOCK_REACQUIRE_MAX - 1:
-                if effective_gid != lock_key:
-                    logger.warning(
-                        "[PROFILE-RECONCILE] group=%s: effective group kept "
-                        "changing under the lock (last %s vs key %s) — proceeding "
-                        "under the latest key after %d attempts",
-                        group_id, effective_gid, lock_key, _LOCK_REACQUIRE_MAX,
+            if effective_gid == lock_key:
+                try:
+                    return await _reconcile_group_locked(
+                        client, all_settings, group_id, effective_gid,
+                        live_rule_ids, cancel_check,
                     )
-                return await _reconcile_group_locked(
-                    client, all_settings, group_id, effective_gid, live_rule_ids
-                )
+                except _ReconcileCancelled:
+                    logger.info(
+                        "[PROFILE-RECONCILE] group=%s: cancelled mid-reconcile — "
+                        "degraded (no further writes)", group_id,
+                    )
+                    return _result(
+                        "degraded", group_id, effective_gid=effective_gid,
+                        error="cancelled mid-reconcile",
+                    )
         # effective group changed under us — loop to re-acquire the correct lock.
+
+    # Exhausted the bound without stabilising the lock key — FAIL CLOSED.
+    final_key = resolve_effective_master_group_id(all_settings, group_id)
+    logger.warning(
+        "[PROFILE-RECONCILE] group=%s: effective group kept changing under the "
+        "lock after %d attempts — failing closed (no writes), degraded",
+        group_id, _LOCK_REACQUIRE_MAX,
+    )
+    return _result(
+        "degraded", group_id, effective_gid=final_key,
+        error="effective group unstable under lock; no writes issued",
+    )
 
 
 async def _reconcile_group_locked(
     client, all_settings: dict, group_id: int, effective_gid: int, live_rule_ids,
+    cancel_check=None,
 ) -> dict:
-    """The reconcile body, run while holding the effective-group lock."""
+    """The reconcile body, run while holding the effective-group lock.
+
+    May raise :class:`_ReconcileCancelled` if ``cancel_check`` fires during a
+    long phase — the caller maps that to a clean ``degraded`` result."""
     setting = all_settings.get(group_id)
     selection = _selection_from_setting(setting)
     conflict = bool(isinstance(setting, dict) and setting.get("_ecm_channel_profile_conflict"))
@@ -408,7 +502,7 @@ async def _reconcile_group_locked(
 
     selected = set(selection)
 
-    channels = await _fetch_group_channels(client, effective_gid)
+    channels = await _fetch_group_channels(client, effective_gid, cancel_check)
 
     # Classify each channel (decision 2b handoff): owned -> excluded; released
     # -> rejoins the reconcile and its stale marker is cleared; unowned ->
@@ -482,6 +576,7 @@ async def _reconcile_group_locked(
         profiles_enabled = 0
         failed_enable: list[int] = []
         for pid in selection:
+            _check_cancel(cancel_check)
             try:
                 await client.bulk_update_profile_channels(
                     pid, {"channel_ids": channel_ids, "enabled": True}
@@ -530,6 +625,45 @@ async def _reconcile_group_locked(
             excluded=owned_count, released=released, conflict=conflict,
         )
 
+    # Blocker 2(a): RE-CHECK ownership immediately before the destructive writes.
+    # A Channel Pipeline assign_channel_profile may have stamped a channel as
+    # pipeline-owned AFTER our initial snapshot (the pipeline stamps the marker
+    # BEFORE its exclusive-membership write — Blocker 2(b) — so a marker seen
+    # here means the pipeline already owns it). Overwriting such a channel's
+    # membership would clobber the pipeline decision, and the marker would keep
+    # later sweeps preserving the wrong membership. Re-fetch the group's channels
+    # under the lock and DROP any channel that became owned since the snapshot.
+    try:
+        recheck = await _fetch_group_channels(client, effective_gid, cancel_check)
+    except Exception as e:  # noqa: BLE001 - fail closed rather than risk a clobber
+        logger.warning(
+            "[PROFILE-RECONCILE] group=%s: ownership re-check fetch FAILED (%s) — "
+            "failing closed (no writes), degraded", group_id, e,
+        )
+        return _result(
+            "degraded", group_id, effective_gid=effective_gid,
+            excluded=owned_count, released=released, conflict=conflict,
+            error="ownership re-check fetch failed; no writes issued",
+        )
+    newly_owned = {
+        c["id"] for c in recheck
+        if c.get("id") is not None and _ownership_state(c, live_rule_ids) == "owned"
+    }
+    dropped = [cid for cid in channel_ids if cid in newly_owned]
+    if dropped:
+        logger.info(
+            "[PROFILE-RECONCILE] group=%s: dropping %d channel(s) that became "
+            "pipeline-owned since the snapshot (pre-write ownership re-check)",
+            group_id, len(dropped),
+        )
+        channel_ids = [cid for cid in channel_ids if cid not in newly_owned]
+        owned_count += len(dropped)
+    if not channel_ids:
+        return _result(
+            "no_channels", group_id, effective_gid=effective_gid,
+            excluded=owned_count, released=released, conflict=conflict,
+        )
+
     # Phase 1 — ENABLE the selected profiles FIRST (enable-first, Blocker 1).
     # If ANY selected-profile enable FAILS (transient 5xx/network) we must NOT
     # proceed to the disables: disabling every non-selected profile while a
@@ -540,6 +674,7 @@ async def _reconcile_group_locked(
     for pid in universe_ids:
         if pid not in valid_selected:
             continue
+        _check_cancel(cancel_check)
         try:
             await client.bulk_update_profile_channels(
                 pid, {"channel_ids": channel_ids, "enabled": True}
@@ -575,6 +710,7 @@ async def _reconcile_group_locked(
     for pid in universe_ids:
         if pid in valid_selected:
             continue
+        _check_cancel(cancel_check)
         try:
             await client.bulk_update_profile_channels(
                 pid, {"channel_ids": channel_ids, "enabled": False}
@@ -654,33 +790,144 @@ def resolve_save_reconcile_targets(all_settings: dict, edited_gids) -> list[int]
     ]
 
 
+async def normalize_group_selections(client, all_settings: dict, cancel_check=None) -> dict:
+    """Enforced-global DURABLE convergence (Blocker 3b): propagate each group's
+    WINNING selection (``all_settings[gid]`` — the deterministic collapse
+    winner) to EVERY M3U account row for that group that DIVERGES.
+
+    Runs every sweep, UNCONDITIONALLY (not gated on "changed this request"), so a
+    partially-failed save cascade, a divergent sibling, or a stale row self-heals
+    without an operator action. Writes are serialized under the per-effective-
+    group locks (shared with reconcile) so a normalize can't interleave with a
+    concurrent save cascade or membership reconcile. Best-effort — never raises;
+    returns ``{normalized_accounts, failed_accounts}``.
+    """
+    winning: dict[int, list[int]] = {}
+    for gid, setting in all_settings.items():
+        sel = _selection_from_setting(setting)
+        if sel:
+            winning[gid] = sorted(set(sel))
+    if not winning:
+        return {"normalized_accounts": 0, "failed_accounts": 0}
+
+    try:
+        accounts = await client.get_m3u_accounts()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[PROFILE-RECONCILE] normalize: could not list accounts: %s", e)
+        return {"normalized_accounts": 0, "failed_accounts": 0}
+    if not isinstance(accounts, list):
+        return {"normalized_accounts": 0, "failed_accounts": 0}
+
+    normalized = 0
+    failed = 0
+    for acct in accounts:
+        if cancel_check is not None and cancel_check():
+            break
+        aid = acct.get("id")
+        if aid is None:
+            continue
+        rows_to_write = []
+        for row in acct.get("channel_groups", []):
+            gid = row.get("channel_group")
+            desired = winning.get(gid)
+            if desired is None:
+                continue
+            current = sorted(set(_selection_from_setting(row) or []))
+            if current == desired:
+                continue  # already in sync — no write
+            new_cp = dict(row.get("custom_properties") or {})
+            new_cp["channel_profile_ids"] = list(desired)
+            new_cp.pop("_ecm_channel_profile_conflict", None)  # ECM-synthetic
+            rows_to_write.append({**row, "custom_properties": new_cp})
+        if not rows_to_write:
+            continue
+        eff_gids = {
+            resolve_effective_master_group_id(all_settings, r["channel_group"])
+            for r in rows_to_write
+        }
+        try:
+            async with acquire_effective_group_locks(eff_gids):
+                await client.update_m3u_group_settings(aid, {"group_settings": rows_to_write})
+            normalized += 1
+            logger.info(
+                "[PROFILE-RECONCILE] normalize: converged account %s (%d divergent "
+                "group row(s))", aid, len(rows_to_write),
+            )
+        except Exception as e:  # noqa: BLE001 - best-effort per account
+            failed += 1
+            logger.warning(
+                "[PROFILE-RECONCILE] normalize: account %s update failed: %s", aid, e
+            )
+    return {"normalized_accounts": normalized, "failed_accounts": failed}
+
+
+def _coalesced_result() -> dict:
+    return {
+        "coalesced": True, "groups_reconciled": 0, "groups_partial_failure": 0,
+        "groups_degraded": 0, "groups_errored": 0, "accounts_normalized": 0,
+        "accounts_normalize_failed": 0, "groups_with_selection": 0,
+        "channels_scoped": 0,
+    }
+
+
 async def reconcile_all_selected_groups(
+    client, all_settings: dict | None = None, cancel_check=None,
+) -> dict:
+    """Reconcile every group that carries a profile selection (COALESCED).
+
+    Finding: coalesce redundant sweeps — if an equivalent full sweep is already
+    in flight (the monitor fires every pass; a post-refresh poll may overlap),
+    this call short-circuits to a ``coalesced`` no-op instead of duplicating the
+    work. The in-flight sweep already converges the same state.
+    """
+    global _sweep_in_progress
+    if _sweep_in_progress:
+        logger.info("[PROFILE-RECONCILE] sweep already in progress — coalescing")
+        return _coalesced_result()
+    _sweep_in_progress = True
+    try:
+        return await _run_selected_group_sweep(client, all_settings, cancel_check)
+    finally:
+        _sweep_in_progress = False
+
+
+async def _run_selected_group_sweep(
     client, all_settings: dict | None = None, cancel_check=None,
 ) -> dict:
     """Reconcile every group that carries a profile selection.
 
-    Convenience entrypoint for the converging hooks (change monitor,
-    post-refresh poll). Fetches ``all_settings`` once if not supplied, resolves
-    the live profile-assigning rule set ONCE (shared across every group so the
-    handoff query runs a single time per sweep), dedupes by effective group,
-    and reconciles each. Returns aggregate counts; one group's failure is
-    logged and does not abort the rest. ``partial_failure`` groups are counted
-    distinctly from fully ``reconciled`` ones.
+    Fetches ``all_settings`` once if not supplied, NORMALIZES divergent sibling
+    rows (Blocker 3b), resolves the live profile-assigning rule set ONCE, dedupes
+    by effective group, and reconciles each. Returns aggregate counts; one
+    group's failure is logged and does not abort the rest.
 
-    ``cancel_check`` (NIT 7): an optional ``() -> bool`` predicate checked
-    between groups so a long sweep aborts promptly when the caller (the monitor)
-    requests cancellation. Best-effort — omit for callers with no cancel signal.
+    ``cancel_check`` — an optional ``() -> bool`` predicate checked between groups
+    AND threaded into each group's long phases (pagination / profile writes) so a
+    long sweep aborts promptly on cancellation.
     """
     if all_settings is None:
         try:
             all_settings = await client.get_all_m3u_group_settings()
         except Exception as e:  # noqa: BLE001
+            # Finding: a failed group-settings fetch is NOT a clean sweep — count
+            # it as an errored sweep so task history isn't falsely green.
             logger.warning("[PROFILE-RECONCILE] failed to fetch group settings: %s", e)
             return {
                 "groups_reconciled": 0, "groups_partial_failure": 0,
-                "groups_degraded": 0, "groups_errored": 0,
+                "groups_degraded": 0, "groups_errored": 1,
+                "accounts_normalized": 0, "accounts_normalize_failed": 0,
                 "groups_with_selection": 0, "channels_scoped": 0,
             }
+
+    # Blocker 3b: normalize divergent sibling rows FIRST (durable convergence),
+    # so the membership reconcile below sees converged per-account selections.
+    normalize_result = {}
+    try:
+        normalize_result = await normalize_group_selections(
+            client, all_settings, cancel_check=cancel_check
+        )
+    except Exception as e:  # noqa: BLE001 - best-effort, never abort the sweep
+        logger.warning("[PROFILE-RECONCILE] normalize pass failed: %s", e)
 
     live_rule_ids = await _resolve_live_rule_ids()
 
@@ -707,7 +954,7 @@ async def reconcile_all_selected_groups(
         try:
             result = await reconcile_group_profiles(
                 client, all_settings, gid, live_rule_ids=live_rule_ids,
-                settings_provider=settings_provider,
+                settings_provider=settings_provider, cancel_check=cancel_check,
             )
             status = result.get("status")
             if status == "reconciled":
@@ -744,6 +991,11 @@ async def reconcile_all_selected_groups(
         "groups_partial_failure": groups_partial_failure,
         "groups_degraded": groups_degraded,
         "groups_errored": groups_errored,
+        # Account-domain normalize counters kept SEPARATE from the group-domain
+        # counters above so the caller never conflates the two (Finding: counter
+        # semantics).
+        "accounts_normalized": normalize_result.get("normalized_accounts", 0),
+        "accounts_normalize_failed": normalize_result.get("failed_accounts", 0),
         "groups_with_selection": len(target_gids),
         "channels_scoped": channels_scoped,
     }

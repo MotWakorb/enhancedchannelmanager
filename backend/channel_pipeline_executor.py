@@ -2942,6 +2942,28 @@ class ActionExecutor:
             )
 
         try:
+            # GH #720 Part B (Blocker 2b — ORDERING): stamp the ownership marker
+            # BEFORE the exclusive-membership write. A group reconcile that reads
+            # this channel AFTER the pipeline started but BEFORE membership lands
+            # must already see the marker and EXCLUDE it — otherwise the reconcile
+            # could overwrite the pipeline's membership while the marker (written
+            # later) then keeps subsequent sweeps preserving the wrong state.
+            # Stamping first claims ownership as soon as the pipeline commits to
+            # assigning. The marker write is fail-closed (Blocker 5): a failed
+            # fresh-read skips the stamp and returns False — we record
+            # ownership-unestablished but STILL apply membership (the profiles
+            # must land), surfacing the incompleteness as a run-level warning.
+            marked = await self._mark_channel_profile_ownership(
+                exec_ctx.current_channel_id, rule_id
+            )
+            if not marked:
+                # Judgment 4b: record the channel so the engine surfaces a
+                # run-level WARNING (not a failed action) — the assignment below
+                # still proceeds and success stays True.
+                exec_ctx.profile_ownership_unestablished_channel_ids.add(
+                    exec_ctx.current_channel_id
+                )
+
             # Dispatcharr auto-joins every newly-created channel to ALL channel
             # profiles by default, so honoring a selection is SUBTRACTIVE: enable
             # the selected profiles AND disable the channel in every OTHER known
@@ -2957,13 +2979,10 @@ class ActionExecutor:
                 # channel may still be in a profile it shouldn't be. Report a
                 # NON-success (still ``modified``: the successful enable/disable
                 # calls did land) with the failed ids surfaced so the run is
-                # observable and retryable (y3m6o.1 Bug 1).
-                #
-                # GH #720 Part B (decision 2b): the ownership marker is
-                # deliberately NOT stamped here. Exclusive membership is
-                # unproven, so we do not yet claim pipeline ownership — the run
-                # reports failure and is retried, and the successful retry (full
-                # membership) stamps the marker below.
+                # observable and retryable (y3m6o.1 Bug 1). The ownership marker
+                # was already stamped above (Blocker 2b) — that is correct: the
+                # channel is pipeline-owned even with incomplete membership, so a
+                # concurrent reconcile excludes it; the retry completes membership.
                 failed_str = ", ".join(str(p) for p in membership.failed_profile_ids)
                 logger.warning(
                     "[AUTO-CREATE-EXEC] Incomplete channel-profile assignment for "
@@ -2994,32 +3013,9 @@ class ActionExecutor:
                     error=f"Failed to update channel profile(s): {failed_str}",
                 )
 
-            # GH #720 Part B (decision 2b): exclusive membership fully applied
-            # (no failed profiles), so stamp a durable provenance marker on the
-            # channel — the group-level reconcile (services.profile_reconcile)
-            # EXCLUDES marked channels because the pipeline's explicit profile
-            # choice outranks a group auto-sync selection (pipeline action >
-            # group selection > global default). This is the single chokepoint
-            # for exclusive membership set by an assign_channel_profile rule:
-            # the event_sync path (apply_channel_profile_to_channels) reuses
-            # this very method per channel, so it stamps here too — one DRY call
-            # site covers BOTH the standard and event_sync pipeline paths.
-            # Reached only on a non-dry run (dry_run early-returned above) and
-            # only after enforcement succeeded. Best-effort: a marker-write
-            # failure must NOT fail the assignment (profiles are already
-            # applied). The default-profile path (_assign_default_profiles) is a
-            # global default and is intentionally NOT stamped.
-            marked = await self._mark_channel_profile_ownership(
-                exec_ctx.current_channel_id, rule_id
-            )
-            if not marked:
-                # Judgment 4b: profiles ARE applied (success stays True), but the
-                # ownership marker did not land — record the channel so the
-                # engine surfaces a run-level WARNING (not a failed action).
-                exec_ctx.profile_ownership_unestablished_channel_ids.add(
-                    exec_ctx.current_channel_id
-                )
-
+            # Ownership marker was stamped BEFORE the membership write above
+            # (Blocker 2b); ``marked`` reflects whether it landed.
+            #
             # y3m6o.1 review follow-up: ``modified`` is True only when at least
             # one profile's enabled-state actually flipped. An idempotent
             # reconcile (channel already in exactly the selected profiles) makes
@@ -3869,22 +3865,25 @@ class ActionExecutor:
                 and cached_cp.get(PIPELINE_OWNERSHIP_RULE_ID_KEY) == rule_id):
             return True  # Already marked by this rule per the cache — skip.
 
-        # A write is (probably) needed — fresh-fetch current custom_properties
-        # right before the merge to shrink the wholesale-PATCH clobber window;
-        # fall back to the run cache if the refetch fails.
-        current_cp = None
+        # A write is needed — fresh-fetch current custom_properties right before
+        # the merge (clobber-safety). Blocker 5: if the fresh read FAILS, do NOT
+        # write from the stale cache (a wholesale PATCH from stale data would
+        # re-introduce lost-update during dependency degradation). SKIP the
+        # marker mutation entirely and report ownership-unestablished — the next
+        # run retries.
         try:
             fresh = await self.client.get_channel(channel_id)
-            if isinstance(fresh, dict) and isinstance(fresh.get("custom_properties"), dict):
-                current_cp = fresh["custom_properties"]
-        except Exception as e:  # noqa: BLE001 - fall back to cache below
+        except Exception as e:  # noqa: BLE001 - fail closed (no write from stale)
             logger.warning(
-                "[CHANNEL-PIPELINE-EXEC] channel %s: could not refetch "
-                "custom_properties before marker write (using cache): %s",
+                "[CHANNEL-PIPELINE-EXEC] channel %s: fresh custom_properties read "
+                "FAILED (%s) — SKIPPING the ownership marker write rather than "
+                "writing from stale cache; precedence not established this run",
                 channel_id, e,
             )
-        if current_cp is None:
-            current_cp = cached_cp
+            return False
+        current_cp = fresh.get("custom_properties") if isinstance(fresh, dict) else None
+        if not isinstance(current_cp, dict):
+            current_cp = {}
 
         merged_cp = dict(current_cp)
         already_owner = (

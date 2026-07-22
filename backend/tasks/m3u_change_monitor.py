@@ -95,15 +95,11 @@ class M3UChangeMonitorTask(TaskScheduler):
 
                 accounts_to_check.append(account)
 
-            if not accounts_to_check:
-                return TaskResult(
-                    success=True,
-                    message="No M3U accounts to monitor",
-                    started_at=started_at,
-                    completed_at=datetime.utcnow(),
-                    total_items=0,
-                )
-
+            # Finding: even when account filtering yields NO accounts to check,
+            # the profile-reconcile sweep must STILL run — it is the durable
+            # convergence backbone and is independent of change monitoring. So we
+            # do NOT early-return here; we skip the per-account loop and fall
+            # through to the sweep below.
             self._set_progress(
                 total=len(accounts_to_check),
                 current=0,
@@ -248,16 +244,23 @@ class M3UChangeMonitorTask(TaskScheduler):
 
             duration = (datetime.utcnow() - started_at).total_seconds()
 
-            # Blocker 3c: fold the profile-reconcile outcome into the TaskResult
-            # so task history reflects a warning (not plain success) when any
-            # group ended partial_failure/degraded. Best-effort semantics keep
-            # success=True; a non-zero failed_count renders as "completed with
-            # warnings".
+            # Blocker 3c + counter-semantics finding: fold the profile-reconcile
+            # outcome into the TaskResult so history reflects a warning (not plain
+            # success) when any group ended partial_failure/degraded/errored or a
+            # normalize account write failed — WITHOUT conflating the two domains.
+            # total_items spans BOTH domains (accounts checked + profile groups
+            # with a selection) and failed_count is clamped to <= total_items.
             recon_detail = {"profile_reconcile": recon} if recon else {}
-            recon_suffix = (
-                f" ({reconcile_warnings} profile group(s) incomplete)"
-                if reconcile_warnings else ""
-            )
+            groups_with_selection = recon.get("groups_with_selection", 0)
+            normalize_failed = recon.get("accounts_normalize_failed", 0)
+            total_items = accounts_checked + groups_with_selection
+            failed_count = min(reconcile_warnings + normalize_failed, total_items)
+            warn_bits = []
+            if reconcile_warnings:
+                warn_bits.append(f"{reconcile_warnings} profile group(s) incomplete")
+            if normalize_failed:
+                warn_bits.append(f"{normalize_failed} account(s) not normalized")
+            recon_suffix = f" ({', '.join(warn_bits)})" if warn_bits else ""
 
             if changes_detected > 0:
                 logger.info(
@@ -269,9 +272,9 @@ class M3UChangeMonitorTask(TaskScheduler):
                     message=f"Detected changes in {changes_detected} M3U account(s){recon_suffix}",
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
-                    total_items=accounts_checked,
+                    total_items=total_items,
                     success_count=changes_detected,
-                    failed_count=reconcile_warnings,
+                    failed_count=failed_count,
                     details={"changed_accounts": changed_accounts, **recon_detail},
                 )
 
@@ -284,9 +287,9 @@ class M3UChangeMonitorTask(TaskScheduler):
                 message=f"Checked {accounts_checked} M3U accounts - no external changes detected{recon_suffix}",
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
-                total_items=accounts_checked,
+                total_items=total_items,
                 success_count=0,
-                failed_count=reconcile_warnings,
+                failed_count=failed_count,
                 details=recon_detail,
             )
 

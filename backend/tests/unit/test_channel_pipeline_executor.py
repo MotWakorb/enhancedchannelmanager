@@ -4974,6 +4974,12 @@ class TestAssignChannelProfileProvenanceMarker:
         existing = [
             {"id": 99, "name": "ESPN2 HD", "custom_properties": {"custom_epg_id": 7}}
         ]
+        # The marker helper now merges over the FRESH-fetched custom_properties
+        # (Blocker 2/5), so the authoritative current state is what get_channel
+        # returns.
+        self.client.get_channel = AsyncMock(
+            return_value={"id": 99, "custom_properties": {"custom_epg_id": 7}}
+        )
         executor = ActionExecutor(
             self.client, existing_channels=existing, all_profile_ids=[1, 2]
         )
@@ -5052,6 +5058,22 @@ class TestAssignChannelProfileProvenanceMarker:
         assert result.success is True
         assert result.error and "precedence" in result.error
         assert "precedence not established" in result.description
+
+    def test_marker_write_skipped_on_failed_fresh_read(self):
+        """Blocker 5: a FAILED fresh read must SKIP the marker write entirely (no
+        PATCH from stale cache) and record ownership-unestablished; the profile
+        assignment itself still succeeds."""
+        self.client.get_channel = AsyncMock(side_effect=RuntimeError("read boom"))
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx, rule_id=5)
+
+        assert result.success is True
+        self.client.update_channel.assert_not_called()  # no stale write
+        assert 99 in exec_ctx.profile_ownership_unestablished_channel_ids
 
     def test_marker_add_preserves_concurrent_custom_properties(self):
         """Blocker 2 (clobber, add direction): a concurrent custom_properties
