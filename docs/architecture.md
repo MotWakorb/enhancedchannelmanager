@@ -286,6 +286,11 @@ A run finalizes to exactly one terminal `ChannelPipelineExecution.status`:
 | `completed` | Every executed action succeeded (green). |
 | `completed_with_errors` | ≥1 executed action/phase FAILED, but the run was not wholly aborted — some channels/actions may have succeeded. Distinct from a blanket `failed`. The top-level `run_pipeline` result reports `success=False` and `failed_action_count`. |
 | `capped` | The created-channel cap was hit. Takes precedence over `completed_with_errors`, but a compound capped+failed run persists BOTH the cap info AND the failed-action summary in `error_message`, and the result still reports `success=False`. |
+| `failed` | The run was wholly aborted by an unrecoverable error. |
+| `rolled_back` | A completed run was later reverted via rollback/undo. |
+| `abandoned` | The run was left at `running` by a hard restart/OOM kill and crash-reconciled to `abandoned` on next boot by `task_engine._abandon_orphaned_auto_creation_executions` (GH #473 / bd-exo4j). Carries an "Abandoned: run was interrupted…" `error_message` and trips the run-on-refresh circuit breaker until an operator clears it. This transition lives in `task_engine`, NOT the engine's finalization branch, so it is easy to miss when enumerating the terminal set — it is nonetheless a genuinely persisted terminal status. |
+
+The full persisted terminal set is therefore: `completed`, `completed_with_errors`, `capped`, `failed`, `rolled_back`, `abandoned` (transient: `pending`, `running`). Any poller/consumer must treat ALL six as terminal.
 
 **One aggregation chokepoint.** Every executed-action/phase failure is recorded into `results["failed_actions"]` — the ONE list finalization keys on. Per-stream Pass 2 action failures funnel through `_record_failed_action`; the non-Pass-2 phases (Event Sync attach, Event Sync dummy-EPG, Pass 5 deferred-EPG retry, default-profile assignment) funnel through `_record_failed_phase`. Default-profile assignment is best-effort for the channel CREATE (a failed profile PATCH never aborts it) but its failure now escalates into aggregation, so such a run is not green.
 

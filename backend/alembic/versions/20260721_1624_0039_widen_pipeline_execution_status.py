@@ -12,7 +12,11 @@ enforce VARCHAR width so deployed rows are fine today, but the contract
 is wrong: a width-enforcing backend (the stack is Postgres-fluent) would
 truncate or reject the value. Widen to ``String(32)``, which comfortably
 covers the current allowed set (pending, running, completed, failed,
-rolled_back, capped, completed_with_errors) plus near-future statuses.
+rolled_back, capped, completed_with_errors, abandoned) plus near-future
+statuses. ``abandoned`` is a PRE-EXISTING value (GH #473 / bd-exo4j —
+task_engine crash-reconciliation transitions 'running' -> 'abandoned'), not
+introduced by this migration; it fits String(20) but is listed here for a
+complete terminal-set record.
 
 SQLite cannot ALTER COLUMN in place, so the width change goes through
 ``op.batch_alter_table`` (table recreate) per docs/database_migrations.md.

@@ -1,18 +1,24 @@
 """Regression tests for y3m6o.1 review (build 0.17.6-0152) — run_channel_pipeline
 poll-loop terminal-status handling.
 
-Blocker 2: ``_TERMINAL_STATUSES`` omitted ``completed_with_errors`` and
-``capped``, so a run finalizing in either state was polled all
+Blocker 2: ``_TERMINAL_STATUSES`` omitted ``completed_with_errors``, ``capped``,
+and ``abandoned``, so a run finalizing in any of those states was polled all
 ``_POLL_MAX_ATTEMPTS`` times and then falsely reported "still running after N
 polls". These tests prove:
 
-  * EACH real terminal status a ChannelPipelineExecution can persist
-    (completed, failed, rolled_back, capped, completed_with_errors) exits the
-    poll loop on the FIRST poll — no timeout, exactly one status poll.
+  * EACH real terminal status a ChannelPipelineExecution can persist exits the
+    poll loop on the FIRST poll — no timeout, exactly one status poll. The
+    EXHAUSTIVE persisted-terminal set is completed, failed, rolled_back, capped,
+    completed_with_errors, abandoned. ``abandoned`` is persisted by
+    task_engine's startup crash-reconciliation (GH #473 / bd-exo4j), NOT a
+    task_engine-only concept — an earlier revision of this file omitted it,
+    which was a genuine miss.
   * A ``completed_with_errors`` terminal result surfaces the failed-action
     warning/error summary (error_message) to the caller rather than a generic
     "complete".
   * A ``capped`` terminal result surfaces its cap guidance.
+  * An ``abandoned`` terminal result surfaces the interrupted outcome + its
+    "Abandoned: run was interrupted…" error_message.
 """
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -43,8 +49,14 @@ async def _run(mock_client) -> str:
 
 
 # Every value ChannelPipelineExecution.status can persist that is TERMINAL
-# (see alembic 0039 + finalization branches in channel_pipeline_engine.py).
-_ALL_TERMINAL = ["completed", "failed", "rolled_back", "capped", "completed_with_errors"]
+# (alembic 0039 + finalization branches in channel_pipeline_engine.py + the
+# 'abandoned' crash-reconciliation transition in task_engine, GH #473). This is
+# the EXHAUSTIVE persisted-terminal set — keep it in sync with
+# tools.channel_pipeline._TERMINAL_STATUSES.
+_ALL_TERMINAL = [
+    "completed", "failed", "rolled_back", "capped", "completed_with_errors",
+    "abandoned",
+]
 
 
 @pytest.mark.parametrize("status", _ALL_TERMINAL)
@@ -114,6 +126,35 @@ async def test_capped_surfaces_cap_guidance():
     assert "still running after" not in result
     assert "CAPPED" in result
     assert guidance in result
+
+
+@pytest.mark.asyncio
+async def test_abandoned_surfaces_interrupted_outcome():
+    """An abandoned run (crash-reconciled from 'running' by task_engine, GH #473)
+    reports it was ABANDONED, surfaces its "Abandoned: run was interrupted…"
+    error_message, and notes the run-on-refresh circuit breaker is tripped —
+    instead of a generic "complete" or the false "still running" timeout."""
+    kickoff = {"execution_id": 15, "status": "running"}
+    abandoned_msg = (
+        "Abandoned: run was interrupted by a system restart "
+        "(likely an out-of-memory kill). See GH #473."
+    )
+    final = {
+        "id": 15, "status": "abandoned", "mode": "execute",
+        "streams_evaluated": 0, "streams_matched": 0, "channels_created": 0,
+        "duration_seconds": 0.0, "error_message": abandoned_msg,
+    }
+    mock_client = _client(side_effect=[kickoff, final])
+    with patch("tools.channel_pipeline._poll_sleep", new=AsyncMock(return_value=None)):
+        result = await _run(mock_client)
+
+    assert "still running after" not in result
+    assert "ABANDONED" in result
+    assert abandoned_msg in result
+    # Circuit-breaker disclosure so the caller knows why auto-fire is now off.
+    assert "circuit breaker" in result
+    # Not silently reported as a clean completion.
+    assert "complete (execution_id=15)" not in result
 
 
 @pytest.mark.asyncio

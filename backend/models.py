@@ -2226,13 +2226,21 @@ class ChannelPipelineExecution(Base):
     duration_seconds = Column(Float, nullable=True)
 
     # Status
-    # Allowed terminal/lifecycle values: pending, running, completed, failed,
-    # rolled_back, capped, completed_with_errors. Widened to String(32) in
-    # Alembic 0039 (y3m6o.1 / GH #720): build 0.17.6-0152 added the terminal
-    # status 'completed_with_errors' (21 chars), which overflowed the previous
-    # String(20). 32 comfortably covers the current set plus near-future
-    # statuses. SQLite ignores VARCHAR width, but a width-enforcing backend
-    # (Postgres) would truncate/reject — keep this contract honest.
+    # Allowed lifecycle values:
+    #   Transient: pending, running
+    #   Terminal:  completed, failed, rolled_back, capped,
+    #              completed_with_errors, abandoned
+    # 'abandoned' is set by task_engine's startup crash-reconciliation
+    # (_abandon_orphaned_auto_creation_executions, GH #473 / bd-exo4j) on rows
+    # left at 'running' by a hard restart/OOM kill; it also carries an
+    # error_message and trips the run-on-refresh circuit breaker.
+    # 'completed_with_errors' (build 0.17.6-0152, y3m6o.1 / GH #720) marks a run
+    # in which at least one executed action failed.
+    # Widened to String(32) in Alembic 0039 (y3m6o.1 / GH #720):
+    # 'completed_with_errors' (21 chars) overflowed the previous String(20). 32
+    # comfortably covers the full set above plus near-future statuses. SQLite
+    # ignores VARCHAR width, but a width-enforcing backend (Postgres) would
+    # truncate/reject — keep this contract honest.
     status = Column(String(32), nullable=False, default="pending")
     error_message = Column(Text, nullable=True)  # Error details if failed
 

@@ -29,15 +29,25 @@ _POLL_MAX_ATTEMPTS: int = 120          # cap at 120 × 5 s = 10 minutes
 #
 # The authoritative set a ChannelPipelineExecution.status can persist is
 # pending, running, completed, failed, rolled_back, capped,
-# completed_with_errors (see alembic 0039 widen_pipeline_execution_status and
-# the finalization branches in backend/channel_pipeline_engine.py). pending and
-# running are transient; every other value is TERMINAL and must break the poll
-# loop. Omitting completed_with_errors/capped meant a run that finalized in one
-# of those states was polled all _POLL_MAX_ATTEMPTS times and then falsely
-# reported "still running" (y3m6o.1 review). ``abandoned`` is a task_engine
-# concept, not a pipeline-execution status, so it is intentionally not here.
+# completed_with_errors, abandoned (see alembic 0039
+# widen_pipeline_execution_status, the finalization branches in
+# backend/channel_pipeline_engine.py, AND task_engine's crash-reconciliation).
+# pending and running are transient; every other value is TERMINAL and must
+# break the poll loop.
+#
+# ``abandoned`` IS a persisted pipeline-execution status, NOT a task_engine-only
+# concept (an earlier version of this comment claimed otherwise — that was a
+# genuine miss: task_engine._abandon_orphaned_auto_creation_executions
+# transitions in-flight ChannelPipelineExecution rows from 'running' ->
+# 'abandoned' on startup crash-reconciliation, GH #473 / bd-exo4j). ECM and the
+# MCP server are separate processes, so the MCP poller survives the backend
+# restart that mints the abandoned row and would otherwise poll it all
+# _POLL_MAX_ATTEMPTS times, then falsely report "still running" — the same
+# false-polling defect we fixed for completed_with_errors/capped (y3m6o.1
+# review).
 _TERMINAL_STATUSES = frozenset({
     "completed", "failed", "rolled_back", "capped", "completed_with_errors",
+    "abandoned",
 })
 
 
@@ -389,13 +399,15 @@ def register(mcp: FastMCP):
             dur_str = f"{dur:.1f}s" if dur is not None else "N/A"
 
             # y3m6o.1 review: a run can finalize in a NON-green terminal state
-            # (completed_with_errors — one or more executed actions failed; or
-            # capped — the created-channel cap was hit) while still having done
-            # real work on the channels/actions that succeeded. Surface the
-            # warning/error summary (error_message carries the failed-action
-            # summary or the cap guidance) in the header instead of reporting a
-            # generic "complete", so the caller sees the run did NOT finish
-            # cleanly. The per-counter breakdown below still renders for context.
+            # (completed_with_errors — one or more executed actions failed;
+            # capped — the created-channel cap was hit; or abandoned — the run
+            # was interrupted by a hard restart/OOM kill and crash-reconciled)
+            # while some (or, for abandoned, none) of its work landed. Surface
+            # the warning/error summary (error_message carries the failed-action
+            # summary, the cap guidance, or the "Abandoned: run was
+            # interrupted…" text) in the header instead of reporting a generic
+            # "complete", so the caller sees the run did NOT finish cleanly. The
+            # per-counter breakdown below still renders for context.
             if status == "completed_with_errors":
                 header = (
                     f"Auto-creation {mode} completed WITH ERRORS "
@@ -406,13 +418,28 @@ def register(mcp: FastMCP):
                     f"Auto-creation {mode} was CAPPED "
                     f"(execution_id={execution_id}):"
                 )
+            elif status == "abandoned":
+                header = (
+                    f"Auto-creation {mode} was ABANDONED "
+                    f"(execution_id={execution_id}) — the run was interrupted "
+                    f"before it finished:"
+                )
             else:
                 header = f"Auto-creation {mode} complete (execution_id={execution_id}):"
 
             lines = [header]
             summary = result.get("error_message")
-            if status in ("completed_with_errors", "capped") and summary:
+            if status in ("completed_with_errors", "capped", "abandoned") and summary:
                 lines.append(f"  Warning: {summary}")
+            # An abandoned run trips the run-on-refresh circuit breaker, which
+            # stays disabled across the restart until an operator clears it
+            # (GH #473 / bd-exo4j) — call that out so the caller knows why the
+            # post-refresh auto-fire chain is now off.
+            if status == "abandoned":
+                lines.append(
+                    "  Note: this trips the run-on-refresh circuit breaker; it "
+                    "stays disabled until an operator resets it."
+                )
             # A run that changed channel-profile membership non-reversibly cannot
             # be fully undone by rollback — disclose it on the terminal summary.
             if result.get("has_non_reversible_profile_changes"):
