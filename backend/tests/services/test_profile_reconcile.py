@@ -61,11 +61,22 @@ class FakeClient:
     stale/deleted-id skip path.
     """
 
-    def __init__(self, channels_by_gid, profiles, *, page_size=100, fail_profiles=None):
+    def __init__(
+        self,
+        channels_by_gid,
+        profiles,
+        *,
+        page_size=100,
+        fail_profiles=None,
+        raise_on_profiles=False,
+    ):
         self.channels_by_gid = channels_by_gid
         self.profiles = profiles
         self.page_size = page_size
         self.fail_profiles = set(fail_profiles or [])
+        # When True, get_channel_profiles raises — models an unreachable
+        # Dispatcharr so the universe fetch fails (Should-Fix 3).
+        self.raise_on_profiles = raise_on_profiles
         self.bulk_calls: list[tuple[int, tuple, bool]] = []
         self.get_channels_gids: list[int] = []
 
@@ -84,6 +95,8 @@ class FakeClient:
         }
 
     async def get_channel_profiles(self):
+        if self.raise_on_profiles:
+            raise RuntimeError("profile universe unreachable")
         return [{"id": pid, "name": f"P{pid}"} for pid in self.profiles]
 
     async def bulk_update_profile_channels(self, profile_id, data):
@@ -168,14 +181,69 @@ async def test_selecting_multiple_profiles():
 
 
 @pytest.mark.asyncio
-async def test_selected_profile_outside_universe_still_enabled():
-    """A selected id missing from a stale universe fetch is still enabled."""
+async def test_fully_stale_selection_is_safety_no_op():
+    """Blocker 1: every selected profile has been DELETED from Dispatcharr.
+
+    The universe fetch SUCCEEDS and is authoritative (profiles [1, 2]); the
+    stored selection [5] references a profile that no longer exists. Enabling
+    channels in 5 would 404, and the old union-with-selection loop would still
+    disable them in every REAL profile (1, 2) — stranding the channels in ZERO
+    profiles, exactly the harm decision 1a forbids. The safe behavior is a
+    total NO-OP: issue no bulk calls at all and leave the channels untouched
+    where they are, surfacing status "stale_selection" so the deleted-selection
+    condition is observable.
+    """
     client = FakeClient({100: [_channel(10)]}, profiles=[1, 2])
     settings = {100: _setting(channel_profile_ids=[5])}
 
-    await reconcile_group_profiles(client, settings, 100)
+    result = await reconcile_group_profiles(client, settings, 100)
 
-    assert client.enabled_map() == {5: True, 1: False, 2: False}
+    assert result["status"] == "stale_selection"
+    # No disables (and no enables) — channels are NOT stranded in zero profiles.
+    assert client.bulk_calls == []
+    assert result["profiles_enabled"] == 0
+    assert result["profiles_disabled"] == 0
+
+
+@pytest.mark.asyncio
+async def test_partial_stale_selection_ignores_deleted_id():
+    """Blocker 1: a selection mixing valid and deleted ids reconciles against
+    the authoritative universe and simply ignores the dead id.
+
+    selection=[2, 5], universe=[1, 2, 3]: enable in 2, disable in 1 and 3, and
+    5 (deleted) is never touched — no 404-inducing enable, no strand.
+    """
+    client = FakeClient({100: [_channel(10)]}, profiles=[1, 2, 3])
+    settings = {100: _setting(channel_profile_ids=[2, 5])}
+
+    result = await reconcile_group_profiles(client, settings, 100)
+
+    assert result["status"] == "reconciled"
+    assert client.enabled_map() == {1: False, 2: True, 3: False}
+    # The deleted id 5 never appears in any bulk call.
+    assert all(pid != 5 for pid, _cids, _en in client.bulk_calls)
+
+
+@pytest.mark.asyncio
+async def test_universe_fetch_failure_degrades_to_enable_only():
+    """Should-Fix 3: when the universe fetch FAILS (not merely empty) the
+    reconcile degrades to enable-selected-only and issues NO disables.
+
+    Without the authoritative universe we cannot know which profiles to
+    disable, and blind disables could strand channels — so we only enable the
+    selected ids (never worse than the pre-fix state where channels stayed in
+    every profile). The skipped-disables window closes on the next successful
+    reconcile.
+    """
+    client = FakeClient({100: [_channel(10)]}, profiles=[1, 2], raise_on_profiles=True)
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    result = await reconcile_group_profiles(client, settings, 100)
+
+    assert result["status"] == "reconciled"
+    # Only the selected profile is enabled; NO disable calls are issued.
+    assert client.enabled_map() == {1: True}
+    assert all(enabled is True for _pid, _cids, enabled in client.bulk_calls)
 
 
 @pytest.mark.asyncio
@@ -330,6 +398,35 @@ async def test_reconcile_all_selected_groups_sweep():
     assert result["groups_with_selection"] == 2
     assert result["groups_reconciled"] == 2
     assert result["channels_scoped"] == 2
+
+
+@pytest.mark.asyncio
+async def test_sweep_dedupes_override_source_and_target_by_effective_group():
+    """Should-Fix 6: when a Channel Group Override SOURCE and its TARGET both
+    carry a selection, the sweep must reconcile the shared (target) channels
+    exactly ONCE, using the TARGET's own selection — not last-writer-wins by
+    dict order.
+
+    Source 100 overrides into target 200; channels live in 200. Source selects
+    [1], target selects [2]. The dedupe collapses both to effective group 200
+    and prefers 200's own selection, so channels end up enabled in 2 (not 1),
+    and 200 is enumerated only once.
+    """
+    channels = [_channel(10, group=200)]
+    client = FakeClient({200: channels, 100: []}, profiles=[1, 2])
+    settings = {
+        100: _setting(channel_profile_ids=[1], group_override=200),
+        200: _setting(channel_profile_ids=[2]),
+    }
+
+    result = await reconcile_all_selected_groups(client, settings)
+
+    # Only ONE effective group reconciled, enumerated exactly once.
+    assert result["groups_reconciled"] == 1
+    assert client.get_channels_gids.count(200) == 1
+    assert 100 not in client.get_channels_gids
+    # The TARGET's own selection ([2]) won, not the source's ([1]).
+    assert client.enabled_map() == {2: True, 1: False}
 
 
 def test_groups_with_selection_filters_correctly():

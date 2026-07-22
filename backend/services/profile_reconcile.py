@@ -138,7 +138,13 @@ async def reconcile_group_profiles(client, all_settings: dict, group_id: int) ->
 
     * ``no_selection`` — absent/empty selection, nothing done (decision 1a).
     * ``no_channels`` — selection present but the effective group is empty.
-    * ``reconciled`` — bulk updates issued; counts populated.
+    * ``stale_selection`` — every selected profile has been DELETED (the
+      authoritative universe contains none of them); a SAFETY NO-OP that
+      leaves the channels untouched rather than disabling them everywhere
+      (Blocker 1 — decision 1a's real guarantee).
+    * ``reconciled`` — bulk updates issued; counts populated. Covers both the
+      normal authoritative path and the degraded enable-selected-only path
+      taken when the universe fetch fails.
 
     Never raises for a single bad profile — each per-profile bulk call is
     guarded so one stale/deleted selected id cannot abort the group.
@@ -180,6 +186,7 @@ async def reconcile_group_profiles(client, all_settings: dict, group_id: int) ->
             "profiles_disabled": 0,
         }
 
+    universe_fetch_failed = False
     try:
         profiles = await client.get_channel_profiles()
     except Exception as e:  # noqa: BLE001 - one bad fetch must not crash the poll
@@ -188,19 +195,86 @@ async def reconcile_group_profiles(client, all_settings: dict, group_id: int) ->
             group_id, e,
         )
         profiles = []
+        universe_fetch_failed = True
     universe_ids = [p["id"] for p in profiles if isinstance(p, dict) and "id" in p]
 
-    # Union so a selected id missing from a stale universe fetch is still
-    # enabled, while every OTHER known profile is disabled — mirrors the
-    # executor's per-channel helper semantics. When the universe fetch fails
-    # entirely this degrades to enable-selected-only (never worse than the
-    # pre-fix state where channels stayed in every profile).
-    ordered_ids = list(dict.fromkeys(universe_ids + list(selection)))
+    if universe_fetch_failed:
+        # Universe UNKNOWN (the fetch raised). Without the authoritative
+        # universe we cannot know which profiles to DISABLE, and disabling
+        # blindly could strand channels — so degrade to ENABLE-SELECTED-ONLY:
+        # enable every selected id and issue NO disables. This is never worse
+        # than the pre-fix state (channels stayed in every profile); the
+        # transient gap — a just-deselected profile stays enabled — closes on
+        # the next successful reconcile. Logged so the skipped-disables window
+        # is observable rather than silent (Should-Fix 3). NOTE this is the
+        # fetch-FAILED path only; an authoritative EMPTY universe is handled
+        # below (and is NOT enable-only).
+        logger.warning(
+            "[PROFILE-RECONCILE] group=%s: profile universe fetch failed — "
+            "degrading to enable-selected-only; disables SKIPPED until the next "
+            "successful reconcile (selection=%s)",
+            group_id, sorted(selected),
+        )
+        profiles_enabled = 0
+        for pid in selection:
+            try:
+                await client.bulk_update_profile_channels(
+                    pid, {"channel_ids": channel_ids, "enabled": True}
+                )
+                profiles_enabled += 1
+            except Exception as e:  # noqa: BLE001 - a stale/deleted id skips, not aborts
+                logger.warning(
+                    "[PROFILE-RECONCILE] group=%s: profile %s enable failed, "
+                    "skipping: %s", group_id, pid, e,
+                )
+        return {
+            "status": "reconciled",
+            "group_id": group_id,
+            "effective_group_id": effective_gid,
+            "channels_scoped": len(channel_ids),
+            "channels_excluded": excluded,
+            "profiles_enabled": profiles_enabled,
+            "profiles_disabled": 0,
+        }
+
+    # Authoritative universe in hand. Intersect the stored selection with it:
+    # any selected id NOT present has been DELETED in Dispatcharr (nothing
+    # prunes the stored selection), so it can neither be a member nor be enabled
+    # (a bulk enable on a dead profile 404s). We iterate the universe as the
+    # authoritative set and deliberately do NOT union the stale ids back in —
+    # unioning them would 404 on enable while the disables to every real profile
+    # still landed, stranding the channels in ZERO profiles (Blocker 1).
+    universe_set = set(universe_ids)
+    valid_selected = selected & universe_set
+
+    if not valid_selected:
+        # Every selected profile is gone (or the universe is authoritatively
+        # empty). Disabling the channels in every real profile now would strand
+        # them in zero profiles — the exact harm decision 1a forbids, reached
+        # via a stale selection the literal _selection_from_setting check can't
+        # see. Treat it as a SAFETY NO-OP: touch nothing, and surface a distinct
+        # status so the deleted-selection condition is observable.
+        logger.warning(
+            "[PROFILE-RECONCILE] group=%s effective=%s: entire profile selection "
+            "%s is stale (no selected profile exists in the universe %s) — "
+            "leaving %d channel(s) UNTOUCHED rather than disabling everywhere",
+            group_id, effective_gid, sorted(selected), sorted(universe_set),
+            len(channel_ids),
+        )
+        return {
+            "status": "stale_selection",
+            "group_id": group_id,
+            "effective_group_id": effective_gid,
+            "channels_scoped": 0,
+            "channels_excluded": excluded,
+            "profiles_enabled": 0,
+            "profiles_disabled": 0,
+        }
 
     profiles_enabled = 0
     profiles_disabled = 0
-    for pid in ordered_ids:
-        enable = pid in selected
+    for pid in universe_ids:
+        enable = pid in valid_selected
         try:
             await client.bulk_update_profile_channels(
                 pid, {"channel_ids": channel_ids, "enabled": enable}
@@ -221,7 +295,7 @@ async def reconcile_group_profiles(client, all_settings: dict, group_id: int) ->
         "(%d pipeline-owned excluded) into %d profile(s), disabled in %d "
         "(selection=%s)",
         group_id, effective_gid, len(channel_ids), excluded,
-        profiles_enabled, profiles_disabled, sorted(selected),
+        profiles_enabled, profiles_disabled, sorted(valid_selected),
     )
     return {
         "status": "reconciled",
@@ -259,9 +333,27 @@ async def reconcile_all_selected_groups(client, all_settings: dict | None = None
             return {"groups_reconciled": 0, "groups_with_selection": 0, "channels_scoped": 0}
 
     target_gids = groups_with_selection(all_settings)
+
+    # Dedupe by EFFECTIVE group id (Should-Fix 6). A Channel Group Override
+    # makes a SOURCE group's channels live in its TARGET group, so if BOTH the
+    # source and the target carry a selection they would each reconcile the SAME
+    # channels — non-deterministically last-writer-wins by dict order. Collapse
+    # to one selection per effective group, preferring the TARGET group's own
+    # selection when it has one (the group whose channels physically live there
+    # outranks a source that merely redirects into it). Groups with no override
+    # resolve to themselves, so this is a no-op for the common case.
+    effective_to_gid: dict[int, int] = {}
+    for gid in target_gids:
+        eff = resolve_effective_master_group_id(all_settings, gid)
+        if eff not in effective_to_gid or gid == eff:
+            # First seen for this effective id, OR this gid IS the target group
+            # (its own selection wins over a source redirecting into it).
+            effective_to_gid[eff] = gid
+    reconcile_gids = list(effective_to_gid.values())
+
     groups_reconciled = 0
     channels_scoped = 0
-    for gid in target_gids:
+    for gid in reconcile_gids:
         try:
             result = await reconcile_group_profiles(client, all_settings, gid)
             if result.get("status") == "reconciled":
@@ -274,9 +366,10 @@ async def reconcile_all_selected_groups(client, all_settings: dict | None = None
 
     if target_gids:
         logger.info(
-            "[PROFILE-RECONCILE] swept %d group(s) with a selection, reconciled "
-            "%d, scoped %d channel(s)",
-            len(target_gids), groups_reconciled, channels_scoped,
+            "[PROFILE-RECONCILE] swept %d group(s) with a selection (%d after "
+            "effective-group dedupe), reconciled %d, scoped %d channel(s)",
+            len(target_gids), len(reconcile_gids), groups_reconciled,
+            channels_scoped,
         )
     return {
         "groups_reconciled": groups_reconciled,
