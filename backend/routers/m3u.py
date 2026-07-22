@@ -1114,7 +1114,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         try:
             from services.profile_reconcile import (
                 reconcile_group_profiles,
-                dedupe_gids_by_effective_group,
+                resolve_save_reconcile_targets,
                 _resolve_live_rule_ids,
             )
             edited_gids = [
@@ -1127,11 +1127,13 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                 # stored selection reflect the just-saved state. reconcile_group_
                 # profiles no-ops any group without a selection (decision 1a).
                 fresh_settings = await client.get_all_m3u_group_settings()
-                # Same resolution + effective-group dedupe as the sweep
-                # (Should-Fix 6), order-independent. Resolve the live rule set
-                # ONCE for the whole save (Blocker 2 handoff).
+                # Resolve the effective-group WINNER over the FULL settings —
+                # EXACTLY as the sweep does — so instant-apply and the sweep can
+                # never pick different winners and flap an override source/target
+                # every pass (Should-Fix 2). Resolve the live rule set ONCE for
+                # the whole save (Blocker 2 handoff).
                 live_rule_ids = await _resolve_live_rule_ids()
-                for gid in dedupe_gids_by_effective_group(fresh_settings, edited_gids):
+                for gid in resolve_save_reconcile_targets(fresh_settings, edited_gids):
                     # Per-group isolation (Should-Fix 7): one group's failure
                     # must not abort reconcile of the others.
                     try:

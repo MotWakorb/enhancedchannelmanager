@@ -670,35 +670,54 @@ class DispatcharrClient:
                         "m3u_account_name": account.get("name", ""),
                     })
 
+        def _row_selection(r):
+            cp = r.get("custom_properties")
+            if isinstance(cp, dict):
+                sel = cp.get("channel_profile_ids")
+                if isinstance(sel, list) and sel:
+                    return tuple(sorted(
+                        x for x in sel if isinstance(x, int) and not isinstance(x, bool)
+                    ))
+            return None
+
         all_settings = {}
         for channel_group_id, rows in rows_by_group.items():
             # Deterministic precedence: auto_channel_sync ON (0) before OFF (1),
+            # then — within a tier — prefer a row that HAS a non-empty selection
+            # (0) over one that does not (1) so an operator's real selection is
+            # never silently shadowed by a no-selection winner (Should-Fix 3),
             # then LOWEST m3u_account_id.
             winner = min(
                 rows,
                 key=lambda r: (
                     0 if r.get("auto_channel_sync") else 1,
+                    0 if _row_selection(r) is not None else 1,
                     r.get("m3u_account_id") if r.get("m3u_account_id") is not None else 1 << 62,
                 ),
             )
-            # Conflict = two rows with DIFFERENT non-empty channel_profile_ids.
-            distinct_selections = set()
-            for r in rows:
-                cp = r.get("custom_properties")
-                if isinstance(cp, dict):
-                    sel = cp.get("channel_profile_ids")
-                    if isinstance(sel, list) and sel:
-                        distinct_selections.add(
-                            tuple(sorted(x for x in sel if isinstance(x, int) and not isinstance(x, bool)))
-                        )
-            conflict = len(distinct_selections) > 1
+            distinct_selections = {
+                s for s in (_row_selection(r) for r in rows) if s is not None
+            }
+            winner_selection = _row_selection(winner)
+            # Conflict when either two rows carry DIFFERENT non-empty selections,
+            # OR some row carries a selection but the chosen winner does not
+            # (a selection-vs-no-selection disagreement that would otherwise
+            # silently ignore the operator's choice — Should-Fix 3).
+            conflict = len(distinct_selections) > 1 or (
+                bool(distinct_selections) and winner_selection is None
+            )
             if conflict:
                 logger.warning(
                     "[DISPATCHARR] group %s has CONFLICTING channel_profile_ids across "
-                    "accounts %s — using the deterministic winner (account %s)",
+                    "accounts (selections=%s, winner account %s selection=%s)",
                     channel_group_id, sorted(distinct_selections),
-                    winner.get("m3u_account_id"),
+                    winner.get("m3u_account_id"), winner_selection,
                 )
+            # NOTE: ``_ecm_channel_profile_conflict`` is an ECM-SYNTHETIC key —
+            # it is NOT a Dispatcharr field. It must be STRIPPED before any
+            # Dispatcharr group-settings PATCH (NIT 9). Today's save paths build
+            # explicit payloads and never round-trip it; a future consumer that
+            # forwards a collapsed row wholesale must drop this key first.
             all_settings[channel_group_id] = {**winner, "_ecm_channel_profile_conflict": conflict}
 
         logger.info("[DISPATCHARR]   Total channel_groups entries across all accounts: %s", total_groups_found)

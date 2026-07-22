@@ -28,6 +28,7 @@ from services.profile_reconcile import (
     groups_with_selection,
     reconcile_all_selected_groups,
     reconcile_group_profiles,
+    resolve_save_reconcile_targets,
 )
 
 _FIXTURE = os.path.join(
@@ -616,6 +617,53 @@ async def test_sweep_dedupes_override_source_and_target_by_effective_group(monke
     assert client.enabled_map() == {2: True, 1: False}
 
 
+@pytest.mark.asyncio
+async def test_save_reconcile_target_matches_sweep_winner_no_flap(monkeypatch):
+    """Should-Fix 2 (no flap): saving the override SOURCE account must reconcile
+    the SAME effective-group winner the sweep picks (the TARGET's selection),
+    not the source's — otherwise instant-apply sets [1] and the next monitor
+    sweep flips it to [2] every pass.
+
+    S(100) overrides into T(200); channels live in 200. S selects [1], T selects
+    [2]. A save that edits only S resolves winner 200 and applies [2] == the
+    sweep winner, so a subsequent sweep is a no-op (no flap).
+    """
+    async def _no_live_rules():
+        return set()
+    monkeypatch.setattr(
+        "services.profile_reconcile._resolve_live_rule_ids", _no_live_rules
+    )
+    settings = {
+        100: _setting(channel_profile_ids=[1], group_override=200),
+        200: _setting(channel_profile_ids=[2]),
+    }
+
+    # The save hook, editing only the source group 100, targets the same winner
+    # the sweep uses.
+    save_targets = resolve_save_reconcile_targets(settings, [100])
+    sweep_targets = dedupe_gids_by_effective_group(settings, groups_with_selection(settings))
+    assert save_targets == sweep_targets == [200]
+
+    # Applying the save target yields the TARGET's selection [2], not the
+    # source's [1] — so the sweep won't change anything afterward.
+    channels = [_channel(10, group=200)]
+    client = FakeClient({200: channels, 100: []}, profiles=[1, 2])
+    for gid in save_targets:
+        await reconcile_group_profiles(client, settings, gid, live_rule_ids=set())
+    assert client.enabled_map() == {2: True, 1: False}
+
+
+def test_resolve_save_targets_untouched_effective_group_excluded():
+    """A save that edits a group whose effective group carries no selection
+    anywhere targets nothing (a cleared selection is a no-op)."""
+    settings = {
+        100: _setting(channel_profile_ids=[1]),
+        200: _setting(),  # no selection
+    }
+    assert resolve_save_reconcile_targets(settings, [200]) == []
+    assert resolve_save_reconcile_targets(settings, [100]) == [100]
+
+
 def test_dedupe_gids_by_effective_group_is_order_independent():
     settings = {
         100: _setting(channel_profile_ids=[1], group_override=200),
@@ -624,6 +672,33 @@ def test_dedupe_gids_by_effective_group_is_order_independent():
     assert dedupe_gids_by_effective_group(settings, [100, 200]) == [200]
     # Reverse order still resolves to the target.
     assert dedupe_gids_by_effective_group(settings, [200, 100]) == [200]
+
+
+@pytest.mark.asyncio
+async def test_sweep_aborts_promptly_on_cancel(monkeypatch):
+    """NIT 7: a cancel_check predicate returning True aborts the sweep between
+    groups so a long every-pass sweep stops promptly on monitor cancellation."""
+    async def _no_live_rules():
+        return set()
+    monkeypatch.setattr(
+        "services.profile_reconcile._resolve_live_rule_ids", _no_live_rules
+    )
+    client = FakeClient(
+        {100: [_channel(10, group=100)], 300: [_channel(30, group=300)]},
+        profiles=[1, 2],
+    )
+    settings = {
+        100: _setting(channel_profile_ids=[1]),
+        300: _setting(channel_profile_ids=[2]),
+    }
+
+    # Cancel immediately — no group should be reconciled.
+    result = await reconcile_all_selected_groups(
+        client, settings, cancel_check=lambda: True
+    )
+
+    assert result["groups_reconciled"] == 0
+    assert client.get_channels_gids == []  # nothing enumerated
 
 
 def test_groups_with_selection_filters_correctly():

@@ -203,7 +203,9 @@ class M3UChangeMonitorTask(TaskScheduler):
                 try:
                     from services.profile_reconcile import reconcile_all_selected_groups
                     self._set_progress(status="reconciling_profiles")
-                    recon = await reconcile_all_selected_groups(client)
+                    recon = await reconcile_all_selected_groups(
+                        client, cancel_check=lambda: self._cancel_requested
+                    )
                     if recon.get("groups_reconciled") or recon.get("groups_partial_failure"):
                         logger.info(
                             "[%s] Profile reconcile: %s group(s) reconciled, %s "

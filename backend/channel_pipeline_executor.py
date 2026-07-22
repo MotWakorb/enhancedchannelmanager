@@ -2850,7 +2850,7 @@ class ActionExecutor:
 
     async def _execute_assign_channel_profile(self, action: Action, stream_ctx: StreamContext,
                                                exec_ctx: ExecutionContext,
-                                               rule_id: int = None) -> ActionResult:
+                                               rule_id: Optional[int] = None) -> ActionResult:
         """Execute assign_channel_profile action.
 
         ``rule_id`` (GH #720 Part B handoff): the id of the firing
@@ -3035,7 +3035,7 @@ class ActionExecutor:
 
     async def apply_channel_profile_to_channels(
         self, action: Action | dict, channel_ids: list[int],
-        exec_ctx: ExecutionContext, rule_id: int = None,
+        exec_ctx: ExecutionContext, rule_id: Optional[int] = None,
     ) -> list[ActionResult]:
         """Apply an ``assign_channel_profile`` action to an EXPLICIT set of
         channel ids (the event_sync execution path — GH #720 / y3m6o.1 Finding
@@ -3796,7 +3796,7 @@ class ActionExecutor:
         return ProfileMembershipResult(enabled_count, disabled_count, failed_profile_ids)
 
     async def _mark_channel_profile_ownership(self, channel_id: int,
-                                              rule_id: int = None) -> None:
+                                              rule_id: Optional[int] = None) -> None:
         """Stamp the pipeline-ownership provenance marker on a channel.
 
         GH #720 Part B (decision 2b + handoff): records — in the channel's

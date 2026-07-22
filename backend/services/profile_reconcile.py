@@ -67,7 +67,6 @@ not fight this.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
@@ -125,9 +124,11 @@ def _query_live_profile_assigning_rule_ids() -> set[int]:
     A channel is only excluded from group reconcile while its owning rule is in
     this set (decision 2b handoff). Queries the ChannelPipelineRule model
     (table ``auto_creation_rules``) for enabled rules whose JSON ``actions``
-    array contains an ``assign_channel_profile`` action. Runs in a worker
-    thread via :func:`_resolve_live_rule_ids` so the sync DB call never blocks
-    the event loop.
+    array contains an ``assign_channel_profile`` action. Called INLINE on the
+    event-loop thread (see :func:`_resolve_live_rule_ids`) — it is a handful of
+    rows and, crucially, ECM's DB runs on a single shared StaticPool connection
+    that every other access uses one-thread-at-a-time, so it must NOT be
+    offloaded to a worker thread.
     """
     from database import get_session
     from models import ChannelPipelineRule
@@ -156,14 +157,20 @@ def _query_live_profile_assigning_rule_ids() -> set[int]:
 
 
 async def _resolve_live_rule_ids() -> set[int] | None:
-    """Resolve the live profile-assigning rule-id set off the event loop.
+    """Resolve the live profile-assigning rule-id set.
 
-    Returns the set on success, or ``None`` if the query FAILS — a failure must
-    be conservative (treat every marker as still-owned) so a transient DB error
-    can never release, reconcile, and stomp a genuinely pipeline-owned channel.
+    Runs the query INLINE on the event-loop thread (async only so callers'
+    ``await`` is unchanged). ECM's DB is a single shared StaticPool sqlite
+    connection used one-thread-at-a-time by all inline event-loop DB access;
+    offloading this query to a worker thread would let it issue statements on
+    that same connection concurrently with unrelated inline DB work and corrupt
+    the victim's transaction state (Blocker 1). Returns the set on success, or
+    ``None`` if the query FAILS — a failure must be conservative (treat every
+    marker as still-owned) so a transient DB error can never release,
+    reconcile, and stomp a genuinely pipeline-owned channel.
     """
     try:
-        return await asyncio.to_thread(_query_live_profile_assigning_rule_ids)
+        return _query_live_profile_assigning_rule_ids()
     except Exception as e:  # noqa: BLE001 - conservative fallback below
         logger.warning(
             "[PROFILE-RECONCILE] could not resolve live profile-assigning rule "
@@ -538,7 +545,32 @@ def dedupe_gids_by_effective_group(all_settings: dict, gids) -> list[int]:
     return list(effective_to_gid.values())
 
 
-async def reconcile_all_selected_groups(client, all_settings: dict | None = None) -> dict:
+def resolve_save_reconcile_targets(all_settings: dict, edited_gids) -> list[int]:
+    """The effective-group WINNER gids the SAVE hook must reconcile.
+
+    Should-Fix 2 (no flap): the save hook must pick EXACTLY the same winner the
+    sweep would, or an override source/target that carry different selections
+    would flap every monitor pass. The sweep resolves winners by deduping ALL
+    ``groups_with_selection`` by effective group (target-preferred); the save
+    hook must therefore resolve over the SAME full selection set — not just over
+    its edited gids — and reconcile whichever winners share an effective group
+    with something this save touched. Deterministic and order-independent.
+    """
+    sweep_winners = dedupe_gids_by_effective_group(
+        all_settings, groups_with_selection(all_settings)
+    )
+    touched_effective = {
+        resolve_effective_master_group_id(all_settings, gid) for gid in edited_gids
+    }
+    return [
+        w for w in sweep_winners
+        if resolve_effective_master_group_id(all_settings, w) in touched_effective
+    ]
+
+
+async def reconcile_all_selected_groups(
+    client, all_settings: dict | None = None, cancel_check=None,
+) -> dict:
     """Reconcile every group that carries a profile selection.
 
     Convenience entrypoint for the converging hooks (change monitor,
@@ -548,6 +580,10 @@ async def reconcile_all_selected_groups(client, all_settings: dict | None = None
     and reconciles each. Returns aggregate counts; one group's failure is
     logged and does not abort the rest. ``partial_failure`` groups are counted
     distinctly from fully ``reconciled`` ones.
+
+    ``cancel_check`` (NIT 7): an optional ``() -> bool`` predicate checked
+    between groups so a long sweep aborts promptly when the caller (the monitor)
+    requests cancellation. Best-effort — omit for callers with no cancel signal.
     """
     if all_settings is None:
         try:
@@ -568,6 +604,12 @@ async def reconcile_all_selected_groups(client, all_settings: dict | None = None
     groups_partial_failure = 0
     channels_scoped = 0
     for gid in reconcile_gids:
+        if cancel_check is not None and cancel_check():
+            logger.info(
+                "[PROFILE-RECONCILE] sweep cancelled mid-run after %d group(s)",
+                groups_reconciled + groups_partial_failure,
+            )
+            break
         try:
             result = await reconcile_group_profiles(
                 client, all_settings, gid, live_rule_ids=live_rule_ids

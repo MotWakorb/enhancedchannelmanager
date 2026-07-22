@@ -83,6 +83,40 @@ async def test_conflicting_selections_flagged():
 
 
 @pytest.mark.asyncio
+async def test_no_selection_winner_does_not_shadow_a_real_selection():
+    """Should-Fix 3: within the same auto_channel_sync tier, a row WITH a
+    selection outranks a lower-id row WITHOUT one — so the operator's real
+    selection is not silently shadowed by a no-selection winner."""
+    a = _account(3, auto_sync=True, selection=None)   # ON, no selection, low id
+    b = _account(9, auto_sync=True, selection=[1, 2])  # ON, has selection
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=[a, b])
+
+    settings = await client.get_all_m3u_group_settings()
+
+    # The winner carries the real selection (account 9), not the empty account 3.
+    assert settings[500]["m3u_account_id"] == 9
+    assert settings[500]["custom_properties"]["channel_profile_ids"] == [1, 2]
+    assert settings[500]["_ecm_channel_profile_conflict"] is False
+
+
+@pytest.mark.asyncio
+async def test_cross_tier_selection_shadow_is_flagged_as_conflict():
+    """When the auto_channel_sync-ON winner carries NO selection but an OFF row
+    DOES, precedence keeps the ON winner but the shadowed selection is flagged
+    as a conflict so it is surfaced, not silently ignored (Should-Fix 3)."""
+    a = _account(3, auto_sync=True, selection=None)    # ON wins per precedence
+    b = _account(9, auto_sync=False, selection=[1, 2])  # OFF, has selection
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=[a, b])
+
+    settings = await client.get_all_m3u_group_settings()
+
+    assert settings[500]["m3u_account_id"] == 3       # ON tier wins
+    assert settings[500]["_ecm_channel_profile_conflict"] is True
+
+
+@pytest.mark.asyncio
 async def test_matching_selections_not_flagged():
     """Identical selections across accounts are NOT a conflict."""
     a = _account(3, auto_sync=True, selection=[1, 2])
