@@ -39,7 +39,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   const [nameRegexPattern, setNameRegexPattern] = useState<string>('');
   const [nameReplacePattern, setNameReplacePattern] = useState<string>('');
   const [channelNameFilter, setChannelNameFilter] = useState<string>('');
-  const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set());
+  const [selectedProfileIds, setSelectedProfileIds] = useState<Set<number>>(new Set());
   const [sortOrder, setSortOrder] = useState<string>('');
   const [sortReverse, setSortReverse] = useState<boolean>(false);
   const [streamProfileId, setStreamProfileId] = useState<string>('');
@@ -94,7 +94,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
       setNameRegexPattern(customProperties?.name_regex_pattern ?? '');
       setNameReplacePattern(customProperties?.name_replace_pattern ?? '');
       setChannelNameFilter(customProperties?.name_match_regex ?? '');
-      setSelectedProfileIds(new Set(customProperties?.channel_profile_ids ?? []));
+      setSelectedProfileIds(new Set(
+        (customProperties?.channel_profile_ids ?? [])
+          .map(Number)
+          .filter((n) => Number.isInteger(n))
+      ));
       setSortOrder(customProperties?.channel_sort_order ?? '');
       setSortReverse(customProperties?.channel_sort_reverse ?? false);
       setStreamProfileId(customProperties?.stream_profile_id?.toString() ?? '');
@@ -159,7 +163,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   }, [logos, customLogoId]);
 
   // Handle profile toggle
-  const handleToggleProfile = (profileId: string) => {
+  const handleToggleProfile = (profileId: number) => {
     setSelectedProfileIds(prev => {
       const next = new Set(prev);
       if (next.has(profileId)) {
@@ -205,28 +209,33 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       const profile = channelProfiles[activeProfileIndex];
-      if (profile) handleToggleProfile(profile.id.toString());
+      if (profile) handleToggleProfile(profile.id);
     }
   };
-
-  // Get selected profile names. An EMPTY selection is NOT "clear everywhere":
-  // ECM stops MANAGING this group's profiles and leaves existing memberships
-  // untouched (GH #720 Part B, decision 1a) — the label reflects that.
-  const selectedProfileNames = useMemo(() => {
-    if (selectedProfileIds.size === 0) return 'Not managed by Auto-Sync';
-    return channelProfiles
-      .filter(p => selectedProfileIds.has(p.id.toString()))
-      .map(p => p.name)
-      .join(', ');
-  }, [selectedProfileIds, channelProfiles]);
 
   // Selected ids that no longer match ANY current profile (deleted in
   // Dispatcharr). Surfaced so a stale selection is shown clearly instead of
   // the picker silently rendering blank / dropping the missing choices.
   const missingSelectedIds = useMemo(() => {
-    const known = new Set(channelProfiles.map(p => p.id.toString()));
+    const known = new Set(channelProfiles.map(p => p.id));
     return Array.from(selectedProfileIds).filter(id => !known.has(id));
   }, [selectedProfileIds, channelProfiles]);
+
+  // Get selected profile names. An EMPTY selection is NOT "clear everywhere":
+  // ECM stops MANAGING this group's profiles and leaves existing memberships
+  // untouched (GH #720 Part B, decision 1a) — the label reflects that. Stale
+  // ids (deleted profiles) are shown as an explicit "N unknown" count so the
+  // trigger is never blank when the whole selection is stale.
+  const selectedProfileNames = useMemo(() => {
+    if (selectedProfileIds.size === 0) return 'Not managed by Auto-Sync';
+    const knownNames = channelProfiles
+      .filter(p => selectedProfileIds.has(p.id))
+      .map(p => p.name);
+    const parts: string[] = [];
+    if (knownNames.length) parts.push(knownNames.join(', '));
+    if (missingSelectedIds.length) parts.push(`${missingSelectedIds.length} unknown profile(s)`);
+    return parts.join(', ');
+  }, [selectedProfileIds, channelProfiles, missingSelectedIds]);
 
   // Filter active EPG sources (include dummy)
   const activeEpgSources = useMemo(() => {
@@ -342,7 +351,14 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
     if (nameRegexPattern) props.name_regex_pattern = nameRegexPattern; else delete props.name_regex_pattern;
     if (nameReplacePattern !== undefined && nameRegexPattern) props.name_replace_pattern = nameReplacePattern; else delete props.name_replace_pattern;
     if (channelNameFilter) props.name_match_regex = channelNameFilter; else delete props.name_match_regex;
-    if (selectedProfileIds.size > 0) props.channel_profile_ids = Array.from(selectedProfileIds); else delete props.channel_profile_ids;
+    // Drop stale ids (profiles deleted in Dispatcharr) on save so the stored
+    // selection matches the "N unknown profile(s) ... will be dropped on save"
+    // copy — the saved value is exactly the currently-valid selection.
+    {
+      const known = new Set(channelProfiles.map(p => p.id));
+      const validIds = Array.from(selectedProfileIds).filter(id => known.has(id));
+      if (validIds.length > 0) props.channel_profile_ids = validIds; else delete props.channel_profile_ids;
+    }
     if (sortOrder) props.channel_sort_order = sortOrder as 'provider' | 'name' | 'tvg_id' | 'updated_at'; else delete props.channel_sort_order;
     if (sortReverse) props.channel_sort_reverse = sortReverse; else delete props.channel_sort_reverse;
     if (streamProfileId) props.stream_profile_id = parseInt(streamProfileId, 10); else delete props.stream_profile_id;
@@ -640,7 +656,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                 {profileDropdownOpen && (
                   <div className="dropdown-menu">
                     <div className="dropdown-actions">
-                      <button type="button" onClick={() => setSelectedProfileIds(new Set(channelProfiles.map(p => p.id.toString())))}>
+                      <button type="button" onClick={() => setSelectedProfileIds(new Set(channelProfiles.map(p => p.id)))}>
                         Select All
                       </button>
                       <button type="button" onClick={() => setSelectedProfileIds(new Set())}>
@@ -662,7 +678,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                       onKeyDown={handleProfileListboxKeyDown}
                     >
                       {channelProfiles.map((profile, idx) => {
-                        const selected = selectedProfileIds.has(profile.id.toString());
+                        const selected = selectedProfileIds.has(profile.id);
                         return (
                           <div
                             key={profile.id}
@@ -670,7 +686,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                             role="option"
                             aria-selected={selected}
                             className={`dropdown-option${idx === activeProfileIndex ? ' active' : ''}`}
-                            onClick={() => { setActiveProfileIndex(idx); handleToggleProfile(profile.id.toString()); }}
+                            onClick={() => { setActiveProfileIndex(idx); handleToggleProfile(profile.id); }}
                           >
                             <input
                               type="checkbox"
@@ -706,6 +722,8 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                 unchanged — it does NOT remove the channels from every profile. Channels whose
                 profile membership was set by a Channel Pipeline rule are excluded from
                 Auto-Sync profile management.
+                {' '}This selection is GLOBAL for the channel group: saving it here applies it
+                to this group across ALL M3U accounts, not just this one.
               </span>
             </div>
 

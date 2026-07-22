@@ -258,7 +258,7 @@ export interface AutoSyncCustomProperties {
   name_regex_pattern?: string;              // Find pattern (regex)
   name_replace_pattern?: string;            // Replace pattern
   name_match_regex?: string;                // Channel name filter regex (Dispatcharr field name)
-  channel_profile_ids?: string[];           // Channel Profile IDs (strings for API compatibility)
+  channel_profile_ids?: number[];           // Channel Profile IDs (canonical INTEGER type — Dispatcharr profile ids)
   channel_sort_order?: 'provider' | 'name' | 'tvg_id' | 'updated_at' | null; // Sort field
   channel_sort_reverse?: boolean;           // Reverse sort order
   stream_profile_id?: number | null;        // Stream Profile ID

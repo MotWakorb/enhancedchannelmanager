@@ -228,7 +228,7 @@ describe('AutoSyncSettingsModal — profile picker accessibility + stale-selecti
   }
 
   it('the profile trigger exposes an accessible name + haspopup, and opens an aria listbox', async () => {
-    renderWithProfiles({ channel_profile_ids: ['1'] });
+    renderWithProfiles({ channel_profile_ids: [1] });
     const user = userEvent.setup();
 
     const trigger = screen.getByRole('button', { name: /Channel Profile Assignment/i });
@@ -268,12 +268,12 @@ describe('AutoSyncSettingsModal — profile picker accessibility + stale-selecti
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Save Settings/i }));
     const saved = onSave.mock.calls[0][0] as AutoSyncCustomProperties;
-    expect(saved.channel_profile_ids).toEqual(['2']);
+    expect(saved.channel_profile_ids).toEqual([2]);
   });
 
   it('a selection referencing deleted profiles shows a clear stale-count state, not a blank picker', () => {
     // Selected ids 1 and 99; only profile 1 still exists -> 1 missing.
-    renderWithProfiles({ channel_profile_ids: ['1', '99'] });
+    renderWithProfiles({ channel_profile_ids: [1, 99] });
 
     expect(screen.getByRole('alert'))
       .toHaveTextContent(/1 previously-selected profile\(s\) no longer exist/i);
