@@ -2226,7 +2226,22 @@ class ChannelPipelineExecution(Base):
     duration_seconds = Column(Float, nullable=True)
 
     # Status
-    status = Column(String(20), nullable=False, default="pending")  # pending, running, completed, failed, rolled_back
+    # Allowed lifecycle values:
+    #   Transient: pending, running
+    #   Terminal:  completed, failed, rolled_back, capped,
+    #              completed_with_errors, abandoned
+    # 'abandoned' is set by task_engine's startup crash-reconciliation
+    # (_abandon_orphaned_auto_creation_executions, GH #473 / bd-exo4j) on rows
+    # left at 'running' by a hard restart/OOM kill; it also carries an
+    # error_message and trips the run-on-refresh circuit breaker.
+    # 'completed_with_errors' (build 0.17.6-0152, y3m6o.1 / GH #720) marks a run
+    # in which at least one executed action failed.
+    # Widened to String(32) in Alembic 0039 (y3m6o.1 / GH #720):
+    # 'completed_with_errors' (21 chars) overflowed the previous String(20). 32
+    # comfortably covers the full set above plus near-future statuses. SQLite
+    # ignores VARCHAR width, but a width-enforcing backend (Postgres) would
+    # truncate/reject — keep this contract honest.
+    status = Column(String(32), nullable=False, default="pending")
     error_message = Column(Text, nullable=True)  # Error details if failed
 
     # Statistics
@@ -2406,6 +2421,7 @@ class ChannelPipelineExecution(Base):
 
     def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
         """Convert to dictionary for API responses."""
+        _warnings = self.get_warnings()
         result = {
             "id": self.id,
             "rule_id": self.rule_id,
@@ -2431,7 +2447,7 @@ class ChannelPipelineExecution(Base):
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             # Advisory, non-fatal run warnings (e.g. disabled normalization
             # groups). Always present so the UI can render unconditionally.
-            "warnings": self.get_warnings(),
+            "warnings": _warnings,
             # Event Sync run-kind flag + structured per-rule summaries
             # (enhancedchannelmanager-7wuhd). Always present so the executions
             # UI can branch its layout unconditionally: is_event_sync True ⇒
@@ -2441,6 +2457,16 @@ class ChannelPipelineExecution(Base):
             # and any legacy NULL row to a real boolean.
             "is_event_sync": bool(self.is_event_sync),
             "event_sync_summary": self.get_event_sync_summary(),
+            # y3m6o.1 review (Finding 3): True when this run mutated
+            # channel-profile membership non-reversibly. Derived from the
+            # persisted ``non_reversible_profile_changes`` warning (no schema
+            # change) so the executions UI can DISCLOSE, on the rollback/undo
+            # affordances, that channel-profile membership will NOT be restored.
+            "has_non_reversible_profile_changes": any(
+                isinstance(w, dict)
+                and w.get("type") == "non_reversible_profile_changes"
+                for w in _warnings
+            ),
         }
         if include_entities:
             result["created_entities"] = self.get_created_entities()

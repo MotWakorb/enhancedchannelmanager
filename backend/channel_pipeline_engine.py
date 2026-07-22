@@ -93,6 +93,35 @@ def event_sync_trigger_allowed(triggered_by: str, config: dict | None) -> bool:
         return bool(config) and config.get("auto_run") is True
     return False
 
+
+def build_channel_profile_membership(
+    profiles: list[dict],
+) -> dict[int, set[int]]:
+    """Invert a Dispatcharr ``get_channel_profiles()`` response into a
+    ``channel_id -> set(profile_ids the channel is ENABLED in)`` map
+    (y3m6o.1 review follow-up).
+
+    CONTRACT (proven against a live v0.27.x instance and pinned by
+    ``tests/fixtures/y3m6o1/dispatcharr_channel_profiles_mixed_membership.json``):
+    each profile's ``channels`` list enumerates EXACTLY the channels ENABLED in
+    that profile — a channel disabled in a profile is ABSENT from that profile's
+    ``channels`` (verified by mixed enable/disable writes on one channel). So a
+    channel absent from every ``channels`` list is enabled in zero profiles, and
+    ``assign_channel_profile`` may safely diff against this map (skip no-op
+    writes) WITHOUT recreating the GH #720 over-inclusion regression.
+
+    This is the ONE builder the engine and the fixture-backed contract test both
+    use, so the premise the optimization rests on is exercised by real data — a
+    future serializer change that stops enumerating enabled membership breaks the
+    fixture test, not production silently.
+    """
+    membership: dict[int, set[int]] = {}
+    for p in profiles:
+        pid = p["id"]
+        for cid in (p.get("channels") or []):
+            membership.setdefault(cid, set()).add(pid)
+    return membership
+
 # Upper bound on secondary streams fetched per event_sync rule — a fetch
 # guard, not a decision knob (per-stream decisions are independent, so
 # truncation only defers later streams to the next idempotent run; it is
@@ -471,6 +500,13 @@ class ChannelPipelineEngine:
         # record (and the UI/alerts that read it) surface "capped at N of M"
         # rather than masquerading as a clean completion. error_message carries
         # the would-have-been M so the operator sees the full picture.
+        # y3m6o.1 (0152): a run in which any executed action FAILED must not
+        # finalize as green ``completed``. ``completed_with_errors`` is a
+        # distinct terminal outcome — deliberately NOT a blanket ``failed``,
+        # because other channels/actions in the same run may have succeeded.
+        # ``capped`` takes precedence (it is already a non-green terminal state
+        # and carries its own operator guidance).
+        failed_actions = results.get("failed_actions", [])
         if results.get("capped"):
             execution.status = "capped"
             would = results.get("channels_created", 0) + results.get("cap_would_create", 0)
@@ -481,6 +517,22 @@ class ChannelPipelineEngine:
                 f"Auto-creation is idempotent — run it again to continue from "
                 f"where it stopped (the already-created channels persist), or "
                 f"raise the cap in Settings > Auto Creation."
+            )
+            # y3m6o.1 review (Finding 2): capped is the terminal STATUS (it
+            # carries its own operator guidance and takes precedence over
+            # completed_with_errors), but a compound capped+failed run must NOT
+            # lose the failed-action detail — persist BOTH conditions in the row
+            # so the operator sees the failures alongside the cap info. The
+            # top-level result still reports success=False + failed_action_count
+            # (below), so a capped run with failures is never read as green.
+            if failed_actions:
+                execution.error_message += (
+                    "\n\n" + self._summarize_failed_actions(failed_actions)
+                )
+        elif failed_actions:
+            execution.status = "completed_with_errors"
+            execution.error_message = self._summarize_failed_actions(
+                failed_actions
             )
         else:
             execution.status = "completed"
@@ -509,6 +561,29 @@ class ChannelPipelineEngine:
         run_warnings = list(normalization_warnings) + results.pop(
             "event_sync_warnings", []
         )
+        # y3m6o.1 review (Finding 3): if this run mutated channel-profile
+        # membership non-reversibly (assign_channel_profile carries no reversible
+        # previous_state — Finding 6), persist a structured warning so the
+        # executions UI can DISCLOSE that rollback/undo will NOT restore that
+        # membership. Persisted in the existing ``warnings`` JSON column (no
+        # schema change); to_dict derives has_non_reversible_profile_changes from
+        # it. The set is popped so it never rides the JSON-serialized result.
+        non_reversible_ids = sorted(
+            results.pop("non_reversible_channel_ids", set())
+        )
+        if non_reversible_ids:
+            run_warnings.append({
+                "type": "non_reversible_profile_changes",
+                "count": len(non_reversible_ids),
+                "channel_ids": non_reversible_ids,
+                "message": (
+                    f"This run changed channel-profile membership on "
+                    f"{len(non_reversible_ids)} channel(s). Channel-profile "
+                    f"membership has no reversible previous state, so Rollback "
+                    f"and Undo will NOT restore it — they reverse only the "
+                    f"stream/field changes this run made."
+                ),
+            })
         execution.set_warnings(run_warnings)
 
         # enhancedchannelmanager-7wuhd: persist the structured event_sync
@@ -555,7 +630,14 @@ class ChannelPipelineEngine:
         )
 
         return {
-            "success": True,
+            # y3m6o.1 (0152): the top-level API result reflects action-level
+            # failures — a run with any failed action is NOT a success, so
+            # callers (MCP tools, tasks) and the executions UI cannot read it
+            # as green. ``failed_action_count`` gives a cheap severity signal
+            # without walking the (bounded) execution log.
+            "success": not failed_actions,
+            "status": execution.status,
+            "failed_action_count": len(failed_actions),
             "execution_id": execution.id,
             "mode": execution.mode,
             "duration_seconds": execution.duration_seconds,
@@ -1126,9 +1208,18 @@ class ChannelPipelineEngine:
 
         Returns a list of warning dicts, one per affected rule::
 
-            {"rule_id": int, "rule_name": str,
+            {"type": "disabled_normalization_group",
+             "rule_id": int, "rule_name": str,
              "disabled_groups": [{"id": int, "name": str|None,
                                   "missing": bool}]}
+
+        The ``type`` discriminant (y3m6o.1 review) lets the frontend tell this
+        warning apart from the ``non_reversible_profile_changes`` warning that
+        shares the same persisted ``warnings`` JSON column — the two shapes are
+        structurally different (this one carries ``disabled_groups``/``rule_name``,
+        the other carries ``channel_ids``/``message``). Rows persisted before this
+        discriminant existed have no ``type``; the frontend treats a missing
+        ``type`` as this variant for backward compatibility.
         """
         # Only rules that actually reference a normalization group can be
         # affected — short-circuit otherwise so healthy configs do no DB work.
@@ -1174,6 +1265,7 @@ class ChannelPipelineEngine:
                     r.id, r.name, names,
                 )
                 warnings.append({
+                    "type": "disabled_normalization_group",
                     "rule_id": r.id,
                     "rule_name": r.name,
                     "disabled_groups": problem_groups,
@@ -1820,10 +1912,140 @@ class ChannelPipelineEngine:
                         "error": str(e)
                     }]
                 })
+                # y3m6o.1 review: the operator-visible execution_log entry above
+                # is NOT enough on its own — finalization keys terminal status off
+                # results["failed_actions"], so a sort/renumber failure that only
+                # logs success=False still finalizes green. Funnel it through the
+                # SAME run-level aggregation chokepoint the other phase failures
+                # use so the run finalizes ``completed_with_errors`` with an honest
+                # failed_action_count. sort_group is a group-level phase action
+                # (no per-stream ActionResult), so _record_failed_phase is the
+                # matching recorder.
+                self._record_failed_phase(
+                    results, phase="sort_group",
+                    entity_id=group_id,
+                    error=f"Failed to sort group '{group_name}': {e}",
+                )
 
     # =========================================================================
     # Stream Processing
     # =========================================================================
+
+    @staticmethod
+    def _record_failed_action(
+        results: dict, rule_id, rule_name, stream_id, stream_name,
+        action_result,
+    ) -> None:
+        """Record one failed action into ``results["failed_actions"]`` (y3m6o.1
+        / 0152).
+
+        A compact, serializable record — enough to identify WHICH rule, stream
+        and action failed and WHY — so run finalization can set
+        ``completed_with_errors`` with a short summary and the executions UI /
+        API can surface the failure count. Called from both the standard Pass 2
+        loop and the event_sync profile step so every action-failure path funnels
+        through one shape.
+        """
+        results.setdefault("failed_actions", []).append({
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "stream_id": stream_id,
+            "stream_name": stream_name,
+            "action_type": action_result.action_type,
+            "entity_id": action_result.entity_id,
+            "error": action_result.error or action_result.description,
+        })
+
+    @staticmethod
+    def _record_failed_phase(
+        results: dict, *, phase: str, error: str,
+        rule_id=None, rule_name=None, stream_id=None, stream_name=None,
+        entity_id=None, count: int = 1,
+    ) -> None:
+        """Record ``count`` failures from a NON-Pass-2 phase into the SAME
+        run-level aggregation list (``results["failed_actions"]``) that
+        finalization reads (y3m6o.1 review — full failure aggregation).
+
+        Pass 2 per-stream action failures funnel through
+        :meth:`_record_failed_action` (which carries an ``ActionResult``). The
+        other executed-action/phase failures — event_sync attach failures,
+        event_sync dummy-EPG assignment failures, deferred-EPG (Pass 5) retry
+        failures, and default-profile assignment failures — do not have an
+        ``ActionResult`` at the aggregation point (only a count and a rule/phase
+        label), so they funnel through here instead. Both recorders append to
+        the ONE list finalization keys on, so ANY real failure yields
+        ``completed_with_errors`` + a non-success top-level result. One entry
+        per failure keeps ``failed_action_count`` honest.
+        """
+        entries = results.setdefault("failed_actions", [])
+        for _ in range(max(1, count)):
+            entries.append({
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "stream_id": stream_id,
+                "stream_name": stream_name,
+                "action_type": phase,
+                "entity_id": entity_id,
+                "error": error,
+            })
+
+    def _record_default_profile_failures(
+        self, results: dict, exec_ctx, stream_id=None, stream_name=None,
+    ) -> None:
+        """Drain an exec_ctx's default-profile assignment failures into the
+        run-level aggregation (y3m6o.1 review — Finding 1 reversal).
+
+        Default-profile assignment stays best-effort for CHANNEL CREATION (a
+        failed profile PATCH never aborts the create), but the PO decision
+        REVERSES the prior log-only behavior: a partial/total default-profile
+        write failure must now escalate through aggregation like every other
+        executed-action failure, so a run that could not enforce a new channel's
+        configured default-profile membership finalizes ``completed_with_errors``
+        rather than green. Idempotent: the exec_ctx list is cleared after
+        draining so a re-used context cannot double-count.
+        """
+        for dpf in exec_ctx.default_profile_failures:
+            self._record_failed_phase(
+                results, phase="assign_default_profile",
+                stream_id=stream_id, stream_name=stream_name,
+                entity_id=dpf.get("channel_id"),
+                error=(
+                    f"default-profile assignment incomplete for channel "
+                    f"{dpf.get('channel_id')}: failed to update profile(s) "
+                    f"{dpf.get('failed_profile_ids')}"
+                ),
+            )
+        exec_ctx.default_profile_failures.clear()
+
+    @staticmethod
+    def _summarize_failed_actions(failed_actions: list[dict]) -> str:
+        """Build a short operator-facing summary of failed actions for the
+        execution record's ``error_message`` (y3m6o.1 / 0152).
+
+        States the failure count and names a bounded sample (rule + action
+        type) so the operator can identify the failures without opening the
+        full execution log, plus the retry guidance the individual action
+        errors carry (rerunning the pipeline is safe — every action path is
+        idempotent).
+        """
+        count = len(failed_actions)
+        # Group by (rule_name, action_type) for a compact, deterministic sample.
+        seen: list[str] = []
+        for fa in failed_actions:
+            label = f"{fa.get('rule_name')!r} {fa.get('action_type')}"
+            if label not in seen:
+                seen.append(label)
+        SAMPLE = 5
+        sample = "; ".join(seen[:SAMPLE])
+        if len(seen) > SAMPLE:
+            sample += f"; +{len(seen) - SAMPLE} more"
+        return (
+            f"{count} action(s) failed during this run ({sample}). Some "
+            f"channels may have been left in an inconsistent state (e.g. "
+            f"exclusive channel-profile membership not fully enforced). It is "
+            f"safe to retry manually by rerunning the pipeline — every action "
+            f"path is idempotent."
+        )
 
     async def _process_streams(
         self,
@@ -1948,13 +2170,23 @@ class ChannelPipelineEngine:
         # keep "unavailable" distinct from "genuinely empty" and avoid silently
         # recreating GH #720 during a transient read failure (y3m6o.1 Bug 2).
         all_profile_ids: list[int] | None = []
+        # y3m6o.1 review follow-up: build the current per-channel membership map
+        # from the SAME fetch (the profile payload's ``channels`` list is the
+        # enabled member set), so assign_channel_profile can PATCH only the
+        # profiles whose enabled-state actually flips (no channels_updated
+        # inflation on an idempotent reconcile). Zero extra API reads.
+        channel_profile_membership: dict[int, set[int]] = {}
         if needs_profiles:
             try:
                 profiles = await self.client.get_channel_profiles()
                 all_profile_ids = [p["id"] for p in profiles]
+                channel_profile_membership = build_channel_profile_membership(
+                    profiles
+                )
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel profiles: %s", e)
                 all_profile_ids = None
+                channel_profile_membership = {}
 
         # Pre-fetch EPG data and sources if any rule uses assign_epg —
         # including event_sync rules whose config opts into dummy EPG
@@ -2011,6 +2243,10 @@ class ChannelPipelineEngine:
             # operator a queryable (channel_id, stream_id) audit trail to
             # recover from a bad run via get_journal(batch_id=...).
             execution_id=execution.id,
+            # y3m6o.1 review follow-up: run-start channel-profile membership so
+            # assign_channel_profile writes only actual flips (no channels_updated
+            # inflation on idempotent reconciles).
+            channel_profile_membership=channel_profile_membership,
         )
 
         # Results tracking
@@ -2069,6 +2305,23 @@ class ChannelPipelineEngine:
             )),
             "capped": False,
             "cap_would_create": 0,
+            # y3m6o.1 (0152): run-level aggregation of FAILED actions. Any
+            # executed action returning success=False is recorded here (rule +
+            # stream + action + error). A non-empty list finalizes the run as
+            # ``completed_with_errors`` (distinct from green ``completed``) so
+            # an operator-visible failure can never masquerade as success —
+            # e.g. an ``assign_channel_profile`` that could not enforce
+            # exclusive membership (GH #720). Standard Pass 2 actions AND the
+            # event_sync profile step both funnel through _record_failed_action.
+            "failed_actions": [],
+            # y3m6o.1 review (Finding 3): channel ids whose profile membership
+            # was mutated NON-reversibly this run (assign_channel_profile has no
+            # reversible previous_state — Finding 6). Populated at the add_result
+            # chokepoint and folded per-stream / per-event_sync-rule. A non-empty
+            # set at finalization persists a run warning so the executions UI can
+            # DISCLOSE that rollback/undo will not restore channel-profile
+            # membership. A set (transient) — converted + popped before return.
+            "non_reversible_channel_ids": set(),
         }
 
         # Track which streams have been processed by which rules
@@ -2394,6 +2647,17 @@ class ChannelPipelineEngine:
                     action_entry["details"] = action_result.details
                 actions_log.append(action_entry)
 
+                # y3m6o.1 (0152): aggregate any FAILED action at run level so
+                # finalization can surface a non-green outcome. Skipped actions
+                # report success=True, so this fires only on genuine failures
+                # (e.g. an assign_channel_profile that could not enforce
+                # exclusive membership — GH #720).
+                if not action_result.success:
+                    self._record_failed_action(
+                        results, winning_rule.id, winning_rule.name,
+                        stream.stream_id, stream.stream_name, action_result,
+                    )
+
                 # Check for stop_processing action.
                 # NOTE: by the time we reach Pass 2, Pass 1 has already
                 # resolved exactly one winning rule per stream — there are no
@@ -2457,6 +2721,18 @@ class ChannelPipelineEngine:
             # action params are static for the whole run. Whichever stream
             # is processed LAST this run decides the group's sort params.
             results["sort_group_requests"].update(exec_ctx.sort_group_requests)
+            # y3m6o.1 review (Finding 3): fold this stream's non-reversible
+            # profile-membership mutations into the run-wide set (disclosed at
+            # finalization). (Finding 1 reversal): escalate any default-profile
+            # assignment failure into the run-level aggregation so a run that
+            # could not enforce a new channel's default membership is not green.
+            results["non_reversible_channel_ids"].update(
+                exec_ctx.non_reversible_channel_ids
+            )
+            self._record_default_profile_failures(
+                results, exec_ctx,
+                stream_id=stream.stream_id, stream_name=stream.stream_name,
+            )
 
             # Track channel ID for Pass 3 renumber.
             # Only include channels this rule actually OWNS — either just
@@ -2646,6 +2922,18 @@ class ChannelPipelineEngine:
                             "error": str(e)
                         }]
                     })
+                    # y3m6o.1 review: as with sort_group, the execution_log entry
+                    # alone does NOT flip the run's terminal status — finalization
+                    # keys off results["failed_actions"]. Funnel this rule-level
+                    # renumber failure through the same aggregation chokepoint so
+                    # the run finalizes ``completed_with_errors``. This IS
+                    # rule-scoped (unlike sort_group), so carry rule_id/rule_name.
+                    self._record_failed_phase(
+                        results, phase="renumber_channels",
+                        rule_id=rule.id, rule_name=rule.name,
+                        error=f"Failed to renumber channels for rule "
+                              f"'{rule.name}': {e}",
+                    )
 
         try:
             # =================================================================
@@ -3898,6 +4186,51 @@ class ChannelPipelineEngine:
                 if epg_summary is not None:
                     summary["dummy_epg"] = epg_summary
 
+            # GH #720 / y3m6o.1 Finding 4 (0152): a configured
+            # assign_channel_profile action on an event_sync rule must take
+            # effect. event_sync does NOT flow through Pass 1/2 action
+            # evaluation, so this dedicated step applies exclusive profile
+            # membership to the channels this rule touched this run — newly
+            # attached master channels + promoted channels — mirroring the
+            # dummy-EPG step's shape. No-op for rules without such an action.
+            profile_summary = await self._apply_event_sync_profile_action(
+                rule, executor, exec_ctx, results, dry_run, summary,
+            )
+            if profile_summary is not None:
+                summary["assign_channel_profile"] = profile_summary
+
+            # y3m6o.1 review (Finding 1): route this rule's event_sync attach
+            # failures — master attaches AND promotion attaches — through the
+            # run-level aggregation so a run with any failed attach finalizes
+            # completed_with_errors instead of green. (The profile step and
+            # dummy-EPG step register their own failures internally.)
+            attach_failures = summary.get("attach_errors", 0)
+            promo = summary.get("promotion")
+            if promo is not None:
+                attach_failures += promo.get("attach_errors", 0)
+            if attach_failures:
+                self._record_failed_phase(
+                    results, phase="event_sync_attach",
+                    rule_id=rule.id, rule_name=rule.name,
+                    stream_name=f"[EVENT-SYNC] {rule.name}",
+                    error=(
+                        f"{attach_failures} event_sync attach(es) failed for "
+                        f"rule '{rule.name}'"
+                    ),
+                    count=attach_failures,
+                )
+
+            # y3m6o.1 review (Finding 3 + Finding 1 reversal): fold this rule's
+            # non-reversible profile mutations (from the profile step) and drain
+            # any default-profile failures from promotion's channel creations.
+            # setdefault: some tests drive this phase with a partial results dict.
+            results.setdefault("non_reversible_channel_ids", set()).update(
+                exec_ctx.non_reversible_channel_ids
+            )
+            self._record_default_profile_failures(
+                results, exec_ctx, stream_name=f"[EVENT-SYNC] {rule.name}",
+            )
+
             results["event_sync"].append(summary)
 
     async def _assign_event_sync_dummy_epg(
@@ -4030,6 +4363,18 @@ class ChannelPipelineEngine:
             )
         if epg_summary["failed"]:
             extras.append(f"{epg_summary['failed']} failed")
+            # y3m6o.1 review (Finding 1): a failed event_sync dummy-EPG
+            # assignment must finalize the run completed_with_errors, not green.
+            self._record_failed_phase(
+                results, phase="event_sync_dummy_epg",
+                rule_id=rule.id, rule_name=rule.name,
+                stream_name=f"[EVENT-SYNC EPG] {rule.name}",
+                error=(
+                    f"{epg_summary['failed']} dummy-EPG assignment(s) failed "
+                    f"for rule '{rule.name}'"
+                ),
+                count=epg_summary["failed"],
+            )
         if extras:
             epg_line += f" ({'; '.join(extras)})"
         epg_summary["summary_line"] = epg_line
@@ -4052,6 +4397,162 @@ class ChannelPipelineEngine:
             }],
         })
         return epg_summary
+
+    async def _apply_event_sync_profile_action(
+        self,
+        rule,
+        executor: "ActionExecutor",
+        exec_ctx: "ExecutionContext",
+        results: dict,
+        dry_run: bool,
+        summary: dict,
+    ) -> Optional[dict]:
+        """Apply the rule's ``assign_channel_profile`` action to the channels an
+        event_sync rule touched this run (GH #720 / y3m6o.1 Finding 4 — 0152).
+
+        event_sync rules are excluded from Pass 1/2 action evaluation, so a
+        configured ``assign_channel_profile`` action never fired on them before
+        this. Root cause of #720: Dispatcharr auto-joins every new channel to
+        ALL profiles, so honoring a profile selection is SUBTRACTIVE. This step
+        reconciles exclusive membership on the channels this rule actually
+        managed this run:
+
+        * master channels that received a NEW attach (``merged_channel_ids`` —
+          populated by the shared add_result chokepoint, live AND dry-run), and
+        * promoted channels (the ONE event_sync channel-creation path — the
+          exact "new channel joined to all profiles" case #720 describes).
+
+        Idempotent no-op runs (nothing newly attached, no promotion) touch no
+        channels, so steady-state runs perform NO profile writes — the action
+        never churns Dispatcharr-owned masters it did not act on this run.
+
+        Returns a step summary folded onto the rule's event_sync summary, or
+        None when the rule carries no ``assign_channel_profile`` action (the
+        common case — byte-identical to pre-feature behavior).
+        """
+        profile_actions = [
+            a for a in rule.get_actions()
+            if a.get("type") == "assign_channel_profile"
+        ]
+        if not profile_actions:
+            return None
+
+        # Channels this rule touched this run: newly-attached masters + promoted
+        # channels. dict.fromkeys de-dupes while preserving order.
+        touched: list[int] = [
+            cid for cid in exec_ctx.merged_channel_ids if cid is not None
+        ]
+        promotion = summary.get("promotion")
+        if promotion is not None:
+            touched.extend(
+                cid for cid in promotion.get("channel_ids", [])
+                if cid is not None
+            )
+        touched_ids = list(dict.fromkeys(touched))
+
+        step = {
+            "rule_id": rule.id,
+            "rule_name": rule.name,
+            "channels_targeted": len(touched_ids),
+            "succeeded": 0,
+            "failed": 0,
+            "channel_profile_ids": list(
+                profile_actions[0].get("channel_profile_ids", [])
+            ),
+        }
+        if not touched_ids:
+            # Nothing to reconcile (idempotent no-op run). Still return the step
+            # so the summary records that the action was configured but had no
+            # in-scope channels this run.
+            return step
+
+        # Delta-fold counters: the attach phase already folded this exec_ctx's
+        # totals into results, so only what THIS step adds may be folded again
+        # (mirrors _assign_event_sync_dummy_epg).
+        modified_before = len(exec_ctx.modified_entities)
+        updated_before = exec_ctx.channels_updated
+
+        # One action drives all touched channels; multiple assign_channel_profile
+        # actions (rare) apply in order, last-wins per channel — same semantics
+        # as a standard rule with repeated actions.
+        step_results = []
+        for action in profile_actions:
+            step_results.extend(
+                await executor.apply_channel_profile_to_channels(
+                    action, touched_ids, exec_ctx,
+                )
+            )
+
+        results["modified_entities"].extend(
+            exec_ctx.modified_entities[modified_before:]
+        )
+        results["channels_updated"] += (
+            exec_ctx.channels_updated - updated_before
+        )
+
+        for result in step_results:
+            if result.success:
+                step["succeeded"] += 1
+            else:
+                step["failed"] += 1
+                # Surface at run level so a failed event_sync profile
+                # assignment finalizes the run as completed_with_errors.
+                self._record_failed_action(
+                    results, rule.id, rule.name, None,
+                    f"[EVENT-SYNC] {rule.name}", result,
+                )
+            results["execution_log"].append({
+                "stream_id": None,
+                "stream_name": (
+                    f"[EVENT-SYNC PROFILE] channel {result.entity_id}"
+                ),
+                "m3u_account_id": None,
+                "rules_evaluated": [],
+                "actions_executed": [{
+                    "type": "assign_channel_profile",
+                    "description": result.description,
+                    "success": result.success,
+                    "entity_id": result.entity_id,
+                    "error": result.error,
+                }],
+            })
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": None,
+                    "stream_name": (
+                        f"[EVENT-SYNC PROFILE] channel {result.entity_id}"
+                    ),
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "action": result.description,
+                    "would_create": False,
+                    "would_modify": result.modified,
+                })
+
+        profile_line = (
+            f"event_sync channel profiles: {step['succeeded']} reconciled, "
+            f"{step['failed']} failed across {step['channels_targeted']} "
+            f"channel(s)"
+        )
+        step["summary_line"] = profile_line
+        logger.info(
+            "[EVENT-SYNC] Rule '%s' (id=%s): %s",
+            rule.name, rule.id, profile_line,
+        )
+        results["execution_log"].append({
+            "stream_id": None,
+            "stream_name": f"[EVENT-SYNC PROFILE] {rule.name}",
+            "m3u_account_id": None,
+            "rules_evaluated": [],
+            "actions_executed": [{
+                "type": "event_sync_assign_channel_profile_summary",
+                "description": profile_line,
+                "success": step["failed"] == 0,
+                "entity_id": None,
+                "error": None,
+            }],
+        })
+        return step
 
     # =========================================================================
     # Pass 6: Batch probe streams queued by probe_streams actions
@@ -4250,6 +4751,15 @@ class ChannelPipelineEngine:
         except Exception as e:
             db.rollback()
             logger.error("[AUTO-CREATE-ENGINE] Pass 5: failed to update profile groups: %s", e)
+            # y3m6o.1 review (WARN #2): a failed profile-group update leaves the
+            # dummy EPG profile without the run's target groups, so the deferred
+            # guide-data assignments will not resolve — escalate so the run
+            # finalizes completed_with_errors instead of silently green.
+            self._record_failed_phase(
+                results, phase="dummy_epg_refresh",
+                stream_name="[Pass 5] Update Profile Groups",
+                error=f"Failed to update dummy EPG profile groups: {e}",
+            )
         finally:
             db.close()
 
@@ -4291,6 +4801,15 @@ class ChannelPipelineEngine:
                         "error": str(e)
                     }]
                 })
+                # y3m6o.1 review (Finding 1 audit): a regen failure ABORTS Pass 5
+                # — the deferred EPG assignments are never retried, so the run
+                # left guide data unassigned. Escalate so it is not a green run.
+                self._record_failed_phase(
+                    results, phase="dummy_epg_refresh",
+                    stream_name="[Pass 5] Regenerate XMLTV",
+                    error=f"Failed to regenerate XMLTV, deferred EPG "
+                          f"assignments not retried: {e}",
+                )
                 return
 
         results["execution_log"].append({
@@ -4323,7 +4842,8 @@ class ChannelPipelineEngine:
                     "would_create": False,
                     "would_modify": True
                 })
-            else:
+            refresh_error: str | None = None
+            if not dry_run:
                 try:
                     from tasks.dummy_epg_refresh import wait_for_epg_source_refresh
                     await wait_for_epg_source_refresh(
@@ -4335,7 +4855,26 @@ class ChannelPipelineEngine:
                         "[AUTO-CREATE-ENGINE] Pass 5: failed to refresh source %s: %s",
                         source_name, e
                     )
+                    refresh_error = str(e)
+                    # y3m6o.1 review (WARN #3): a failed source refresh means the
+                    # dummy guide data may not be current when the deferred
+                    # assignments retry — escalate so the run is not green.
+                    self._record_failed_phase(
+                        results, phase="refresh_epg_source", entity_id=src_id,
+                        stream_name="[Pass 5] Refresh EPG Source",
+                        error=(
+                            f"Failed to refresh EPG source '{source_name}' "
+                            f"(id={src_id}): {e}"
+                        ),
+                    )
 
+            # y3m6o.1 review (WARN #3): the execution-log entry must reflect the
+            # ACTUAL outcome — it previously recorded success=True even when the
+            # refresh raised.
+            succeeded = dry_run or refresh_error is None
+            verb = "Would refresh" if dry_run else (
+                "Refreshed" if succeeded else "Failed to refresh"
+            )
             results["execution_log"].append({
                 "stream_id": None,
                 "stream_name": f"[Pass 5] Refresh EPG Source",
@@ -4343,11 +4882,10 @@ class ChannelPipelineEngine:
                 "rules_evaluated": [],
                 "actions_executed": [{
                     "type": "refresh_epg_source",
-                    "description": ("Would refresh" if dry_run else "Refreshed")
-                                   + f" EPG source '{source_name}' (id={src_id})",
-                    "success": True,
+                    "description": f"{verb} EPG source '{source_name}' (id={src_id})",
+                    "success": succeeded,
                     "entity_id": src_id,
-                    "error": None
+                    "error": refresh_error,
                 }]
             })
 
@@ -4395,6 +4933,14 @@ class ChannelPipelineEngine:
                 })
             except Exception as e:
                 logger.error("[AUTO-CREATE-ENGINE] Pass 5: failed to re-fetch EPG data: %s", e)
+                # y3m6o.1 review (Finding 1 audit): a reload failure ABORTS Pass
+                # 5 before the deferred retries — guide data left unassigned.
+                self._record_failed_phase(
+                    results, phase="dummy_epg_refresh",
+                    stream_name="[Pass 5] Reload EPG Data",
+                    error=f"Failed to reload EPG data, deferred EPG assignments "
+                          f"not retried: {e}",
+                )
                 return
 
         # Step 5: Retry each deferred assign_epg
@@ -4452,6 +4998,16 @@ class ChannelPipelineEngine:
                     logger.warning(
                         "[AUTO-CREATE-ENGINE] Pass 5: retry failed for channel %s: %s",
                         channel_id, retry_result.error or retry_result.description
+                    )
+                    # y3m6o.1 review (Finding 1): a deferred-EPG retry that still
+                    # fails after the refresh must finalize the run
+                    # completed_with_errors, not green. A still-deferred result
+                    # (retried but not resolvable this run) counts as a failure
+                    # for run status — the guide data was not assigned.
+                    self._record_failed_action(
+                        results, None, "[Pass 5 EPG retry]",
+                        stream_ctx.stream_id, stream_ctx.stream_name,
+                        retry_result,
                     )
 
                 results["execution_log"].append({
@@ -4798,8 +5354,50 @@ class ChannelPipelineEngine:
                             )
                         except Exception as e:
                             logger.error("[AUTO-CREATE-ENGINE] Rule '%s': failed to renumber after cleanup: %s", rule.name, e)
+                            # y3m6o.1 review: this site previously ONLY logged —
+                            # a renumber-after-orphan-cleanup failure was
+                            # completely silent and finalized green with zero
+                            # operator trace. Add (a) a success=False
+                            # execution_log entry for parity with the other two
+                            # renumber sites, AND (b) run-level aggregation so the
+                            # run finalizes ``completed_with_errors``.
+                            results["execution_log"].append({
+                                "stream_id": None,
+                                "stream_name": f"[Renumber] Rule '{rule.name}' after orphan cleanup",
+                                "m3u_account_id": None,
+                                "rules_evaluated": [],
+                                "actions_executed": [{
+                                    "type": "renumber_channels",
+                                    "description": f"Failed to renumber channels after orphan cleanup: {e}",
+                                    "success": False,
+                                    "entity_id": None,
+                                    "error": str(e)
+                                }]
+                            })
+                            self._record_failed_phase(
+                                results, phase="renumber_channels",
+                                rule_id=rule.id, rule_name=rule.name,
+                                error=f"Failed to renumber channels after orphan "
+                                      f"cleanup for rule '{rule.name}': {e}",
+                            )
 
-                # Update managed_channel_ids (not during dry run)
+                # Update managed_channel_ids (not during dry run).
+                #
+                # y3m6o.1 review judgment call: we ADVANCE the managed set even
+                # when the renumber above raised. ``managed_channel_ids`` is a
+                # MEMBERSHIP/ownership ledger (previous vs current drives orphan
+                # detection next run) — it is orthogonal to channel NUMBERING.
+                # ``current_ids`` reflects the correct post-cleanup membership
+                # regardless of whether the cosmetic renumber succeeded, so
+                # persisting it keeps orphan detection accurate. The renumber is
+                # NOT gated by this ledger: both renumber passes (rule-level Pass
+                # 3 and this post-cleanup one) re-run unconditionally and
+                # idempotently every execution, so the failed renumber is retried
+                # on the next run whether or not we advance here. NOT advancing
+                # would instead leave the membership ledger stale for a run
+                # (degrading orphan detection) without actually gating any retry.
+                # The failure is no longer silent: it is now logged, recorded in
+                # the execution_log, and aggregated into completed_with_errors.
                 if not dry_run:
                     rule.set_managed_channel_ids(list(current_ids))
                     session.merge(rule)

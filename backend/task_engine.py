@@ -1039,8 +1039,18 @@ class TaskEngine:
                     user_initiated=(triggered_by == "manual"),
                 )
 
-                # Send notification - warning if partial failure, success if all ok
-                if result.failed_count > 0:
+                # Send notification - warning if partial failure, success if all ok.
+                # y3m6o.1 review (Finding 2): a task that already emitted ONE
+                # coherent completion notification (e.g. a channel-pipeline run
+                # that was BOTH capped and had failed actions) sets
+                # suppress_completion_notification so we do NOT emit a second,
+                # competing warning here. Journal + gauge above still ran.
+                if result.suppress_completion_notification:
+                    logger.debug(
+                        "[%s] Completion notification suppressed by task "
+                        "(single coherent notification already emitted)", task_id,
+                    )
+                elif result.failed_count > 0:
                     # Partial success - some items failed
                     if task_id == "stream_probe":
                         warn_msg = (

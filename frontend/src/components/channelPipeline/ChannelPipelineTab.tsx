@@ -13,6 +13,10 @@ import type {
   FailedChannel,
   EventSyncExecutionSummary,
 } from '../../types/channelPipeline';
+import {
+  isNormalizationWarning,
+  isNonReversibleProfileChangesWarning,
+} from '../../types/channelPipeline';
 import type { CircuitBreakerState } from '../../services/channelPipelineApi';
 import { useAuth } from '../../hooks/useAuth';
 import { useChannelPipelineRules } from '../../hooks/useChannelPipelineRules';
@@ -40,6 +44,10 @@ const getStatusBadgeClass = (status: string) => {
     disabled: '', failed: 'badge-error',
     running: 'badge-info', rolled_back: 'badge-warning',
     capped: 'badge-warning', abandoned: 'badge-error',
+    // y3m6o.1 (0152): a run in which an action failed is amber/warning — some
+    // channels may have succeeded, so it is not a full error, but it is
+    // clearly distinct from green ``completed``.
+    completed_with_errors: 'badge-warning',
   };
   return `badge badge-sm badge-uppercase ${map[status] || ''}`;
 };
@@ -49,6 +57,7 @@ const EXECUTION_STATUS_LABEL: Partial<Record<string, string>> = {
   rolled_back: 'Rolled Back',
   capped: 'Capped',
   abandoned: 'Abandoned',
+  completed_with_errors: 'Completed with Errors',
 };
 
 /**
@@ -588,6 +597,12 @@ export function ChannelPipelineTab() {
         const created = response.channels_created ?? 0;
         const status = response.status;
         const succeeded = status === 'completed';
+        // y3m6o.1 (0152): a run whose actions partly failed is a non-green
+        // WARNING outcome, not a clean success and not a hard failure — some
+        // channels were still modified. It surfaces an amber toast with the
+        // run's error_message (the failed-action summary) and, like a clean
+        // run, still refreshes the channel/group panes below.
+        const completedWithErrors = status === 'completed_with_errors';
         // Event Sync runs attach streams rather than create channels, so the
         // "Created N channels" figure is always 0 and reads as "nothing
         // happened". When every targeted rule is an event_sync rule, point the
@@ -609,33 +624,64 @@ export function ChannelPipelineTab() {
               ? `Dry run complete - Would create ${created} channel${created !== 1 ? 's' : ''}`
               : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}`))
           : `Pipeline ${status}`;
+        // y3m6o.1 review (Blocker 3): the `warnings` array is heterogeneous —
+        // disabled-normalization-group warnings AND non_reversible-profile-change
+        // warnings share the same column. Discriminate by type so each gets its
+        // OWN operator copy. The prior code blindly read `w.rule_name` on every
+        // warning, so a non_reversible warning (which has no rule_name) produced
+        // a FALSE "Normalization applied no changes: undefined ..." toast on an
+        // otherwise-clean run that merely changed profile membership.
+        const allWarnings = response.warnings ?? [];
+        const normalizationWarnings = allWarnings.filter(isNormalizationWarning);
+        const nonReversibleWarnings = allWarnings.filter(
+          isNonReversibleProfileChangesWarning,
+        );
         if (succeeded) {
           notifications.success(msg, 'Channel Pipeline');
-          // Surface disabled-normalization-group warnings so the operator
-          // notices that normalization silently applied nothing, even on an
-          // otherwise-clean run (enhancedchannelmanager-e8p1h).
-          if (response.warnings && response.warnings.length > 0) {
-            const ruleNames = response.warnings.map(w => w.rule_name).join(', ');
-            notifications.warning(
-              `Normalization applied no changes: ${ruleNames} ` +
-                `reference disabled normalization groups. Enable them under ` +
-                `Settings > Normalization, then re-run.`,
-              'Channel Pipeline',
-            );
-          }
+        } else if (completedWithErrors) {
+          notifications.warning(
+            response.error_message ||
+              'Pipeline completed with errors — some actions failed. See Execution History.',
+            'Channel Pipeline',
+          );
         } else {
           notifications.error(
             response.error_message || msg,
             'Channel Pipeline',
           );
         }
+        // Surface disabled-normalization-group warnings so the operator notices
+        // that normalization silently applied nothing, even on an otherwise-clean
+        // run (enhancedchannelmanager-e8p1h). Fires ONLY for a non-error terminal
+        // state (success or completed_with_errors) — a hard-failed/rolled_back
+        // run already shows an error toast, and stacking a "no changes" advisory
+        // on top of it is noise (y3m6o.1 review, Should-Fix C).
+        if ((succeeded || completedWithErrors) && normalizationWarnings.length > 0) {
+          const ruleNames = normalizationWarnings
+            .map(w => w.rule_name)
+            .join(', ');
+          notifications.warning(
+            `Normalization applied no changes: ${ruleNames} ` +
+              `reference disabled normalization groups. Enable them under ` +
+              `Settings > Normalization, then re-run.`,
+            'Channel Pipeline',
+          );
+        }
+        // Disclose non-reversible channel-profile membership changes — the
+        // warning carries an operator-ready `message`. This MUST surface on a
+        // clean `completed` run that only changed membership (the happy path the
+        // previous code mislabeled), so it is emitted independently of status.
+        for (const w of nonReversibleWarnings) {
+          notifications.warning(w.message, 'Channel Pipeline');
+        }
         // Refresh executions list and rule stats (match counts). The hook
         // already refetches executions in its finally block, but rule stats
         // (last_run_at / match_count) live on a separate endpoint.
         await fetchExecutions();
         await fetchRules();
-        // Notify other panes to refresh (channels/groups may have changed)
-        if (!dryRun && succeeded) {
+        // Notify other panes to refresh (channels/groups may have changed).
+        // completed_with_errors still mutated channels, so it refreshes too.
+        if (!dryRun && (succeeded || completedWithErrors)) {
           window.dispatchEvent(new CustomEvent('channels-changed'));
         }
       }
@@ -1291,7 +1337,7 @@ export function ChannelPipelineTab() {
                     >
                       <span className="material-icons">info</span>
                     </button>
-                    {execution.status === 'completed' && execution.mode === 'execute' && (
+                    {(execution.status === 'completed' || execution.status === 'completed_with_errors') && execution.mode === 'execute' && (
                       <button
                         className="action-btn danger"
                         onClick={() => handleRollbackClick(execution)}
@@ -1300,7 +1346,10 @@ export function ChannelPipelineTab() {
                           'Rollback — deletes the channel(s) this run created and reverts the ' +
                           "channel(s) it modified, using this run's own recorded changes. This is " +
                           'the legacy per-run undo; it does not use the full pre-run snapshot ' +
-                          '(see "Undo this run").'
+                          '(see "Undo this run").' +
+                          (execution.has_non_reversible_profile_changes
+                            ? ' Note: channel-profile membership changed this run will NOT be restored.'
+                            : '')
                         }
                       >
                         <span className="material-icons">undo</span>
@@ -1310,23 +1359,26 @@ export function ChannelPipelineTab() {
                         when has_snapshot=true; hidden for dry runs, legacy runs,
                         and already-reverted executions so the operator always
                         knows what will happen. */}
-                    {execution.has_snapshot && execution.status === 'completed' && execution.mode === 'execute' && (
+                    {execution.has_snapshot && (execution.status === 'completed' || execution.status === 'completed_with_errors') && execution.mode === 'execute' && (
                       <button
                         className="action-btn action-btn-revert"
                         onClick={() => handleRevertClick(execution)}
                         aria-label="Undo this run"
                         title={
-                          'Undo this run — restores ALL affected channels to their exact state ' +
+                          'Undo this run — restores affected channels to their exact stream state ' +
                           'from the pre-run snapshot, overwriting any changes made since ' +
                           '(including edits made after this run). Unlike Rollback, this is a ' +
-                          "full snapshot restore, not just this run's own changes."
+                          "full snapshot restore, not just this run's own changes." +
+                          (execution.has_non_reversible_profile_changes
+                            ? ' Note: channel-profile membership is not captured by the snapshot and will NOT be restored.'
+                            : '')
                         }
                         data-testid="revert-btn"
                       >
                         <span className="material-icons">settings_backup_restore</span>
                       </button>
                     )}
-                    {!execution.has_snapshot && execution.mode === 'execute' && execution.status === 'completed' && (
+                    {!execution.has_snapshot && execution.mode === 'execute' && (execution.status === 'completed' || execution.status === 'completed_with_errors') && (
                       <span
                         className="execution-no-snapshot"
                         title="No pre-run snapshot — only legacy rollback is available for this run"
@@ -1568,6 +1620,15 @@ export function ChannelPipelineTab() {
                 For a complete restore to the exact pre-run state (including edits made after
                 this run), cancel and use &quot;Undo this run&quot; instead.
               </p>
+              {showRollbackConfirm.has_non_reversible_profile_changes && (
+                <p className="revert-warning-detail" data-testid="rollback-profile-disclosure">
+                  <span className="material-icons revert-warning-icon">warning</span>{' '}
+                  This run changed <strong>channel-profile membership</strong>, which has no
+                  reversible previous state. Rollback will <strong>not</strong> restore it —
+                  only the stream and field changes this run made are reverted. Profile
+                  membership must be corrected manually.
+                </p>
+              )}
             </div>
             <div className="modal-footer">
               <button
@@ -1617,6 +1678,15 @@ export function ChannelPipelineTab() {
                 Unlike Rollback, this restores every affected channel to the pre-run snapshot —
                 not just the changes this run itself made.
               </p>
+              {showRevertConfirm.has_non_reversible_profile_changes && (
+                <p className="revert-warning-detail" data-testid="revert-profile-disclosure">
+                  <span className="material-icons revert-warning-icon">warning</span>{' '}
+                  Note: this run changed <strong>channel-profile membership</strong>, which the
+                  pre-run snapshot does not capture. Undo restores stream assignments but will
+                  <strong> not</strong> restore channel-profile membership — correct it manually
+                  if needed.
+                </p>
+              )}
             </div>
             <div className="modal-footer">
               <button
@@ -1881,42 +1951,78 @@ export function ChannelPipelineTab() {
                 </div>
               )}
 
-              {/* Disabled-normalization-group warning (enhancedchannelmanager-e8p1h).
-                  Surfaced prominently because these rules silently normalize
-                  nothing — the run looks clean but names never get cleaned up. */}
-              {details.warnings && details.warnings.length > 0 && (
-                <div className="norm-warning-banner" role="alert">
-                  <span className="material-icons norm-warning-icon">warning</span>
-                  <div className="norm-warning-content">
-                    <p className="norm-warning-title">
-                      Normalization applied no changes — disabled groups referenced
-                    </p>
-                    <p className="norm-warning-detail">
-                      The rule{details.warnings.length > 1 ? 's' : ''} below
-                      reference normalization groups that are disabled or no longer
-                      exist, so stream names were not normalized and
-                      merge-into-channel matching likely missed most streams.
-                      Enable the listed group(s) under Settings &gt; Normalization,
-                      then re-run.
-                    </p>
-                    <ul className="norm-warning-list">
-                      {details.warnings.map(w => (
-                        <li key={w.rule_id}>
-                          <strong>{w.rule_name}</strong>
-                          {' → '}
-                          {w.disabled_groups
-                            .map(g =>
-                              g.missing
-                                ? `#${g.id} (missing)`
-                                : (g.name ?? `#${g.id}`),
-                            )
-                            .join(', ')}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
+              {/* y3m6o.1 review (Blocker 3): the warnings array is heterogeneous
+                  — split by type so `disabled_groups.map()` only runs for the
+                  normalization variant (the non_reversible variant has no
+                  disabled_groups and would crash the render). */}
+              {(() => {
+                const warns = details.warnings ?? [];
+                const normWarnings = warns.filter(isNormalizationWarning);
+                const nonReversible = warns.filter(
+                  isNonReversibleProfileChangesWarning,
+                );
+                return (
+                  <>
+                    {/* Disabled-normalization-group warning
+                        (enhancedchannelmanager-e8p1h). Surfaced prominently
+                        because these rules silently normalize nothing — the run
+                        looks clean but names never get cleaned up. */}
+                    {normWarnings.length > 0 && (
+                      <div className="norm-warning-banner" role="alert">
+                        <span className="material-icons norm-warning-icon">warning</span>
+                        <div className="norm-warning-content">
+                          <p className="norm-warning-title">
+                            Normalization applied no changes — disabled groups referenced
+                          </p>
+                          <p className="norm-warning-detail">
+                            The rule{normWarnings.length > 1 ? 's' : ''} below
+                            reference normalization groups that are disabled or no longer
+                            exist, so stream names were not normalized and
+                            merge-into-channel matching likely missed most streams.
+                            Enable the listed group(s) under Settings &gt; Normalization,
+                            then re-run.
+                          </p>
+                          <ul className="norm-warning-list">
+                            {normWarnings.map(w => (
+                              <li key={w.rule_id}>
+                                <strong>{w.rule_name}</strong>
+                                {' → '}
+                                {w.disabled_groups
+                                  .map(g =>
+                                    g.missing
+                                      ? `#${g.id} (missing)`
+                                      : (g.name ?? `#${g.id}`),
+                                  )
+                                  .join(', ')}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Non-reversible channel-profile membership change
+                        (y3m6o.1 Finding 3). Rollback/Undo will not restore it —
+                        disclose using the warning's operator-ready message. */}
+                    {nonReversible.map((w, i) => (
+                      <div
+                        className="norm-warning-banner"
+                        role="alert"
+                        key={`non-reversible-${i}`}
+                      >
+                        <span className="material-icons norm-warning-icon">info</span>
+                        <div className="norm-warning-content">
+                          <p className="norm-warning-title">
+                            Channel-profile membership changed on {w.count}{' '}
+                            channel{w.count !== 1 ? 's' : ''} (not reversible)
+                          </p>
+                          <p className="norm-warning-detail">{w.message}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
 
               {/* Execution Log Section */}
               <div className="execution-log-section">

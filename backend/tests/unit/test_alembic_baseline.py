@@ -113,6 +113,88 @@ class TestAlembicBaseline:
         )
 
 
+class TestMigration0039WidenPipelineStatus:
+    """0039 widens auto_creation_executions.status to hold completed_with_errors.
+
+    Build 0.17.6-0152 added the 21-char terminal status
+    'completed_with_errors', which overflowed the previous String(20)
+    contract. 0039 widens the column to String(32).
+    """
+
+    @staticmethod
+    def _status_width(engine):
+        from sqlalchemy import inspect as sa_inspect
+
+        for col in sa_inspect(engine).get_columns("auto_creation_executions"):
+            if col["name"] == "status":
+                return getattr(col["type"], "length", None)
+        return None
+
+    def test_upgrade_widens_status_and_round_trips_value(self, tmp_path):
+        """After upgrade head the column is String(32) and stores the value."""
+        from datetime import datetime
+
+        from alembic import command
+        from sqlalchemy.orm import Session
+
+        from models import ChannelPipelineExecution
+
+        db_file = tmp_path / "mig0039_value.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url)
+        try:
+            assert self._status_width(engine) == 32
+
+            with Session(engine) as session:
+                row = ChannelPipelineExecution(
+                    started_at=datetime.utcnow(),
+                    status="completed_with_errors",
+                )
+                session.add(row)
+                session.commit()
+                row_id = row.id
+
+            with Session(engine) as session:
+                stored = session.get(ChannelPipelineExecution, row_id)
+                assert stored is not None
+                assert stored.status == "completed_with_errors"
+                assert len(stored.status) == 21
+        finally:
+            engine.dispose()
+
+    def test_downgrade_upgrade_round_trip(self, tmp_path):
+        """0039 reverses to String(20) and re-applies to String(32)."""
+        from alembic import command
+
+        db_file = tmp_path / "mig0039_rt.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(db_url)
+        try:
+            assert self._status_width(engine) == 32
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0038")
+        engine = create_engine(db_url)
+        try:
+            assert self._status_width(engine) == 20
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(db_url)
+        try:
+            assert self._status_width(engine) == 32
+        finally:
+            engine.dispose()
+
+
 class TestForeignKeyEnforcement:
     """SQLite silently accepts FK violations unless PRAGMA foreign_keys=ON.
 

@@ -34,17 +34,30 @@ logger = logging.getLogger(__name__)
 class ProfileMembershipResult:
     """Outcome of an exclusive channel-profile reconciliation.
 
-    ``enabled_count`` / ``disabled_count`` are SUCCEEDED counts — they only
-    increment when the per-profile ``update_profile_channel`` call returned
-    without raising. ``failed_profile_ids`` carries every profile id whose
-    enable/disable PATCH raised. A NON-EMPTY ``failed_profile_ids`` means
-    exclusive membership was NOT fully achieved, so the caller must not report
-    plain success (GH #720 / y3m6o.1) — the channel may be left in a profile it
-    should not be in, which is the exact invariant #720 protects.
+    ``enabled_count`` / ``disabled_count`` count the SUCCEEDED FLIPS — profiles
+    whose enabled-state actually CHANGED (enabled a profile that was off, or
+    disabled one that was on) and whose ``update_profile_channel`` PATCH returned
+    without raising. Profiles already in the desired state are NEITHER PATCHed
+    NOR counted, so an idempotent reconcile reports ``enabled_count ==
+    disabled_count == 0`` and the caller treats it as a no-op (``modified=False``,
+    no ``channels_updated`` inflation — y3m6o.1 review follow-up).
+
+    ``failed_profile_ids`` carries every profile id whose NEEDED flip raised. A
+    profile that did not need changing is never PATCHed and therefore can never
+    appear here. A NON-EMPTY ``failed_profile_ids`` means exclusive membership
+    was NOT fully achieved, so the caller must not report plain success
+    (GH #720 / y3m6o.1) — the channel may be left in a profile it should not be
+    in, which is the exact invariant #720 protects.
     """
     enabled_count: int
     disabled_count: int
     failed_profile_ids: list[int] = field(default_factory=list)
+
+    @property
+    def changed(self) -> bool:
+        """True when at least one profile's enabled-state actually flipped
+        (succeeded). Drives the caller's ``modified`` flag."""
+        return bool(self.enabled_count or self.disabled_count)
 
 
 @dataclass
@@ -63,6 +76,14 @@ class ActionResult:
     error: Optional[str] = None
     details: list[str] = field(default_factory=list)  # Additional context (normalization, group, etc.)
     deferred: bool = False  # True if action will be retried after EPG refresh
+    # y3m6o.1 Finding 6 (0152): whether this modification can be reversed from
+    # its recorded ``previous_state``. assign_channel_profile changes channel
+    # *profile membership* — a mutation the ActionResult carries NO
+    # previous_state for and that neither the legacy per-run rollback (restores
+    # channel fields) nor the pre-run snapshot (captures channel<->stream state)
+    # can reverse. Such results set this False so add_result does NOT record a
+    # misleading modified/rollback entity claiming the change is reversible.
+    rollbackable: bool = True
 
 
 @dataclass
@@ -123,6 +144,23 @@ class ExecutionContext:
     # how many matched streams in this run resolved to that group.
     sort_group_requests: dict[int, dict] = field(default_factory=dict)
 
+    # y3m6o.1 review (Finding 3): channel ids whose profile membership was
+    # mutated NON-reversibly this run — a modified result flagged
+    # rollbackable=False (assign_channel_profile carries no reversible
+    # previous_state). Populated at the add_result chokepoint so no
+    # profile-write path can be missed; the engine folds these across the run
+    # and persists a disclosure warning so rollback/undo never claims to restore
+    # channel-profile membership it cannot.
+    non_reversible_channel_ids: set[int] = field(default_factory=set)
+
+    # y3m6o.1 review (Finding 1 reversal): default-profile assignment failures.
+    # Each entry {channel_id, failed_profile_ids} for a newly-created channel
+    # whose configured default-profile membership could not be fully enforced.
+    # Default assignment stays best-effort for the CREATE (never aborts it), but
+    # the PO decision escalates the failure into the run-level aggregation via
+    # the engine, so such a run finalizes completed_with_errors, not green.
+    default_profile_failures: list[dict] = field(default_factory=list)
+
     # BD-F (bd-a5lb2): per-stream count of pending_merges rows
     # enqueued by the bulk-M3U dedup hook (ADR-008 §D1). One per
     # would-be channel creation deferred to operator review. The
@@ -171,12 +209,27 @@ class ExecutionContext:
                     self.channels_updated += 1
             elif result.entity_type == "stream" and result.action_type == "remove_from_channel":
                 self.streams_removed += 1
-            self.modified_entities.append({
-                "type": result.entity_type,
-                "id": result.entity_id,
-                "name": result.entity_name,
-                "previous": result.previous_state
-            })
+            # y3m6o.1 Finding 6 (0152): a non-rollbackable modification (e.g.
+            # assign_channel_profile — profile membership with no reversible
+            # previous_state) is still COUNTED as an update but is NOT recorded
+            # as a rollback entity, so rollback/restore never claims to reverse
+            # a change it cannot. The channel's OTHER actions (merges, field
+            # updates) still record their own rollback entities independently.
+            if result.rollbackable:
+                self.modified_entities.append({
+                    "type": result.entity_type,
+                    "id": result.entity_id,
+                    "name": result.entity_name,
+                    "previous": result.previous_state
+                })
+            elif result.entity_type == "channel" and result.entity_id is not None:
+                # y3m6o.1 review (Finding 3): a modified-but-non-rollbackable
+                # channel change (assign_channel_profile — profile membership
+                # with no reversible previous_state) is recorded HERE so the run
+                # can DISCLOSE that rollback/undo will not restore it. Same
+                # chokepoint that counts the update, so no profile-write path
+                # (standard Pass 2 OR event_sync) can be missed.
+                self.non_reversible_channel_ids.add(result.entity_id)
 
         if result.skipped:
             self.streams_skipped += 1
@@ -195,7 +248,8 @@ class ActionExecutor:
     def __init__(self, client, existing_channels: list = None, existing_groups: list = None,
                  normalization_engine=None, settings=None, all_profile_ids: list[int] | None = None,
                  epg_data: list = None, epg_sources: list = None,
-                 triggered_by: str = "manual", execution_id: int | None = None):
+                 triggered_by: str = "manual", execution_id: int | None = None,
+                 channel_profile_membership: dict[int, set[int]] | None = None):
         """
         Initialize the executor.
 
@@ -227,6 +281,14 @@ class ActionExecutor:
                 for direct-construct callers/tests) disables the per-merge
                 journal write — entries without an execution_id would be
                 unrecoverable noise.
+            channel_profile_membership: Optional ``channel_id -> set(profile_ids
+                enabled)`` map for channels at run start, built by the engine from
+                the same ``get_channel_profiles()`` fetch (zero extra reads). Lets
+                ``assign_channel_profile`` PATCH only the profiles whose state
+                actually flips, so an idempotent reconcile does not inflate
+                ``channels_updated``. ``None``/absent falls back to no-diff for
+                unknown channels (write-all), preserving prior behavior for
+                direct-construct callers/tests.
         """
         self.client = client
         self.existing_channels = existing_channels or []
@@ -247,6 +309,36 @@ class ActionExecutor:
         self._all_profile_ids = all_profile_ids
         self._triggered_by = triggered_by
         self._execution_id = execution_id
+        # y3m6o.1 review follow-up: current channel-profile membership at RUN
+        # START — ``channel_id -> set(profile_ids the channel is ENABLED in)``,
+        # built from the SAME ``get_channel_profiles()`` fetch the engine already
+        # makes for the universe (the profile payload's ``channels`` list is the
+        # enabled member set), so it costs ZERO extra API reads. Used by
+        # ``_apply_exclusive_profile_membership`` to PATCH only the profiles whose
+        # enabled-state actually flips, so an idempotent no-op reconcile performs
+        # zero writes and is not counted as a channel update.
+        #
+        # ``None`` (the default) is a distinct "no membership info" sentinel:
+        # direct-construct callers/tests that never supply it keep the proven
+        # write-all behavior (every profile PATCHed to its desired state). The
+        # engine ALWAYS supplies a map (even ``{}``), so the diff optimization is
+        # always active in production. When present: absent channels that EXISTED
+        # at run start are enabled in zero profiles; channels CREATED this run are
+        # auto-joined by Dispatcharr to ALL universe profiles (verified live) —
+        # see ``_current_profile_membership``. The map is mutated in-run after
+        # each reconcile so a second reconcile of the same channel sees fresh
+        # state.
+        self._channel_profile_membership: dict[int, set[int]] | None = (
+            {cid: set(pids) for cid, pids in channel_profile_membership.items()}
+            if channel_profile_membership is not None
+            else None
+        )
+        # Channel ids that EXISTED at run start — the discriminator between "an
+        # existing channel enabled in zero profiles" (current = ∅) and "a channel
+        # created this run" (current = the full auto-joined universe).
+        self._run_start_channel_ids: set[int] = {
+            c["id"] for c in self.existing_channels if isinstance(c, dict) and "id" in c
+        }
 
         # Build EPG data lookup: epg_source_id -> list of data entries
         self._epg_data_by_source: dict[int, list[dict]] = {}
@@ -1304,7 +1396,9 @@ class ActionExecutor:
             exec_ctx.created_channel_ids.add(new_channel["id"])
 
             # Assign default channel profiles if configured
-            profile_desc = await self._assign_default_profiles(new_channel["id"])
+            profile_desc = await self._assign_default_profiles(
+                new_channel["id"], exec_ctx
+            )
 
             desc = f"Created channel '{channel_name}' (#{channel_number}) in group {group_label}"
             if profile_desc:
@@ -2772,16 +2866,6 @@ class ActionExecutor:
                 error="Missing channel_profile_ids"
             )
 
-        if exec_ctx.dry_run:
-            return ActionResult(
-                success=True,
-                action_type=action.type,
-                description=f"Would assign {len(channel_profile_ids)} channel profile(s)",
-                entity_type="channel",
-                entity_id=exec_ctx.current_channel_id,
-                modified=True
-            )
-
         # Enforcing exclusive membership requires a KNOWN profile universe — we
         # must know which profiles to DISABLE. ``None`` means the universe is
         # UNAVAILABLE (the engine's get_channel_profiles() fetch raised), so
@@ -2789,6 +2873,12 @@ class ActionExecutor:
         # report-success, which would recreate GH #720 during a transient read
         # failure (y3m6o.1 Bug 2). A genuinely-empty universe (``[]``) is a
         # real, known fact and degrades to enable-selected-only as before.
+        #
+        # y3m6o.1 Bug 2 (0152): this check runs BEFORE the dry-run preview so a
+        # DRY RUN whose universe is unavailable returns an explicit blocking
+        # outcome instead of a rosy "Would assign N…" that the live run cannot
+        # honor. The engine attempts the profile fetch during dry-run too, so
+        # the executor knows the universe availability at preview time.
         if self._all_profile_ids is None:
             logger.warning(
                 "[AUTO-CREATE-EXEC] Cannot assign channel profiles for channel %s: "
@@ -2801,10 +2891,37 @@ class ActionExecutor:
                 description="Cannot assign channel profiles: profile universe unavailable",
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
+                # No writes happen (dry-run or live), so nothing was modified —
+                # do NOT let add_result fabricate an update count / rollback
+                # entry for a no-op.
+                modified=False,
                 error=(
                     "Channel profile universe unavailable (fetch failed); exclusive "
                     "membership cannot be enforced. Retry once profiles are reachable."
                 ),
+            )
+
+        if exec_ctx.dry_run:
+            # y3m6o.1 review follow-up: preview the ACTUAL flips (read-only) so a
+            # dry run of an already-correct channel reports modified=False rather
+            # than a phantom "Would assign N" — matching the live no-op path.
+            enable_pids, disable_pids = self._profile_flip_plan(
+                exec_ctx.current_channel_id, channel_profile_ids
+            )
+            n_flips = len(enable_pids) + len(disable_pids)
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=(
+                    f"Would change channel-profile membership on {n_flips} "
+                    f"profile(s) (enable {len(enable_pids)}, disable "
+                    f"{len(disable_pids)})"
+                    if n_flips
+                    else "Channel-profile membership already correct (no change)"
+                ),
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                modified=bool(n_flips),
             )
 
         try:
@@ -2830,6 +2947,12 @@ class ActionExecutor:
                     "channel %s: failed to update profile(s) %s",
                     exec_ctx.current_channel_id, failed_str,
                 )
+                # y3m6o.1 Bug 3 (0152) + review follow-up: ``modified`` reflects
+                # whether any real FLIP actually landed. enabled_count /
+                # disabled_count now count only profiles whose state changed, so
+                # a failure where no needed flip landed changed nothing and must
+                # NOT be ``modified`` (no phantom update count / rollback entity);
+                # a partial success (some flips landed) stays ``modified``.
                 return ActionResult(
                     success=False,
                     action_type=action.type,
@@ -2841,20 +2964,34 @@ class ActionExecutor:
                     ),
                     entity_type="channel",
                     entity_id=exec_ctx.current_channel_id,
-                    modified=True,
+                    modified=membership.changed,
+                    # Profile membership carries no reversible previous_state
+                    # (Finding 6) — never recorded as a rollback entity.
+                    rollbackable=False,
                     error=f"Failed to update channel profile(s): {failed_str}",
                 )
 
+            # y3m6o.1 review follow-up: ``modified`` is True only when at least
+            # one profile's enabled-state actually flipped. An idempotent
+            # reconcile (channel already in exactly the selected profiles) makes
+            # zero writes, reports changed=False, and is NOT counted as a channel
+            # update — so re-running a rule no longer inflates channels_updated.
             return ActionResult(
                 success=True,
                 action_type=action.type,
                 description=(
-                    f"Assigned channel profiles: enabled in {membership.enabled_count}, "
-                    f"disabled in {membership.disabled_count}"
+                    f"Assigned channel profiles: enabled in "
+                    f"{membership.enabled_count}, disabled in "
+                    f"{membership.disabled_count}"
+                    if membership.changed
+                    else "Channel profiles already correct (no change)"
                 ),
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
-                modified=True
+                modified=membership.changed,
+                # Profile membership carries no reversible previous_state
+                # (Finding 6) — never recorded as a rollback entity.
+                rollbackable=False,
             )
         except Exception as e:
             return ActionResult(
@@ -2863,6 +3000,58 @@ class ActionExecutor:
                 description="Failed to assign channel profile(s)",
                 error=str(e)
             )
+
+    async def apply_channel_profile_to_channels(
+        self, action: Action | dict, channel_ids: list[int],
+        exec_ctx: ExecutionContext,
+    ) -> list[ActionResult]:
+        """Apply an ``assign_channel_profile`` action to an EXPLICIT set of
+        channel ids (the event_sync execution path — GH #720 / y3m6o.1 Finding
+        4).
+
+        The standard Pass 1/2 path runs ``assign_channel_profile`` per matched
+        stream against ``exec_ctx.current_channel_id``. event_sync rules do NOT
+        flow through per-stream action evaluation — the dedicated attach phase
+        (:meth:`execute_event_sync_rule`) resolves and attaches streams
+        directly — so a configured ``assign_channel_profile`` on an event_sync
+        rule never fired before. This helper closes that gap WITHOUT routing
+        event_sync through the standard passes: the engine hands it the channels
+        the rule touched this run (newly-attached masters + promoted channels)
+        and it applies exclusive membership to each.
+
+        It reuses :meth:`_execute_assign_channel_profile` unchanged by rebinding
+        ``exec_ctx.current_channel_id`` per channel, so the truthful-status,
+        exclusive-membership, universe-availability, and modified-flag semantics
+        are BYTE-IDENTICAL to the standard path. Each result funnels through the
+        shared ``add_result`` chokepoint exactly as the standard path's
+        ``execute`` does, so channels_updated / modified_entities stay
+        consistent. A dummy StreamContext is passed because
+        ``_execute_assign_channel_profile`` reads only ``current_channel_id``.
+        """
+        if isinstance(action, dict):
+            action = Action.from_dict(action)
+
+        results: list[ActionResult] = []
+        # De-dupe while preserving order — a channel touched by several attaches
+        # this run gets its membership reconciled ONCE.
+        ordered_ids = list(dict.fromkeys(channel_ids))
+        dummy_ctx = StreamContext(
+            stream_id=None,
+            stream_name="[event_sync assign_channel_profile]",
+            m3u_account_id=None,
+        )
+        saved_channel_id = exec_ctx.current_channel_id
+        try:
+            for channel_id in ordered_ids:
+                exec_ctx.current_channel_id = channel_id
+                result = await self._execute_assign_channel_profile(
+                    action, dummy_ctx, exec_ctx
+                )
+                exec_ctx.add_result(result)
+                results.append(result)
+        finally:
+            exec_ctx.current_channel_id = saved_channel_id
+        return results
 
     async def _execute_set_channel_number(self, action: Action, stream_ctx: StreamContext,
                                            exec_ctx: ExecutionContext) -> ActionResult:
@@ -3511,9 +3700,20 @@ class ActionExecutor:
         y3m6o.1).
 
         The iteration order is the de-duplicated union of the known profile
-        universe and the selection, so selected profiles are always
-        (re)enabled — even if the fetched profile list is stale and missing one
-        — while every OTHER known profile is disabled.
+        universe and the selection, so selected profiles are always enabled —
+        even if the fetched profile list is stale and missing one — while every
+        OTHER known profile is disabled.
+
+        **Diff-only writes (y3m6o.1 review follow-up).** Only the profiles whose
+        enabled-state actually FLIPS are PATCHed: current membership (from the
+        run-start ``get_channel_profiles()`` snapshot, plus the verified
+        Dispatcharr rule that a channel created THIS run is auto-joined to ALL
+        universe profiles) is diffed against the desired exclusive set, and a
+        profile already in the desired state is skipped. A fully-idempotent
+        reconcile therefore performs ZERO writes and returns ``changed=False``,
+        so re-running a rule no longer inflates ``channels_updated``. The
+        in-memory membership map is updated after each successful flip so a
+        second reconcile of the same channel this run sees fresh state.
 
         A ``None`` ``self._all_profile_ids`` (universe unavailable) is coerced
         to an empty universe HERE only defensively: callers that require a
@@ -3522,24 +3722,25 @@ class ActionExecutor:
         ``_assign_default_profiles`` returns early on a falsy universe — so this
         helper is never reached with ``None`` in practice.
         """
-        universe = self._all_profile_ids if self._all_profile_ids is not None else []
-        selected = set(selected_ids)
-        ordered_ids = list(dict.fromkeys(list(universe) + list(selected_ids)))
+        enable_pids, disable_pids = self._profile_flip_plan(channel_id, selected_ids)
 
-        # enabled_count / disabled_count are "succeeded" counts, not
-        # "attempted" — they only increment when update_profile_channel returns
-        # without raising. failed_profile_ids captures the ids that raised.
+        # enabled_count / disabled_count count SUCCEEDED FLIPS only — a profile
+        # already in the desired state is neither PATCHed nor counted (so a no-op
+        # reconcile reports changed=False). failed_profile_ids captures the ids
+        # of NEEDED flips whose PATCH raised.
         enabled_count = 0
         disabled_count = 0
         failed_profile_ids: list[int] = []
-        for pid in ordered_ids:
-            enable = pid in selected
+        current = self._current_profile_membership(channel_id)
+        for pid, enable in [(p, True) for p in enable_pids] + [(p, False) for p in disable_pids]:
             try:
                 await self.client.update_profile_channel(pid, channel_id, {"enabled": enable})
                 if enable:
                     enabled_count += 1
+                    current.add(pid)
                 else:
                     disabled_count += 1
+                    current.discard(pid)
             except Exception as e:
                 logger.warning(
                     "[AUTO-CREATE-EXEC] Failed to update profile %s for channel %s: %s",
@@ -3547,13 +3748,84 @@ class ActionExecutor:
                 )
                 failed_profile_ids.append(pid)
 
+        # Persist the post-reconcile membership so a later same-run reconcile of
+        # this channel diffs against fresh state (idempotent within the run).
+        # Only the flips that SUCCEEDED are reflected (a failed flip left the
+        # profile in its prior state); ``current`` was mutated accordingly above.
+        # Skipped when membership info is absent (write-all mode).
+        if self._channel_profile_membership is not None:
+            self._channel_profile_membership[channel_id] = current
+            self._run_start_channel_ids.add(channel_id)
+
         return ProfileMembershipResult(enabled_count, disabled_count, failed_profile_ids)
 
-    async def _assign_default_profiles(self, channel_id: int) -> str:
+    def _current_profile_membership(self, channel_id: int) -> set[int]:
+        """The set of profile ids ``channel_id`` is CURRENTLY enabled in.
+
+        * Known from the run-start snapshot -> that set.
+        * Existed at run start but absent from the snapshot -> enabled nowhere
+          (``∅``).
+        * Created THIS run (not a run-start channel) -> Dispatcharr auto-joins
+          new channels to ALL universe profiles (verified live), so the current
+          membership is the full universe.
+
+        Only meaningful when membership info is present; returns ``∅`` otherwise
+        (write-all mode does not consult current membership).
+        """
+        if self._channel_profile_membership is None:
+            return set()
+        if channel_id in self._channel_profile_membership:
+            return set(self._channel_profile_membership[channel_id])
+        if channel_id in self._run_start_channel_ids:
+            return set()
+        # Created this run — auto-joined to every universe profile.
+        return set(self._all_profile_ids or [])
+
+    def _profile_flip_plan(
+        self, channel_id: int, selected_ids: list[int]
+    ) -> tuple[list[int], list[int]]:
+        """Compute (enable_pids, disable_pids) — the profiles whose enabled-state
+        must FLIP to make ``channel_id`` a member of exactly ``selected_ids``,
+        given its current membership. Read-only (no writes), so it is shared by
+        the live PATCH path and the dry-run preview. No-op profiles (already in
+        the desired state) are excluded from both lists.
+
+        Without membership info (``_channel_profile_membership is None``) it
+        cannot diff, so it falls back to write-all: enable every selected profile
+        and disable every other known profile (the proven pre-optimization
+        behavior — preserved for direct-construct callers/tests).
+        """
+        universe = self._all_profile_ids if self._all_profile_ids is not None else []
+        selected = set(selected_ids)
+        ordered_ids = list(dict.fromkeys(list(universe) + list(selected_ids)))
+        if self._channel_profile_membership is None:
+            enable_pids = [p for p in ordered_ids if p in selected]
+            disable_pids = [p for p in ordered_ids if p not in selected]
+            return enable_pids, disable_pids
+        current = self._current_profile_membership(channel_id)
+        enable_pids = []
+        disable_pids = []
+        for pid in ordered_ids:
+            desired = pid in selected
+            now = pid in current
+            if desired == now:
+                continue  # already correct — skip (no write, no inflation)
+            (enable_pids if desired else disable_pids).append(pid)
+        return enable_pids, disable_pids
+
+    async def _assign_default_profiles(
+        self, channel_id: int, exec_ctx: "ExecutionContext | None" = None,
+    ) -> str:
         """Assign default channel profiles to a newly created channel.
 
         Enables channel in default profiles, disables in non-default profiles.
         Returns a description string for logging, or empty string if no profiles configured.
+
+        ``exec_ctx`` (y3m6o.1 review — Finding 1 reversal): when supplied, a
+        partial/total default-profile write failure is recorded on the context
+        (``default_profile_failures``) so the engine can escalate it into the
+        run-level failure aggregation. Optional so direct-construct callers/tests
+        that never pass a context keep the log-only behavior.
         """
         if not self._settings or not self._settings.default_channel_profile_ids:
             return ""
@@ -3577,6 +3849,32 @@ class ActionExecutor:
         membership = await self._apply_exclusive_profile_membership(
             channel_id, list(self._settings.default_channel_profile_ids)
         )
+
+        # y3m6o.1 review (Finding 1 reversal, was Finding 5 in 0152):
+        # default-profile assignment stays best-effort for the CREATE (a failed
+        # PATCH never aborts channel creation), but the prior log-only behavior
+        # is REVERSED — a partial/total failure now ESCALATES through the run's
+        # failure aggregation (via exec_ctx.default_profile_failures) so a run
+        # that could not enforce a new channel's configured default membership
+        # finalizes completed_with_errors, not green. Still logged for the ops
+        # trail; the return description stays unchanged.
+        if membership.failed_profile_ids:
+            failed_str = ", ".join(
+                str(p) for p in membership.failed_profile_ids
+            )
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Channel %s: default-profile assignment "
+                "incomplete — enabled in %s, disabled in %s; failed to update "
+                "profile(s): %s (channel creation unaffected; escalated to the "
+                "run's failed-action aggregation)",
+                channel_id, membership.enabled_count,
+                membership.disabled_count, failed_str,
+            )
+            if exec_ctx is not None:
+                exec_ctx.default_profile_failures.append({
+                    "channel_id": channel_id,
+                    "failed_profile_ids": list(membership.failed_profile_ids),
+                })
 
         if membership.enabled_count or membership.disabled_count:
             desc = (

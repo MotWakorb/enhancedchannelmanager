@@ -189,6 +189,7 @@ export function createMockChannelPipelineExecution(overrides: Partial<MockChanne
     rolled_back_by: overrides.rolled_back_by ?? undefined,
     error: overrides.error ?? undefined,
     has_snapshot: overrides.has_snapshot ?? false,
+    has_non_reversible_profile_changes: overrides.has_non_reversible_profile_changes ?? false,
     warnings: overrides.warnings ?? undefined,
     is_event_sync: overrides.is_event_sync ?? false,
     event_sync_summary: overrides.event_sync_summary ?? undefined,
@@ -344,7 +345,7 @@ interface MockChannelPipelineExecution {
   started_at: string
   completed_at: string | null
   duration_seconds: number | null
-  status: 'running' | 'completed' | 'failed' | 'rolled_back' | 'capped' | 'abandoned'
+  status: 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'rolled_back' | 'capped' | 'abandoned'
   streams_evaluated: number
   streams_matched: number
   channels_created: number
@@ -361,12 +362,27 @@ interface MockChannelPipelineExecution {
   error?: string
   /** ADR-010 §D6 — true when a pre-run ChannelPipelineSnapshot row exists. */
   has_snapshot?: boolean
-  /** enhancedchannelmanager-e8p1h — disabled-normalization-group warnings. */
-  warnings?: {
-    rule_id: number
-    rule_name: string
-    disabled_groups: { id: number; name: string | null; missing: boolean }[]
-  }[]
+  /** y3m6o.1 review Finding 3 — run mutated channel-profile membership non-reversibly. */
+  has_non_reversible_profile_changes?: boolean
+  /**
+   * Heterogeneous run warnings persisted in the execution `warnings` column:
+   * disabled-normalization-group (enhancedchannelmanager-e8p1h) AND
+   * non_reversible-profile-change (y3m6o.1 review Blocker 3) share the column.
+   */
+  warnings?: (
+    | {
+        type?: 'disabled_normalization_group'
+        rule_id: number
+        rule_name: string
+        disabled_groups: { id: number; name: string | null; missing: boolean }[]
+      }
+    | {
+        type: 'non_reversible_profile_changes'
+        count: number
+        channel_ids: number[]
+        message: string
+      }
+  )[]
   /** enhancedchannelmanager-7wuhd — pure-event_sync run flag. */
   is_event_sync?: boolean
   /** enhancedchannelmanager-7wuhd — structured per-rule event_sync counters. */

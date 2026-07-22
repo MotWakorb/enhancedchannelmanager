@@ -397,12 +397,17 @@ export type AnalyzeRuleBodyRequest = Partial<CreateRuleData>;
 /**
  * Status of a pipeline execution.
  *
- * Terminal statuses: completed, failed, rolled_back, capped, abandoned.
+ * Terminal statuses: completed, completed_with_errors, failed, rolled_back,
+ * capped, abandoned.
  * - capped: the pipeline hit the per-run created-channel cap and stopped early.
+ * - completed_with_errors: the run finished but at least one executed action
+ *   failed (e.g. exclusive channel-profile membership could not be enforced —
+ *   GH #720 / y3m6o.1). Distinct from green ``completed``; some channels may
+ *   still have succeeded. Safe to retry by rerunning the pipeline.
  * - abandoned: the pipeline was abandoned (e.g. OOM crash); trips the
  *   run-on-refresh circuit breaker until an operator resets it.
  */
-export type ExecutionStatus = 'running' | 'completed' | 'failed' | 'rolled_back' | 'capped' | 'abandoned';
+export type ExecutionStatus = 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'rolled_back' | 'capped' | 'abandoned';
 
 /**
  * How a pipeline was triggered.
@@ -453,7 +458,7 @@ export interface ChannelPipelineExecution {
    * makes normalization silently apply nothing. Distinct from error_message —
    * the run still completes. Always present (empty array when none).
    */
-  warnings?: NormalizationWarning[];
+  warnings?: ExecutionWarning[];
   /**
    * True only for a PURE event_sync run — event_sync rule(s) ran and NO
    * standard rules were in scope (enhancedchannelmanager-7wuhd). The
@@ -471,6 +476,15 @@ export interface ChannelPipelineExecution {
    * runs.
    */
   event_sync_summary?: EventSyncExecutionSummary[];
+  /**
+   * True when this run mutated channel-profile membership non-reversibly
+   * (assign_channel_profile carries no reversible previous state — y3m6o.1
+   * Finding 6). Rollback and Undo will NOT restore that membership, so the
+   * rollback/undo affordances disclose it (y3m6o.1 review Finding 3). Derived
+   * by the backend from the persisted non_reversible_profile_changes warning.
+   * Absent/false for runs that changed no profile membership.
+   */
+  has_non_reversible_profile_changes?: boolean;
 }
 
 /**
@@ -507,11 +521,69 @@ export interface EventSyncExecutionSummary {
 /**
  * A rule that references normalization groups that are disabled or missing, so
  * normalization applied no changes (enhancedchannelmanager-e8p1h).
+ *
+ * The backend now stamps ``type: 'disabled_normalization_group'`` on this
+ * warning (y3m6o.1 review, Blocker 3) so it can be told apart from the
+ * ``non_reversible_profile_changes`` warning that shares the same persisted
+ * ``warnings`` JSON column. ``type`` is OPTIONAL here because rows persisted
+ * before the discriminant existed carry no ``type`` — the frontend treats a
+ * missing ``type`` (or one that carries ``disabled_groups``) as this variant.
  */
 export interface NormalizationWarning {
+  type?: 'disabled_normalization_group';
   rule_id: number;
   rule_name: string;
   disabled_groups: DisabledNormalizationGroup[];
+}
+
+/**
+ * A run that changed channel-profile membership non-reversibly (y3m6o.1 review,
+ * Blocker 3 / Finding 3). Rollback and Undo will NOT restore that membership.
+ * Shares the persisted ``warnings`` JSON column with NormalizationWarning but
+ * has a structurally distinct shape — it carries ``channel_ids`` + a ready-made
+ * operator ``message`` and NO ``rule_name``/``disabled_groups``. The engine
+ * appends it (backend/channel_pipeline_engine.py) on both clean ``completed``
+ * runs that merely flipped membership AND ``completed_with_errors`` runs.
+ */
+export interface NonReversibleProfileChangesWarning {
+  type: 'non_reversible_profile_changes';
+  count: number;
+  channel_ids: number[];
+  message: string;
+}
+
+/**
+ * Discriminated union of every warning shape the backend can persist into the
+ * execution ``warnings`` column. Discriminate on ``type``; a missing ``type``
+ * is a legacy NormalizationWarning row (see {@link isNormalizationWarning}).
+ */
+export type ExecutionWarning =
+  | NormalizationWarning
+  | NonReversibleProfileChangesWarning;
+
+/**
+ * True for the disabled-normalization-group warning variant. Robust to legacy
+ * rows: a warning with no ``type`` is treated as this variant, and a defensive
+ * ``disabled_groups`` presence check backs up the discriminant. The
+ * non_reversible variant (which carries an explicit ``type`` and no
+ * ``disabled_groups``) is excluded.
+ */
+export function isNormalizationWarning(
+  w: ExecutionWarning,
+): w is NormalizationWarning {
+  if (w.type === 'non_reversible_profile_changes') return false;
+  return (
+    w.type === 'disabled_normalization_group' ||
+    w.type === undefined ||
+    'disabled_groups' in w
+  );
+}
+
+/** True for the non-reversible profile-change warning variant. */
+export function isNonReversibleProfileChangesWarning(
+  w: ExecutionWarning,
+): w is NonReversibleProfileChangesWarning {
+  return w.type === 'non_reversible_profile_changes';
 }
 
 export interface DisabledNormalizationGroup {

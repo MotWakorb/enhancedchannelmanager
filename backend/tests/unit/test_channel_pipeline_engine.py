@@ -1657,6 +1657,32 @@ class TestSortChannelGroupsPass:
         assert action["success"] is False
         assert "boom" in action["error"]
 
+    def test_failure_reaches_run_level_failed_actions(self):
+        """y3m6o.1 review (Blocker 1): a sort/renumber failure must funnel
+        through the SAME run-level aggregation the other phases use, not merely
+        log a success=False execution_log entry. Without this the run finalizes
+        green because finalization keys terminal status off
+        ``results["failed_actions"]``. Asserts BOTH the operator-visible log entry
+        (preserved) AND the run-level failed_actions record are produced."""
+        self.client.assign_channel_numbers = AsyncMock(side_effect=Exception("boom"))
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False}}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, self.executor, results, dry_run=False, settings=self.settings)
+        )
+
+        # (1) operator-visible execution_log entry is still present.
+        assert len(results["execution_log"]) == 1
+        assert results["execution_log"][0]["actions_executed"][0]["success"] is False
+
+        # (2) the failure is aggregated into the run-level list finalization reads.
+        assert "failed_actions" in results
+        assert len(results["failed_actions"]) == 1
+        fa = results["failed_actions"][0]
+        assert fa["action_type"] == "sort_group"
+        assert fa["entity_id"] == 5
+        assert "boom" in fa["error"]
+
 
 class TestChannelPipelineEngineExecutionTracking:
     """Tests for execution tracking methods."""
@@ -2763,6 +2789,848 @@ class TestRunPipelineCreateChannelMergeChannelsTouched:
         assert {entry["batch_id"] for entry in entries} == {"1"}
 
 
+class TestRunLevelFailedActionStatus:
+    """y3m6o.1 (0152) — THE core regression the first pass MISSED.
+
+    A run in which an executed action FAILS must finalize as
+    ``completed_with_errors`` (a distinct terminal outcome, NOT green
+    ``completed``) AND the top-level API result must be non-success. Drives the
+    REAL pipeline end to end (run_pipeline -> _process_streams ->
+    executor.execute -> _execute_assign_channel_profile) with a rule whose
+    assign_channel_profile action fails a profile update — this is a run-level
+    assertion on both the stored ``execution.status`` and the returned dict, not
+    a unit probe of the action result (which the 0151 pass mistook for
+    coverage)."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_channel_groups = AsyncMock(return_value=[])
+        self.client.update_channel = AsyncMock()
+        self.client.get_channel_profiles = AsyncMock(
+            return_value=[{"id": 1}, {"id": 2}, {"id": 3}]
+        )
+        # Disabling profile 2 fails => assign_channel_profile returns a partial
+        # failure (success=False) for the created channel.
+        def _update_profile(pid, channel_id, body):
+            if pid == 2:
+                raise RuntimeError("profile 2 patch failed")
+            return None
+        self.client.update_profile_channel = AsyncMock(side_effect=_update_profile)
+        self._next_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _make_rule(self):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Profile Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([
+            {"type": "create_channel", "name_template": "{stream_name}"},
+            {"type": "assign_channel_profile", "channel_profile_ids": [1]},
+        ])
+        return rule
+
+    def _run(self, rule, streams, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_failed_action_finalizes_completed_with_errors(self):
+        rule = self._make_rule()
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        # (1) the STORED execution row status is the new errored terminal state.
+        assert self.exec_mock.status == "completed_with_errors"
+        # (2) the top-level API result is non-success.
+        assert result["success"] is False
+        assert result["status"] == "completed_with_errors"
+        assert result["failed_action_count"] >= 1
+        # The error_message summary names the failure + safe-retry guidance.
+        msg = (self.exec_mock.error_message or "").lower()
+        assert "failed" in msg
+        assert "retry" in msg
+
+    def test_clean_run_finalizes_completed(self):
+        """Control: same rule but all profile writes succeed => green
+        ``completed`` + success True. Proves the errored status is not applied
+        spuriously."""
+        self.client.update_profile_channel = AsyncMock()  # all succeed
+        rule = self._make_rule()
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        assert self.exec_mock.status == "completed"
+        assert result["success"] is True
+        assert result["failed_action_count"] == 0
+
+    def test_dry_run_unavailable_universe_finalizes_completed_with_errors(self):
+        """y3m6o.1 Finding 2 (0152) at run level: a DRY RUN whose profile-universe
+        fetch FAILS must surface the blocking preview as completed_with_errors,
+        not a rosy green preview. The dry-run assign action returns the
+        universe-unavailable failure, which aggregates into failed_actions."""
+        self.client.get_channel_profiles = AsyncMock(
+            side_effect=RuntimeError("dispatcharr down")
+        )
+        rule = self._make_rule()
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=True)
+
+        assert self.exec_mock.status == "completed_with_errors"
+        assert result["success"] is False
+        assert result["failed_action_count"] >= 1
+        # Nothing was written even in the failure preview.
+        self.client.update_profile_channel.assert_not_called()
+
+
+class TestSortGroupFailureRunStatus:
+    """y3m6o.1 review (Blocker 1) at RUN level: a Pass 3.6 sort/renumber failure
+    must finalize the whole run ``completed_with_errors`` + non-success — NOT a
+    green ``completed`` with only a success=False execution_log entry. Drives the
+    REAL ``run_pipeline`` end to end: a rule with a ``sort_group`` action queues a
+    2-channel group for the post-run sort pass, and ``assign_channel_numbers``
+    raises, so the caught failure must reach ``results["failed_actions"]`` and
+    flip the terminal status."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        # Two pre-existing channels in group 5 → the sort pass has ≥2 channels
+        # and actually calls assign_channel_numbers (which we make fail).
+        self._channels = [
+            {"id": 101, "name": "Channel B", "channel_group_id": 5, "channel_number": 10},
+            {"id": 102, "name": "Channel A", "channel_group_id": 5, "channel_number": 11},
+        ]
+        self.client.get_channels = AsyncMock(
+            return_value={"count": 2, "results": self._channels}
+        )
+        self.client.get_channel_groups = AsyncMock(
+            return_value=[{"id": 5, "name": "Sports"}]
+        )
+        self.client.get_channel_profiles = AsyncMock(return_value=[{"id": 1}])
+        self.client.update_channel = AsyncMock()
+        # The Pass 3.6 renumber call fails — the whole point of the regression.
+        self.client.assign_channel_numbers = AsyncMock(
+            side_effect=RuntimeError("dispatcharr renumber rejected")
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _make_sort_rule(self):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Sort Sports"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.set_conditions([{"type": "always"}])
+        # sort_group with an explicit group_id resolves without needing a prior
+        # create_channel — it queues group 5 for the post-run sort pass.
+        rule.set_actions([
+            {"type": "sort_group", "group_id": 5, "order": "asc"},
+        ])
+        return rule
+
+    def _run(self, rule, streams, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_sort_group_failure_finalizes_completed_with_errors(self):
+        rule = self._make_sort_rule()
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        # The renumber pass was actually attempted (2 channels in the group).
+        self.client.assign_channel_numbers.assert_awaited()
+        # (1) the STORED execution row is the errored terminal state, not green.
+        assert self.exec_mock.status == "completed_with_errors"
+        # (2) the top-level API result is non-success and counts the failure.
+        assert result["success"] is False
+        assert result["status"] == "completed_with_errors"
+        assert result["failed_action_count"] >= 1
+        # (3) the failure carries the sort_group phase + underlying error.
+        fa = [f for f in result["failed_actions"] if f["action_type"] == "sort_group"]
+        assert len(fa) == 1
+        assert "renumber rejected" in fa[0]["error"]
+
+
+class TestRuleRenumberFailureRunStatus:
+    """y3m6o.1 review (Blocker A) at RUN level: a Pass 3 rule-level renumber
+    failure (a rule with ``sort_field`` set whose ``assign_channel_numbers``
+    raises) must finalize ``completed_with_errors`` + non-success — NOT green.
+    This is a DIFFERENT code path from sort_group (Pass 3, not Pass 3.6): the
+    sort_group test exercises a sort_group action and skips the rule-level
+    renumber pass entirely, so this path was previously uncovered. Drives the
+    REAL ``run_pipeline`` end to end: a rule with a create_channel action (fixed
+    starting number) + sort_field creates 2 owned channels, then Pass 3 renumbers
+    them and the renumber raises."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_channel_groups = AsyncMock(return_value=[])
+        self.client.update_channel = AsyncMock()
+        self.client.get_channel_profiles = AsyncMock(return_value=[{"id": 1}])
+        self._next_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        # The Pass 3 rule-level renumber call fails.
+        self.client.assign_channel_numbers = AsyncMock(
+            side_effect=RuntimeError("dispatcharr renumber rejected")
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _make_rule(self):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Renumber Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        # sort_field triggers the Pass 3 rule-level renumber; a FIXED starting
+        # number (not "auto") makes _get_rule_starting_number return non-None so
+        # the pass actually runs.
+        rule.sort_field = "channel_name"
+        rule.sort_order = "asc"
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([
+            {"type": "create_channel", "name_template": "{stream_name}",
+             "channel_number": 100},
+        ])
+        return rule
+
+    def _run(self, rule, streams, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_rule_renumber_failure_finalizes_completed_with_errors(self):
+        rule = self._make_rule()
+        # Two streams => two channels created and owned by the rule, so Pass 3
+        # (len >= 2) actually renumbers.
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1),
+            StreamContext(stream_id=602, stream_name="CNN", m3u_account_id=1),
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        # The rule-level renumber pass was actually attempted.
+        self.client.assign_channel_numbers.assert_awaited()
+        # (1) stored execution row is the errored terminal state, not green.
+        assert self.exec_mock.status == "completed_with_errors"
+        # (2) top-level result is non-success + counts the failure.
+        assert result["success"] is False
+        assert result["status"] == "completed_with_errors"
+        assert result["failed_action_count"] >= 1
+        # (3) the failure carries the renumber_channels phase + rule identity.
+        fa = [
+            f for f in result["failed_actions"]
+            if f["action_type"] == "renumber_channels"
+        ]
+        assert len(fa) == 1
+        assert fa[0]["rule_id"] == 1
+        assert fa[0]["rule_name"] == "Renumber Rule"
+        assert "renumber rejected" in fa[0]["error"]
+
+
+class TestOrphanCleanupRenumberFailureRunStatus:
+    """y3m6o.1 review (Blocker B) at RUN level: a renumber-after-orphan-cleanup
+    failure (_reconcile_orphans) previously ONLY logged — no execution_log entry,
+    no aggregation — so it was completely silent and finalized green. It must now
+    finalize ``completed_with_errors`` + populate failed_actions AND write a
+    success=False execution_log entry. Drives the REAL ``run_pipeline``: the rule
+    has a pre-run managed set containing an orphan that no longer matches, so the
+    orphan is deleted and the post-cleanup renumber runs — and raises.
+
+    Also pins the managed_channel_ids JUDGMENT CALL: the membership ledger is
+    ADVANCED to the current set even though the (cosmetic) renumber failed."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        # Pre-existing orphan channel 999 (owned by the rule last run) that will
+        # not be matched again this run => it becomes an orphan and is deleted.
+        self._orphan = {
+            "id": 999, "name": "Old Channel", "channel_group_id": 5,
+            "channel_number": 50,
+        }
+        self.client.get_channels = AsyncMock(
+            return_value={"count": 1, "results": [self._orphan]}
+        )
+        self.client.get_channel_groups = AsyncMock(
+            return_value=[{"id": 5, "name": "Sports"}]
+        )
+        self.client.update_channel = AsyncMock()
+        self.client.delete_channel = AsyncMock()
+        self.client.get_channel_profiles = AsyncMock(return_value=[{"id": 1}])
+        self._next_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        # The post-orphan-cleanup renumber call fails.
+        self.client.assign_channel_numbers = AsyncMock(
+            side_effect=RuntimeError("post-cleanup renumber rejected")
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _make_rule(self):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Orphan Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = 5
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.orphan_action = "delete"
+        # No sort_field: keep Pass 3 out of it so ONLY the post-cleanup renumber
+        # fires. A fixed create starting number makes _get_rule_starting_number
+        # return non-None so the post-cleanup renumber actually runs.
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([
+            {"type": "create_channel", "name_template": "{stream_name}",
+             "channel_number": 100},
+        ])
+        # Pre-run managed set: channel 999 was owned last run. It still exists in
+        # Dispatcharr (returned by get_channels) so it is a live orphan, not a
+        # stale one, and gets deleted + triggers the post-cleanup renumber.
+        rule.set_managed_channel_ids([999])
+        return rule
+
+    def _run(self, rule, streams, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_orphan_cleanup_renumber_failure_finalizes_completed_with_errors(self):
+        rule = self._make_rule()
+        # One NEW stream => creates channel 1000 (current), so 999 (previous)
+        # becomes an orphan; after deleting it the remaining [1000] is renumbered.
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        # The orphan was deleted and the post-cleanup renumber was attempted.
+        self.client.delete_channel.assert_awaited_with(999)
+        self.client.assign_channel_numbers.assert_awaited()
+        # (1) stored execution row is the errored terminal state, not green.
+        assert self.exec_mock.status == "completed_with_errors"
+        # (2) top-level result is non-success + counts the failure.
+        assert result["success"] is False
+        assert result["status"] == "completed_with_errors"
+        assert result["failed_action_count"] >= 1
+        # (3) the failure is aggregated with the renumber_channels phase + rule.
+        fa = [
+            f for f in result["failed_actions"]
+            if f["action_type"] == "renumber_channels"
+        ]
+        assert len(fa) == 1
+        assert fa[0]["rule_id"] == 1
+        assert "post-cleanup renumber rejected" in fa[0]["error"]
+        # (4) parity with the other renumber sites: a success=False execution_log
+        # entry is also present (previously this site logged NOTHING).
+        renumber_log = [
+            entry for entry in result["execution_log"]
+            for a in entry.get("actions_executed", [])
+            if a.get("type") == "renumber_channels" and a.get("success") is False
+        ]
+        assert len(renumber_log) >= 1
+        # (5) JUDGMENT CALL: the membership ledger is ADVANCED to the current set
+        # despite the cosmetic renumber failing. managed_channel_ids tracks
+        # OWNERSHIP (drives orphan detection), orthogonal to numbering; the
+        # renumber passes re-run unconditionally next execution so the failed
+        # renumber is retried regardless. 999 (deleted orphan) is dropped; 1000
+        # (the current channel) is retained.
+        managed = set(rule.get_managed_channel_ids())
+        assert 999 not in managed
+        assert 1000 in managed
+
+
+class TestRunLevelFailureAggregationFullCoverage:
+    """y3m6o.1 review — FULL failure aggregation (the 0152 pass only routed
+    assign_channel_profile action failures). Every executed-action/phase failure
+    must finalize the run ``completed_with_errors`` + non-success. Each test
+    drives the REAL ``run_pipeline`` path end to end. Finding 3 (non-reversible
+    disclosure) and Finding 2 (compound capped+failed) share this harness."""
+
+    def setup_method(self):
+        from config import DispatcharrSettings
+
+        self.client = MagicMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_channel_groups = AsyncMock(return_value=[])
+        self.client.update_channel = AsyncMock()
+        self.client.get_channel_profiles = AsyncMock(
+            return_value=[{"id": 1}, {"id": 2}, {"id": 3}]
+        )
+        self._next_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+        self._settings_cls = DispatcharrSettings
+
+    def _settings(self, **overrides):
+        return self._settings_cls(**overrides)
+
+    def _make_rule(self, actions):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "R"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions(actions)
+        return rule
+
+    def _run(self, rule, streams, settings, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_engine.get_settings", return_value=settings), \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def _persisted_warnings(self):
+        # exec_mock.set_warnings(list) — capture the list persisted.
+        assert self.exec_mock.set_warnings.call_args is not None
+        return self.exec_mock.set_warnings.call_args.args[0]
+
+    # -- Finding 1 reversal: default-profile assignment failure escalates -----
+    def test_default_profile_failure_finalizes_completed_with_errors(self):
+        """A create_channel run with a configured GLOBAL default profile whose
+        write fails must NOT finalize green — the default-profile failure now
+        escalates through aggregation (the 0152 code left it log-only)."""
+        def _update_profile(pid, channel_id, body):
+            if pid == 2:
+                raise RuntimeError("default profile 2 patch failed")
+            return None
+        self.client.update_profile_channel = AsyncMock(side_effect=_update_profile)
+        rule = self._make_rule([
+            {"type": "create_channel", "name_template": "{stream_name}"},
+        ])
+        streams = [StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1)]
+
+        result = self._run(
+            rule, streams,
+            self._settings(default_channel_profile_ids=[1]),
+        )
+
+        assert self.exec_mock.status == "completed_with_errors"
+        assert result["success"] is False
+        assert result["failed_action_count"] >= 1
+        assert any(
+            fa.get("action_type") == "assign_default_profile"
+            for fa in result["failed_actions"]
+        )
+
+    def test_default_profile_all_writes_succeed_finalizes_completed(self):
+        """Control: same default-profile config but every write succeeds =>
+        green completed."""
+        self.client.update_profile_channel = AsyncMock()  # all succeed
+        rule = self._make_rule([
+            {"type": "create_channel", "name_template": "{stream_name}"},
+        ])
+        streams = [StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1)]
+
+        result = self._run(
+            rule, streams,
+            self._settings(default_channel_profile_ids=[1]),
+        )
+
+        assert self.exec_mock.status == "completed"
+        assert result["success"] is True
+
+    # -- Finding 3: non-reversible profile mutation disclosure ----------------
+    def test_successful_profile_assignment_persists_non_reversible_warning(self):
+        """A successful assign_channel_profile mutates membership non-reversibly,
+        so the run persists a ``non_reversible_profile_changes`` warning the UI
+        reads to disclose that rollback/undo won't restore it. The run itself
+        stays green (the assignment SUCCEEDED)."""
+        self.client.update_profile_channel = AsyncMock()  # all succeed
+        rule = self._make_rule([
+            {"type": "create_channel", "name_template": "{stream_name}"},
+            {"type": "assign_channel_profile", "channel_profile_ids": [1]},
+        ])
+        streams = [StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1)]
+
+        result = self._run(rule, streams, self._settings())
+
+        assert self.exec_mock.status == "completed"
+        assert result["success"] is True
+        warnings = self._persisted_warnings()
+        assert any(
+            isinstance(w, dict)
+            and w.get("type") == "non_reversible_profile_changes"
+            and w.get("count", 0) >= 1
+            for w in warnings
+        )
+        # The transient set never rides the serialized result.
+        assert "non_reversible_channel_ids" not in result
+
+    def test_no_profile_action_persists_no_non_reversible_warning(self):
+        """Control: a run with no profile mutation persists no such warning."""
+        self.client.update_profile_channel = AsyncMock()
+        rule = self._make_rule([
+            {"type": "create_channel", "name_template": "{stream_name}"},
+        ])
+        streams = [StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1)]
+
+        self._run(rule, streams, self._settings())
+
+        warnings = self._persisted_warnings()
+        assert not any(
+            isinstance(w, dict)
+            and w.get("type") == "non_reversible_profile_changes"
+            for w in warnings
+        )
+
+    # -- Finding 2: compound capped + failed-action run -----------------------
+    def test_capped_and_failed_persists_both_conditions(self):
+        """A run that is BOTH capped AND has a failed action persists BOTH in
+        the row: status=capped (precedence) but error_message carries the cap
+        info AND the failed-action summary — and the result is still
+        non-success."""
+        def _update_profile(pid, channel_id, body):
+            if pid == 2:
+                raise RuntimeError("profile 2 patch failed")
+            return None
+        self.client.update_profile_channel = AsyncMock(side_effect=_update_profile)
+        rule = self._make_rule([
+            {"type": "create_channel", "name_template": "{stream_name}"},
+            {"type": "assign_channel_profile", "channel_profile_ids": [1]},
+        ])
+        # Two streams, cap of 1: first creates + fails profile assign, second is
+        # capped => capped True AND failed_actions non-empty.
+        streams = [
+            StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1),
+            StreamContext(stream_id=2, stream_name="FS1", m3u_account_id=1),
+        ]
+
+        result = self._run(
+            rule, streams,
+            self._settings(max_auto_created_channels_per_run=1),
+        )
+
+        assert self.exec_mock.status == "capped"
+        assert result["success"] is False
+        assert result["failed_action_count"] >= 1
+        msg = (self.exec_mock.error_message or "").lower()
+        # BOTH conditions present in the persisted row.
+        assert "cap" in msg
+        assert "failed" in msg and "retry" in msg
+
+
+class TestEventSyncDummyEpgFailureAggregation:
+    """y3m6o.1 review (Finding 1): a failed event_sync dummy-EPG assignment must
+    aggregate into results['failed_actions'] so the run finalizes
+    completed_with_errors. Drives the real ``_assign_event_sync_dummy_epg``
+    wrapper with a mocked executor step reporting failures."""
+
+    def _run(self, failed_count):
+        client = MagicMock()
+        engine = ChannelPipelineEngine(client)
+
+        rule = MagicMock(id=7)
+        rule.name = "Dummy EPG Rule"
+        config = {"dummy_epg_profile_id": 3}
+
+        epg_summary = {
+            "source_id": 55,
+            "assign_entries": [],
+            "assigned": 0,
+            "deferred": 0,
+            "already_assigned": 0,
+            "skipped_foreign_epg": 0,
+            "failed": failed_count,
+        }
+        exec_ctx = ExecutionContext(dry_run=False)
+        executor = MagicMock()
+        executor.assign_event_sync_dummy_epg = AsyncMock(return_value=epg_summary)
+
+        results = {
+            "event_sync_warnings": [],
+            "modified_entities": [],
+            "channels_updated": 0,
+            "execution_log": [],
+            "dry_run_results": [],
+        }
+
+        profile = MagicMock(enabled=True)
+        profile.name = "Guide"
+        sess = MagicMock()
+        sess.get.return_value = profile
+        with patch("channel_pipeline_engine.get_session", return_value=sess):
+            asyncio.get_event_loop().run_until_complete(
+                engine._assign_event_sync_dummy_epg(
+                    rule, config, executor, exec_ctx, results, dry_run=False
+                )
+            )
+        return results
+
+    def test_failed_dummy_epg_aggregates(self):
+        results = self._run(failed_count=2)
+        failed = results.get("failed_actions", [])
+        assert any(fa["action_type"] == "event_sync_dummy_epg" for fa in failed)
+        assert len(failed) == 2
+
+    def test_clean_dummy_epg_aggregates_nothing(self):
+        results = self._run(failed_count=0)
+        assert not results.get("failed_actions")
+
+
+class TestPass5DeferredEpgRetryFailureAggregation:
+    """y3m6o.1 review (Finding 1): a deferred assign_epg that STILL fails on the
+    Pass 5 retry (after the dummy-EPG refresh) must aggregate into
+    results['failed_actions'] so the run finalizes completed_with_errors, not
+    green. Drives the real ``_refresh_dummy_epg_and_retry`` retry loop with a
+    failing ``_execute_assign_epg``."""
+
+    def _run_pass5(self, retry_result, *, source_refresh=None, query_raises=False):
+        from channel_pipeline_executor import ActionResult  # noqa: F401
+
+        client = MagicMock()
+        client.get_epg_data = AsyncMock(return_value=[])
+        engine = ChannelPipelineEngine(client)
+
+        action = MagicMock()
+        action.type = "assign_epg"
+        action.params = {"epg_id": 5}
+        action.to_dict.return_value = {"type": "assign_epg", "epg_id": 5}
+
+        stream_ctx = StreamContext(stream_id=42, stream_name="ESPN", m3u_account_id=1)
+
+        executor = MagicMock()
+        executor._deferred_epg_assignments = [(100, action, stream_ctx, MagicMock())]
+        executor._channel_by_id = {100: {"name": "ESPN", "channel_group_id": 9}}
+        executor._group_by_id = {9: {"name": "Sports"}}
+        executor.reload_epg_data = MagicMock()
+        executor._execute_assign_epg = AsyncMock(return_value=retry_result)
+
+        epg_sources = [{"id": 5, "name": "Dummy", "url": "/api/dummy-epg/xmltv/1"}]
+        results = {"execution_log": [], "dry_run_results": []}
+
+        fake_task = MagicMock()
+        fake_task._regenerate_xmltv = AsyncMock(return_value=1)
+        sess = MagicMock()
+        if query_raises:
+            # WARN #2: Step 1 profile-group update raises.
+            sess.query.side_effect = RuntimeError("profile group update boom")
+        else:
+            sess.query.return_value.filter.return_value.all.return_value = []
+        refresh_mock = (
+            AsyncMock(side_effect=source_refresh) if callable(source_refresh)
+            else AsyncMock()
+        )
+        with patch("channel_pipeline_engine.get_session", return_value=sess), \
+                patch("database.get_session", return_value=sess), \
+                patch("tasks.dummy_epg_refresh.DummyEPGRefreshTask",
+                      return_value=fake_task), \
+                patch("tasks.dummy_epg_refresh.wait_for_epg_source_refresh",
+                      new=refresh_mock):
+            asyncio.get_event_loop().run_until_complete(
+                engine._refresh_dummy_epg_and_retry(
+                    executor, results, epg_sources, dry_run=False
+                )
+            )
+        return results
+
+    @staticmethod
+    def _log_entries(results, type_):
+        return [
+            a for e in results["execution_log"]
+            for a in e["actions_executed"] if a["type"] == type_
+        ]
+
+    def test_failed_retry_aggregates(self):
+        from channel_pipeline_executor import ActionResult
+
+        failing = ActionResult(
+            success=False, action_type="assign_epg",
+            description="assign_epg still failing after refresh",
+            entity_id=100, error="dispatcharr rejected",
+        )
+        results = self._run_pass5(failing)
+        failed = results.get("failed_actions", [])
+        assert any(fa["action_type"] == "assign_epg" for fa in failed)
+        assert len(failed) == 1
+
+    def test_successful_retry_aggregates_nothing(self):
+        from channel_pipeline_executor import ActionResult
+
+        ok = ActionResult(
+            success=True, action_type="assign_epg",
+            description="assigned", entity_id=100,
+        )
+        results = self._run_pass5(ok)
+        assert not results.get("failed_actions")
+
+    def _ok_retry(self):
+        from channel_pipeline_executor import ActionResult
+        return ActionResult(
+            success=True, action_type="assign_epg", description="assigned",
+            entity_id=100,
+        )
+
+    def test_profile_group_update_failure_aggregates(self):
+        """y3m6o.1 review (WARN #2): a Pass 5 profile-group update failure now
+        escalates so the run finalizes completed_with_errors, not green."""
+        results = self._run_pass5(self._ok_retry(), query_raises=True)
+        failed = results.get("failed_actions", [])
+        assert any(fa["action_type"] == "dummy_epg_refresh" for fa in failed)
+
+    def test_source_refresh_failure_aggregates_and_logs_honestly(self):
+        """y3m6o.1 review (WARN #3): a Pass 5 source-refresh failure escalates
+        AND its execution-log entry reflects the actual failure (previously it
+        recorded success=True even when the refresh raised)."""
+        def _boom(*a, **k):
+            raise RuntimeError("refresh timed out")
+        results = self._run_pass5(self._ok_retry(), source_refresh=_boom)
+
+        # Escalated into aggregation.
+        failed = results.get("failed_actions", [])
+        assert any(fa["action_type"] == "refresh_epg_source" for fa in failed)
+        # And the execution-log entry is honest (success=False + error).
+        entries = self._log_entries(results, "refresh_epg_source")
+        assert entries and entries[0]["success"] is False
+        assert entries[0]["error"] is not None
+        assert "Failed to refresh" in entries[0]["description"]
+
+    def test_source_refresh_success_logs_success_and_no_failure(self):
+        """Control: a healthy source refresh logs success=True and aggregates
+        nothing."""
+        results = self._run_pass5(self._ok_retry())
+        entries = self._log_entries(results, "refresh_epg_source")
+        assert entries and entries[0]["success"] is True
+        assert entries[0]["error"] is None
+        assert not any(
+            fa["action_type"] == "refresh_epg_source"
+            for fa in results.get("failed_actions", [])
+        )
+
+
 class TestEngineFoldMatchKeyPassThrough:
     """GH #645 / bead enhancedchannelmanager-0vao3: the engine must thread the
     rule's ``fold_match_key`` flag into every executor.execute call, the same
@@ -3155,6 +4023,9 @@ class TestProfileUniverseSentinelBehavioral:
             inst = RealActionExecutor(*args, **kwargs)
             captured["executor"] = inst
             captured["all_profile_ids"] = kwargs.get("all_profile_ids", "MISSING")
+            captured["channel_profile_membership"] = kwargs.get(
+                "channel_profile_membership", "MISSING"
+            )
             return inst
 
         mock_execution = MagicMock()
@@ -3202,7 +4073,11 @@ class TestProfileUniverseSentinelBehavioral:
 
     def test_standard_rule_fetch_success_assign_enforces_exclusivity(self):
         """Contrast: a healthy fetch => the executor performs real exclusive
-        membership (enable selected, disable the rest) and reports success."""
+        membership and reports success. Channel 99 is created this run, so
+        Dispatcharr auto-joined it to ALL profiles; the diff-aware reconcile
+        DISABLES the unselected profiles (2, 3) and skips the redundant enable of
+        the already-joined selected profile (1) — end state = exactly {1}
+        (y3m6o.1 review follow-up: no phantom enable write)."""
         get_profiles = AsyncMock(return_value=[{"id": 1}, {"id": 2}, {"id": 3}])
         client, engine = self._make_engine(get_profiles)
         rule = self._standard_rule(
@@ -3216,7 +4091,8 @@ class TestProfileUniverseSentinelBehavioral:
         assert result.success is True
         calls = {c.args[0]: c.args[2]["enabled"]
                  for c in client.update_profile_channel.call_args_list}
-        assert calls == {1: True, 2: False, 3: False}
+        # Only the unselected profiles flip (disable); enable-1 is a no-op.
+        assert calls == {2: False, 3: False}
 
     def test_event_sync_rule_assign_fetches_and_enforces_exclusivity(self):
         """Acceptance (b): an EVENT-SYNC rule carrying assign_channel_profile
@@ -3236,7 +4112,29 @@ class TestProfileUniverseSentinelBehavioral:
         assert result.success is True
         calls = {c.args[0]: c.args[2]["enabled"]
                  for c in client.update_profile_channel.call_args_list}
-        assert calls == {2: True, 1: False, 3: False}
+        # Channel 99 auto-joined to all; only the unselected profiles flip
+        # (disable 1, 3), enable-2 is a redundant no-op that is skipped.
+        assert calls == {1: False, 3: False}
+
+    def test_engine_builds_membership_map_from_profile_channels(self):
+        """y3m6o.1 review follow-up: the engine inverts the profile payload's
+        ``channels`` (enabled member ids) into a channel_id -> {profile_ids} map
+        and threads it to the executor, so assign_channel_profile can diff and
+        skip no-op writes. Zero extra API reads (same get_channel_profiles fetch)."""
+        get_profiles = AsyncMock(return_value=[
+            {"id": 1, "channels": [50, 51]},
+            {"id": 2, "channels": [51]},
+            {"id": 3, "channels": []},
+        ])
+        client, engine = self._make_engine(get_profiles)
+        rule = self._standard_rule(
+            [{"type": "assign_channel_profile", "channel_profile_ids": [1]}]
+        )
+
+        captured = self._run_and_capture_executor(engine, rules=[rule])
+
+        assert captured["all_profile_ids"] == [1, 2, 3]
+        assert captured["channel_profile_membership"] == {50: {1}, 51: {1, 2}}
 
     def test_event_sync_rule_fetch_failure_fails_assign_action(self):
         """Event-sync path, fetch failure => None sentinel => assign FAILS,

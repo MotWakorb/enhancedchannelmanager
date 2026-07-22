@@ -477,6 +477,44 @@ class TestEnginePhase:
         assert len(attach_entries) == 1
         assert attach_entries[0]["match"]["secondary_stream_name"] == STREAM_MERCURY
 
+    def test_attach_failure_aggregates_into_failed_actions(self):
+        """y3m6o.1 review (Finding 1): an event_sync attach that FAILS must be
+        recorded in results['failed_actions'] so run finalization sets
+        completed_with_errors instead of green. Drives the production
+        execute_event_sync_rule attach path with a failing update_channel."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        client.update_channel = AsyncMock(side_effect=RuntimeError("attach boom"))
+        results = _results()
+
+        _run(engine._run_event_sync_rules(
+            [_event_rule()], executor, results, dry_run=False,
+            triggered_by="manual", channels_touched_ids=set(),
+        ))
+
+        s = results["event_sync"][0]
+        assert s["attach_errors"] >= 1
+        failed = results.get("failed_actions", [])
+        assert any(fa["action_type"] == "event_sync_attach" for fa in failed)
+        # One aggregated failure entry per attach error (honest count).
+        assert len(failed) == s["attach_errors"]
+
+    def test_clean_attach_records_no_failed_actions(self):
+        """Control: a successful attach records nothing in failed_actions."""
+        channels = [_master_channel(100, MASTER_MERCURY, streams=[9001])]
+        batch = [{"id": 7001, "name": STREAM_MERCURY, "m3u_account": 1}]
+        engine, executor, client = _engine_with_client(channels, batch)
+        results = _results()
+
+        _run(engine._run_event_sync_rules(
+            [_event_rule()], executor, results, dry_run=False,
+            triggered_by="manual", channels_touched_ids=set(),
+        ))
+
+        assert results["event_sync"][0]["attach_errors"] == 0
+        assert not results.get("failed_actions")
+
     def test_unattended_trigger_refused_defense_in_depth(self):
         """Even if a caller bypasses run_pipeline's gate, the phase refuses
         unattended triggers for rules WITHOUT the auto_run opt-in — nothing
