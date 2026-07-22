@@ -50,6 +50,7 @@ import {
   testPlexConnection,
   testJellyfinConnection,
 } from './api';
+import * as api from './api';
 import { logger } from '../utils/logger';
 
 // Start/stop the mock server for these tests
@@ -1962,6 +1963,52 @@ describe('API Service', () => {
         base_url: 'http://jellyfin.local:8096',
         api_key: 'jellyfin-api-key',
       });
+    });
+  });
+
+  // GH #720 Part B (#9) — profile-apply summary interpretation. These pure
+  // functions drive the incomplete-apply warning on EVERY save path (primary,
+  // linked cascade, Sync Groups union), so they are unit-tested directly.
+  describe('profileApplyIncomplete / profileApplyWarningMessage', () => {
+    it('an empty or undefined summary is a clean no-op (not incomplete)', () => {
+      expect(api.profileApplyIncomplete(undefined)).toBe(false);
+      expect(api.profileApplyIncomplete([])).toBe(false);
+      expect(api.profileApplyWarningMessage([])).toBeNull();
+    });
+
+    it('a clean reconciled-only summary is not incomplete', () => {
+      const s = [{ status: 'reconciled' }, { status: 'no_selection' }];
+      expect(api.profileApplyIncomplete(s)).toBe(false);
+      expect(api.profileApplyWarningMessage(s)).toBeNull();
+    });
+
+    it.each([
+      ['partial_failure', [{ status: 'partial_failure' }], 'applying some channel profiles failed'],
+      ['degraded', [{ status: 'degraded' }], 'could not be fully enforced'],
+      ['error', [{ status: 'error', error: 'boom' }], 'hit an error'],
+      ['stale_selection', [{ status: 'stale_selection' }], 'no longer exist'],
+      ['conflict', [{ status: 'reconciled', conflict: true }], 'conflicting profile selections'],
+      ['failed_profile_ids', [{ status: 'reconciled', failed_profile_ids: [2] }], 'applying some channel profiles failed'],
+    ])('%s is incomplete with status-specific guidance', (_label, summary, needle) => {
+      expect(api.profileApplyIncomplete(summary as never)).toBe(true);
+      expect(api.profileApplyWarningMessage(summary as never)).toContain(needle);
+    });
+
+    it('accumulated summaries (multi save path) surface the worst status; stale outranks partial', () => {
+      // Models the linked-cascade / Sync-Groups accumulation: one path partial,
+      // another stale -> the actionable (stale) guidance wins.
+      const accumulated = [
+        { status: 'partial_failure' },
+        { status: 'stale_selection' },
+      ];
+      expect(api.profileApplyWarningMessage(accumulated)).toContain('no longer exist');
+    });
+
+    it('stale/conflict guidance does NOT promise auto-retry (which cannot fix them)', () => {
+      expect(api.profileApplyWarningMessage([{ status: 'stale_selection' }]))
+        .not.toContain('retry automatically');
+      expect(api.profileApplyWarningMessage([{ status: 'reconciled', conflict: true }]))
+        .not.toContain('retry automatically');
     });
   });
 });

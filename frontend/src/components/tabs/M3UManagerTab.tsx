@@ -683,7 +683,7 @@ export function M3UManagerTab({
         }
 
         // Update each account with the union result
-        let applyIncomplete = false;
+        const applySummary: api.ProfileApplyOutcome[] = [];
         for (const account of accountsData) {
           const groupSettings = account.channel_groups.map(g => ({
             channel_group: g.channel_group,
@@ -696,13 +696,11 @@ export function M3UManagerTab({
           // A group untouched by THIS sync may still carry a channel_profile_ids
           // selection whose reconcile ran and partially failed / conflicted —
           // surface it rather than silently succeeding (#9 / Should-Fix 4).
-          applyIncomplete = applyIncomplete || api.profileApplyIncomplete(resp?.ecm_profile_apply);
+          applySummary.push(...(resp?.ecm_profile_apply ?? []));
         }
-        if (applyIncomplete) {
-          notifications.warning(
-            'Groups synced, but applying channel profiles was incomplete — some profiles failed or conflict across accounts. Check the logs; it will retry automatically.',
-            'M3U Manager'
-          );
+        const applyWarning = api.profileApplyWarningMessage(applySummary);
+        if (applyWarning) {
+          notifications.warning(applyWarning, 'M3U Manager');
         }
       }
 

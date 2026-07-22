@@ -899,10 +899,11 @@ export interface ProfileApplyOutcome {
   // Backend statuses: no_selection | no_channels | stale_selection |
   // partial_failure | reconciled | error.
   status: string;
-  group_id?: number;
+  group_id?: number | null;
   failed_profile_ids?: number[];
   conflict?: boolean;
   channels_scoped?: number;
+  error?: string | null;
 }
 
 export async function updateM3UGroupSettings(
@@ -918,12 +919,12 @@ export async function updateM3UGroupSettings(
 
 /**
  * True when a group-settings save's profile-apply summary reports an
- * INCOMPLETE or dead apply — any per-group partial_failure/error, a fully
- * stale (all-deleted) selection, a cross-account conflict, or a non-empty
- * failed_profile_ids. Drives the "saved but apply incomplete" warning toast
- * (#9). ``stale_selection`` is included so an operator whose selected profiles
- * were all deleted learns the selection is dead instead of seeing plain
- * success (NIT 6).
+ * INCOMPLETE or dead apply — any per-group partial_failure/degraded/error, a
+ * fully stale (all-deleted) selection, a cross-account conflict, or a non-empty
+ * failed_profile_ids. Drives the "saved but apply incomplete" warning (#9).
+ * An empty summary is a clean no-op (nothing to apply) — NOT incomplete; the
+ * backend emits an explicit {status:'error'} entry when setup itself failed so
+ * that case is distinguished from "nothing to do".
  */
 export function profileApplyIncomplete(
   summary: ProfileApplyOutcome[] | undefined
@@ -931,11 +932,39 @@ export function profileApplyIncomplete(
   return (summary ?? []).some(
     (o) =>
       o.status === 'partial_failure' ||
+      o.status === 'degraded' ||
       o.status === 'error' ||
       o.status === 'stale_selection' ||
       o.conflict === true ||
       (o.failed_profile_ids?.length ?? 0) > 0
   );
+}
+
+/**
+ * Status-specific recovery guidance for an incomplete profile apply. Returns
+ * null when the apply is clean. The generic "it will retry automatically"
+ * message is WRONG for stale_selection and conflict (auto-retry cannot fix a
+ * deleted profile or contradictory operator choices), so those get an
+ * actionable next step instead of a false promise.
+ */
+export function profileApplyWarningMessage(
+  summary: ProfileApplyOutcome[] | undefined
+): string | null {
+  const items = summary ?? [];
+  if (!profileApplyIncomplete(items)) return null;
+  if (items.some((o) => o.status === 'stale_selection')) {
+    return 'Saved, but the selected channel profile(s) no longer exist — open Auto-Sync settings and choose current profiles.';
+  }
+  if (items.some((o) => o.conflict === true)) {
+    return 'Saved, but this group had conflicting profile selections across accounts — reopen Auto-Sync settings and re-save to normalize them.';
+  }
+  if (items.some((o) => o.status === 'degraded')) {
+    return 'Saved, but channel profiles could not be fully enforced (the profile list was unreachable). It will retry automatically on the next sync.';
+  }
+  if (items.some((o) => o.status === 'error')) {
+    return 'Saved, but applying channel profiles hit an error — check the logs.';
+  }
+  return 'Saved, but applying some channel profiles failed — check the logs; it will retry automatically.';
 }
 
 export interface GroupAutoSyncToggleResult {

@@ -201,3 +201,81 @@ describe('AutoSyncSettingsModal — profile-management relabel + guardrail copy 
       .toBeInTheDocument();
   });
 });
+
+describe('AutoSyncSettingsModal — profile picker accessibility + stale-selection state (GH #720 Part B)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function renderWithProfiles(customProperties: AutoSyncCustomProperties | null) {
+    return render(
+      <AutoSyncSettingsModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        groupName="Sports HD"
+        customProperties={customProperties}
+        epgSources={[]}
+        channelGroups={[]}
+        channelProfiles={[
+          { id: 1, name: 'Everyone' } as never,
+          { id: 2, name: 'Kids' } as never,
+          { id: 3, name: 'Sports' } as never,
+        ]}
+        streamProfiles={[]}
+      />
+    );
+  }
+
+  it('the profile trigger exposes an accessible name + haspopup, and opens an aria listbox', async () => {
+    renderWithProfiles({ channel_profile_ids: ['1'] });
+    const user = userEvent.setup();
+
+    const trigger = screen.getByRole('button', { name: /Channel Profile Assignment/i });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'listbox');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(trigger);
+
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    const listbox = screen.getByRole('listbox');
+    expect(listbox).toHaveAttribute('aria-multiselectable', 'true');
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    // The selected profile is announced via aria-selected.
+    expect(screen.getByRole('option', { name: /Everyone/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('option', { name: /Kids/i })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('keyboard: Arrow to an option + Enter toggles it; Escape closes the listbox', async () => {
+    const onSave = vi.fn();
+    render(
+      <AutoSyncSettingsModal
+        isOpen={true} onClose={vi.fn()} onSave={onSave} groupName="Sports HD"
+        customProperties={{}} epgSources={[]} channelGroups={[]}
+        channelProfiles={[{ id: 1, name: 'Everyone' } as never, { id: 2, name: 'Kids' } as never]}
+        streamProfiles={[]}
+      />
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /Channel Profile Assignment/i }));
+
+    const listbox = screen.getByRole('listbox');
+    listbox.focus();
+    await user.keyboard('{ArrowDown}');  // active -> Kids (index 1)
+    await user.keyboard('{Enter}');       // toggle Kids on
+    await user.keyboard('{Escape}');      // close
+
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Save Settings/i }));
+    const saved = onSave.mock.calls[0][0] as AutoSyncCustomProperties;
+    expect(saved.channel_profile_ids).toEqual(['2']);
+  });
+
+  it('a selection referencing deleted profiles shows a clear stale-count state, not a blank picker', () => {
+    // Selected ids 1 and 99; only profile 1 still exists -> 1 missing.
+    renderWithProfiles({ channel_profile_ids: ['1', '99'] });
+
+    expect(screen.getByRole('alert'))
+      .toHaveTextContent(/1 previously-selected profile\(s\) no longer exist/i);
+  });
+});

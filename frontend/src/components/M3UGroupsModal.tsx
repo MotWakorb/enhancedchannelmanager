@@ -238,9 +238,10 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
       // Save this account first. Capture the response so we can warn if the
       // downstream channel-profile apply was incomplete (#9).
       const primaryResp = await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
-      // OR in every save path's apply summary — the linked-account saves below
-      // can also report a partial/conflict apply (#9 / Should-Fix 4).
-      let applyIncomplete = api.profileApplyIncomplete(primaryResp?.ecm_profile_apply);
+      // Accumulate the apply summary across EVERY save path (primary + linked)
+      // so a partial/conflict/degraded apply from any of them is surfaced with
+      // status-specific recovery guidance (#9 / Should-Fix 4).
+      const applySummary = [...(primaryResp?.ecm_profile_apply ?? [])];
 
       // Accounts to refresh after a successful save (Dispatcharr parity:
       // its modal's only save action is Save & Refresh — settings take
@@ -277,11 +278,14 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
             });
 
             const linkedResp = await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
-            applyIncomplete = applyIncomplete || api.profileApplyIncomplete(linkedResp?.ecm_profile_apply);
+            applySummary.push(...(linkedResp?.ecm_profile_apply ?? []));
             refreshAccountIds.push(linkedAccountId);
           } catch (linkedErr) {
-            // Log error but continue with other linked accounts
+            // Log error but continue with other linked accounts — but record it
+            // as an apply error so it is not silently swallowed into a success
+            // toast (Should-Fix 4 / follow-up).
             logger.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);
+            applySummary.push({ status: 'error', error: 'linked account update failed' });
           }
         }
       }
@@ -289,16 +293,14 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
       // Chain the M3U refresh (Save & Refresh, mirroring Dispatcharr's
       // native modal). Only fires after a successful save; a refresh
       // failure does not undo the save.
+      const applyWarning = api.profileApplyWarningMessage(applySummary);
       try {
         await Promise.all(refreshAccountIds.map(id => api.refreshM3UAccount(id)));
-        if (applyIncomplete) {
-          // #9: the save + refresh succeeded, but the channel-profile apply
-          // was partial (a profile write failed) or a cross-account conflict
-          // was detected — surface it instead of a plain success.
-          notifications.warning(
-            'Group settings saved, but applying channel profiles was incomplete — some profiles failed or conflict across accounts. Check the logs; it will retry automatically.',
-            'M3U Groups'
-          );
+        if (applyWarning) {
+          // #9: the save + refresh succeeded, but the channel-profile apply was
+          // incomplete — surface status-specific recovery guidance instead of a
+          // plain success (auto-retry is not promised where it cannot help).
+          notifications.warning(applyWarning, 'M3U Groups');
         } else {
           notifications.success(
             `Group settings saved — M3U refresh started for ${account.name}`,

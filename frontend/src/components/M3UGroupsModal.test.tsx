@@ -421,7 +421,7 @@ describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)
 
     await waitFor(() =>
       expect(mockNotifications.warning).toHaveBeenCalledWith(
-        expect.stringContaining('applying channel profiles was incomplete'),
+        expect.stringContaining('applying some channel profiles failed'),
         'M3U Groups'
       )
     );
@@ -432,7 +432,7 @@ describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)
     );
   });
 
-  it('#9 / NIT 6: warns when the saved selection is fully stale (all profiles deleted)', async () => {
+  it('#9 / NIT 6: warns with stale-specific guidance (no false auto-retry) when the selection is fully stale', async () => {
     vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
       message: 'ok',
       ecm_profile_apply: [{ status: 'stale_selection', group_id: 100 }],
@@ -442,7 +442,39 @@ describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)
 
     await waitFor(() =>
       expect(mockNotifications.warning).toHaveBeenCalledWith(
-        expect.stringContaining('applying channel profiles was incomplete'),
+        expect.stringContaining('no longer exist'),
+        'M3U Groups'
+      )
+    );
+  });
+
+  it('follow-up: degraded apply warns that profiles could not be fully enforced', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
+      message: 'ok',
+      ecm_profile_apply: [{ status: 'degraded', group_id: 100 }],
+    });
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() =>
+      expect(mockNotifications.warning).toHaveBeenCalledWith(
+        expect.stringContaining('could not be fully enforced'),
+        'M3U Groups'
+      )
+    );
+  });
+
+  it('follow-up: a cross-account conflict warns with normalize guidance', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
+      message: 'ok',
+      ecm_profile_apply: [{ status: 'reconciled', group_id: 100, conflict: true }],
+    });
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() =>
+      expect(mockNotifications.warning).toHaveBeenCalledWith(
+        expect.stringContaining('conflicting profile selections'),
         'M3U Groups'
       )
     );
