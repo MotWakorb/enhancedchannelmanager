@@ -3804,6 +3804,13 @@ class ActionExecutor:
         )
 
         try:
+            # Staleness window (accepted, consistent with the executor's other
+            # custom_properties writers at _execute_set_epg / _execute_set_logo):
+            # merged_cp is built from the in-run cache, and the PATCH replaces
+            # custom_properties wholesale, so a mid-run EXTERNAL custom_properties
+            # write on this pre-existing channel would be dropped. Not
+            # re-architected here — a single run is short and this matches the
+            # established per-run-cache pattern.
             cached = self._channel_by_id.get(channel_id) or {}
             current_cp = cached.get("custom_properties")
             merged_cp = dict(current_cp) if isinstance(current_cp, dict) else {}

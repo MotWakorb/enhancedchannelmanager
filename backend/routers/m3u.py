@@ -202,6 +202,23 @@ def _advance_refresh_watermark() -> None:
         logger.warning("[M3U-REFRESH] Failed to advance refresh watermark: %s", e)
 
 
+async def _reconcile_profiles_after_refresh(client, account_name: str) -> None:
+    """GH #720 Part B (bead y3m6o): reinforcing instant reconcile after an
+    M3U refresh completes.
+
+    An ECM-triggered refresh may have created auto-sync channels; re-apply each
+    group's channel_profile_ids selection so the operator's choice takes effect
+    immediately (the change monitor is the converging backbone). Best-effort —
+    a reconcile failure never fails the refresh. Extracted (Nit 8) so the two
+    poll-completion branches share one copy that cannot drift.
+    """
+    try:
+        from services.profile_reconcile import reconcile_all_selected_groups
+        await reconcile_all_selected_groups(client)
+    except Exception as e:
+        logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, e)
+
+
 async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
     """
     Background task to poll Dispatcharr until M3U refresh completes.
@@ -252,16 +269,9 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
 
-                # GH #720 Part B (bead y3m6o): reinforcing instant reconcile.
-                # An ECM-triggered refresh may have created auto-sync channels;
-                # re-apply each group's channel_profile_ids selection so the
-                # operator's choice takes effect immediately (the change monitor
-                # is the converging backbone). Best-effort — never fail refresh.
-                try:
-                    from services.profile_reconcile import reconcile_all_selected_groups
-                    await reconcile_all_selected_groups(client)
-                except Exception as e:
-                    logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, e)
+                # GH #720 Part B (bead y3m6o): reinforcing instant reconcile
+                # of every auto-sync group's channel_profile_ids selection.
+                await _reconcile_profiles_after_refresh(client, account_name)
 
                 # Send immediate digest if configured
                 try:
@@ -304,16 +314,9 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
 
-                # GH #720 Part B (bead y3m6o): reinforcing instant reconcile.
-                # An ECM-triggered refresh may have created auto-sync channels;
-                # re-apply each group's channel_profile_ids selection so the
-                # operator's choice takes effect immediately (the change monitor
-                # is the converging backbone). Best-effort — never fail refresh.
-                try:
-                    from services.profile_reconcile import reconcile_all_selected_groups
-                    await reconcile_all_selected_groups(client)
-                except Exception as e:
-                    logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, e)
+                # GH #720 Part B (bead y3m6o): reinforcing instant reconcile
+                # of every auto-sync group's channel_profile_ids selection.
+                await _reconcile_profiles_after_refresh(client, account_name)
 
                 # Send immediate digest if configured
                 try:
