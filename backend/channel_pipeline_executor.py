@@ -153,6 +153,14 @@ class ExecutionContext:
     # channel-profile membership it cannot.
     non_reversible_channel_ids: set[int] = field(default_factory=set)
 
+    # GH #720 Part B review (Judgment 4b): channel ids where the profile
+    # membership WAS applied but the pipeline-ownership marker write FAILED, so
+    # precedence was not established (a group reconcile may move them until the
+    # next pipeline run re-stamps). Folded by the engine into a run-level
+    # WARNING (NOT a failed action — the assignment itself succeeded, so the run
+    # stays completed, not completed_with_errors).
+    profile_ownership_unestablished_channel_ids: set[int] = field(default_factory=set)
+
     # y3m6o.1 review (Finding 1 reversal): default-profile assignment failures.
     # Each entry {channel_id, failed_profile_ids} for a newly-created channel
     # whose configured default-profile membership could not be fully enforced.
@@ -3004,6 +3012,13 @@ class ActionExecutor:
             marked = await self._mark_channel_profile_ownership(
                 exec_ctx.current_channel_id, rule_id
             )
+            if not marked:
+                # Judgment 4b: profiles ARE applied (success stays True), but the
+                # ownership marker did not land — record the channel so the
+                # engine surfaces a run-level WARNING (not a failed action).
+                exec_ctx.profile_ownership_unestablished_channel_ids.add(
+                    exec_ctx.current_channel_id
+                )
 
             # y3m6o.1 review follow-up: ``modified`` is True only when at least
             # one profile's enabled-state actually flipped. An idempotent
@@ -3842,9 +3857,21 @@ class ActionExecutor:
         )
 
         cached = self._channel_by_id.get(channel_id)
-        # Fresh-fetch current custom_properties right before the merge to shrink
-        # the wholesale-PATCH clobber window; fall back to the run cache if the
-        # refetch fails.
+        cached_cp = cached.get("custom_properties") if isinstance(cached, dict) else None
+        cached_cp = cached_cp if isinstance(cached_cp, dict) else {}
+
+        # FAST idempotent-skip on the run cache FIRST (Should-Fix 4): a rule
+        # re-run over already-marked channels must NOT issue a GET per channel.
+        # The fresh-fetch (below) only matters when a WRITE is actually needed,
+        # so gating it behind this check preserves clobber-safety at zero extra
+        # GETs on the common no-op path.
+        if (cached_cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) == PIPELINE_OWNERSHIP_MARKER_VALUE
+                and cached_cp.get(PIPELINE_OWNERSHIP_RULE_ID_KEY) == rule_id):
+            return True  # Already marked by this rule per the cache — skip.
+
+        # A write is (probably) needed — fresh-fetch current custom_properties
+        # right before the merge to shrink the wholesale-PATCH clobber window;
+        # fall back to the run cache if the refetch fails.
         current_cp = None
         try:
             fresh = await self.client.get_channel(channel_id)
@@ -3857,8 +3884,7 @@ class ActionExecutor:
                 channel_id, e,
             )
         if current_cp is None:
-            cc = cached.get("custom_properties") if isinstance(cached, dict) else None
-            current_cp = cc if isinstance(cc, dict) else {}
+            current_cp = cached_cp
 
         merged_cp = dict(current_cp)
         already_owner = (
@@ -3866,7 +3892,11 @@ class ActionExecutor:
         )
         same_rule = merged_cp.get(PIPELINE_OWNERSHIP_RULE_ID_KEY) == rule_id
         if already_owner and same_rule:
-            return True  # Already marked by this rule — idempotent, skip the write.
+            # Fresh state shows another run already marked it — no write; sync
+            # the cache so later actions see the marker.
+            if isinstance(cached, dict):
+                cached["custom_properties"] = merged_cp
+            return True
         merged_cp[PIPELINE_OWNERSHIP_MARKER_KEY] = PIPELINE_OWNERSHIP_MARKER_VALUE
         # Stamp the owning rule id so the reconcile can hand ownership back when
         # the rule goes away. None only outside a rule run (shouldn't happen for

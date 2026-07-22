@@ -5114,8 +5114,10 @@ class TestAssignChannelProfileProvenanceMarker:
         _cid, body = self.client.update_channel.call_args.args
         assert body["custom_properties"][rid_key] == 2
 
-    def test_marker_idempotent_when_same_rule_id(self):
-        """Same owner AND same rule id already present -> no redundant write."""
+    def test_marker_idempotent_when_same_rule_id_skips_without_a_get(self):
+        """Same owner AND same rule id already present -> no redundant write AND
+        (Should-Fix 4) NO fresh-fetch GET: the idempotent skip is decided on the
+        run cache, so a rule re-run over marked channels issues zero extra GETs."""
         key, value = self._marker()
         rid_key = self._rule_id_key()
         existing = [
@@ -5132,6 +5134,22 @@ class TestAssignChannelProfileProvenanceMarker:
         self._run(executor, action, exec_ctx, rule_id=5)
 
         self.client.update_channel.assert_not_called()
+        self.client.get_channel.assert_not_called()  # fast-path, no GET
+
+    def test_marker_write_failure_records_run_warning_signal(self):
+        """Judgment 4b: a marker-write failure records the channel on
+        exec_ctx.profile_ownership_unestablished_channel_ids (the engine folds it
+        into a run-level WARNING) while the assignment stays success=True."""
+        self.client.update_channel = AsyncMock(side_effect=RuntimeError("boom"))
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx, rule_id=5)
+
+        assert result.success is True
+        assert 99 in exec_ctx.profile_ownership_unestablished_channel_ids
 
 
 class TestAssignDefaultProfiles:

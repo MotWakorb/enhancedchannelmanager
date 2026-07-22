@@ -3407,6 +3407,42 @@ class TestRunLevelFailureAggregationFullCoverage:
             for w in warnings
         )
 
+    # -- GH #720 Part B (4b): ownership-marker-write failure disclosure --------
+    def test_marker_write_failure_persists_warning_run_stays_completed(self):
+        """Judgment 4b: the profiles applied but the ownership marker write
+        FAILED — the run persists a ``profile_ownership_not_established`` warning
+        AND stays ``completed`` (NOT completed_with_errors — the assignment
+        itself succeeded, so we do not misattribute a successful assign as a
+        failed run)."""
+        self.client.update_profile_channel = AsyncMock()  # profiles apply
+        # The ONLY custom_properties PATCH in this rule is the ownership marker;
+        # make exactly that write fail.
+        async def _update_channel(cid, data):
+            if isinstance(data, dict) and "custom_properties" in data:
+                raise RuntimeError("marker write boom")
+            return {"id": cid, **(data or {})}
+        self.client.update_channel = AsyncMock(side_effect=_update_channel)
+
+        rule = self._make_rule([
+            {"type": "create_channel", "name_template": "{stream_name}"},
+            {"type": "assign_channel_profile", "channel_profile_ids": [1]},
+        ])
+        streams = [StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1)]
+
+        result = self._run(rule, streams, self._settings())
+
+        assert self.exec_mock.status == "completed"   # NOT completed_with_errors
+        assert result["success"] is True
+        warnings = self._persisted_warnings()
+        assert any(
+            isinstance(w, dict)
+            and w.get("type") == "profile_ownership_not_established"
+            and w.get("count", 0) >= 1
+            for w in warnings
+        )
+        # The transient set never rides the serialized result.
+        assert "profile_ownership_unestablished_channel_ids" not in result
+
     # -- Finding 2: compound capped + failed-action run -----------------------
     def test_capped_and_failed_persists_both_conditions(self):
         """A run that is BOTH capped AND has a failed action persists BOTH in
