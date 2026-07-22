@@ -896,7 +896,9 @@ export async function deleteM3UProfile(accountId: number, profileId: number): Pr
  * can warn on an incomplete apply.
  */
 export interface ProfileApplyOutcome {
-  status: string;                 // reconciled | partial_failure | stale_selection | no_selection | no_channels | error
+  // Backend statuses: no_selection | no_channels | stale_selection |
+  // partial_failure | reconciled | error.
+  status: string;
   group_id?: number;
   failed_profile_ids?: number[];
   conflict?: boolean;
@@ -916,9 +918,12 @@ export async function updateM3UGroupSettings(
 
 /**
  * True when a group-settings save's profile-apply summary reports an
- * INCOMPLETE apply — any per-group partial_failure/degraded/error, a
- * cross-account conflict, or a non-empty failed_profile_ids. Drives the
- * "saved but apply incomplete" warning toast (#9).
+ * INCOMPLETE or dead apply — any per-group partial_failure/error, a fully
+ * stale (all-deleted) selection, a cross-account conflict, or a non-empty
+ * failed_profile_ids. Drives the "saved but apply incomplete" warning toast
+ * (#9). ``stale_selection`` is included so an operator whose selected profiles
+ * were all deleted learns the selection is dead instead of seeing plain
+ * success (NIT 6).
  */
 export function profileApplyIncomplete(
   summary: ProfileApplyOutcome[] | undefined
@@ -926,8 +931,8 @@ export function profileApplyIncomplete(
   return (summary ?? []).some(
     (o) =>
       o.status === 'partial_failure' ||
-      o.status === 'degraded' ||
       o.status === 'error' ||
+      o.status === 'stale_selection' ||
       o.conflict === true ||
       (o.failed_profile_ids?.length ?? 0) > 0
   );

@@ -432,6 +432,22 @@ describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)
     );
   });
 
+  it('#9 / NIT 6: warns when the saved selection is fully stale (all profiles deleted)', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
+      message: 'ok',
+      ecm_profile_apply: [{ status: 'stale_selection', group_id: 100 }],
+    });
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() =>
+      expect(mockNotifications.warning).toHaveBeenCalledWith(
+        expect.stringContaining('applying channel profiles was incomplete'),
+        'M3U Groups'
+      )
+    );
+  });
+
   it('#9: shows plain success when the profile apply is clean', async () => {
     vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
       message: 'ok',

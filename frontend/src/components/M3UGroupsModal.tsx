@@ -238,7 +238,9 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
       // Save this account first. Capture the response so we can warn if the
       // downstream channel-profile apply was incomplete (#9).
       const primaryResp = await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
-      const applyIncomplete = api.profileApplyIncomplete(primaryResp?.ecm_profile_apply);
+      // OR in every save path's apply summary — the linked-account saves below
+      // can also report a partial/conflict apply (#9 / Should-Fix 4).
+      let applyIncomplete = api.profileApplyIncomplete(primaryResp?.ecm_profile_apply);
 
       // Accounts to refresh after a successful save (Dispatcharr parity:
       // its modal's only save action is Save & Refresh — settings take
@@ -274,7 +276,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               };
             });
 
-            await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+            const linkedResp = await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+            applyIncomplete = applyIncomplete || api.profileApplyIncomplete(linkedResp?.ecm_profile_apply);
             refreshAccountIds.push(linkedAccountId);
           } catch (linkedErr) {
             // Log error but continue with other linked accounts
