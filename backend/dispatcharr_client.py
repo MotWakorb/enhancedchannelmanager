@@ -670,14 +670,23 @@ class DispatcharrClient:
                         "m3u_account_name": account.get("name", ""),
                     })
 
+        # Finding 2: coerce ids exactly as _selection_from_setting does (numeric
+        # strings -> int) so the winner tiebreak, conflict detection, and
+        # normalize all see the SAME coerced ints. Int-only DROP here (while the
+        # reconcile coerces) made a legacy ["12"] row lose the has-selection
+        # tiebreak, never flag ["12"] vs [13] as a conflict, and never get
+        # normalized to int storage.
+        from services.profile_reconcile import coerce_profile_id
+
         def _row_selection(r):
             cp = r.get("custom_properties")
             if isinstance(cp, dict):
                 sel = cp.get("channel_profile_ids")
                 if isinstance(sel, list) and sel:
-                    return tuple(sorted(
-                        x for x in sel if isinstance(x, int) and not isinstance(x, bool)
-                    ))
+                    coerced = [coerce_profile_id(x) for x in sel]
+                    valid = [x for x in coerced if x is not None]
+                    if valid:
+                        return tuple(sorted(valid))
             return None
 
         all_settings = {}

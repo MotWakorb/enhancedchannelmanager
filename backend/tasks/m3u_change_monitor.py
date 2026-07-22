@@ -244,17 +244,22 @@ class M3UChangeMonitorTask(TaskScheduler):
 
             duration = (datetime.utcnow() - started_at).total_seconds()
 
-            # Blocker 3c + counter-semantics finding: fold the profile-reconcile
-            # outcome into the TaskResult so history reflects a warning (not plain
-            # success) when any group ended partial_failure/degraded/errored or a
-            # normalize account write failed — WITHOUT conflating the two domains.
-            # total_items spans BOTH domains (accounts checked + profile groups
-            # with a selection) and failed_count is clamped to <= total_items.
+            # Blocker 3c + Finding 5 (truthful counters): fold the profile-
+            # reconcile outcome into the TaskResult so history reflects a warning
+            # (not plain success) when any group ended partial_failure/degraded/
+            # errored or a normalize account write failed — WITHOUT conflating or
+            # clamping across domains. total_items counts every item in BOTH
+            # domains at its own granularity (profile groups with a selection +
+            # accounts the normalize pass ATTEMPTED), and failed_count sums the
+            # per-domain failures (each already <= its own domain total), so
+            # failed_count <= total_items by construction with no clamp and no
+            # under-report.
             recon_detail = {"profile_reconcile": recon} if recon else {}
             groups_with_selection = recon.get("groups_with_selection", 0)
             normalize_failed = recon.get("accounts_normalize_failed", 0)
-            total_items = accounts_checked + groups_with_selection
-            failed_count = min(reconcile_warnings + normalize_failed, total_items)
+            normalize_attempted = recon.get("accounts_normalized", 0) + normalize_failed
+            total_items = groups_with_selection + normalize_attempted
+            failed_count = reconcile_warnings + normalize_failed
             warn_bits = []
             if reconcile_warnings:
                 warn_bits.append(f"{reconcile_warnings} profile group(s) incomplete")

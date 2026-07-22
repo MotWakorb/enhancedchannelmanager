@@ -441,6 +441,23 @@ async def test_non_integer_selection_rejected_422(async_client):
     assert resp.status_code == 422
 
 
+@pytest.mark.parametrize("bad_id", ["--5", "➂", "٣", "", "x"])
+@pytest.mark.asyncio
+async def test_garbage_profile_id_rejected_422_not_500(async_client, bad_id):
+    """Finding 1: a garbage channel_profile_id is 422 at the boundary (NOT a 500
+    from int() raising on '--5'/'➂')."""
+    client = _mock_client()
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {"channel_profile_ids": [bad_id]}}
+            ]},
+        )
+    assert resp.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_numeric_string_selection_normalized_to_int_in_payload(async_client):
     """A numeric-string id is coerced to int in the forwarded Dispatcharr payload
@@ -460,6 +477,58 @@ async def test_numeric_string_selection_normalized_to_int_in_payload(async_clien
     primary = [w for w in client.group_settings_writes if w[0] == 11][0]
     row = primary[1]["group_settings"][0]
     assert row["custom_properties"]["channel_profile_ids"] == [12]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_opposing_saves_converge_no_divergent_interim():
+    """Finding 3: two concurrent opposing enforced-global saves for the SAME
+    group (account 1 -> [1], account 2 -> [2]) serialize under the effective-
+    group lock (primary PATCH + cascade atomic), so after both, EVERY account
+    row carries the SAME selection — no contradictory interim rows."""
+    import asyncio
+    import services.profile_reconcile as pr
+    from routers.m3u import _apply_enforced_global_save
+
+    pr._group_locks.clear()
+
+    class _CascadeClient:
+        def __init__(self):
+            self.stored = {1: {100: [1]}, 2: {100: [2]}}
+            self.delay = 0.01
+
+        async def get_m3u_accounts(self):
+            return [
+                {"id": aid, "channel_groups": [
+                    {"channel_group": 100, "enabled": True, "auto_channel_sync": True,
+                     "custom_properties": {"channel_profile_ids": self.stored[aid][100]}}]}
+                for aid in (1, 2)
+            ]
+
+        async def update_m3u_group_settings(self, aid, data):
+            await asyncio.sleep(self.delay)  # widen the interleave window
+            for row in data.get("group_settings", []):
+                gid = row.get("channel_group")
+                sel = (row.get("custom_properties") or {}).get("channel_profile_ids")
+                self.stored.setdefault(aid, {})[gid] = sel
+            return {"ok": True}
+
+    client = _CascadeClient()
+    settings = {100: {"auto_channel_sync": True, "custom_properties": {"channel_profile_ids": [1]}}}
+
+    def _save(primary, sel):
+        data = {"group_settings": [
+            {"channel_group": 100, "enabled": True, "auto_channel_sync": True,
+             "custom_properties": {"channel_profile_ids": sel}}]}
+        edited = data["group_settings"]
+        before = {100: {"custom_properties": {}}}  # prior none -> genuine change
+        return _apply_enforced_global_save(client, primary, data, edited, before, settings)
+
+    await asyncio.gather(_save(1, [1]), _save(2, [2]))
+
+    pr._group_locks.clear()
+    # Converged: both account rows carry the SAME selection (last-writer-wins),
+    # never one [1] and the other [2].
+    assert client.stored[1][100] == client.stored[2][100]
 
 
 @pytest.mark.asyncio

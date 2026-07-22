@@ -127,3 +127,45 @@ async def test_matching_selections_not_flagged():
     settings = await client.get_all_m3u_group_settings()
 
     assert settings[500]["_ecm_channel_profile_conflict"] is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_string_selection_wins_has_selection_tiebreak():
+    """Finding 2: a legacy STRING selection (["12"]) is coerced, so the row with
+    it wins the has-selection tiebreak over a same-tier no-selection row (it did
+    NOT before, when _row_selection dropped strings)."""
+    a = _account(3, auto_sync=True, selection=None)      # ON, no selection, low id
+    b = _account(9, auto_sync=True, selection=["12"])     # ON, legacy string sel
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=[a, b])
+
+    settings = await client.get_all_m3u_group_settings()
+
+    assert settings[500]["m3u_account_id"] == 9  # the row WITH the selection wins
+    assert settings[500]["_ecm_channel_profile_conflict"] is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_string_vs_int_selection_flags_conflict():
+    """Finding 2: ["12"] vs [13] is a real conflict once the string is coerced."""
+    a = _account(3, auto_sync=True, selection=["12"])
+    b = _account(9, auto_sync=True, selection=[13])
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=[a, b])
+
+    settings = await client.get_all_m3u_group_settings()
+
+    assert settings[500]["_ecm_channel_profile_conflict"] is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_string_equals_int_selection_not_flagged():
+    """["12"] vs [12] are the SAME selection once coerced — no conflict."""
+    a = _account(3, auto_sync=True, selection=["12"])
+    b = _account(9, auto_sync=True, selection=[12])
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=[a, b])
+
+    settings = await client.get_all_m3u_group_settings()
+
+    assert settings[500]["_ecm_channel_profile_conflict"] is False

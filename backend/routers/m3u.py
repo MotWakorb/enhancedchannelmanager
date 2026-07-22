@@ -211,6 +211,13 @@ async def _reconcile_profiles_after_refresh(client, account_name: str) -> None:
     immediately (the change monitor is the converging backbone). Best-effort —
     a reconcile failure never fails the refresh. Extracted (Nit 8) so the two
     poll-completion branches share one copy that cannot drift.
+
+    Finding 6 (accepted): if a monitor sweep is mid-flight this call COALESCES
+    (returns immediately) and the just-refreshed group may not be reconciled
+    until the in-flight/next sweep. That is acceptable — the change monitor
+    sweeps every ~5 minutes and the newly-created channels converge then; not
+    worth bypassing the coalescing guard (which exists to avoid redundant
+    concurrent full sweeps).
     """
     try:
         from services.profile_reconcile import reconcile_all_selected_groups
@@ -1085,38 +1092,15 @@ def _row_selection_set(cp) -> frozenset:
     return frozenset()
 
 
-async def _propagate_group_profile_selection(
-    client, primary_account_id, edited_rows, before_groups, all_settings,
-):
-    """Enforced-global (GH #720 Part B / PO decision): cascade a GENUINELY
-    CHANGED ``channel_profile_ids`` selection to EVERY sibling M3U account row
-    for that channel-group, so no contradictory per-account rows persist.
+def _compute_changed_selections(edited_rows, before_groups):
+    """gid -> desired selection SET for groups whose selection GENUINELY changed
+    this save (present->different, present->absent, or absent->present).
 
-    Blocker B1 (data loss): ``edited_rows`` are POST-MERGE rows, whose
-    ``custom_properties`` are ALWAYS a dict (merge fills them from the group's
-    current stored value), so "did the operator touch profiles?" cannot be
-    inferred from the row alone. We therefore diff the primary account's NEW
-    selection against its PRIOR selection (``before_groups`` — captured before
-    the save) as SETS: only a group whose selection genuinely changed
-    (present->different, present->absent, or absent->present) is propagated. A
-    field-only edit (selection unchanged, incl. absent->absent) is NOT cascaded,
-    so it can never clear a sibling's untouched selection.
-
-    Blocker 3a (concurrent-safe): the whole cascade is serialized under the
-    per-effective-group locks (shared with reconcile + normalize), acquired in
-    sorted order, so two opposing concurrent saves cannot interleave into
-    contradictory rows — the last cascade to acquire the locks wins, and every
-    row ends consistent.
-
-    Best-effort: returns ``None`` on full success, or a short error string
-    describing partial/failed propagation (so the caller can surface it).
-    """
-    from services.profile_reconcile import (
-        acquire_effective_group_locks, resolve_effective_master_group_id,
-    )
-
-    # gid -> desired selection SET (empty set == propagate a CLEAR). Only groups
-    # whose primary selection genuinely changed this save.
+    Blocker B1 (data loss): ``edited_rows`` are POST-MERGE rows whose
+    ``custom_properties`` are ALWAYS a dict, so we diff the NEW vs PRIOR
+    (``before_groups``) selection as SETS — a field-only edit (unchanged, incl.
+    absent->absent) is NOT included, so it can never clear a sibling's untouched
+    selection. Empty set value == propagate a CLEAR."""
     desired: dict[int, frozenset] = {}
     for gs in edited_rows:
         if not isinstance(gs, dict):
@@ -1127,68 +1111,96 @@ async def _propagate_group_profile_selection(
         new_set = _row_selection_set(gs.get("custom_properties"))
         old_set = _row_selection_set((before_groups.get(gid) or {}).get("custom_properties"))
         if new_set == old_set:
-            continue  # unchanged (incl. field-only edits) — do NOT cascade
+            continue
         desired[gid] = new_set
-    if not desired:
-        return None
+    return desired
 
-    try:
-        all_accounts = await client.get_m3u_accounts()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("[M3U] enforced-global: could not list accounts to propagate: %s", e)
-        return f"account list unavailable ({e})"
-    if not isinstance(all_accounts, list):
-        logger.warning("[M3U] enforced-global: account list not available (got %r)", type(all_accounts))
-        return None
 
-    eff_gids = {resolve_effective_master_group_id(all_settings, gid) for gid in desired}
+async def _cascade_to_siblings(client, primary_account_id, desired, all_accounts):
+    """Write the changed selection into every SIBLING account row (the primary
+    account is written separately, under the SAME lock, by the caller). NO lock
+    here — the caller holds the effective-group locks. Best-effort per sibling;
+    returns ``None`` or a short error string."""
     failures = []
-    # Serialize the whole cascade under the changed groups' effective-group
-    # locks (Blocker 3a) — sorted acquisition, deadlock-free.
-    async with acquire_effective_group_locks(eff_gids):
-        for acct in all_accounts:
-            aid = acct.get("id")
-            if aid is None or aid == primary_account_id:
-                continue  # primary already saved
-            sibling_rows = []
-            # Staleness window (Should-Fix 5): sibling rows come from this one
-            # up-front get_m3u_accounts(); a concurrent sibling custom_properties
-            # write between that fetch and the PATCH below could be clobbered.
-            # Small best-effort window — the monitor normalize heals residue.
-            for row in acct.get("channel_groups", []):
-                gid = row.get("channel_group")
-                if gid not in desired:
-                    continue
-                new_cp = dict(row.get("custom_properties") or {})
-                sel = desired[gid]
-                if sel:
-                    if _row_selection_set(new_cp) == sel:
-                        continue  # already in sync (set-compare) — skip no-op
-                    new_cp["channel_profile_ids"] = sorted(sel)
-                else:
-                    if "channel_profile_ids" not in new_cp:
-                        continue  # already absent — nothing to clear
-                    new_cp.pop("channel_profile_ids", None)
-                # Never round-trip the ECM-synthetic conflict key to Dispatcharr.
-                new_cp.pop("_ecm_channel_profile_conflict", None)
-                sibling_rows.append(
-                    merge_group_settings_row(row, {"channel_group": gid, "custom_properties": new_cp})
-                )
-            if not sibling_rows:
+    for acct in all_accounts:
+        aid = acct.get("id")
+        if aid is None or aid == primary_account_id:
+            continue  # primary written by the caller under the same lock
+        sibling_rows = []
+        # Staleness window (Should-Fix 5): sibling rows come from one up-front
+        # get_m3u_accounts(); the monitor normalize heals any residual divergence.
+        for row in acct.get("channel_groups", []):
+            gid = row.get("channel_group")
+            if gid not in desired:
                 continue
-            try:
-                await client.update_m3u_group_settings(aid, {"group_settings": sibling_rows})
-                logger.info(
-                    "[M3U] enforced-global: propagated selection to account %s (%d group row(s))",
-                    aid, len(sibling_rows),
-                )
-            except Exception as e:  # noqa: BLE001 - best-effort per sibling
-                logger.warning("[M3U] enforced-global propagation to account %s failed: %s", aid, e)
-                failures.append(aid)
-
+            new_cp = dict(row.get("custom_properties") or {})
+            sel = desired[gid]
+            if sel:
+                if _row_selection_set(new_cp) == sel:
+                    continue  # already in sync (set-compare) — skip no-op
+                new_cp["channel_profile_ids"] = sorted(sel)
+            else:
+                if "channel_profile_ids" not in new_cp:
+                    continue  # already absent — nothing to clear
+                new_cp.pop("channel_profile_ids", None)
+            new_cp.pop("_ecm_channel_profile_conflict", None)  # ECM-synthetic
+            sibling_rows.append(
+                merge_group_settings_row(row, {"channel_group": gid, "custom_properties": new_cp})
+            )
+        if not sibling_rows:
+            continue
+        try:
+            await client.update_m3u_group_settings(aid, {"group_settings": sibling_rows})
+            logger.info(
+                "[M3U] enforced-global: propagated selection to account %s (%d group row(s))",
+                aid, len(sibling_rows),
+            )
+        except Exception as e:  # noqa: BLE001 - best-effort per sibling
+            logger.warning("[M3U] enforced-global propagation to account %s failed: %s", aid, e)
+            failures.append(aid)
     if failures:
         return f"{len(failures)} sibling account(s) not updated: {failures}"
     return None
+
+
+async def _apply_enforced_global_save(
+    client, primary_account_id, data, edited_rows, before_groups, all_settings,
+):
+    """Enforced-global save (GH #720 Part B / PO decision). Finding 3: the
+    PRIMARY account PATCH and the sibling cascade run as ONE atomic unit under
+    the changed groups' per-effective-group locks (shared with reconcile +
+    normalize, acquired in sorted order), so two concurrent opposing saves are
+    deterministically last-writer-wins with NO divergent interim rows. Returns
+    ``(primary_result, propagation_error)``."""
+    from services.profile_reconcile import (
+        acquire_effective_group_locks, resolve_effective_master_group_id,
+    )
+
+    desired = _compute_changed_selections(edited_rows, before_groups)
+    eff_gids = {resolve_effective_master_group_id(all_settings, gid) for gid in desired}
+
+    # Read the account list BEFORE the lock (the writes happen under it).
+    all_accounts = []
+    account_err = None
+    if desired:
+        try:
+            all_accounts = await client.get_m3u_accounts()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[M3U] enforced-global: could not list accounts: %s", e)
+            account_err = f"account list unavailable ({e})"
+        if not isinstance(all_accounts, list):
+            all_accounts = []
+
+    async with acquire_effective_group_locks(eff_gids):
+        # PRIMARY write UNDER the lock (Finding 3) — no divergent interim row.
+        result = await client.update_m3u_group_settings(primary_account_id, data)
+        propagation_error = account_err
+        if desired and all_accounts:
+            sibling_err = await _cascade_to_siblings(
+                client, primary_account_id, desired, all_accounts
+            )
+            propagation_error = propagation_error or sibling_err
+    return result, propagation_error
 
 
 @router.patch("/accounts/{account_id}/group-settings")
@@ -1264,30 +1276,22 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     for gs in incoming_settings
                 ],
             }
-        result = await client.update_m3u_group_settings(account_id, data)
-        elapsed_ms = (time.time() - start) * 1000
-        logger.debug("[M3U] Updated group settings for account %s in %.1fms", account_id, elapsed_ms)
-
         # GH #720 Part B (bead y3m6o, decision 3a): instant apply on save.
-        # Reconcile every edited group that carries a channel_profile_ids
-        # selection so the operator's profile choice takes effect immediately,
-        # without waiting for the next sync. Fetch group settings fresh (needed
-        # for Channel Group Override resolution + the deterministic global-per-
-        # group selection). Best-effort — a reconcile failure must not fail the
-        # save the operator just made — but the per-group OUTCOME is returned in
-        # the response so the modal can warn on an incomplete apply (#9).
+        # Best-effort — a reconcile failure must not fail the save — but the
+        # per-group OUTCOME is returned in the response so the modal can warn on
+        # an incomplete apply (#9).
         profile_apply_summary: list[dict] = []
         edited_gids = [
             gs.get("channel_group")
             for gs in (data.get("group_settings") or [])
             if isinstance(gs, dict) and gs.get("channel_group") is not None
         ]
+        # Group settings for the enforced-global lock keys (override resolution
+        # does not depend on the profile selection, so a pre-save fetch is fine).
+        settings_for_apply = None
         if edited_gids:
-            # Fetch group settings ONCE (needed for override resolution, the
-            # cascade's effective-group lock keys, and the reconcile winners).
-            fresh_settings = None
             try:
-                fresh_settings = await client.get_all_m3u_group_settings()
+                settings_for_apply = await client.get_all_m3u_group_settings()
             except Exception as e:
                 # Blocker 3b: a SETUP failure must NOT leave the summary empty
                 # (an empty summary reads as a clean no-op) — emit an error entry.
@@ -1295,57 +1299,62 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                 profile_apply_summary.append({
                     "status": "error", "group_id": None, "error": str(e),
                 })
-            if fresh_settings is not None:
-                # ENFORCED-GLOBAL propagation (PO decision): a channel_profile_ids
-                # selection is a GLOBAL-per-channel-group fact, but Dispatcharr
-                # stores per-account junction rows. Cascade-write each GENUINELY
-                # CHANGED group's selection into EVERY sibling account row (under
-                # the effective-group locks — Blocker 3a) so no contradictory rows
-                # persist and the save takes effect regardless of which account it
-                # was made on. Incomplete propagation is surfaced in the summary.
-                propagation_error = await _propagate_group_profile_selection(
-                    client, account_id, data.get("group_settings") or [],
-                    before_groups, fresh_settings,
-                )
-                if propagation_error:
-                    profile_apply_summary.append({
-                        "status": "error", "group_id": None,
-                        "error": f"selection could not be propagated to all accounts: {propagation_error}",
-                    })
 
-                # Instant apply (decision 3a): reconcile channel membership now.
-                # Best-effort — a reconcile failure must not fail the save — but
-                # the per-group OUTCOME is returned so the modal can warn (#9).
+        if settings_for_apply is not None:
+            # Finding 3 (full hardening): the PRIMARY account PATCH and the
+            # enforced-global sibling cascade run as ONE atomic unit under the
+            # changed groups' per-effective-group locks, so two concurrent
+            # opposing saves are deterministically last-writer-wins with NO
+            # divergent interim rows.
+            result, propagation_error = await _apply_enforced_global_save(
+                client, account_id, data, data.get("group_settings") or [],
+                before_groups, settings_for_apply,
+            )
+            if propagation_error:
+                profile_apply_summary.append({
+                    "status": "error", "group_id": None,
+                    "error": f"selection could not be propagated to all accounts: {propagation_error}",
+                })
+
+            # Reconcile channel membership. Re-fetch POST-save so a just-ADDED
+            # selection (absent->present) is a reconcile target; the reconcile
+            # itself also revalidates under its lock (Should-Fix 2).
+            try:
+                from services.profile_reconcile import (
+                    reconcile_group_profiles,
+                    resolve_save_reconcile_targets,
+                    _resolve_live_rule_ids,
+                )
                 try:
-                    from services.profile_reconcile import (
-                        reconcile_group_profiles,
-                        resolve_save_reconcile_targets,
-                        _resolve_live_rule_ids,
-                    )
-                    # Resolve the effective-group WINNER over the FULL settings —
-                    # EXACTLY as the sweep does — so instant-apply and the sweep
-                    # can never pick different winners (Should-Fix 2). Resolve the
-                    # live rule set ONCE.
-                    live_rule_ids = await _resolve_live_rule_ids()
-                    for gid in resolve_save_reconcile_targets(fresh_settings, edited_gids):
-                        # Per-group isolation (Should-Fix 7): one group's failure
-                        # must not abort reconcile of the others.
-                        try:
-                            outcome = await reconcile_group_profiles(
-                                client, fresh_settings, gid, live_rule_ids=live_rule_ids,
-                                settings_provider=client.get_all_m3u_group_settings,
-                            )
-                            profile_apply_summary.append(outcome)
-                        except Exception as e:  # noqa: BLE001 - isolate per group
-                            logger.warning(
-                                "[M3U] Profile reconcile for group %s failed: %s", gid, e
-                            )
-                            profile_apply_summary.append({"status": "error", "group_id": gid, "error": str(e)})
-                except Exception as e:
-                    logger.warning("[M3U] Profile reconcile after group-settings save failed: %s", e)
-                    profile_apply_summary.append({
-                        "status": "error", "group_id": None, "error": str(e),
-                    })
+                    fresh_settings = await client.get_all_m3u_group_settings()
+                except Exception:  # noqa: BLE001 - fall back to the pre-save view
+                    fresh_settings = settings_for_apply
+                live_rule_ids = await _resolve_live_rule_ids()
+                for gid in resolve_save_reconcile_targets(fresh_settings, edited_gids):
+                    # Per-group isolation (Should-Fix 7).
+                    try:
+                        outcome = await reconcile_group_profiles(
+                            client, fresh_settings, gid, live_rule_ids=live_rule_ids,
+                            settings_provider=client.get_all_m3u_group_settings,
+                        )
+                        profile_apply_summary.append(outcome)
+                    except Exception as e:  # noqa: BLE001 - isolate per group
+                        logger.warning(
+                            "[M3U] Profile reconcile for group %s failed: %s", gid, e
+                        )
+                        profile_apply_summary.append({"status": "error", "group_id": gid, "error": str(e)})
+            except Exception as e:
+                logger.warning("[M3U] Profile reconcile after group-settings save failed: %s", e)
+                profile_apply_summary.append({
+                    "status": "error", "group_id": None, "error": str(e),
+                })
+        else:
+            # No edited groups (or the apply-settings fetch failed) — save the
+            # group settings without the enforced-global lock.
+            result = await client.update_m3u_group_settings(account_id, data)
+
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Updated group settings for account %s in %.1fms", account_id, elapsed_ms)
 
         # Log to journal - compare before/after states for all settings
         group_settings = data.get("group_settings", [])
