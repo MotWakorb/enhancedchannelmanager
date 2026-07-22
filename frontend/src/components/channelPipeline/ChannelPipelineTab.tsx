@@ -652,9 +652,11 @@ export function ChannelPipelineTab() {
         }
         // Surface disabled-normalization-group warnings so the operator notices
         // that normalization silently applied nothing, even on an otherwise-clean
-        // run (enhancedchannelmanager-e8p1h). Fires for any non-error terminal
-        // state (success or completed_with_errors).
-        if (normalizationWarnings.length > 0) {
+        // run (enhancedchannelmanager-e8p1h). Fires ONLY for a non-error terminal
+        // state (success or completed_with_errors) — a hard-failed/rolled_back
+        // run already shows an error toast, and stacking a "no changes" advisory
+        // on top of it is noise (y3m6o.1 review, Should-Fix C).
+        if ((succeeded || completedWithErrors) && normalizationWarnings.length > 0) {
           const ruleNames = normalizationWarnings
             .map(w => w.rule_name)
             .join(', ');

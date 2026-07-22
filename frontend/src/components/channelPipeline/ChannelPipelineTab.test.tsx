@@ -843,6 +843,46 @@ describe('ChannelPipelineTab', () => {
       expect(screen.queryByText(/undefined/i)).toBeNull();
     });
 
+    it('hard-failed run with a disabled-norm warning: shows only the error toast, not the normalization toast (Should-Fix C)', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Norm Rule', enabled: true }),
+      );
+      // Override run: a HARD-FAILED run that also carries a disabled-norm warning.
+      server.use(
+        http.post('/api/channel-pipeline/run', async () => {
+          const execution = createMockChannelPipelineExecution({
+            mode: 'execute',
+            status: 'failed',
+            channels_created: 0,
+            streams_matched: 0,
+            warnings: [disabledNormWarning()],
+          });
+          mockDataStore.channelPipelineExecutions.unshift(execution);
+          return HttpResponse.json(
+            { execution_id: execution.id, status: 'running', message: 'started' },
+            { status: 202 },
+          );
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByText('Norm Rule')).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /^run$/i }));
+
+      // The error toast surfaces (a hard-failed run reports "Pipeline failed").
+      await waitFor(() => {
+        expect(screen.getByText(/pipeline failed/i)).toBeInTheDocument();
+      });
+      // The "Normalization applied no changes" toast must NOT stack on top of a
+      // hard failure — the guard restricts it to succeeded/completedWithErrors.
+      expect(
+        screen.queryByText(/normalization applied no changes/i),
+      ).toBeNull();
+    });
+
     it('expanded execution details with a non_reversible warning: renders its copy without crashing', async () => {
       const user = userEvent.setup();
       mockDataStore.channelPipelineExecutions.push(
