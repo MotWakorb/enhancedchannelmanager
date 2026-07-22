@@ -235,8 +235,10 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
         custom_properties: g.custom_properties,
       }));
 
-      // Save this account first
-      await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+      // Save this account first. Capture the response so we can warn if the
+      // downstream channel-profile apply was incomplete (#9).
+      const primaryResp = await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+      const applyIncomplete = api.profileApplyIncomplete(primaryResp?.ecm_profile_apply);
 
       // Accounts to refresh after a successful save (Dispatcharr parity:
       // its modal's only save action is Save & Refresh — settings take
@@ -286,10 +288,20 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
       // failure does not undo the save.
       try {
         await Promise.all(refreshAccountIds.map(id => api.refreshM3UAccount(id)));
-        notifications.success(
-          `Group settings saved — M3U refresh started for ${account.name}`,
-          'M3U Groups'
-        );
+        if (applyIncomplete) {
+          // #9: the save + refresh succeeded, but the channel-profile apply
+          // was partial (a profile write failed) or a cross-account conflict
+          // was detected — surface it instead of a plain success.
+          notifications.warning(
+            'Group settings saved, but applying channel profiles was incomplete — some profiles failed or conflict across accounts. Check the logs; it will retry automatically.',
+            'M3U Groups'
+          );
+        } else {
+          notifications.success(
+            `Group settings saved — M3U refresh started for ${account.name}`,
+            'M3U Groups'
+          );
+        }
       } catch (refreshErr) {
         logger.error('Failed to start M3U refresh after group settings save:', refreshErr);
         notifications.warning(

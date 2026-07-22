@@ -168,3 +168,36 @@ describe('AutoSyncSettingsModal — collision-prone section disambiguation (bead
     expect(screen.getByText(/Manage Filters/i)).toBeInTheDocument();
   });
 });
+
+describe('AutoSyncSettingsModal — profile-management relabel + guardrail copy (GH #720 Part B #9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('zero profile selection reads as "Not managed by Auto-Sync", not delete-ish "None selected"', () => {
+    // customProperties without channel_profile_ids -> empty selection.
+    renderModal(vi.fn(), { name_match_regex: '^ESPN.*' });
+
+    expect(screen.getByText('Not managed by Auto-Sync')).toBeInTheDocument();
+    expect(screen.queryByText('None selected')).not.toBeInTheDocument();
+  });
+
+  it('the profile dropdown offers "Stop managing profiles" instead of "Clear All"', async () => {
+    renderModal(vi.fn(), { name_match_regex: '^ESPN.*' });
+    const user = userEvent.setup();
+
+    // Open the Channel Profile Assignment dropdown.
+    await user.click(screen.getByText('Not managed by Auto-Sync'));
+
+    expect(screen.getByRole('button', { name: /Stop managing profiles/i })).toBeInTheDocument();
+  });
+
+  it('helper copy explains empty = ECM stops managing (memberships unchanged) and pipeline-owned channels are excluded', () => {
+    renderModal(vi.fn(), { name_match_regex: '^ESPN.*' });
+
+    expect(screen.getByText(/stops managing this group.*profiles and leaves existing memberships/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/set by a Channel Pipeline rule are excluded from/i))
+      .toBeInTheDocument();
+  });
+});

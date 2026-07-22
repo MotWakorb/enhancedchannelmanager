@@ -889,15 +889,48 @@ export async function deleteM3UProfile(accountId: number, profileId: number): Pr
 }
 
 // M3U Group Settings
+/**
+ * Per-group outcome of the downstream channel-profile reconcile the
+ * group-settings PATCH performs (GH #720 Part B / #9). Best-effort — a
+ * reconcile problem never fails the PATCH, but it IS reported here so the UI
+ * can warn on an incomplete apply.
+ */
+export interface ProfileApplyOutcome {
+  status: string;                 // reconciled | partial_failure | stale_selection | no_selection | no_channels | error
+  group_id?: number;
+  failed_profile_ids?: number[];
+  conflict?: boolean;
+  channels_scoped?: number;
+}
+
 export async function updateM3UGroupSettings(
   accountId: number,
   data: { group_settings: Partial<ChannelGroupM3UAccount>[] }
-): Promise<{ message: string }> {
+): Promise<{ message?: string; ecm_profile_apply?: ProfileApplyOutcome[] }> {
   // Dispatcharr expects 'group_settings' key, not 'channel_groups'
   return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/group-settings`, {
     method: 'PATCH',
     body: JSON.stringify(data),
   });
+}
+
+/**
+ * True when a group-settings save's profile-apply summary reports an
+ * INCOMPLETE apply — any per-group partial_failure/degraded/error, a
+ * cross-account conflict, or a non-empty failed_profile_ids. Drives the
+ * "saved but apply incomplete" warning toast (#9).
+ */
+export function profileApplyIncomplete(
+  summary: ProfileApplyOutcome[] | undefined
+): boolean {
+  return (summary ?? []).some(
+    (o) =>
+      o.status === 'partial_failure' ||
+      o.status === 'degraded' ||
+      o.status === 'error' ||
+      o.conflict === true ||
+      (o.failed_profile_ids?.length ?? 0) > 0
+  );
 }
 
 export interface GroupAutoSyncToggleResult {

@@ -167,9 +167,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
     });
   };
 
-  // Get selected profile names
+  // Get selected profile names. An EMPTY selection is NOT "clear everywhere":
+  // ECM stops MANAGING this group's profiles and leaves existing memberships
+  // untouched (GH #720 Part B, decision 1a) — the label reflects that.
   const selectedProfileNames = useMemo(() => {
-    if (selectedProfileIds.size === 0) return 'None selected';
+    if (selectedProfileIds.size === 0) return 'Not managed by Auto-Sync';
     return channelProfiles
       .filter(p => selectedProfileIds.has(p.id.toString()))
       .map(p => p.name)
@@ -588,7 +590,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                         Select All
                       </button>
                       <button type="button" onClick={() => setSelectedProfileIds(new Set())}>
-                        Clear All
+                        Stop managing profiles
                       </button>
                     </div>
                     <div className="dropdown-options">
@@ -613,6 +615,12 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                 Assigns Dispatcharr Channel Profiles (client-facing visibility) to channels
                 synced from this group — a different entity than the per-account &quot;Manage
                 Account Profiles&quot; screen, which sets M3U stream failover profiles.
+                {' '}Selecting profiles makes ECM keep this group&apos;s channels in exactly
+                those profiles. Leaving it empty (&quot;Stop managing profiles&quot;) means ECM
+                stops managing this group&apos;s profiles and leaves existing memberships
+                unchanged — it does NOT remove the channels from every profile. Channels whose
+                profile membership was set by a Channel Pipeline rule are excluded from
+                Auto-Sync profile management.
               </span>
             </div>
 
