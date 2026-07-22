@@ -1106,10 +1106,17 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         # Reconcile every edited group that carries a channel_profile_ids
         # selection so the operator's profile choice takes effect immediately,
         # without waiting for the next sync. Fetch group settings fresh (needed
-        # for Channel Group Override resolution). Best-effort — a reconcile
-        # failure must not fail the save the operator just made.
+        # for Channel Group Override resolution + the deterministic global-per-
+        # group selection). Best-effort — a reconcile failure must not fail the
+        # save the operator just made — but the per-group OUTCOME is returned in
+        # the response so the modal can warn on an incomplete apply (#9).
+        profile_apply_summary: list[dict] = []
         try:
-            from services.profile_reconcile import reconcile_group_profiles
+            from services.profile_reconcile import (
+                reconcile_group_profiles,
+                dedupe_gids_by_effective_group,
+                _resolve_live_rule_ids,
+            )
             edited_gids = [
                 gs.get("channel_group")
                 for gs in (data.get("group_settings") or [])
@@ -1120,8 +1127,23 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                 # stored selection reflect the just-saved state. reconcile_group_
                 # profiles no-ops any group without a selection (decision 1a).
                 fresh_settings = await client.get_all_m3u_group_settings()
-                for gid in edited_gids:
-                    await reconcile_group_profiles(client, fresh_settings, gid)
+                # Same resolution + effective-group dedupe as the sweep
+                # (Should-Fix 6), order-independent. Resolve the live rule set
+                # ONCE for the whole save (Blocker 2 handoff).
+                live_rule_ids = await _resolve_live_rule_ids()
+                for gid in dedupe_gids_by_effective_group(fresh_settings, edited_gids):
+                    # Per-group isolation (Should-Fix 7): one group's failure
+                    # must not abort reconcile of the others.
+                    try:
+                        outcome = await reconcile_group_profiles(
+                            client, fresh_settings, gid, live_rule_ids=live_rule_ids
+                        )
+                        profile_apply_summary.append(outcome)
+                    except Exception as e:  # noqa: BLE001 - isolate per group
+                        logger.warning(
+                            "[M3U] Profile reconcile for group %s failed: %s", gid, e
+                        )
+                        profile_apply_summary.append({"status": "error", "group_id": gid})
         except Exception as e:
             logger.warning("[M3U] Profile reconcile after group-settings save failed: %s", e)
 
@@ -1231,6 +1253,14 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     after_value=changed_groups,
                 )
 
+        # #9: surface the per-group profile-apply outcome in the 200 body so the
+        # modal can warn on an incomplete apply (partial_failure/degraded or a
+        # cross-account conflict) instead of a plain success. Additive — never
+        # fails the PATCH; absent when no group carried a selection.
+        if isinstance(result, dict):
+            result = {**result, "ecm_profile_apply": profile_apply_summary}
+        else:
+            result = {"result": result, "ecm_profile_apply": profile_apply_summary}
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")

@@ -190,22 +190,27 @@ class M3UChangeMonitorTask(TaskScheduler):
             finally:
                 db.close()
 
-            # GH #720 Part B (bead y3m6o): converging backbone. Any M3U change
-            # — ECM- OR Dispatcharr-triggered — may have created auto-sync
-            # channels that Dispatcharr joined to EVERY profile. Re-apply each
-            # group's stored channel_profile_ids selection subtractively so the
-            # operator's choice sticks and profile drift self-heals. Idempotent
-            # and best-effort: a reconcile failure never fails the monitor poll.
-            if changes_detected > 0 and not self._cancel_requested:
+            # GH #720 Part B (bead y3m6o): converging backbone. This is the
+            # DURABLE guarantee that the operator's channel_profile_ids
+            # selection sticks. Run the idempotent selected-group sweep on EVERY
+            # scheduled pass — NOT only when changes were detected (Blocker 4):
+            # a reconcile that partially failed, or external profile drift that
+            # ECM did not cause, must self-heal without waiting for the next
+            # content change. The sweep is idempotent and O(P) per group, so
+            # running it every ~5 minutes is cheap. Best-effort: a reconcile
+            # failure never fails the monitor poll.
+            if not self._cancel_requested:
                 try:
                     from services.profile_reconcile import reconcile_all_selected_groups
                     self._set_progress(status="reconciling_profiles")
                     recon = await reconcile_all_selected_groups(client)
-                    if recon.get("groups_reconciled"):
+                    if recon.get("groups_reconciled") or recon.get("groups_partial_failure"):
                         logger.info(
-                            "[%s] Profile reconcile: %s group(s), %s channel(s) scoped",
+                            "[%s] Profile reconcile: %s group(s) reconciled, %s "
+                            "partial_failure, %s channel(s) scoped",
                             self.task_id,
                             recon.get("groups_reconciled"),
+                            recon.get("groups_partial_failure"),
                             recon.get("channels_scoped"),
                         )
                 except Exception as e:
