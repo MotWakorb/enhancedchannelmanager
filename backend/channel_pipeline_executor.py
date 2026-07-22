@@ -3001,29 +3001,41 @@ class ActionExecutor:
             # failure must NOT fail the assignment (profiles are already
             # applied). The default-profile path (_assign_default_profiles) is a
             # global default and is intentionally NOT stamped.
-            await self._mark_channel_profile_ownership(exec_ctx.current_channel_id, rule_id)
+            marked = await self._mark_channel_profile_ownership(
+                exec_ctx.current_channel_id, rule_id
+            )
 
             # y3m6o.1 review follow-up: ``modified`` is True only when at least
             # one profile's enabled-state actually flipped. An idempotent
             # reconcile (channel already in exactly the selected profiles) makes
             # zero writes, reports changed=False, and is NOT counted as a channel
             # update — so re-running a rule no longer inflates channels_updated.
+            base_desc = (
+                f"Assigned channel profiles: enabled in "
+                f"{membership.enabled_count}, disabled in "
+                f"{membership.disabled_count}"
+                if membership.changed
+                else "Channel profiles already correct (no change)"
+            )
+            # Blocker 2: the profiles ARE applied (success stays True, the change
+            # is counted), but if the ownership marker write failed, precedence
+            # was NOT established — surface it non-fatally in the description +
+            # error field so the run reflects the incompleteness.
+            marker_warning = (
+                None if marked
+                else "ownership marker write failed; profile precedence not established"
+            )
             return ActionResult(
                 success=True,
                 action_type=action.type,
-                description=(
-                    f"Assigned channel profiles: enabled in "
-                    f"{membership.enabled_count}, disabled in "
-                    f"{membership.disabled_count}"
-                    if membership.changed
-                    else "Channel profiles already correct (no change)"
-                ),
+                description=base_desc if marked else f"{base_desc} ({marker_warning})",
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
                 modified=membership.changed,
                 # Profile membership carries no reversible previous_state
                 # (Finding 6) — never recorded as a rollback entity.
                 rollbackable=False,
+                error=marker_warning,
             )
         except Exception as e:
             return ActionResult(
@@ -3796,7 +3808,7 @@ class ActionExecutor:
         return ProfileMembershipResult(enabled_count, disabled_count, failed_profile_ids)
 
     async def _mark_channel_profile_ownership(self, channel_id: int,
-                                              rule_id: Optional[int] = None) -> None:
+                                              rule_id: Optional[int] = None) -> bool:
         """Stamp the pipeline-ownership provenance marker on a channel.
 
         GH #720 Part B (decision 2b + handoff): records — in the channel's
@@ -3809,13 +3821,19 @@ class ActionExecutor:
         (``ecm_profile_owner="pipeline"``) AND the OWNING RULE ID
         (``ecm_profile_owner_rule_id``) — the reconcile revalidates the rule id
         against the live rule set so ownership is RELEASED once the rule is
-        disabled/deleted (automatic handoff). The marker is MERGED over the
-        channel's current ``custom_properties`` (Dispatcharr's channel PATCH
-        replaces the dict wholesale, so any other keys must be preserved).
-        Idempotent: skipped without a write when the SAME owner AND rule id are
-        already present. Best-effort: failures are logged and swallowed — the
-        profile assignment already succeeded and must not be reverted by a
-        marker-write error.
+        disabled/deleted (automatic handoff).
+
+        Blocker 2 (clobber): Dispatcharr's channel PATCH replaces
+        custom_properties WHOLESALE. We FRESH-FETCH the channel's current
+        custom_properties immediately before the merge (rather than trusting the
+        run-start cache, which can be seconds stale) so a concurrent
+        EPG/logo/metadata write is not erased. Idempotent: skipped without a
+        write when the SAME owner AND rule id are already present.
+
+        Returns ``True`` if the marker is present after this call (written or
+        already-present), ``False`` if the write FAILED — the caller surfaces
+        that as a non-fatal partial so ownership precedence being unestablished
+        is visible (the profile assignment itself already succeeded).
         """
         from services.profile_reconcile import (
             PIPELINE_OWNERSHIP_MARKER_KEY,
@@ -3823,43 +3841,48 @@ class ActionExecutor:
             PIPELINE_OWNERSHIP_RULE_ID_KEY,
         )
 
+        cached = self._channel_by_id.get(channel_id)
+        # Fresh-fetch current custom_properties right before the merge to shrink
+        # the wholesale-PATCH clobber window; fall back to the run cache if the
+        # refetch fails.
+        current_cp = None
         try:
-            # Staleness window (accepted, consistent with the executor's other
-            # custom_properties writers at _execute_set_epg / _execute_set_logo):
-            # merged_cp is built from the in-run cache, and the PATCH replaces
-            # custom_properties wholesale, so a mid-run EXTERNAL custom_properties
-            # write on this pre-existing channel would be dropped. Not
-            # re-architected here — a single run is short and this matches the
-            # established per-run-cache pattern.
-            cached = self._channel_by_id.get(channel_id) or {}
-            current_cp = cached.get("custom_properties")
-            merged_cp = dict(current_cp) if isinstance(current_cp, dict) else {}
-            already_owner = (
-                merged_cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) == PIPELINE_OWNERSHIP_MARKER_VALUE
+            fresh = await self.client.get_channel(channel_id)
+            if isinstance(fresh, dict) and isinstance(fresh.get("custom_properties"), dict):
+                current_cp = fresh["custom_properties"]
+        except Exception as e:  # noqa: BLE001 - fall back to cache below
+            logger.warning(
+                "[CHANNEL-PIPELINE-EXEC] channel %s: could not refetch "
+                "custom_properties before marker write (using cache): %s",
+                channel_id, e,
             )
-            same_rule = merged_cp.get(PIPELINE_OWNERSHIP_RULE_ID_KEY) == rule_id
-            if already_owner and same_rule:
-                return  # Already marked by this rule — idempotent, skip the write.
-            merged_cp[PIPELINE_OWNERSHIP_MARKER_KEY] = PIPELINE_OWNERSHIP_MARKER_VALUE
-            # Stamp the owning rule id so the reconcile can hand ownership back
-            # when the rule goes away. None only outside a rule run (shouldn't
-            # happen for a real assign) — leave the key absent so the reconcile
-            # logs the legacy/conservative case rather than storing a null id.
-            if rule_id is not None:
-                merged_cp[PIPELINE_OWNERSHIP_RULE_ID_KEY] = rule_id
+        if current_cp is None:
+            cc = cached.get("custom_properties") if isinstance(cached, dict) else None
+            current_cp = cc if isinstance(cc, dict) else {}
+
+        merged_cp = dict(current_cp)
+        already_owner = (
+            merged_cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) == PIPELINE_OWNERSHIP_MARKER_VALUE
+        )
+        same_rule = merged_cp.get(PIPELINE_OWNERSHIP_RULE_ID_KEY) == rule_id
+        if already_owner and same_rule:
+            return True  # Already marked by this rule — idempotent, skip the write.
+        merged_cp[PIPELINE_OWNERSHIP_MARKER_KEY] = PIPELINE_OWNERSHIP_MARKER_VALUE
+        # Stamp the owning rule id so the reconcile can hand ownership back when
+        # the rule goes away. None only outside a rule run (shouldn't happen for
+        # a real assign) — leave the key absent so the reconcile logs the
+        # legacy/conservative case rather than storing a null id.
+        if rule_id is not None:
+            merged_cp[PIPELINE_OWNERSHIP_RULE_ID_KEY] = rule_id
+        try:
             await self.client.update_channel(
                 channel_id, {"custom_properties": merged_cp}
             )
-            # Keep the in-run cache consistent so a later action in the same run
-            # sees the marker.
-            if isinstance(cached, dict):
-                cached["custom_properties"] = merged_cp
         except Exception as e:
-            # Should-Fix 10: the profile membership DID land, but the ownership
-            # marker did NOT — so precedence is NOT established. Surface it
-            # loudly: the group reconcile may treat this channel as unowned and
-            # move it until a later run re-stamps the marker. Not silently
-            # treated as owned.
+            # The profile membership DID land, but the ownership marker did NOT —
+            # precedence is NOT established. Surface it loudly AND to the caller
+            # (returns False) so the run reflects the incompleteness rather than
+            # a silent clean success.
             logger.warning(
                 "[CHANNEL-PIPELINE-EXEC] Profile assignment for channel %s "
                 "SUCCEEDED but the pipeline-ownership marker write FAILED (%s) — "
@@ -3867,6 +3890,12 @@ class ActionExecutor:
                 "move this channel until the next pipeline run re-stamps it",
                 channel_id, e,
             )
+            return False
+        # Keep the in-run cache consistent so a later action in the same run
+        # sees the marker.
+        if isinstance(cached, dict):
+            cached["custom_properties"] = merged_cp
+        return True
 
     def _current_profile_membership(self, channel_id: int) -> set[int]:
         """The set of profile ids ``channel_id`` is CURRENTLY enabled in.

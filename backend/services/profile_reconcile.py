@@ -67,12 +67,31 @@ not fight this.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
 from services.event_sync_preflight import resolve_effective_master_group_id
 
 logger = logging.getLogger(__name__)
+
+# --- Per-effective-group serialization (Blocker 1) -------------------------
+# The three reconcile entrypoints (save hook, post-refresh poll, monitor
+# every-pass sweep) run as separate async tasks and can interleave for the
+# SAME effective group: enable{A} -> enable{B} -> disable{A} -> disable{B}
+# would leave the channels in ZERO profiles. We serialize per effective group
+# id with a lazily-created asyncio.Lock so a group's enable+disable phases are
+# atomic w.r.t. every other reconcile of that group. Lock creation is a single
+# synchronous dict get/set (no await between), so it needs no guard lock.
+_group_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_group_lock(effective_gid: int) -> asyncio.Lock:
+    lock = _group_locks.get(effective_gid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _group_locks[effective_gid] = lock
+    return lock
 
 # Provenance marker (decision 2b). Written into a channel's Dispatcharr
 # ``custom_properties`` by the pipeline ``assign_channel_profile`` action; read
@@ -220,13 +239,36 @@ async def _clear_ownership_marker(client, channel: dict) -> None:
     Called when a channel is RELEASED (its owning rule is gone/disabled) so a
     future reconcile sees it as a plain Auto-Sync channel. Merge-preserving:
     only the two marker keys are dropped, every other ``custom_properties`` key
-    is retained. A failure is logged and swallowed — never fail the reconcile
-    over a marker cleanup.
+    is retained.
+
+    Blocker 2 (clobber): Dispatcharr's channel PATCH replaces custom_properties
+    WHOLESALE, so we fetch the channel's CURRENT custom_properties immediately
+    before the merge (not the reconcile snapshot, which may be seconds stale) to
+    minimise the window in which a concurrent EPG/logo/metadata write is erased.
+    A failure is logged and swallowed — never fail the reconcile over a marker
+    cleanup.
     """
     cid = channel.get("id")
-    cp = channel.get("custom_properties")
-    if cid is None or not isinstance(cp, dict):
+    if cid is None:
         return
+    # Fresh-fetch the current custom_properties right before the PATCH; fall
+    # back to the snapshot only if the refetch fails.
+    cp = channel.get("custom_properties")
+    try:
+        fresh = await client.get_channel(cid)
+        fresh_cp = fresh.get("custom_properties") if isinstance(fresh, dict) else None
+        if isinstance(fresh_cp, dict):
+            cp = fresh_cp
+    except Exception as e:  # noqa: BLE001 - fall back to snapshot below
+        logger.warning(
+            "[PROFILE-RECONCILE] channel %s: could not refetch custom_properties "
+            "before marker clear (using snapshot): %s", cid, e,
+        )
+    if not isinstance(cp, dict):
+        return
+    if (PIPELINE_OWNERSHIP_MARKER_KEY not in cp
+            and PIPELINE_OWNERSHIP_RULE_ID_KEY not in cp):
+        return  # Already clear (another run beat us) — no write needed.
     merged = {
         k: v
         for k, v in cp.items()
@@ -264,9 +306,14 @@ async def _fetch_group_channels(client, group_id: int) -> list[dict]:
 
 def _result(status: str, group_id: int, *, effective_gid=None, scoped=0,
             excluded=0, released=0, enabled=0, disabled=0,
-            failed_profile_ids=None, conflict=False) -> dict:
+            failed_profile_ids=None, conflict=False, error=None) -> dict:
     """Build a uniform reconcile result dict so every caller can rely on the
-    same keys (status, counts, failed_profile_ids, conflict)."""
+    same keys (status, counts, failed_profile_ids, conflict, error).
+
+    ``status`` vocabulary: ``no_selection`` | ``no_channels`` |
+    ``stale_selection`` | ``reconciled`` | ``partial_failure`` | ``degraded``
+    (enables applied but exclusivity could NOT be enforced — universe fetch
+    failed) | ``error`` (setup/exception before any per-group apply)."""
     return {
         "status": status,
         "group_id": group_id,
@@ -278,45 +325,61 @@ def _result(status: str, group_id: int, *, effective_gid=None, scoped=0,
         "profiles_disabled": disabled,
         "failed_profile_ids": sorted(failed_profile_ids or []),
         "conflict": bool(conflict),
+        "error": error,
     }
 
 
 async def reconcile_group_profiles(
     client, all_settings: dict, group_id: int, live_rule_ids=_UNSET,
+    settings_provider=None,
 ) -> dict:
     """Apply a group's stored profile selection to its channels (idempotent).
 
-    Reads ``custom_properties.channel_profile_ids`` from the group's settings
-    row, resolves the EFFECTIVE group id (following any Channel Group
-    Override), enumerates that group's channels, excludes pipeline-owned ones
-    whose owning rule is still live (decision 2b handoff), and issues one bulk
-    profile update per profile so the channels end up members of exactly the
-    selected profiles.
+    Serialized per EFFECTIVE group (Blocker 1): all three entrypoints call this,
+    so acquiring the effective-group lock here makes a group's enable+disable
+    phases atomic against every concurrent reconcile of that group — no
+    interleave can strand channels in zero profiles.
+
+    ``settings_provider`` — optional ``() -> awaitable[dict]`` returning the
+    freshest ``all_settings``. When supplied, after acquiring the lock we
+    RE-READ the settings (TOCTOU revalidation): the selection/universe may have
+    changed while we blocked, so we always apply the CURRENT selection, never a
+    stale snapshot. Real callers (save hook, sweep) pass
+    ``client.get_all_m3u_group_settings``; unit tests omit it and use the static
+    settings passed in.
 
     ``live_rule_ids`` — the set of currently-enabled rule ids that still assign
     channel profiles. Pass it explicitly (the sweep computes it ONCE); left
     unset it is resolved from the DB. Explicit ``None`` means resolution failed
     and every marker is treated conservatively as still-owned.
 
-    Returns a uniform result dict (see :func:`_result`) with a ``status``:
-
-    * ``no_selection`` — absent/empty selection, nothing done (decision 1a).
-    * ``no_channels`` — selection present but the effective group has no
-      reconcilable channels.
-    * ``stale_selection`` — every selected profile has been DELETED (the
-      authoritative universe contains none of them); a SAFETY NO-OP that
-      leaves the channels untouched rather than disabling them everywhere.
-    * ``partial_failure`` — a bulk profile write failed. If a SELECTED-profile
-      enable failed the reconcile ABORTS before any destructive disable (so the
-      channels cannot be stranded); ``failed_profile_ids`` is populated.
-    * ``reconciled`` — all writes succeeded; counts populated. Also covers the
-      degraded enable-selected-only path when the universe fetch fails.
-
-    Never raises for a single bad profile — each bulk call is guarded.
+    Returns a uniform result dict (see :func:`_result`).
     """
     if live_rule_ids is _UNSET:
         live_rule_ids = await _resolve_live_rule_ids()
 
+    # Lock key comes from the currently-known settings; overrides changing while
+    # we hold the lock is an accepted extreme edge (we keep the original key).
+    effective_gid = resolve_effective_master_group_id(all_settings, group_id)
+    async with _get_group_lock(effective_gid):
+        if settings_provider is not None:
+            try:
+                all_settings = await settings_provider()
+            except Exception as e:  # noqa: BLE001 - fall back to snapshot
+                logger.warning(
+                    "[PROFILE-RECONCILE] group=%s: revalidation fetch failed, "
+                    "using snapshot: %s", group_id, e,
+                )
+            effective_gid = resolve_effective_master_group_id(all_settings, group_id)
+        return await _reconcile_group_locked(
+            client, all_settings, group_id, effective_gid, live_rule_ids
+        )
+
+
+async def _reconcile_group_locked(
+    client, all_settings: dict, group_id: int, effective_gid: int, live_rule_ids,
+) -> dict:
+    """The reconcile body, run while holding the effective-group lock."""
     setting = all_settings.get(group_id)
     selection = _selection_from_setting(setting)
     conflict = bool(isinstance(setting, dict) and setting.get("_ecm_channel_profile_conflict"))
@@ -325,7 +388,6 @@ async def reconcile_group_profiles(
         return _result("no_selection", group_id, conflict=conflict)
 
     selected = set(selection)
-    effective_gid = resolve_effective_master_group_id(all_settings, group_id)
 
     channels = await _fetch_group_channels(client, effective_gid)
 
@@ -412,11 +474,16 @@ async def reconcile_group_profiles(
                     "[PROFILE-RECONCILE] group=%s: profile %s enable failed, "
                     "skipping: %s", group_id, pid, e,
                 )
+        # Blocker 3a: enables were applied but EXCLUSIVITY could NOT be enforced
+        # (we never learned the universe, so no disables ran). That is NOT a
+        # clean reconcile — report ``degraded`` so the run/summary reflects the
+        # incompleteness instead of a false success.
         return _result(
-            "partial_failure" if failed_enable else "reconciled", group_id,
+            "degraded", group_id,
             effective_gid=effective_gid, scoped=len(channel_ids),
             excluded=owned_count, released=released, enabled=profiles_enabled,
             failed_profile_ids=failed_enable, conflict=conflict,
+            error="profile universe unavailable; exclusivity not enforced",
         )
 
     # Authoritative universe in hand. Intersect the stored selection with it:
@@ -592,7 +659,8 @@ async def reconcile_all_selected_groups(
             logger.warning("[PROFILE-RECONCILE] failed to fetch group settings: %s", e)
             return {
                 "groups_reconciled": 0, "groups_partial_failure": 0,
-                "groups_with_selection": 0, "channels_scoped": 0,
+                "groups_degraded": 0, "groups_with_selection": 0,
+                "channels_scoped": 0,
             }
 
     live_rule_ids = await _resolve_live_rule_ids()
@@ -600,19 +668,26 @@ async def reconcile_all_selected_groups(
     target_gids = groups_with_selection(all_settings)
     reconcile_gids = dedupe_gids_by_effective_group(all_settings, target_gids)
 
+    # Revalidate each group's selection under its lock (Blocker 1 TOCTOU) when
+    # the client can re-fetch; the FakeClient in unit tests has no such method
+    # so revalidation is simply skipped there.
+    settings_provider = getattr(client, "get_all_m3u_group_settings", None)
+
     groups_reconciled = 0
     groups_partial_failure = 0
+    groups_degraded = 0
     channels_scoped = 0
     for gid in reconcile_gids:
         if cancel_check is not None and cancel_check():
             logger.info(
                 "[PROFILE-RECONCILE] sweep cancelled mid-run after %d group(s)",
-                groups_reconciled + groups_partial_failure,
+                groups_reconciled + groups_partial_failure + groups_degraded,
             )
             break
         try:
             result = await reconcile_group_profiles(
-                client, all_settings, gid, live_rule_ids=live_rule_ids
+                client, all_settings, gid, live_rule_ids=live_rule_ids,
+                settings_provider=settings_provider,
             )
             status = result.get("status")
             if status == "reconciled":
@@ -620,6 +695,9 @@ async def reconcile_all_selected_groups(
                 channels_scoped += result.get("channels_scoped", 0)
             elif status == "partial_failure":
                 groups_partial_failure += 1
+                channels_scoped += result.get("channels_scoped", 0)
+            elif status == "degraded":
+                groups_degraded += 1
                 channels_scoped += result.get("channels_scoped", 0)
         except Exception as e:  # noqa: BLE001 - isolate per-group failures
             logger.warning(
@@ -630,13 +708,14 @@ async def reconcile_all_selected_groups(
         logger.info(
             "[PROFILE-RECONCILE] swept %d group(s) with a selection (%d after "
             "effective-group dedupe), reconciled %d, partial_failure %d, "
-            "scoped %d channel(s)",
+            "degraded %d, scoped %d channel(s)",
             len(target_gids), len(reconcile_gids), groups_reconciled,
-            groups_partial_failure, channels_scoped,
+            groups_partial_failure, groups_degraded, channels_scoped,
         )
     return {
         "groups_reconciled": groups_reconciled,
         "groups_partial_failure": groups_partial_failure,
+        "groups_degraded": groups_degraded,
         "groups_with_selection": len(target_gids),
         "channels_scoped": channels_scoped,
     }

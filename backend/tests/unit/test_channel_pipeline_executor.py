@@ -4927,6 +4927,10 @@ class TestAssignChannelProfileProvenanceMarker:
         self.client = MagicMock()
         self.client.update_profile_channel = AsyncMock()
         self.client.update_channel = AsyncMock()
+        # get_channel returns a non-dict by default so the marker helper's
+        # fresh-fetch cleanly falls back to the run cache (Blocker 2); tests that
+        # exercise a concurrent write override its return_value.
+        self.client.get_channel = AsyncMock(return_value=None)
         self.stream_ctx = StreamContext(
             stream_id=201,
             stream_name="ESPN2 HD",
@@ -5031,6 +5035,46 @@ class TestAssignChannelProfileProvenanceMarker:
 
         # Profiles were still applied; the marker failure is swallowed.
         assert result.success is True
+
+    def test_marker_write_failure_surfaces_nonfatal_partial(self):
+        """Blocker 2: a marker-write failure keeps success=True (profiles ARE
+        applied) but is surfaced non-fatally — result.error is set and the
+        description notes precedence was not established, so the run reflects the
+        incompleteness instead of a silent clean success."""
+        self.client.update_channel = AsyncMock(side_effect=RuntimeError("boom"))
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        result = self._run(executor, action, exec_ctx, rule_id=5)
+
+        assert result.success is True
+        assert result.error and "precedence" in result.error
+        assert "precedence not established" in result.description
+
+    def test_marker_add_preserves_concurrent_custom_properties(self):
+        """Blocker 2 (clobber, add direction): a concurrent custom_properties
+        write landing between the run snapshot and the marker PATCH is preserved
+        because the helper fresh-fetches current custom_properties right before
+        the merge."""
+        # Run cache has NO concurrent key; the FRESH fetch returns it.
+        self.client.get_channel = AsyncMock(
+            return_value={"id": 99, "custom_properties": {"custom_epg_id": 77}}
+        )
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        self._run(executor, action, exec_ctx, rule_id=5)
+
+        _cid, body = self.client.update_channel.call_args.args
+        key, value = self._marker()
+        cp = body["custom_properties"]
+        assert cp["custom_epg_id"] == 77   # concurrent write preserved
+        assert cp[key] == value
+        assert cp[self._rule_id_key()] == 5
 
     def test_marker_stamps_owning_rule_id(self):
         """Blocker 2 handoff: the owning rule id is stamped alongside the owner

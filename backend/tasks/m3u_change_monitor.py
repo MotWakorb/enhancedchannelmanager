@@ -199,6 +199,8 @@ class M3UChangeMonitorTask(TaskScheduler):
             # content change. The sweep is idempotent and O(P) per group, so
             # running it every ~5 minutes is cheap. Best-effort: a reconcile
             # failure never fails the monitor poll.
+            reconcile_warnings = 0  # partial_failure + degraded groups this pass
+            recon: dict = {}
             if not self._cancel_requested:
                 try:
                     from services.profile_reconcile import reconcile_all_selected_groups
@@ -206,17 +208,25 @@ class M3UChangeMonitorTask(TaskScheduler):
                     recon = await reconcile_all_selected_groups(
                         client, cancel_check=lambda: self._cancel_requested
                     )
-                    if recon.get("groups_reconciled") or recon.get("groups_partial_failure"):
+                    reconcile_warnings = (
+                        recon.get("groups_partial_failure", 0)
+                        + recon.get("groups_degraded", 0)
+                    )
+                    if recon.get("groups_reconciled") or reconcile_warnings:
                         logger.info(
                             "[%s] Profile reconcile: %s group(s) reconciled, %s "
-                            "partial_failure, %s channel(s) scoped",
+                            "partial_failure, %s degraded, %s channel(s) scoped",
                             self.task_id,
                             recon.get("groups_reconciled"),
                             recon.get("groups_partial_failure"),
+                            recon.get("groups_degraded"),
                             recon.get("channels_scoped"),
                         )
                 except Exception as e:
                     logger.warning("[%s] Profile reconcile failed: %s", self.task_id, e)
+                    # Blocker 3c: a sweep that raised is itself a warning the task
+                    # history should reflect.
+                    reconcile_warnings = max(reconcile_warnings, 1)
 
             self._set_progress(
                 success_count=changes_detected,
@@ -236,6 +246,17 @@ class M3UChangeMonitorTask(TaskScheduler):
 
             duration = (datetime.utcnow() - started_at).total_seconds()
 
+            # Blocker 3c: fold the profile-reconcile outcome into the TaskResult
+            # so task history reflects a warning (not plain success) when any
+            # group ended partial_failure/degraded. Best-effort semantics keep
+            # success=True; a non-zero failed_count renders as "completed with
+            # warnings".
+            recon_detail = {"profile_reconcile": recon} if recon else {}
+            recon_suffix = (
+                f" ({reconcile_warnings} profile group(s) incomplete)"
+                if reconcile_warnings else ""
+            )
+
             if changes_detected > 0:
                 logger.info(
                     "[%s] Poll complete in %.1fs: checked %s accounts, %s with changes",
@@ -243,12 +264,13 @@ class M3UChangeMonitorTask(TaskScheduler):
                 )
                 return TaskResult(
                     success=True,
-                    message=f"Detected changes in {changes_detected} M3U account(s)",
+                    message=f"Detected changes in {changes_detected} M3U account(s){recon_suffix}",
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=accounts_checked,
                     success_count=changes_detected,
-                    details={"changed_accounts": changed_accounts},
+                    failed_count=reconcile_warnings,
+                    details={"changed_accounts": changed_accounts, **recon_detail},
                 )
 
             logger.info(
@@ -257,11 +279,13 @@ class M3UChangeMonitorTask(TaskScheduler):
             )
             return TaskResult(
                 success=True,
-                message=f"Checked {accounts_checked} M3U accounts - no external changes detected",
+                message=f"Checked {accounts_checked} M3U accounts - no external changes detected{recon_suffix}",
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
                 total_items=accounts_checked,
                 success_count=0,
+                failed_count=reconcile_warnings,
+                details=recon_detail,
             )
 
         except Exception as e:

@@ -15,6 +15,7 @@ PO decisions:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 
@@ -41,6 +42,16 @@ _FIXTURE = os.path.join(
 
 # Rule id used by the pipeline-ownership handoff tests.
 _RULE_ID = 7
+
+
+@pytest.fixture(autouse=True)
+def _reset_group_locks():
+    """Each test gets fresh per-effective-group locks (created in this test's
+    event loop) so a module-level lock from a prior loop is never reused."""
+    import services.profile_reconcile as pr
+    pr._group_locks.clear()
+    yield
+    pr._group_locks.clear()
 
 
 def _channel(cid: int, *, group: int = 100, owned: bool = False,
@@ -94,6 +105,18 @@ class FakeClient:
         self.bulk_calls: list[tuple[int, tuple, bool]] = []
         self.get_channels_gids: list[int] = []
         self.update_channel_calls: list[tuple[int, dict]] = []
+        # cid -> custom_properties returned by get_channel (models a CONCURRENT
+        # custom_properties write between the reconcile snapshot and the PATCH).
+        self.fresh_cp_by_id: dict[int, dict] = {}
+
+    async def get_channel(self, channel_id):
+        if channel_id in self.fresh_cp_by_id:
+            return {"id": channel_id, "custom_properties": self.fresh_cp_by_id[channel_id]}
+        for rows in self.channels_by_gid.values():
+            for c in rows:
+                if c.get("id") == channel_id:
+                    return dict(c)
+        return {"id": channel_id, "custom_properties": {}}
 
     async def get_channels(self, page=1, page_size=100, search=None, channel_group=None):
         self.get_channels_gids.append(channel_group)
@@ -115,12 +138,22 @@ class FakeClient:
         return [{"id": pid, "name": f"P{pid}"} for pid in self.profiles]
 
     async def bulk_update_profile_channels(self, profile_id, data):
-        if profile_id in self.fail_profiles:
-            raise RuntimeError(f"profile {profile_id} is stale/deleted")
-        self.bulk_calls.append(
-            (profile_id, tuple(data["channel_ids"]), data["enabled"])
+        # Track max concurrency to prove per-effective-group serialization.
+        self._bulk_in_flight = getattr(self, "_bulk_in_flight", 0) + 1
+        self.max_concurrent_bulk = max(
+            getattr(self, "max_concurrent_bulk", 0), self._bulk_in_flight
         )
-        return {"success": True}
+        try:
+            if getattr(self, "bulk_delay", 0):
+                await asyncio.sleep(self.bulk_delay)
+            if profile_id in self.fail_profiles:
+                raise RuntimeError(f"profile {profile_id} is stale/deleted")
+            self.bulk_calls.append(
+                (profile_id, tuple(data["channel_ids"]), data["enabled"])
+            )
+            return {"success": True}
+        finally:
+            self._bulk_in_flight -= 1
 
     async def update_channel(self, channel_id, data):
         self.update_channel_calls.append((channel_id, data))
@@ -309,16 +342,83 @@ async def test_partial_stale_selection_ignores_deleted_id():
 
 
 @pytest.mark.asyncio
-async def test_universe_fetch_failure_degrades_to_enable_only():
-    """Universe fetch FAILS -> enable-selected-only, NO disables."""
+async def test_universe_fetch_failure_is_degraded_enable_only():
+    """Blocker 3a: universe fetch FAILS -> enable-selected-only, NO disables,
+    and status is DEGRADED (enables applied but exclusivity not enforced) — NOT
+    a clean 'reconciled'."""
     client = FakeClient({100: [_channel(10)]}, profiles=[1, 2], raise_on_profiles=True)
     settings = {100: _setting(channel_profile_ids=[1])}
 
     result = await reconcile_group_profiles(client, settings, 100, live_rule_ids=set())
 
-    assert result["status"] == "reconciled"
+    assert result["status"] == "degraded"
+    assert result["error"]
     assert client.enabled_map() == {1: True}
     assert all(enabled is True for _pid, _cids, enabled in client.bulk_calls)
+
+
+# --------------------------------------------------------------------------
+# Blocker 1 — per-effective-group serialization + revalidation
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_overlapping_reconciles_serialize_and_end_in_later_selection():
+    """Two overlapping reconciles of the SAME effective group must serialize
+    (their enable/disable phases never interleave) and converge on the LATER
+    selection — never zero memberships.
+
+    Run A snapshots selection [1]; run B (the later save) snapshots [2]. Both
+    pass a settings_provider returning the CURRENT selection ([2]); after
+    acquiring the lock each revalidates to [2], so both apply [2]. A per-call
+    delay encourages interleaving, and we assert the lock kept max concurrent
+    bulk writes at 1."""
+    channels = [_channel(10, group=100)]
+    client = FakeClient({100: channels}, profiles=[1, 2])
+    client.bulk_delay = 0.005
+
+    current = {100: _setting(channel_profile_ids=[2])}  # latest committed state
+
+    async def _provider():
+        return current
+
+    settings_a = {100: _setting(channel_profile_ids=[1])}
+    settings_b = {100: _setting(channel_profile_ids=[2])}
+    await asyncio.gather(
+        reconcile_group_profiles(client, settings_a, 100, live_rule_ids=set(),
+                                 settings_provider=_provider),
+        reconcile_group_profiles(client, settings_b, 100, live_rule_ids=set(),
+                                 settings_provider=_provider),
+    )
+
+    # Serialized: never two bulk writes for this group in flight at once.
+    assert client.max_concurrent_bulk == 1
+    # Converged on the LATER selection [2]; channel never left in zero profiles.
+    assert client.enabled_map() == {2: True, 1: False}
+
+
+@pytest.mark.asyncio
+async def test_reconcile_acquires_effective_group_lock(monkeypatch):
+    """Every entrypoint routes through reconcile_group_profiles, which acquires
+    the shared per-effective-group lock — assert the lock for the EFFECTIVE
+    group (200, via override) is acquired."""
+    import services.profile_reconcile as pr
+    acquired = []
+    real_get = pr._get_group_lock
+
+    def _spy(eff):
+        acquired.append(eff)
+        return real_get(eff)
+
+    monkeypatch.setattr(pr, "_get_group_lock", _spy)
+    client = FakeClient({200: [_channel(10, group=200)], 100: []}, profiles=[1, 2])
+    settings = {
+        100: _setting(channel_profile_ids=[1], group_override=200),
+        200: {"auto_channel_sync": False, "custom_properties": {}},
+    }
+
+    await reconcile_group_profiles(client, settings, 100, live_rule_ids=set())
+
+    assert acquired == [200]  # locked the EFFECTIVE group, not the source id
 
 
 # --------------------------------------------------------------------------
@@ -379,6 +479,35 @@ async def test_owned_channel_released_when_rule_disabled():
     assert PIPELINE_OWNERSHIP_MARKER_KEY not in cleared
     assert PIPELINE_OWNERSHIP_RULE_ID_KEY not in cleared
     assert cleared["custom_epg_id"] == 9  # unrelated key preserved
+
+
+@pytest.mark.asyncio
+async def test_marker_clear_preserves_concurrent_custom_properties():
+    """Blocker 2 (clobber, removal direction): a concurrent unrelated
+    custom_properties write that lands BETWEEN the reconcile snapshot and the
+    marker-clear PATCH must survive. _clear_ownership_marker fresh-fetches the
+    channel's CURRENT custom_properties right before the merge, so the
+    concurrent key is preserved and only the marker keys are dropped."""
+    # Snapshot the channel WITHOUT the concurrent key...
+    ch = _channel(11, group=100, owned=True, rule_id=_RULE_ID)
+    client = FakeClient({100: [ch]}, profiles=[1, 2])
+    # ...but a concurrent writer has since added custom_epg_id=42 (get_channel
+    # returns the FRESH blob).
+    client.fresh_cp_by_id[11] = {
+        PIPELINE_OWNERSHIP_MARKER_KEY: PIPELINE_OWNERSHIP_MARKER_VALUE,
+        PIPELINE_OWNERSHIP_RULE_ID_KEY: _RULE_ID,
+        "custom_epg_id": 42,
+    }
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    await reconcile_group_profiles(client, settings, 100, live_rule_ids=set())  # rule 7 not live -> released
+
+    assert len(client.update_channel_calls) == 1
+    _cid, body = client.update_channel_calls[0]
+    cleared = body["custom_properties"]
+    assert cleared["custom_epg_id"] == 42          # concurrent write preserved
+    assert PIPELINE_OWNERSHIP_MARKER_KEY not in cleared
+    assert PIPELINE_OWNERSHIP_RULE_ID_KEY not in cleared
 
 
 @pytest.mark.asyncio
