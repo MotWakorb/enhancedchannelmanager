@@ -2922,6 +2922,18 @@ class ChannelPipelineEngine:
                             "error": str(e)
                         }]
                     })
+                    # y3m6o.1 review: as with sort_group, the execution_log entry
+                    # alone does NOT flip the run's terminal status — finalization
+                    # keys off results["failed_actions"]. Funnel this rule-level
+                    # renumber failure through the same aggregation chokepoint so
+                    # the run finalizes ``completed_with_errors``. This IS
+                    # rule-scoped (unlike sort_group), so carry rule_id/rule_name.
+                    self._record_failed_phase(
+                        results, phase="renumber_channels",
+                        rule_id=rule.id, rule_name=rule.name,
+                        error=f"Failed to renumber channels for rule "
+                              f"'{rule.name}': {e}",
+                    )
 
         try:
             # =================================================================
@@ -5342,8 +5354,50 @@ class ChannelPipelineEngine:
                             )
                         except Exception as e:
                             logger.error("[AUTO-CREATE-ENGINE] Rule '%s': failed to renumber after cleanup: %s", rule.name, e)
+                            # y3m6o.1 review: this site previously ONLY logged —
+                            # a renumber-after-orphan-cleanup failure was
+                            # completely silent and finalized green with zero
+                            # operator trace. Add (a) a success=False
+                            # execution_log entry for parity with the other two
+                            # renumber sites, AND (b) run-level aggregation so the
+                            # run finalizes ``completed_with_errors``.
+                            results["execution_log"].append({
+                                "stream_id": None,
+                                "stream_name": f"[Renumber] Rule '{rule.name}' after orphan cleanup",
+                                "m3u_account_id": None,
+                                "rules_evaluated": [],
+                                "actions_executed": [{
+                                    "type": "renumber_channels",
+                                    "description": f"Failed to renumber channels after orphan cleanup: {e}",
+                                    "success": False,
+                                    "entity_id": None,
+                                    "error": str(e)
+                                }]
+                            })
+                            self._record_failed_phase(
+                                results, phase="renumber_channels",
+                                rule_id=rule.id, rule_name=rule.name,
+                                error=f"Failed to renumber channels after orphan "
+                                      f"cleanup for rule '{rule.name}': {e}",
+                            )
 
-                # Update managed_channel_ids (not during dry run)
+                # Update managed_channel_ids (not during dry run).
+                #
+                # y3m6o.1 review judgment call: we ADVANCE the managed set even
+                # when the renumber above raised. ``managed_channel_ids`` is a
+                # MEMBERSHIP/ownership ledger (previous vs current drives orphan
+                # detection next run) — it is orthogonal to channel NUMBERING.
+                # ``current_ids`` reflects the correct post-cleanup membership
+                # regardless of whether the cosmetic renumber succeeded, so
+                # persisting it keeps orphan detection accurate. The renumber is
+                # NOT gated by this ledger: both renumber passes (rule-level Pass
+                # 3 and this post-cleanup one) re-run unconditionally and
+                # idempotently every execution, so the failed renumber is retried
+                # on the next run whether or not we advance here. NOT advancing
+                # would instead leave the membership ledger stale for a run
+                # (degrading orphan detection) without actually gating any retry.
+                # The failure is no longer silent: it is now logged, recorded in
+                # the execution_log, and aggregated into completed_with_errors.
                 if not dry_run:
                     rule.set_managed_channel_ids(list(current_ids))
                     session.merge(rule)

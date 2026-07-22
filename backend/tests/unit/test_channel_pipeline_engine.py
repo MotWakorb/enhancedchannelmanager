@@ -3010,6 +3010,243 @@ class TestSortGroupFailureRunStatus:
         assert "renumber rejected" in fa[0]["error"]
 
 
+class TestRuleRenumberFailureRunStatus:
+    """y3m6o.1 review (Blocker A) at RUN level: a Pass 3 rule-level renumber
+    failure (a rule with ``sort_field`` set whose ``assign_channel_numbers``
+    raises) must finalize ``completed_with_errors`` + non-success — NOT green.
+    This is a DIFFERENT code path from sort_group (Pass 3, not Pass 3.6): the
+    sort_group test exercises a sort_group action and skips the rule-level
+    renumber pass entirely, so this path was previously uncovered. Drives the
+    REAL ``run_pipeline`` end to end: a rule with a create_channel action (fixed
+    starting number) + sort_field creates 2 owned channels, then Pass 3 renumbers
+    them and the renumber raises."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.client.get_channel_groups = AsyncMock(return_value=[])
+        self.client.update_channel = AsyncMock()
+        self.client.get_channel_profiles = AsyncMock(return_value=[{"id": 1}])
+        self._next_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        # The Pass 3 rule-level renumber call fails.
+        self.client.assign_channel_numbers = AsyncMock(
+            side_effect=RuntimeError("dispatcharr renumber rejected")
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _make_rule(self):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Renumber Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        # sort_field triggers the Pass 3 rule-level renumber; a FIXED starting
+        # number (not "auto") makes _get_rule_starting_number return non-None so
+        # the pass actually runs.
+        rule.sort_field = "channel_name"
+        rule.sort_order = "asc"
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([
+            {"type": "create_channel", "name_template": "{stream_name}",
+             "channel_number": 100},
+        ])
+        return rule
+
+    def _run(self, rule, streams, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_rule_renumber_failure_finalizes_completed_with_errors(self):
+        rule = self._make_rule()
+        # Two streams => two channels created and owned by the rule, so Pass 3
+        # (len >= 2) actually renumbers.
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1),
+            StreamContext(stream_id=602, stream_name="CNN", m3u_account_id=1),
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        # The rule-level renumber pass was actually attempted.
+        self.client.assign_channel_numbers.assert_awaited()
+        # (1) stored execution row is the errored terminal state, not green.
+        assert self.exec_mock.status == "completed_with_errors"
+        # (2) top-level result is non-success + counts the failure.
+        assert result["success"] is False
+        assert result["status"] == "completed_with_errors"
+        assert result["failed_action_count"] >= 1
+        # (3) the failure carries the renumber_channels phase + rule identity.
+        fa = [
+            f for f in result["failed_actions"]
+            if f["action_type"] == "renumber_channels"
+        ]
+        assert len(fa) == 1
+        assert fa[0]["rule_id"] == 1
+        assert fa[0]["rule_name"] == "Renumber Rule"
+        assert "renumber rejected" in fa[0]["error"]
+
+
+class TestOrphanCleanupRenumberFailureRunStatus:
+    """y3m6o.1 review (Blocker B) at RUN level: a renumber-after-orphan-cleanup
+    failure (_reconcile_orphans) previously ONLY logged — no execution_log entry,
+    no aggregation — so it was completely silent and finalized green. It must now
+    finalize ``completed_with_errors`` + populate failed_actions AND write a
+    success=False execution_log entry. Drives the REAL ``run_pipeline``: the rule
+    has a pre-run managed set containing an orphan that no longer matches, so the
+    orphan is deleted and the post-cleanup renumber runs — and raises.
+
+    Also pins the managed_channel_ids JUDGMENT CALL: the membership ledger is
+    ADVANCED to the current set even though the (cosmetic) renumber failed."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        # Pre-existing orphan channel 999 (owned by the rule last run) that will
+        # not be matched again this run => it becomes an orphan and is deleted.
+        self._orphan = {
+            "id": 999, "name": "Old Channel", "channel_group_id": 5,
+            "channel_number": 50,
+        }
+        self.client.get_channels = AsyncMock(
+            return_value={"count": 1, "results": [self._orphan]}
+        )
+        self.client.get_channel_groups = AsyncMock(
+            return_value=[{"id": 5, "name": "Sports"}]
+        )
+        self.client.update_channel = AsyncMock()
+        self.client.delete_channel = AsyncMock()
+        self.client.get_channel_profiles = AsyncMock(return_value=[{"id": 1}])
+        self._next_id = iter(range(1000, 2000))
+        self.client.create_channel = AsyncMock(
+            side_effect=lambda data: {
+                "id": next(self._next_id),
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        )
+        # The post-orphan-cleanup renumber call fails.
+        self.client.assign_channel_numbers = AsyncMock(
+            side_effect=RuntimeError("post-cleanup renumber rejected")
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _make_rule(self):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Orphan Rule"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = 5
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.orphan_action = "delete"
+        # No sort_field: keep Pass 3 out of it so ONLY the post-cleanup renumber
+        # fires. A fixed create starting number makes _get_rule_starting_number
+        # return non-None so the post-cleanup renumber actually runs.
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([
+            {"type": "create_channel", "name_template": "{stream_name}",
+             "channel_number": 100},
+        ])
+        # Pre-run managed set: channel 999 was owned last run. It still exists in
+        # Dispatcharr (returned by get_channels) so it is a live orphan, not a
+        # stale one, and gets deleted + triggers the post-cleanup renumber.
+        rule.set_managed_channel_ids([999])
+        return rule
+
+    def _run(self, rule, streams, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_orphan_cleanup_renumber_failure_finalizes_completed_with_errors(self):
+        rule = self._make_rule()
+        # One NEW stream => creates channel 1000 (current), so 999 (previous)
+        # becomes an orphan; after deleting it the remaining [1000] is renumbered.
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        # The orphan was deleted and the post-cleanup renumber was attempted.
+        self.client.delete_channel.assert_awaited_with(999)
+        self.client.assign_channel_numbers.assert_awaited()
+        # (1) stored execution row is the errored terminal state, not green.
+        assert self.exec_mock.status == "completed_with_errors"
+        # (2) top-level result is non-success + counts the failure.
+        assert result["success"] is False
+        assert result["status"] == "completed_with_errors"
+        assert result["failed_action_count"] >= 1
+        # (3) the failure is aggregated with the renumber_channels phase + rule.
+        fa = [
+            f for f in result["failed_actions"]
+            if f["action_type"] == "renumber_channels"
+        ]
+        assert len(fa) == 1
+        assert fa[0]["rule_id"] == 1
+        assert "post-cleanup renumber rejected" in fa[0]["error"]
+        # (4) parity with the other renumber sites: a success=False execution_log
+        # entry is also present (previously this site logged NOTHING).
+        renumber_log = [
+            entry for entry in result["execution_log"]
+            for a in entry.get("actions_executed", [])
+            if a.get("type") == "renumber_channels" and a.get("success") is False
+        ]
+        assert len(renumber_log) >= 1
+        # (5) JUDGMENT CALL: the membership ledger is ADVANCED to the current set
+        # despite the cosmetic renumber failing. managed_channel_ids tracks
+        # OWNERSHIP (drives orphan detection), orthogonal to numbering; the
+        # renumber passes re-run unconditionally next execution so the failed
+        # renumber is retried regardless. 999 (deleted orphan) is dropped; 1000
+        # (the current channel) is retained.
+        managed = set(rule.get_managed_channel_ids())
+        assert 999 not in managed
+        assert 1000 in managed
+
+
 class TestRunLevelFailureAggregationFullCoverage:
     """y3m6o.1 review — FULL failure aggregation (the 0152 pass only routed
     assign_channel_profile action failures). Every executed-action/phase failure
