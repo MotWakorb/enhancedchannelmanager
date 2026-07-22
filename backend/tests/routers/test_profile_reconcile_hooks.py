@@ -332,6 +332,136 @@ async def test_reconcile_setup_failure_surfaces_error_in_summary(async_client):
     assert any(o.get("status") == "error" for o in summary)
 
 
+class _E2EClient:
+    """Stateful client for the end-to-end profile-ID contract test: drives the
+    REAL reconcile (no mocking) so a UI-shaped selection flows PATCH ->
+    validation/coercion -> propagation -> reconcile -> bulk profile write."""
+
+    def __init__(self, stored_selection):
+        # ``stored_selection`` is what get_all_m3u_group_settings reports for the
+        # group (may be legacy strings to exercise coercion).
+        self._stored_selection = stored_selection
+        self.bulk_calls = []
+        self.group_settings_writes = []
+
+    async def get_m3u_account(self, account_id):
+        # PRIOR state has NO selection so the save is a genuine change.
+        return {"id": account_id, "name": "A", "channel_groups": [
+            {"channel_group": 1304, "enabled": True, "auto_channel_sync": True,
+             "auto_sync_channel_start": None, "auto_sync_channel_end": None,
+             "custom_properties": {}}]}
+
+    async def get_channel_groups(self):
+        return [{"id": 1304, "name": "HD Homerun"}]
+
+    async def get_m3u_accounts(self):
+        return [{"id": 11, "channel_groups": [
+            {"channel_group": 1304, "custom_properties": {}}]}]
+
+    async def update_m3u_group_settings(self, account_id, data):
+        self.group_settings_writes.append((account_id, data))
+        return {"message": "ok"}
+
+    async def get_all_m3u_group_settings(self):
+        return {1304: {"auto_channel_sync": True,
+                       "custom_properties": {"channel_profile_ids": self._stored_selection}}}
+
+    async def get_channels(self, page=1, page_size=100, search=None, channel_group=None):
+        return {"count": 1, "next": None, "previous": None,
+                "results": [{"id": 500, "channel_group": 1304, "custom_properties": {}}]}
+
+    async def get_channel(self, channel_id):
+        return {"id": channel_id, "custom_properties": {}}
+
+    async def get_channel_profiles(self):
+        return [{"id": 12, "name": "P12"}, {"id": 13, "name": "P13"}]
+
+    async def bulk_update_profile_channels(self, profile_id, data):
+        self.bulk_calls.append((profile_id, tuple(data["channel_ids"]), data["enabled"]))
+        return {"ok": True}
+
+
+async def _no_live_rules_impl():
+    return set()
+
+
+@pytest.mark.asyncio
+async def test_e2e_ui_integer_selection_enables_profile(async_client):
+    """Blocker 1 E2E CONTRACT: a UI-shaped integer selection [12] flows through
+    PATCH -> propagation -> reconcile and the channel ends ENABLED in profile
+    12."""
+    client = _E2EClient(stored_selection=[12])
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules_impl):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {"channel_profile_ids": [12]}}
+            ]},
+        )
+    assert resp.status_code == 200
+    # Channel 500 enabled in the selected profile 12 (and disabled in 13).
+    assert (12, (500,), True) in client.bulk_calls
+    assert (13, (500,), False) in client.bulk_calls
+
+
+@pytest.mark.asyncio
+async def test_e2e_legacy_string_selection_coerced_and_enabled(async_client):
+    """Blocker 1: a LEGACY string-typed stored selection ("12") is coerced to
+    int and still enables profile 12 — the exact case the pre-fix int-only drop
+    silently no-op'd (this asserts the fix, and fails against that old code)."""
+    client = _E2EClient(stored_selection=["12"])  # legacy strings in storage
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules_impl):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {"channel_profile_ids": [12]}}
+            ]},
+        )
+    assert resp.status_code == 200
+    assert (12, (500,), True) in client.bulk_calls  # coerced "12" -> 12, applied
+
+
+@pytest.mark.asyncio
+async def test_non_integer_selection_rejected_422(async_client):
+    """Blocker 1: a non-integer channel_profile_id is REJECTED with 422 (never
+    silently dropped, which would read as a clear)."""
+    client = _mock_client()
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {"channel_profile_ids": ["not-a-number"]}}
+            ]},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_numeric_string_selection_normalized_to_int_in_payload(async_client):
+    """A numeric-string id is coerced to int in the forwarded Dispatcharr payload
+    (boundary normalization)."""
+    client = _E2EClient(stored_selection=[12])
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules_impl):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {"channel_profile_ids": ["12"]}}
+            ]},
+        )
+    assert resp.status_code == 200
+    # The PRIMARY forwarded row carries INT 12, not the string "12".
+    primary = [w for w in client.group_settings_writes if w[0] == 11][0]
+    row = primary[1]["group_settings"][0]
+    assert row["custom_properties"]["channel_profile_ids"] == [12]
+
+
 @pytest.mark.asyncio
 async def test_post_refresh_completion_hook_invokes_sweep():
     """Should-Fix 8: the post-refresh completion helper actually calls the
