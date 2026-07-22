@@ -43,6 +43,79 @@ async def test_monitor_runs_sweep_when_no_changes_detected(test_session):
     assert result.failed_count == 0
 
 
+async def _run_monitor(test_session, *, accounts, snapshot_ts, sweep_return=None,
+                       sweep_side_effect=None, change_set=None):
+    """Drive M3UChangeMonitorTask.execute with a stubbed sweep + change capture."""
+    if snapshot_ts is not None:
+        test_session.add(
+            M3USnapshot(m3u_account_id=11, dispatcharr_updated_at=snapshot_ts, total_streams=0)
+        )
+        test_session.commit()
+    client = AsyncMock()
+    client.get_m3u_accounts.return_value = accounts
+    if sweep_side_effect is not None:
+        fake_sweep = AsyncMock(side_effect=sweep_side_effect)
+    else:
+        fake_sweep = AsyncMock(return_value=sweep_return or {})
+    task = M3UChangeMonitorTask()
+    with patch("tasks.m3u_change_monitor.get_client", return_value=client), \
+         patch("tasks.m3u_change_monitor.get_session", return_value=test_session), \
+         patch("tasks.m3u_refresh.capture_m3u_changes", AsyncMock(return_value=change_set)), \
+         patch("tasks.m3u_digest.send_immediate_digest", AsyncMock()), \
+         patch("services.profile_reconcile.reconcile_all_selected_groups", fake_sweep):
+        return await task.execute()
+
+
+@pytest.mark.asyncio
+async def test_counter_invariants_hold_across_change_and_error_paths(test_session):
+    """BLOCKER (Finding-5 regression): total_items must be >= BOTH success_count
+    and failed_count on every path — including a change detected in a
+    no-selection deployment (A), a sweep that RAISED (B), and a sweep whose
+    group-settings fetch failed (C)."""
+    account = {"id": 11, "name": "HD Homerun", "is_active": True, "updated_at": "T1"}
+
+    # (A) 1 account checked, 1 CHANGE detected, deployment has NO selections.
+    result_a = await _run_monitor(
+        test_session, accounts=[account], snapshot_ts="T0",  # T0 != T1 -> change
+        change_set={"changed": True},
+        sweep_return={"groups_reconciled": 0, "groups_partial_failure": 0,
+                      "groups_degraded": 0, "groups_errored": 0,
+                      "groups_with_selection": 0, "accounts_normalized": 0,
+                      "accounts_normalize_failed": 0},
+    )
+    assert result_a.success_count == 1
+    assert result_a.total_items >= result_a.success_count
+    assert result_a.total_items >= result_a.failed_count
+
+
+@pytest.mark.asyncio
+async def test_counter_invariants_hold_when_sweep_raises(test_session):
+    account = {"id": 11, "name": "HD Homerun", "is_active": True, "updated_at": "T1"}
+    # (B) no change, sweep RAISED -> a warning with no counted group/account item.
+    result_b = await _run_monitor(
+        test_session, accounts=[account], snapshot_ts="T1",  # matches -> no change
+        sweep_side_effect=RuntimeError("sweep boom"),
+    )
+    assert result_b.failed_count >= 1
+    assert result_b.total_items >= result_b.success_count
+    assert result_b.total_items >= result_b.failed_count
+
+
+@pytest.mark.asyncio
+async def test_counter_invariants_hold_when_sweep_fetch_failed(test_session):
+    # (C) NO accounts to check, sweep group-settings fetch failed -> groups_errored.
+    result_c = await _run_monitor(
+        test_session, accounts=[], snapshot_ts=None,
+        sweep_return={"groups_reconciled": 0, "groups_partial_failure": 0,
+                      "groups_degraded": 0, "groups_errored": 1,
+                      "groups_with_selection": 0, "accounts_normalized": 0,
+                      "accounts_normalize_failed": 0},
+    )
+    assert result_c.failed_count >= 1
+    assert result_c.total_items >= result_c.success_count
+    assert result_c.total_items >= result_c.failed_count
+
+
 @pytest.mark.asyncio
 async def test_monitor_runs_sweep_even_with_no_accounts_to_check(test_session):
     """Finding: even when account filtering yields NO accounts, the profile
