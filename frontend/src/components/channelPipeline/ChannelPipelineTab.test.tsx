@@ -778,6 +778,134 @@ describe('ChannelPipelineTab', () => {
       expect(screen.queryByText(/normalization applied no changes/i)).toBeNull();
     });
 
+    // y3m6o.1 review (Blocker 3): the run `warnings` array is heterogeneous.
+    // A non_reversible_profile_changes warning has no rule_name/disabled_groups,
+    // so the old code produced a FALSE "Normalization applied no changes:
+    // undefined ..." toast and crashed the details renderer on disabled_groups.
+    const NON_REVERSIBLE_MSG =
+      'This run changed channel-profile membership on 4 channel(s). ' +
+      'Channel-profile membership has no reversible previous state, so ' +
+      'Rollback and Undo will NOT restore it.';
+
+    const nonReversibleWarning = () => ({
+      type: 'non_reversible_profile_changes' as const,
+      count: 4,
+      channel_ids: [1, 2, 3, 4],
+      message: NON_REVERSIBLE_MSG,
+    });
+
+    const disabledNormWarning = () => ({
+      type: 'disabled_normalization_group' as const,
+      rule_id: 7,
+      rule_name: 'Movie Channels',
+      disabled_groups: [{ id: 2, name: 'Country Prefixes', missing: false }],
+    });
+
+    it('clean run with only a non_reversible warning: shows its own copy, not a false normalization toast', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Profile Rule', enabled: true }),
+      );
+      // Override run: clean `completed` run that only changed profile membership.
+      server.use(
+        http.post('/api/channel-pipeline/run', async () => {
+          const execution = createMockChannelPipelineExecution({
+            mode: 'execute',
+            status: 'completed',
+            channels_created: 0,
+            streams_matched: 4,
+            warnings: [nonReversibleWarning()],
+          });
+          mockDataStore.channelPipelineExecutions.unshift(execution);
+          return HttpResponse.json(
+            { execution_id: execution.id, status: 'running', message: 'started' },
+            { status: 202 },
+          );
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByText('Profile Rule')).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /^run$/i }));
+
+      // The non-reversible disclosure toast (its own operator copy) appears.
+      await waitFor(() => {
+        expect(
+          screen.getByText(/rollback and undo will not restore it/i),
+        ).toBeInTheDocument();
+      });
+      // And NO false normalization toast (the bug: "...no changes: undefined").
+      expect(
+        screen.queryByText(/normalization applied no changes/i),
+      ).toBeNull();
+      expect(screen.queryByText(/undefined/i)).toBeNull();
+    });
+
+    it('expanded execution details with a non_reversible warning: renders its copy without crashing', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          streams_matched: 4,
+          channels_created: 0,
+          status: 'completed',
+          has_non_reversible_profile_changes: true,
+          warnings: [nonReversibleWarning()],
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        // Its own disclosure copy (count + message), no disabled_groups crash.
+        expect(
+          screen.getByText(/channel-profile membership changed on 4 channels/i),
+        ).toBeInTheDocument();
+        expect(
+          screen.getByText(/rollback and undo will not restore it/i),
+        ).toBeInTheDocument();
+      });
+      // The normalization banner must NOT appear for a pure non_reversible run.
+      expect(
+        screen.queryByText(/normalization applied no changes/i),
+      ).toBeNull();
+    });
+
+    it('mixed warnings in execution details: renders BOTH the normalization banner and the non_reversible disclosure', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          streams_matched: 25,
+          channels_created: 0,
+          status: 'completed',
+          has_non_reversible_profile_changes: true,
+          warnings: [disabledNormWarning(), nonReversibleWarning()],
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        // Normalization variant still renders (rule + disabled group).
+        expect(screen.getByText(/normalization applied no changes/i)).toBeInTheDocument();
+        expect(screen.getByText('Movie Channels')).toBeInTheDocument();
+        expect(screen.getByText(/country prefixes/i)).toBeInTheDocument();
+        // Non-reversible variant also renders alongside it.
+        expect(
+          screen.getByText(/channel-profile membership changed on 4 channels/i),
+        ).toBeInTheDocument();
+      });
+    });
+
     // enhancedchannelmanager-7wuhd: event_sync runs need an event_sync-aware
     // summary — the standard evaluated/matched/created counters are
     // structurally 0 for them and read as "nothing happened".

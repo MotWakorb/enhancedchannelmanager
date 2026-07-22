@@ -1208,9 +1208,18 @@ class ChannelPipelineEngine:
 
         Returns a list of warning dicts, one per affected rule::
 
-            {"rule_id": int, "rule_name": str,
+            {"type": "disabled_normalization_group",
+             "rule_id": int, "rule_name": str,
              "disabled_groups": [{"id": int, "name": str|None,
                                   "missing": bool}]}
+
+        The ``type`` discriminant (y3m6o.1 review) lets the frontend tell this
+        warning apart from the ``non_reversible_profile_changes`` warning that
+        shares the same persisted ``warnings`` JSON column — the two shapes are
+        structurally different (this one carries ``disabled_groups``/``rule_name``,
+        the other carries ``channel_ids``/``message``). Rows persisted before this
+        discriminant existed have no ``type``; the frontend treats a missing
+        ``type`` as this variant for backward compatibility.
         """
         # Only rules that actually reference a normalization group can be
         # affected — short-circuit otherwise so healthy configs do no DB work.
@@ -1256,6 +1265,7 @@ class ChannelPipelineEngine:
                     r.id, r.name, names,
                 )
                 warnings.append({
+                    "type": "disabled_normalization_group",
                     "rule_id": r.id,
                     "rule_name": r.name,
                     "disabled_groups": problem_groups,

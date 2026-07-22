@@ -364,12 +364,25 @@ interface MockChannelPipelineExecution {
   has_snapshot?: boolean
   /** y3m6o.1 review Finding 3 — run mutated channel-profile membership non-reversibly. */
   has_non_reversible_profile_changes?: boolean
-  /** enhancedchannelmanager-e8p1h — disabled-normalization-group warnings. */
-  warnings?: {
-    rule_id: number
-    rule_name: string
-    disabled_groups: { id: number; name: string | null; missing: boolean }[]
-  }[]
+  /**
+   * Heterogeneous run warnings persisted in the execution `warnings` column:
+   * disabled-normalization-group (enhancedchannelmanager-e8p1h) AND
+   * non_reversible-profile-change (y3m6o.1 review Blocker 3) share the column.
+   */
+  warnings?: (
+    | {
+        type?: 'disabled_normalization_group'
+        rule_id: number
+        rule_name: string
+        disabled_groups: { id: number; name: string | null; missing: boolean }[]
+      }
+    | {
+        type: 'non_reversible_profile_changes'
+        count: number
+        channel_ids: number[]
+        message: string
+      }
+  )[]
   /** enhancedchannelmanager-7wuhd — pure-event_sync run flag. */
   is_event_sync?: boolean
   /** enhancedchannelmanager-7wuhd — structured per-rule event_sync counters. */
