@@ -26,7 +26,19 @@ _POLL_INTERVAL_SECONDS: float = 5.0   # seconds between status checks
 _POLL_MAX_ATTEMPTS: int = 120          # cap at 120 × 5 s = 10 minutes
 
 # Terminal statuses that end the poll loop.
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "rolled_back"})
+#
+# The authoritative set a ChannelPipelineExecution.status can persist is
+# pending, running, completed, failed, rolled_back, capped,
+# completed_with_errors (see alembic 0039 widen_pipeline_execution_status and
+# the finalization branches in backend/channel_pipeline_engine.py). pending and
+# running are transient; every other value is TERMINAL and must break the poll
+# loop. Omitting completed_with_errors/capped meant a run that finalized in one
+# of those states was polled all _POLL_MAX_ATTEMPTS times and then falsely
+# reported "still running" (y3m6o.1 review). ``abandoned`` is a task_engine
+# concept, not a pipeline-execution status, so it is intentionally not here.
+_TERMINAL_STATUSES = frozenset({
+    "completed", "failed", "rolled_back", "capped", "completed_with_errors",
+})
 
 
 async def _poll_sleep(seconds: float) -> None:
@@ -376,7 +388,38 @@ def register(mcp: FastMCP):
             dur = result.get("duration_seconds")
             dur_str = f"{dur:.1f}s" if dur is not None else "N/A"
 
-            lines = [f"Auto-creation {mode} complete (execution_id={execution_id}):"]
+            # y3m6o.1 review: a run can finalize in a NON-green terminal state
+            # (completed_with_errors — one or more executed actions failed; or
+            # capped — the created-channel cap was hit) while still having done
+            # real work on the channels/actions that succeeded. Surface the
+            # warning/error summary (error_message carries the failed-action
+            # summary or the cap guidance) in the header instead of reporting a
+            # generic "complete", so the caller sees the run did NOT finish
+            # cleanly. The per-counter breakdown below still renders for context.
+            if status == "completed_with_errors":
+                header = (
+                    f"Auto-creation {mode} completed WITH ERRORS "
+                    f"(execution_id={execution_id}) — one or more actions failed:"
+                )
+            elif status == "capped":
+                header = (
+                    f"Auto-creation {mode} was CAPPED "
+                    f"(execution_id={execution_id}):"
+                )
+            else:
+                header = f"Auto-creation {mode} complete (execution_id={execution_id}):"
+
+            lines = [header]
+            summary = result.get("error_message")
+            if status in ("completed_with_errors", "capped") and summary:
+                lines.append(f"  Warning: {summary}")
+            # A run that changed channel-profile membership non-reversibly cannot
+            # be fully undone by rollback — disclose it on the terminal summary.
+            if result.get("has_non_reversible_profile_changes"):
+                lines.append(
+                    "  Note: this run changed channel-profile membership, which "
+                    "Rollback/Undo will NOT restore."
+                )
             lines.append(f"  Streams evaluated: {result.get('streams_evaluated', 0)}")
             lines.append(f"  Streams matched: {result.get('streams_matched', 0)}")
             lines.append(
