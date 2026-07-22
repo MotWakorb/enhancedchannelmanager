@@ -70,6 +70,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from services.event_sync_preflight import resolve_effective_master_group_id
@@ -101,6 +102,16 @@ def _get_group_lock(effective_gid: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _group_locks[effective_gid] = lock
     return lock
+
+
+def effective_group_lock(effective_gid: int) -> asyncio.Lock:
+    """Public accessor for the per-effective-group lock registry (Finding 4).
+
+    The Channel Pipeline's assign_channel_profile write acquires the SAME lock
+    the reconcile uses so a pipeline membership write and a group reconcile can
+    never touch the same effective group's channels concurrently. Same registry,
+    same key resolution (``resolve_effective_master_group_id``)."""
+    return _get_group_lock(effective_gid)
 
 
 @asynccontextmanager
@@ -141,12 +152,20 @@ _UNSET = object()
 
 def coerce_profile_id(value):
     """Coerce a single profile id to ``int``, or return ``None`` if it is not a
-    valid integer id.
+    valid integer id. NEVER raises.
 
     Canonical type is INTEGER (Blocker 1). For legacy back-compat we also accept
     a NUMERIC STRING (``"12"`` -> ``12``) — early builds of the Auto-Sync modal
-    stored the selection as strings. ``bool`` is rejected (it is an int subclass
-    but not a profile id); a non-numeric string is invalid.
+    stored the selection as strings. ``bool`` is rejected (int subclass, not a
+    profile id).
+
+    Finding 1: parse strings with a STRICT ASCII integer regex
+    (``-?[0-9]+``) rather than ``str.isdigit()``/``lstrip``. ``str.isdigit()``
+    accepts unicode digits (``"➂"``, ``"²"``, Arabic-Indic ``"٣"``), and
+    ``lstrip("-")`` lets ``"--5"`` through — both then reach ``int()``, which
+    either RAISES (``"--5"``, ``"➂"``) or silently mis-accepts (``int("٣") == 3``).
+    ``[0-9]`` is ASCII-only and the fullmatch rejects empty/sign-only strings, so
+    ``int()`` is always safe.
     """
     if isinstance(value, bool):
         return None
@@ -154,7 +173,7 @@ def coerce_profile_id(value):
         return value
     if isinstance(value, str):
         s = value.strip()
-        if s.lstrip("-").isdigit():
+        if re.fullmatch(r"-?[0-9]+", s):
             return int(s)
     return None
 
@@ -370,6 +389,17 @@ async def _fetch_group_channels(client, group_id: int, cancel_check=None) -> lis
     return channels
 
 
+async def _recheck_newly_owned(client, effective_gid, live_rule_ids, cancel_check=None) -> set:
+    """Re-fetch the group's channels and return the set of channel ids that are
+    NOW pipeline-owned (Blocker 2a pre-write ownership re-check). Raises on fetch
+    failure so the caller can fail closed rather than risk a membership clobber."""
+    recheck = await _fetch_group_channels(client, effective_gid, cancel_check)
+    return {
+        c["id"] for c in recheck
+        if c.get("id") is not None and _ownership_state(c, live_rule_ids) == "owned"
+    }
+
+
 def _result(status: str, group_id: int, *, effective_gid=None, scoped=0,
             excluded=0, released=0, enabled=0, disabled=0,
             failed_profile_ids=None, conflict=False, error=None) -> dict:
@@ -573,6 +603,36 @@ async def _reconcile_group_locked(
             "successful reconcile (selection=%s)",
             group_id, sorted(selected),
         )
+        # Sub-note (Finding 4 family): the executor now holds the SAME group lock
+        # during a pipeline assign, so in the common case a pipeline stamp cannot
+        # race this enable-only write. But if the executor SKIPPED its lock
+        # (settings fetch failed), only this re-check protects a just-owned
+        # channel from being additively enabled here — so guard the enable-only
+        # path with the ownership re-check too (drop newly-owned before enabling).
+        try:
+            newly_owned = await _recheck_newly_owned(
+                client, effective_gid, live_rule_ids, cancel_check
+            )
+        except Exception as e:  # noqa: BLE001 - fail closed rather than clobber
+            logger.warning(
+                "[PROFILE-RECONCILE] group=%s: enable-only ownership re-check "
+                "fetch FAILED (%s) — failing closed (no writes), degraded",
+                group_id, e,
+            )
+            return _result(
+                "degraded", group_id, effective_gid=effective_gid,
+                excluded=owned_count, released=released, conflict=conflict,
+                error="enable-only ownership re-check fetch failed; no writes issued",
+            )
+        if newly_owned:
+            n_drop = sum(1 for cid in channel_ids if cid in newly_owned)
+            channel_ids = [cid for cid in channel_ids if cid not in newly_owned]
+            owned_count += n_drop
+        if not channel_ids:
+            return _result(
+                "no_channels", group_id, effective_gid=effective_gid,
+                excluded=owned_count, released=released, conflict=conflict,
+            )
         profiles_enabled = 0
         failed_enable: list[int] = []
         for pid in selection:
@@ -634,7 +694,9 @@ async def _reconcile_group_locked(
     # later sweeps preserving the wrong membership. Re-fetch the group's channels
     # under the lock and DROP any channel that became owned since the snapshot.
     try:
-        recheck = await _fetch_group_channels(client, effective_gid, cancel_check)
+        newly_owned = await _recheck_newly_owned(
+            client, effective_gid, live_rule_ids, cancel_check
+        )
     except Exception as e:  # noqa: BLE001 - fail closed rather than risk a clobber
         logger.warning(
             "[PROFILE-RECONCILE] group=%s: ownership re-check fetch FAILED (%s) — "
@@ -645,10 +707,6 @@ async def _reconcile_group_locked(
             excluded=owned_count, released=released, conflict=conflict,
             error="ownership re-check fetch failed; no writes issued",
         )
-    newly_owned = {
-        c["id"] for c in recheck
-        if c.get("id") is not None and _ownership_state(c, live_rule_ids) == "owned"
-    }
     dropped = [cid for cid in channel_ids if cid in newly_owned]
     if dropped:
         logger.info(
@@ -833,8 +891,13 @@ async def normalize_group_selections(client, all_settings: dict, cancel_check=No
             if desired is None:
                 continue
             current = sorted(set(_selection_from_setting(row) or []))
-            if current == desired:
-                continue  # already in sync — no write
+            raw = (row.get("custom_properties") or {}).get("channel_profile_ids")
+            # Finding 2: skip only when the row's SELECTION matches AND it is
+            # already stored in the canonical INTEGER list form. A legacy
+            # ["12"] row coerces to the same selection but is not canonical, so
+            # it is rewritten to int storage (divergence otherwise persists).
+            if current == desired and raw == list(desired):
+                continue
             new_cp = dict(row.get("custom_properties") or {})
             new_cp["channel_profile_ids"] = list(desired)
             new_cp.pop("_ecm_channel_profile_conflict", None)  # ECM-synthetic

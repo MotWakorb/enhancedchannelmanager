@@ -5,6 +5,7 @@ Executes actions defined in auto-creation rules, such as creating channels,
 groups, merging streams, and assigning properties. Tracks all changes for
 potential rollback.
 """
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -160,6 +161,15 @@ class ExecutionContext:
     # WARNING (NOT a failed action — the assignment itself succeeded, so the run
     # stays completed, not completed_with_errors).
     profile_ownership_unestablished_channel_ids: set[int] = field(default_factory=set)
+
+    # GH #720 Part B (Finding 4): group settings fetched ONCE per pipeline run
+    # (cached here) so assign_channel_profile can resolve each channel's
+    # EFFECTIVE group id and acquire the SAME reconcile lock without a per-channel
+    # get_all_m3u_group_settings fetch. ``_group_settings_fetched`` guards the
+    # one-shot fetch (a None cache after fetch means the fetch failed — skip the
+    # lock, fall back to the re-check + marker-ordering defense-in-depth).
+    group_settings_cache: Optional[dict] = None
+    group_settings_fetched: bool = False
 
     # y3m6o.1 review (Finding 1 reversal): default-profile assignment failures.
     # Each entry {channel_id, failed_profile_ids} for a newly-created channel
@@ -2856,6 +2866,38 @@ class ActionExecutor:
                 error=str(e)
             )
 
+    async def _resolve_channel_effective_group(self, channel_id, exec_ctx):
+        """Resolve a channel's EFFECTIVE group id for the shared reconcile lock
+        (Finding 4). Fetches ``get_all_m3u_group_settings`` ONCE per pipeline run
+        (cached on ``exec_ctx``) — NOT per channel — then follows any Channel
+        Group Override. Returns ``None`` when the settings fetch failed or the
+        channel has no resolvable group (nothing to serialize against)."""
+        if not exec_ctx.group_settings_fetched:
+            exec_ctx.group_settings_fetched = True
+            try:
+                exec_ctx.group_settings_cache = await self.client.get_all_m3u_group_settings()
+            except Exception as e:  # noqa: BLE001 - lock is best-effort defense
+                logger.warning(
+                    "[CHANNEL-PIPELINE-EXEC] could not fetch group settings for the "
+                    "assign_channel_profile lock (%s) — proceeding WITHOUT the "
+                    "shared lock (re-check + marker-ordering still apply)", e,
+                )
+                exec_ctx.group_settings_cache = None
+        all_settings = exec_ctx.group_settings_cache
+        if not isinstance(all_settings, dict) or not all_settings:
+            return None
+        channel = self._channel_by_id.get(channel_id) or {}
+        gid = channel.get("channel_group")
+        if gid is None:
+            gid = channel.get("channel_group_id")
+        if gid is None:
+            return None
+        from services.event_sync_preflight import resolve_effective_master_group_id
+        try:
+            return resolve_effective_master_group_id(all_settings, gid)
+        except Exception:  # noqa: BLE001 - resolution is best-effort
+            return None
+
     async def _execute_assign_channel_profile(self, action: Action, stream_ctx: StreamContext,
                                                exec_ctx: ExecutionContext,
                                                rule_id: Optional[int] = None) -> ActionResult:
@@ -2941,6 +2983,38 @@ class ActionExecutor:
                 modified=bool(n_flips),
             )
 
+        # Finding 4 (close B2): acquire the SAME per-effective-group lock the
+        # reconcile uses around the (marker-stamp + membership-write) unit, so a
+        # pipeline assign_channel_profile and a group reconcile can NEVER touch
+        # this effective group's channels concurrently. The effective group is
+        # resolved from group settings fetched ONCE per run (cached on exec_ctx —
+        # see _resolve_channel_effective_group), NOT per channel. Acquire/release
+        # is per-channel with no nested holds: the executor is never invoked from
+        # within a reconcile (reconcile only calls the Dispatcharr client), so
+        # there is no reconcile->executor->reconcile re-entrancy and no deadlock.
+        # When the group can't be resolved (settings fetch failed / channel has
+        # no group), skip the lock and rely on the pre-write re-check +
+        # marker-before-membership ordering (defense-in-depth, still airtight in
+        # combination for the resolvable case).
+        from services.profile_reconcile import effective_group_lock
+        eff_gid = await self._resolve_channel_effective_group(
+            exec_ctx.current_channel_id, exec_ctx
+        )
+        lock_cm = (
+            effective_group_lock(eff_gid) if eff_gid is not None
+            else contextlib.nullcontext()
+        )
+        async with lock_cm:
+            return await self._assign_channel_profile_write(
+                action, exec_ctx, rule_id, channel_profile_ids
+            )
+
+    async def _assign_channel_profile_write(self, action, exec_ctx, rule_id,
+                                            channel_profile_ids):
+        """The marker-stamp + exclusive-membership write for one channel, run
+        while holding the shared per-effective-group reconcile lock (Finding 4).
+        Split out of :meth:`_execute_assign_channel_profile` so the lock wraps
+        EXACTLY the write unit."""
         try:
             # GH #720 Part B (Blocker 2b — ORDERING): stamp the ownership marker
             # BEFORE the exclusive-membership write. A group reconcile that reads

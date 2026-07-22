@@ -678,6 +678,33 @@ async def test_normalize_converges_divergent_sibling(monkeypatch):
     assert row["custom_properties"]["channel_profile_ids"] == [1]
 
 
+@pytest.mark.asyncio
+async def test_normalize_rewrites_legacy_string_row_to_int_storage(monkeypatch):
+    """Finding 2: normalize rewrites a legacy STRING-typed row (["12"]) to the
+    canonical INTEGER list [12] even though the coerced selection matches — so
+    the string storage does not persist forever."""
+    async def _no_live_rules():
+        return set()
+    monkeypatch.setattr(
+        "services.profile_reconcile._resolve_live_rule_ids", _no_live_rules
+    )
+    accounts = [
+        {"id": 1, "channel_groups": [
+            {"channel_group": 100, "custom_properties": {"channel_profile_ids": ["12"]}}]},
+    ]
+    client = _NormalizeClient({100: [_channel(10, group=100)]}, profiles=[12, 13],
+                              accounts=accounts)
+    settings = {100: _setting(channel_profile_ids=[12])}  # winner (int) = [12]
+
+    result = await reconcile_all_selected_groups(client, settings)
+
+    assert result["accounts_normalized"] == 1
+    writes = [w for w in client.group_settings_writes if w[0] == 1]
+    assert writes
+    row = writes[0][1][0]
+    assert row["custom_properties"]["channel_profile_ids"] == [12]  # int storage
+
+
 # --------------------------------------------------------------------------
 # Findings — coalesce redundant sweeps; cancel during long phases
 # --------------------------------------------------------------------------
@@ -1143,6 +1170,48 @@ async def test_sweep_aborts_promptly_on_cancel(monkeypatch):
 
     assert result["groups_reconciled"] == 0
     assert client.get_channels_gids == []  # nothing enumerated
+
+
+@pytest.mark.parametrize("bad", ["--5", "➂", "٣", "²", "", "-", " ", "5x", "x"])
+def test_coerce_profile_id_rejects_garbage_without_raising(bad):
+    """Finding 1: strict ASCII parse — '--5', unicode digits ('➂','²','٣'),
+    empty/sign-only, and mixed strings all coerce to None (never raise, never
+    accept a unicode digit)."""
+    from services.profile_reconcile import coerce_profile_id
+    assert coerce_profile_id(bad) is None
+
+
+@pytest.mark.parametrize("good,expected", [(12, 12), ("12", 12), ("-3", -3), ("007", 7)])
+def test_coerce_profile_id_accepts_ints_and_ascii_numeric_strings(good, expected):
+    from services.profile_reconcile import coerce_profile_id
+    assert coerce_profile_id(good) == expected
+
+
+def test_coerce_profile_id_rejects_bool():
+    from services.profile_reconcile import coerce_profile_id
+    assert coerce_profile_id(True) is None
+    assert coerce_profile_id(False) is None
+
+
+@pytest.mark.asyncio
+async def test_sweep_survives_garbage_stored_selection(monkeypatch):
+    """Finding 1: a garbage stored channel_profile_ids (e.g. ['--5']) must NOT
+    crash the sweep at groups_with_selection — the bad id is dropped and the
+    group is treated as no_selection."""
+    async def _no_live_rules():
+        return set()
+    monkeypatch.setattr(
+        "services.profile_reconcile._resolve_live_rule_ids", _no_live_rules
+    )
+    client = FakeClient({100: [_channel(10, group=100)]}, profiles=[1, 2])
+    settings = {100: {"auto_channel_sync": True,
+                      "custom_properties": {"channel_profile_ids": ["--5", "➂"]}}}
+
+    result = await reconcile_all_selected_groups(client, settings)  # must not raise
+
+    # No valid ids -> not counted as a selected group, no writes.
+    assert client.bulk_calls == []
+    assert result["groups_with_selection"] == 0
 
 
 def test_groups_with_selection_filters_correctly():
