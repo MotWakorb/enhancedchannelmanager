@@ -170,16 +170,23 @@ def _account(aid, gid, selection):
     }
 
 
+def _sibling_calls(client, aid):
+    return [
+        c for c in client.update_m3u_group_settings.await_args_list
+        if c.args and c.args[0] == aid
+    ]
+
+
 @pytest.mark.asyncio
-async def test_enforced_global_propagates_selection_to_sibling_accounts(async_client):
-    """PO decision (enforced global): saving group 1304's selection on account
-    11 CASCADE-WRITES the same selection into sibling account 22's row for 1304,
-    so no contradictory per-account rows persist."""
+async def test_enforced_global_propagates_genuine_selection_change(async_client):
+    """PO decision (enforced global): a GENUINE selection change on account 11
+    (prior none -> [12]) is CASCADE-WRITTEN into sibling account 22's row for
+    1304, normalizing away 22's contradictory [99]."""
     client = _mock_client()
-    # Two accounts share group 1304; account 22 currently has a DIFFERENT
-    # selection that must be normalized to the just-saved [12].
+    # Prior primary state carries NO selection, so saving [12] is a real change.
+    client.get_m3u_account.return_value = _account(11, 1304, None)
     client.get_m3u_accounts.return_value = [
-        _account(11, 1304, [12]),
+        _account(11, 1304, None),
         _account(22, 1304, [99]),
     ]
     fake_reconcile = AsyncMock(return_value={"status": "reconciled", "group_id": 1304})
@@ -196,16 +203,110 @@ async def test_enforced_global_propagates_selection_to_sibling_accounts(async_cl
         )
 
     assert resp.status_code == 200
-    # A PATCH was issued to the SIBLING account 22 carrying the saved selection.
-    sibling_calls = [
-        c for c in client.update_m3u_group_settings.await_args_list
-        if c.args and c.args[0] == 22
-    ]
+    sibling_calls = _sibling_calls(client, 22)
     assert sibling_calls, "sibling account 22 should have been propagated to"
-    payload = sibling_calls[0].args[1]
-    row = payload["group_settings"][0]
+    row = sibling_calls[0].args[1]["group_settings"][0]
     assert row["channel_group"] == 1304
     assert row["custom_properties"]["channel_profile_ids"] == [12]
+
+
+@pytest.mark.asyncio
+async def test_enforced_global_field_only_edit_does_not_clear_sibling(async_client):
+    """Blocker B1 (data loss): a field-only edit on account 11 (it has other
+    custom props, NO profile selection — unchanged) must NOT clear sibling
+    account 22's untouched [5]. No cascade PATCH may touch account 22."""
+    client = _mock_client()
+    # Primary 11 has custom_epg_id but NO selection, both before AND in the save
+    # (a field-only edit); sibling 22 has a selection [5].
+    prior_11 = {
+        "id": 11, "name": "Account 11",
+        "channel_groups": [{
+            "channel_group": 1304, "enabled": True, "auto_channel_sync": True,
+            "auto_sync_channel_start": None, "auto_sync_channel_end": None,
+            "custom_properties": {"custom_epg_id": 9},
+        }],
+    }
+    client.get_m3u_account.return_value = prior_11
+    client.get_m3u_accounts.return_value = [prior_11, _account(22, 1304, [5])]
+    fake_reconcile = AsyncMock(return_value={"status": "no_selection", "group_id": 1304})
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules), \
+         patch("services.profile_reconcile.reconcile_group_profiles", fake_reconcile):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            # Field-only edit: bumps auto_sync_channel_start, carries the same
+            # (no-selection) custom_properties — profiles untouched.
+            json={"group_settings": [
+                {"channel_group": 1304, "auto_sync_channel_start": 100,
+                 "custom_properties": {"custom_epg_id": 9}}
+            ]},
+        )
+
+    assert resp.status_code == 200
+    # CRITICAL: no PATCH cascaded to the sibling — its [5] is untouched.
+    assert _sibling_calls(client, 22) == []
+
+
+@pytest.mark.asyncio
+async def test_enforced_global_propagates_a_genuine_clear(async_client):
+    """A genuine present->absent clear on the primary DOES clear siblings."""
+    client = _mock_client()
+    client.get_m3u_account.return_value = _account(11, 1304, [12])  # prior HAD [12]
+    client.get_m3u_accounts.return_value = [
+        _account(11, 1304, None),
+        _account(22, 1304, [12]),
+    ]
+    fake_reconcile = AsyncMock(return_value={"status": "no_selection", "group_id": 1304})
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules), \
+         patch("services.profile_reconcile.reconcile_group_profiles", fake_reconcile):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            # Selection cleared: custom_properties present but no channel_profile_ids.
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {}}
+            ]},
+        )
+
+    assert resp.status_code == 200
+    sibling_calls = _sibling_calls(client, 22)
+    assert sibling_calls, "sibling should be propagated the clear"
+    row = sibling_calls[0].args[1]["group_settings"][0]
+    assert "channel_profile_ids" not in (row["custom_properties"] or {})
+
+
+@pytest.mark.asyncio
+async def test_enforced_global_sync_groups_shape_does_not_alter_selection(async_client):
+    """Blocker B1 / Sync Groups: a save whose rows OMIT custom_properties (the
+    M3UManagerTab union save) leaves the merged selection == prior, so nothing
+    is cascaded — no sibling selection is rewritten."""
+    client = _mock_client()
+    client.get_m3u_account.return_value = _account(11, 1304, [12])  # prior has [12]
+    client.get_m3u_accounts.return_value = [
+        _account(11, 1304, [12]),
+        _account(22, 1304, [12]),
+    ]
+    fake_reconcile = AsyncMock(return_value={"status": "reconciled", "group_id": 1304})
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules), \
+         patch("services.profile_reconcile.reconcile_group_profiles", fake_reconcile):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            # Sync-Groups shape: only enabled/auto_channel_sync/start, NO custom_properties.
+            json={"group_settings": [
+                {"channel_group": 1304, "enabled": True, "auto_channel_sync": True,
+                 "auto_sync_channel_start": None}
+            ]},
+        )
+
+    assert resp.status_code == 200
+    assert _sibling_calls(client, 22) == []
 
 
 @pytest.mark.asyncio

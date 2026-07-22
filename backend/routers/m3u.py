@@ -1054,33 +1054,50 @@ def merge_group_settings_row(current: dict | None, incoming: dict) -> dict:
     return merged
 
 
-async def _propagate_group_profile_selection(client, primary_account_id, edited_rows):
-    """Enforced-global (GH #720 Part B / PO decision): cascade each edited
-    group's ``channel_profile_ids`` selection to EVERY sibling M3U account row
+def _row_selection_set(cp) -> frozenset:
+    """The channel_profile_ids in a custom_properties dict as an int SET (order-
+    insensitive; non-ints dropped). Empty set = no/empty selection."""
+    if isinstance(cp, dict):
+        sel = cp.get("channel_profile_ids")
+        if isinstance(sel, list):
+            return frozenset(x for x in sel if isinstance(x, int) and not isinstance(x, bool))
+    return frozenset()
+
+
+async def _propagate_group_profile_selection(
+    client, primary_account_id, edited_rows, before_groups,
+):
+    """Enforced-global (GH #720 Part B / PO decision): cascade a GENUINELY
+    CHANGED ``channel_profile_ids`` selection to EVERY sibling M3U account row
     for that channel-group, so no contradictory per-account rows persist.
 
-    ``edited_rows`` are this save's group_settings entries. For each group they
-    touch, the (possibly cleared) selection is written into every OTHER
-    account's row for the same channel-group, merged over that row's existing
-    custom_properties (all other keys preserved; the ECM-synthetic conflict key
-    stripped). The primary account was already saved by the caller.
+    Blocker B1 (data loss): ``edited_rows`` are POST-MERGE rows, whose
+    ``custom_properties`` are ALWAYS a dict (merge fills them from the group's
+    current stored value), so "did the operator touch profiles?" cannot be
+    inferred from the row alone. We therefore diff the primary account's NEW
+    selection against its PRIOR selection (``before_groups`` — captured before
+    the save) as SETS: only a group whose selection genuinely changed
+    (present->different, present->absent, or absent->present) is propagated. A
+    field-only edit (selection unchanged, incl. absent->absent) is NOT cascaded,
+    so it can never clear a sibling's untouched selection.
 
     Best-effort: returns ``None`` on full success, or a short error string
     describing partial/failed propagation (so the caller can surface it).
     """
-    # Map each edited channel-group id -> desired selection (list, or None/[] to
-    # clear). Only groups whose incoming row actually carried a custom_properties
-    # dict are considered (an unrelated field-only edit must not clear a
-    # selection it never touched).
-    desired: dict[int, object] = {}
+    # gid -> desired selection SET (empty set == propagate a CLEAR). Only groups
+    # whose primary selection genuinely changed this save.
+    desired: dict[int, frozenset] = {}
     for gs in edited_rows:
         if not isinstance(gs, dict):
             continue
         gid = gs.get("channel_group")
-        cp = gs.get("custom_properties")
-        if gid is None or not isinstance(cp, dict):
+        if gid is None:
             continue
-        desired[gid] = cp.get("channel_profile_ids")
+        new_set = _row_selection_set(gs.get("custom_properties"))
+        old_set = _row_selection_set((before_groups.get(gid) or {}).get("custom_properties"))
+        if new_set == old_set:
+            continue  # unchanged (incl. field-only edits) — do NOT cascade
+        desired[gid] = new_set
     if not desired:
         return None
 
@@ -1099,6 +1116,11 @@ async def _propagate_group_profile_selection(client, primary_account_id, edited_
         if aid is None or aid == primary_account_id:
             continue  # primary already saved
         sibling_rows = []
+        # Staleness window (Should-Fix 5): sibling rows come from this one
+        # up-front get_m3u_accounts(); a concurrent sibling custom_properties
+        # write between that fetch and the PATCH below could be clobbered. Small
+        # best-effort window — not worth a per-sibling fresh-fetch (the marker
+        # path fresh-fetches for the higher-risk channel writes).
         for row in acct.get("channel_groups", []):
             gid = row.get("channel_group")
             if gid not in desired:
@@ -1106,9 +1128,9 @@ async def _propagate_group_profile_selection(client, primary_account_id, edited_
             new_cp = dict(row.get("custom_properties") or {})
             sel = desired[gid]
             if sel:
-                if new_cp.get("channel_profile_ids") == sel:
-                    continue  # already in sync — skip a no-op write
-                new_cp["channel_profile_ids"] = sel
+                if _row_selection_set(new_cp) == sel:
+                    continue  # already in sync (set-compare) — skip no-op write
+                new_cp["channel_profile_ids"] = sorted(sel)
             else:
                 if "channel_profile_ids" not in new_cp:
                     continue  # already absent — nothing to clear
@@ -1206,7 +1228,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
             # regardless of which account it was made on. Best-effort per
             # sibling; incomplete propagation is surfaced in the apply summary.
             propagation_error = await _propagate_group_profile_selection(
-                client, account_id, data.get("group_settings") or []
+                client, account_id, data.get("group_settings") or [], before_groups
             )
             if propagation_error:
                 profile_apply_summary.append({
