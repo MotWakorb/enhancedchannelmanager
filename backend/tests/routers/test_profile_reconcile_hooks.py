@@ -151,6 +151,86 @@ async def test_save_response_carries_profile_apply_summary(async_client):
     assert body["ecm_profile_apply"] == [outcome]
 
 
+def _account(aid, gid, selection):
+    return {
+        "id": aid,
+        "name": f"Account {aid}",
+        "channel_groups": [
+            {
+                "channel_group": gid,
+                "enabled": True,
+                "auto_channel_sync": True,
+                "auto_sync_channel_start": None,
+                "auto_sync_channel_end": None,
+                "custom_properties": (
+                    {"channel_profile_ids": selection} if selection is not None else {}
+                ),
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_enforced_global_propagates_selection_to_sibling_accounts(async_client):
+    """PO decision (enforced global): saving group 1304's selection on account
+    11 CASCADE-WRITES the same selection into sibling account 22's row for 1304,
+    so no contradictory per-account rows persist."""
+    client = _mock_client()
+    # Two accounts share group 1304; account 22 currently has a DIFFERENT
+    # selection that must be normalized to the just-saved [12].
+    client.get_m3u_accounts.return_value = [
+        _account(11, 1304, [12]),
+        _account(22, 1304, [99]),
+    ]
+    fake_reconcile = AsyncMock(return_value={"status": "reconciled", "group_id": 1304})
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules), \
+         patch("services.profile_reconcile.reconcile_group_profiles", fake_reconcile):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {"channel_profile_ids": [12]}}
+            ]},
+        )
+
+    assert resp.status_code == 200
+    # A PATCH was issued to the SIBLING account 22 carrying the saved selection.
+    sibling_calls = [
+        c for c in client.update_m3u_group_settings.await_args_list
+        if c.args and c.args[0] == 22
+    ]
+    assert sibling_calls, "sibling account 22 should have been propagated to"
+    payload = sibling_calls[0].args[1]
+    row = payload["group_settings"][0]
+    assert row["channel_group"] == 1304
+    assert row["custom_properties"]["channel_profile_ids"] == [12]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_setup_failure_surfaces_error_in_summary(async_client):
+    """Blocker 3b: a reconcile SETUP failure (get_all_m3u_group_settings throws)
+    before the per-group loop must emit an explicit error entry in
+    ecm_profile_apply so an empty summary is never read as a clean success."""
+    client = _mock_client()
+    client.get_all_m3u_group_settings.side_effect = RuntimeError("dispatcharr down")
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {"channel_profile_ids": [12]}}
+            ]},
+        )
+
+    assert resp.status_code == 200
+    summary = resp.json().get("ecm_profile_apply", [])
+    assert any(o.get("status") == "error" for o in summary)
+
+
 @pytest.mark.asyncio
 async def test_post_refresh_completion_hook_invokes_sweep():
     """Should-Fix 8: the post-refresh completion helper actually calls the
