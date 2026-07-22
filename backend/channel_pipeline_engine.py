@@ -4479,7 +4479,7 @@ class ChannelPipelineEngine:
         for action in profile_actions:
             step_results.extend(
                 await executor.apply_channel_profile_to_channels(
-                    action, touched_ids, exec_ctx,
+                    action, touched_ids, exec_ctx, rule_id=rule.id,
                 )
             )
 

@@ -637,32 +637,70 @@ class DispatcharrClient:
         """Get group settings for all M3U accounts, returns dict mapping channel_group_id to settings.
 
         The channel_groups data is embedded in the accounts response, so we extract it from there.
-        When multiple accounts have settings for the same group, prefer the one with auto_channel_sync enabled.
+
+        GLOBAL-PER-CHANNEL-GROUP contract (GH #720 Part B, decision "global per
+        group"): when multiple accounts carry settings for the SAME global
+        channel-group id we collapse to ONE row DETERMINISTICALLY — precedence
+        is ``auto_channel_sync`` ON first, then the LOWEST ``m3u_account_id``.
+        (The prior "prefer auto_channel_sync, else first-seen" collapse was
+        order-dependent across accounts with the same auto_channel_sync state.)
+        The winning row also carries ``_ecm_channel_profile_conflict``: True
+        when two account rows for the group hold DIFFERENT non-empty
+        ``channel_profile_ids`` selections, so the profile reconcile can warn.
         """
         accounts = await self.get_m3u_accounts()
         logger.info("[DISPATCHARR] get_all_m3u_group_settings: Processing %s M3U accounts", len(accounts))
-        all_settings = {}
+
+        # Gather ALL account rows per global group id first, then pick a
+        # deterministic winner (auto_channel_sync ON first, then lowest account
+        # id). Collecting first also lets us detect cross-account selection
+        # conflicts.
+        rows_by_group: dict = {}
         total_groups_found = 0
         for account in accounts:
-            # channel_groups is embedded in the account response
             channel_groups = account.get("channel_groups", [])
             total_groups_found += len(channel_groups)
             logger.info("[DISPATCHARR]   Account %s: %s has %s channel_groups", account.get('id'), account.get('name'), len(channel_groups))
             for setting in channel_groups:
                 channel_group_id = setting.get("channel_group")
                 if channel_group_id:
-                    new_setting = {
+                    rows_by_group.setdefault(channel_group_id, []).append({
                         **setting,
                         "m3u_account_id": account["id"],
                         "m3u_account_name": account.get("name", ""),
-                    }
-                    # If this group already exists, only overwrite if new setting has auto_channel_sync
-                    # and existing one doesn't (prefer the one with auto_channel_sync enabled)
-                    existing = all_settings.get(channel_group_id)
-                    if existing is None:
-                        all_settings[channel_group_id] = new_setting
-                    elif new_setting.get("auto_channel_sync") and not existing.get("auto_channel_sync"):
-                        all_settings[channel_group_id] = new_setting
+                    })
+
+        all_settings = {}
+        for channel_group_id, rows in rows_by_group.items():
+            # Deterministic precedence: auto_channel_sync ON (0) before OFF (1),
+            # then LOWEST m3u_account_id.
+            winner = min(
+                rows,
+                key=lambda r: (
+                    0 if r.get("auto_channel_sync") else 1,
+                    r.get("m3u_account_id") if r.get("m3u_account_id") is not None else 1 << 62,
+                ),
+            )
+            # Conflict = two rows with DIFFERENT non-empty channel_profile_ids.
+            distinct_selections = set()
+            for r in rows:
+                cp = r.get("custom_properties")
+                if isinstance(cp, dict):
+                    sel = cp.get("channel_profile_ids")
+                    if isinstance(sel, list) and sel:
+                        distinct_selections.add(
+                            tuple(sorted(x for x in sel if isinstance(x, int) and not isinstance(x, bool)))
+                        )
+            conflict = len(distinct_selections) > 1
+            if conflict:
+                logger.warning(
+                    "[DISPATCHARR] group %s has CONFLICTING channel_profile_ids across "
+                    "accounts %s — using the deterministic winner (account %s)",
+                    channel_group_id, sorted(distinct_selections),
+                    winner.get("m3u_account_id"),
+                )
+            all_settings[channel_group_id] = {**winner, "_ecm_channel_profile_conflict": conflict}
+
         logger.info("[DISPATCHARR]   Total channel_groups entries across all accounts: %s", total_groups_found)
         logger.info("[DISPATCHARR]   Unique channel group IDs extracted: %s", len(all_settings))
         return all_settings

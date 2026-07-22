@@ -23,16 +23,34 @@ Design decisions locked with the PO (see bead y3m6o / GH #720):
   ``channel_profile_ids`` (absent, ``None``, or empty list) is left entirely
   alone. "Empty" is NEVER interpreted as "disable everywhere" — that would
   strand the group's channels in zero profiles.
-* **2(b) — pipeline-owned channels are EXCLUDED.** A channel whose profile
-  membership was set by an enabled Channel Pipeline ``assign_channel_profile``
-  rule outranks the group auto-sync selection (precedence: pipeline action >
-  group selection > global default). Such channels carry a durable provenance
-  marker in their Dispatcharr ``custom_properties`` (see
-  ``PIPELINE_OWNERSHIP_MARKER_KEY``) written by
-  ``ActionExecutor._execute_assign_channel_profile``; the reconcile skips
-  every marked channel so it never stomps a pipeline decision.
+* **2(b) — pipeline-owned channels are EXCLUDED, WITH HANDOFF.** A channel
+  whose profile membership was set by an enabled Channel Pipeline
+  ``assign_channel_profile`` rule outranks the group auto-sync selection
+  (precedence: pipeline action > group selection > global default). Such
+  channels carry a durable provenance marker plus the OWNING RULE ID in their
+  Dispatcharr ``custom_properties`` (``PIPELINE_OWNERSHIP_MARKER_KEY`` +
+  ``PIPELINE_OWNERSHIP_RULE_ID_KEY``), written by
+  ``ActionExecutor._execute_assign_channel_profile``. At reconcile time we
+  query the set of pipeline rule ids that are CURRENTLY enabled AND still
+  carry an ``assign_channel_profile`` action; a channel is excluded ONLY while
+  its owning rule is in that live set. If the owning rule is disabled, deleted,
+  or no longer assigns profiles, the channel is RELEASED back to Auto-Sync
+  control — it rejoins the reconcile and its stale marker keys are cleared.
+  RESIDUAL LIMITATION (documented, NOT fixed): ownership is released on rule
+  disable/delete/action-removal, but NOT on a rule CONDITION change that stops
+  matching the channel — that would require per-channel rule re-evaluation,
+  out of scope for a home-lab deployment.
 * **3(a) — instant apply on save.** The group-settings save router reconciles
-  the edited group so the selection takes effect without waiting for a sync.
+  the edited group so the selection takes effect (best-effort) on save; the
+  converging backbone (change monitor + post-refresh poll) is the durable
+  guarantee.
+* **Global per channel-group.** A selection is resolved ONCE per global
+  channel-group id, deterministically: precedence is ``auto_channel_sync`` ON
+  first, then the LOWEST ``m3u_account_id`` (see
+  ``dispatcharr_client.get_all_m3u_group_settings``). Channel enumeration is
+  global-by-name. When two account rows for the same group carry DIFFERENT
+  non-empty selections a conflict is flagged (``conflict`` in the result) so
+  the save hook can warn the operator.
 
 Cost: **O(P) Dispatcharr PATCH calls per group**, independent of channel
 count — one bulk ``bulk_update_profile_channels`` per profile, carrying the
@@ -49,6 +67,8 @@ not fight this.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 
 from services.event_sync_preflight import resolve_effective_master_group_id
@@ -63,12 +83,21 @@ logger = logging.getLogger(__name__)
 # Dispatcharr UI.
 PIPELINE_OWNERSHIP_MARKER_KEY = "ecm_profile_owner"
 PIPELINE_OWNERSHIP_MARKER_VALUE = "pipeline"
+# The id of the assign_channel_profile rule that established ownership. Read at
+# reconcile time against the live rule set to implement automatic HANDOFF: when
+# the owning rule is gone/disabled/no-longer-assigns, the channel is released.
+PIPELINE_OWNERSHIP_RULE_ID_KEY = "ecm_profile_owner_rule_id"
 
 # Page size for channel enumeration — matches the client default.
 _CHANNEL_PAGE_SIZE = 100
 # Hard cap on pages to avoid an unbounded loop if the API never returns a
 # terminal page (defensive; a group with >100k channels is not real here).
 _MAX_CHANNEL_PAGES = 1000
+
+# Sentinel distinct from None: default for the live-rule-ids argument meaning
+# "resolve it yourself from the DB". Explicit None means "resolution failed /
+# unknown — treat every marker conservatively as still-owned".
+_UNSET = object()
 
 
 def _selection_from_setting(setting: dict | None) -> list[int] | None:
@@ -90,18 +119,119 @@ def _selection_from_setting(setting: dict | None) -> list[int] | None:
     return selection or None
 
 
-def _is_pipeline_owned(channel: dict) -> bool:
-    """True if the channel's profile membership is owned by a pipeline rule.
+def _query_live_profile_assigning_rule_ids() -> set[int]:
+    """SYNC: ids of enabled pipeline rules that still assign channel profiles.
 
-    Reads the provenance marker written into the channel's Dispatcharr
-    ``custom_properties`` by the ``assign_channel_profile`` action (decision
-    2b). Marked channels are excluded from group reconciliation so the
-    pipeline's decision is never overwritten.
+    A channel is only excluded from group reconcile while its owning rule is in
+    this set (decision 2b handoff). Queries the ChannelPipelineRule model
+    (table ``auto_creation_rules``) for enabled rules whose JSON ``actions``
+    array contains an ``assign_channel_profile`` action. Runs in a worker
+    thread via :func:`_resolve_live_rule_ids` so the sync DB call never blocks
+    the event loop.
+    """
+    from database import get_session
+    from models import ChannelPipelineRule
+
+    ids: set[int] = set()
+    db = get_session()
+    try:
+        rules = (
+            db.query(ChannelPipelineRule)
+            .filter(ChannelPipelineRule.enabled == True)  # noqa: E712 - SQLAlchemy
+            .all()
+        )
+        for rule in rules:
+            try:
+                actions = json.loads(rule.actions) if rule.actions else []
+            except (ValueError, TypeError):
+                continue
+            if any(
+                isinstance(a, dict) and a.get("type") == "assign_channel_profile"
+                for a in actions
+            ):
+                ids.add(rule.id)
+    finally:
+        db.close()
+    return ids
+
+
+async def _resolve_live_rule_ids() -> set[int] | None:
+    """Resolve the live profile-assigning rule-id set off the event loop.
+
+    Returns the set on success, or ``None`` if the query FAILS — a failure must
+    be conservative (treat every marker as still-owned) so a transient DB error
+    can never release, reconcile, and stomp a genuinely pipeline-owned channel.
+    """
+    try:
+        return await asyncio.to_thread(_query_live_profile_assigning_rule_ids)
+    except Exception as e:  # noqa: BLE001 - conservative fallback below
+        logger.warning(
+            "[PROFILE-RECONCILE] could not resolve live profile-assigning rule "
+            "ids (%s) — treating all pipeline markers as still-owned this pass", e,
+        )
+        return None
+
+
+def _ownership_state(channel: dict, live_rule_ids: set[int] | None) -> str:
+    """Classify a channel's pipeline-ownership for reconcile (decision 2b).
+
+    Returns one of:
+
+    * ``"unowned"`` — no pipeline marker; a normal reconcile target.
+    * ``"owned"`` — marked AND its owning rule is still live (or liveness is
+      unknown / the marker is legacy without a usable rule id); EXCLUDED.
+    * ``"released"`` — marked but its owning rule is gone/disabled/no-longer-
+      assigns; the channel rejoins the reconcile and its stale marker is
+      cleared (automatic handoff back to Auto-Sync control).
     """
     cp = channel.get("custom_properties")
     if not isinstance(cp, dict):
-        return False
-    return cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) == PIPELINE_OWNERSHIP_MARKER_VALUE
+        return "unowned"
+    if cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) != PIPELINE_OWNERSHIP_MARKER_VALUE:
+        return "unowned"
+    if live_rule_ids is None:
+        # Liveness unknown (resolution failed) — stay conservative: keep owned
+        # so a transient DB error never releases a pipeline-owned channel.
+        return "owned"
+    rule_id = cp.get(PIPELINE_OWNERSHIP_RULE_ID_KEY)
+    if not isinstance(rule_id, int) or isinstance(rule_id, bool):
+        # Legacy/malformed marker with no usable rule id (should not exist in
+        # prod — the rule-id stamp shipped with the handoff). Conservatively
+        # owned, but warn: handoff cannot release it until it is re-stamped.
+        logger.warning(
+            "[PROFILE-RECONCILE] channel %s is pipeline-owned but carries no "
+            "valid rule id (%r) — treating as owned; handoff cannot release it",
+            channel.get("id"), rule_id,
+        )
+        return "owned"
+    return "owned" if rule_id in live_rule_ids else "released"
+
+
+async def _clear_ownership_marker(client, channel: dict) -> None:
+    """Best-effort: strip the stale pipeline-ownership marker keys.
+
+    Called when a channel is RELEASED (its owning rule is gone/disabled) so a
+    future reconcile sees it as a plain Auto-Sync channel. Merge-preserving:
+    only the two marker keys are dropped, every other ``custom_properties`` key
+    is retained. A failure is logged and swallowed — never fail the reconcile
+    over a marker cleanup.
+    """
+    cid = channel.get("id")
+    cp = channel.get("custom_properties")
+    if cid is None or not isinstance(cp, dict):
+        return
+    merged = {
+        k: v
+        for k, v in cp.items()
+        if k not in (PIPELINE_OWNERSHIP_MARKER_KEY, PIPELINE_OWNERSHIP_RULE_ID_KEY)
+    }
+    try:
+        await client.update_channel(cid, {"custom_properties": merged})
+    except Exception as e:  # noqa: BLE001 - cleanup is best-effort
+        logger.warning(
+            "[PROFILE-RECONCILE] failed to clear stale ownership marker on "
+            "released channel %s: %s", cid, e,
+        )
 
 
 async def _fetch_group_channels(client, group_id: int) -> list[dict]:
@@ -125,66 +255,114 @@ async def _fetch_group_channels(client, group_id: int) -> list[dict]:
     return channels
 
 
-async def reconcile_group_profiles(client, all_settings: dict, group_id: int) -> dict:
+def _result(status: str, group_id: int, *, effective_gid=None, scoped=0,
+            excluded=0, released=0, enabled=0, disabled=0,
+            failed_profile_ids=None, conflict=False) -> dict:
+    """Build a uniform reconcile result dict so every caller can rely on the
+    same keys (status, counts, failed_profile_ids, conflict)."""
+    return {
+        "status": status,
+        "group_id": group_id,
+        "effective_group_id": effective_gid,
+        "channels_scoped": scoped,
+        "channels_excluded": excluded,
+        "channels_released": released,
+        "profiles_enabled": enabled,
+        "profiles_disabled": disabled,
+        "failed_profile_ids": sorted(failed_profile_ids or []),
+        "conflict": bool(conflict),
+    }
+
+
+async def reconcile_group_profiles(
+    client, all_settings: dict, group_id: int, live_rule_ids=_UNSET,
+) -> dict:
     """Apply a group's stored profile selection to its channels (idempotent).
 
     Reads ``custom_properties.channel_profile_ids`` from the group's settings
     row, resolves the EFFECTIVE group id (following any Channel Group
     Override), enumerates that group's channels, excludes pipeline-owned ones
-    (decision 2b), and issues one bulk profile update per profile so the
-    channels end up members of exactly the selected profiles.
+    whose owning rule is still live (decision 2b handoff), and issues one bulk
+    profile update per profile so the channels end up members of exactly the
+    selected profiles.
 
-    Returns a result dict with a ``status`` and counts, always safe to log:
+    ``live_rule_ids`` — the set of currently-enabled rule ids that still assign
+    channel profiles. Pass it explicitly (the sweep computes it ONCE); left
+    unset it is resolved from the DB. Explicit ``None`` means resolution failed
+    and every marker is treated conservatively as still-owned.
+
+    Returns a uniform result dict (see :func:`_result`) with a ``status``:
 
     * ``no_selection`` — absent/empty selection, nothing done (decision 1a).
-    * ``no_channels`` — selection present but the effective group is empty.
+    * ``no_channels`` — selection present but the effective group has no
+      reconcilable channels.
     * ``stale_selection`` — every selected profile has been DELETED (the
       authoritative universe contains none of them); a SAFETY NO-OP that
-      leaves the channels untouched rather than disabling them everywhere
-      (Blocker 1 — decision 1a's real guarantee).
-    * ``reconciled`` — bulk updates issued; counts populated. Covers both the
-      normal authoritative path and the degraded enable-selected-only path
-      taken when the universe fetch fails.
+      leaves the channels untouched rather than disabling them everywhere.
+    * ``partial_failure`` — a bulk profile write failed. If a SELECTED-profile
+      enable failed the reconcile ABORTS before any destructive disable (so the
+      channels cannot be stranded); ``failed_profile_ids`` is populated.
+    * ``reconciled`` — all writes succeeded; counts populated. Also covers the
+      degraded enable-selected-only path when the universe fetch fails.
 
-    Never raises for a single bad profile — each per-profile bulk call is
-    guarded so one stale/deleted selected id cannot abort the group.
+    Never raises for a single bad profile — each bulk call is guarded.
     """
+    if live_rule_ids is _UNSET:
+        live_rule_ids = await _resolve_live_rule_ids()
+
     setting = all_settings.get(group_id)
     selection = _selection_from_setting(setting)
+    conflict = bool(isinstance(setting, dict) and setting.get("_ecm_channel_profile_conflict"))
     if selection is None:
         # Decision 1a: absent/unset selection is a read-only no-op.
-        return {
-            "status": "no_selection",
-            "group_id": group_id,
-            "channels_scoped": 0,
-            "channels_excluded": 0,
-            "profiles_enabled": 0,
-            "profiles_disabled": 0,
-        }
+        return _result("no_selection", group_id, conflict=conflict)
 
     selected = set(selection)
     effective_gid = resolve_effective_master_group_id(all_settings, group_id)
 
     channels = await _fetch_group_channels(client, effective_gid)
-    owned = [c for c in channels if _is_pipeline_owned(c)]
-    channel_ids = [c["id"] for c in channels if not _is_pipeline_owned(c) and "id" in c]
-    excluded = len(owned)
 
+    # Classify each channel (decision 2b handoff): owned -> excluded; released
+    # -> rejoins the reconcile and its stale marker is cleared; unowned ->
+    # normal target.
+    owned_count = 0
+    released_channels: list[dict] = []
+    channel_ids: list[int] = []
+    for c in channels:
+        cid = c.get("id")
+        if cid is None:
+            continue
+        state = _ownership_state(c, live_rule_ids)
+        if state == "owned":
+            owned_count += 1
+        else:
+            channel_ids.append(cid)
+            if state == "released":
+                released_channels.append(c)
+
+    # Clear stale markers on released channels (best-effort, never fails the
+    # reconcile). Done up front so a subsequent no_channels/stale path still
+    # completes the handoff cleanup.
+    for c in released_channels:
+        await _clear_ownership_marker(client, c)
+    if released_channels:
+        logger.info(
+            "[PROFILE-RECONCILE] group=%s: released %d channel(s) whose owning "
+            "pipeline rule is no longer live — returned to Auto-Sync control",
+            group_id, len(released_channels),
+        )
+
+    released = len(released_channels)
     if not channel_ids:
         logger.info(
             "[PROFILE-RECONCILE] group=%s effective=%s: no reconcilable channels "
             "(%d total, %d pipeline-owned) — nothing to do",
-            group_id, effective_gid, len(channels), excluded,
+            group_id, effective_gid, len(channels), owned_count,
         )
-        return {
-            "status": "no_channels",
-            "group_id": group_id,
-            "effective_group_id": effective_gid,
-            "channels_scoped": 0,
-            "channels_excluded": excluded,
-            "profiles_enabled": 0,
-            "profiles_disabled": 0,
-        }
+        return _result(
+            "no_channels", group_id, effective_gid=effective_gid,
+            excluded=owned_count, released=released, conflict=conflict,
+        )
 
     universe_fetch_failed = False
     try:
@@ -206,9 +384,7 @@ async def reconcile_group_profiles(client, all_settings: dict, group_id: int) ->
         # than the pre-fix state (channels stayed in every profile); the
         # transient gap — a just-deselected profile stays enabled — closes on
         # the next successful reconcile. Logged so the skipped-disables window
-        # is observable rather than silent (Should-Fix 3). NOTE this is the
-        # fetch-FAILED path only; an authoritative EMPTY universe is handled
-        # below (and is NOT enable-only).
+        # is observable rather than silent.
         logger.warning(
             "[PROFILE-RECONCILE] group=%s: profile universe fetch failed — "
             "degrading to enable-selected-only; disables SKIPPED until the next "
@@ -216,6 +392,7 @@ async def reconcile_group_profiles(client, all_settings: dict, group_id: int) ->
             group_id, sorted(selected),
         )
         profiles_enabled = 0
+        failed_enable: list[int] = []
         for pid in selection:
             try:
                 await client.bulk_update_profile_channels(
@@ -223,37 +400,31 @@ async def reconcile_group_profiles(client, all_settings: dict, group_id: int) ->
                 )
                 profiles_enabled += 1
             except Exception as e:  # noqa: BLE001 - a stale/deleted id skips, not aborts
+                failed_enable.append(pid)
                 logger.warning(
                     "[PROFILE-RECONCILE] group=%s: profile %s enable failed, "
                     "skipping: %s", group_id, pid, e,
                 )
-        return {
-            "status": "reconciled",
-            "group_id": group_id,
-            "effective_group_id": effective_gid,
-            "channels_scoped": len(channel_ids),
-            "channels_excluded": excluded,
-            "profiles_enabled": profiles_enabled,
-            "profiles_disabled": 0,
-        }
+        return _result(
+            "partial_failure" if failed_enable else "reconciled", group_id,
+            effective_gid=effective_gid, scoped=len(channel_ids),
+            excluded=owned_count, released=released, enabled=profiles_enabled,
+            failed_profile_ids=failed_enable, conflict=conflict,
+        )
 
     # Authoritative universe in hand. Intersect the stored selection with it:
     # any selected id NOT present has been DELETED in Dispatcharr (nothing
     # prunes the stored selection), so it can neither be a member nor be enabled
     # (a bulk enable on a dead profile 404s). We iterate the universe as the
-    # authoritative set and deliberately do NOT union the stale ids back in —
-    # unioning them would 404 on enable while the disables to every real profile
-    # still landed, stranding the channels in ZERO profiles (Blocker 1).
+    # authoritative set and deliberately do NOT union the stale ids back in.
     universe_set = set(universe_ids)
     valid_selected = selected & universe_set
 
     if not valid_selected:
         # Every selected profile is gone (or the universe is authoritatively
         # empty). Disabling the channels in every real profile now would strand
-        # them in zero profiles — the exact harm decision 1a forbids, reached
-        # via a stale selection the literal _selection_from_setting check can't
-        # see. Treat it as a SAFETY NO-OP: touch nothing, and surface a distinct
-        # status so the deleted-selection condition is observable.
+        # them in zero profiles — the exact harm decision 1a forbids. Treat it
+        # as a SAFETY NO-OP: touch nothing, surface a distinct status.
         logger.warning(
             "[PROFILE-RECONCILE] group=%s effective=%s: entire profile selection "
             "%s is stale (no selected profile exists in the universe %s) — "
@@ -261,51 +432,83 @@ async def reconcile_group_profiles(client, all_settings: dict, group_id: int) ->
             group_id, effective_gid, sorted(selected), sorted(universe_set),
             len(channel_ids),
         )
-        return {
-            "status": "stale_selection",
-            "group_id": group_id,
-            "effective_group_id": effective_gid,
-            "channels_scoped": 0,
-            "channels_excluded": excluded,
-            "profiles_enabled": 0,
-            "profiles_disabled": 0,
-        }
+        return _result(
+            "stale_selection", group_id, effective_gid=effective_gid,
+            excluded=owned_count, released=released, conflict=conflict,
+        )
 
-    profiles_enabled = 0
-    profiles_disabled = 0
+    # Phase 1 — ENABLE the selected profiles FIRST (enable-first, Blocker 1).
+    # If ANY selected-profile enable FAILS (transient 5xx/network) we must NOT
+    # proceed to the disables: disabling every non-selected profile while a
+    # needed enable did not land would remove the channels from every profile
+    # and strand them. Abort with a degraded status and the failed ids.
+    enabled_ok: list[int] = []
+    failed_enable = []
     for pid in universe_ids:
-        enable = pid in valid_selected
+        if pid not in valid_selected:
+            continue
         try:
             await client.bulk_update_profile_channels(
-                pid, {"channel_ids": channel_ids, "enabled": enable}
+                pid, {"channel_ids": channel_ids, "enabled": True}
             )
-            if enable:
-                profiles_enabled += 1
-            else:
-                profiles_disabled += 1
-        except Exception as e:  # noqa: BLE001 - a stale/deleted profile id skips, not aborts
+            enabled_ok.append(pid)
+        except Exception as e:  # noqa: BLE001 - captured, aborts before disables
+            failed_enable.append(pid)
             logger.warning(
-                "[PROFILE-RECONCILE] group=%s: profile %s bulk update (enable=%s) "
-                "failed, skipping: %s",
-                group_id, pid, enable, e,
+                "[PROFILE-RECONCILE] group=%s: SELECTED profile %s enable failed: %s",
+                group_id, pid, e,
             )
 
+    if failed_enable:
+        logger.warning(
+            "[PROFILE-RECONCILE] group=%s effective=%s: ABORTING before any "
+            "disable — selected-profile enable failed for %s; channels left "
+            "as-is to avoid stranding (retry on next reconcile)",
+            group_id, effective_gid, sorted(failed_enable),
+        )
+        return _result(
+            "partial_failure", group_id, effective_gid=effective_gid,
+            scoped=len(channel_ids), excluded=owned_count, released=released,
+            enabled=len(enabled_ok), disabled=0,
+            failed_profile_ids=failed_enable, conflict=conflict,
+        )
+
+    # Phase 2 — every selected enable landed; now DISABLE the non-selected
+    # universe profiles. A disable failure here is NON-destructive (the channel
+    # merely stays in a profile it shouldn't be), so best-effort continue but
+    # record it for truthful status (Should-Fix 5).
+    profiles_disabled = 0
+    failed_disable: list[int] = []
+    for pid in universe_ids:
+        if pid in valid_selected:
+            continue
+        try:
+            await client.bulk_update_profile_channels(
+                pid, {"channel_ids": channel_ids, "enabled": False}
+            )
+            profiles_disabled += 1
+        except Exception as e:  # noqa: BLE001 - non-destructive, best-effort continue
+            failed_disable.append(pid)
+            logger.warning(
+                "[PROFILE-RECONCILE] group=%s: profile %s disable failed, "
+                "skipping: %s", group_id, pid, e,
+            )
+
+    status = "partial_failure" if failed_disable else "reconciled"
     logger.info(
-        "[PROFILE-RECONCILE] group=%s effective=%s: reconciled %d channel(s) "
-        "(%d pipeline-owned excluded) into %d profile(s), disabled in %d "
-        "(selection=%s)",
-        group_id, effective_gid, len(channel_ids), excluded,
-        profiles_enabled, profiles_disabled, sorted(valid_selected),
+        "[PROFILE-RECONCILE] group=%s effective=%s: %s %d channel(s) "
+        "(%d pipeline-owned excluded, %d released) into %d profile(s), "
+        "disabled in %d, failed %s (selection=%s)",
+        group_id, effective_gid, status, len(channel_ids), owned_count,
+        released, len(enabled_ok), profiles_disabled, sorted(failed_disable),
+        sorted(valid_selected),
     )
-    return {
-        "status": "reconciled",
-        "group_id": group_id,
-        "effective_group_id": effective_gid,
-        "channels_scoped": len(channel_ids),
-        "channels_excluded": excluded,
-        "profiles_enabled": profiles_enabled,
-        "profiles_disabled": profiles_disabled,
-    }
+    return _result(
+        status, group_id, effective_gid=effective_gid, scoped=len(channel_ids),
+        excluded=owned_count, released=released, enabled=len(enabled_ok),
+        disabled=profiles_disabled, failed_profile_ids=failed_disable,
+        conflict=conflict,
+    )
 
 
 def groups_with_selection(all_settings: dict) -> list[int]:
@@ -317,47 +520,64 @@ def groups_with_selection(all_settings: dict) -> list[int]:
     ]
 
 
+def dedupe_gids_by_effective_group(all_settings: dict, gids) -> list[int]:
+    """Collapse ``gids`` to one per EFFECTIVE channel-group id (Blocker 3 / 6).
+
+    A Channel Group Override makes a SOURCE group's channels live in its TARGET
+    group, so if both a source and its target carry a selection they would each
+    reconcile the SAME channels — order-dependent last-writer-wins. Keep one gid
+    per effective id, preferring the TARGET group's own selection (the group
+    whose channels physically live there outranks a source redirecting into
+    it). Order-independent: the target wins regardless of iteration order.
+    """
+    effective_to_gid: dict[int, int] = {}
+    for gid in gids:
+        eff = resolve_effective_master_group_id(all_settings, gid)
+        if eff not in effective_to_gid or gid == eff:
+            effective_to_gid[eff] = gid
+    return list(effective_to_gid.values())
+
+
 async def reconcile_all_selected_groups(client, all_settings: dict | None = None) -> dict:
     """Reconcile every group that carries a profile selection.
 
     Convenience entrypoint for the converging hooks (change monitor,
-    post-refresh poll). Fetches ``all_settings`` once if not supplied, filters
-    to groups with a selection, and reconciles each. Returns aggregate counts;
-    one group's failure is logged and does not abort the rest.
+    post-refresh poll). Fetches ``all_settings`` once if not supplied, resolves
+    the live profile-assigning rule set ONCE (shared across every group so the
+    handoff query runs a single time per sweep), dedupes by effective group,
+    and reconciles each. Returns aggregate counts; one group's failure is
+    logged and does not abort the rest. ``partial_failure`` groups are counted
+    distinctly from fully ``reconciled`` ones.
     """
     if all_settings is None:
         try:
             all_settings = await client.get_all_m3u_group_settings()
         except Exception as e:  # noqa: BLE001
             logger.warning("[PROFILE-RECONCILE] failed to fetch group settings: %s", e)
-            return {"groups_reconciled": 0, "groups_with_selection": 0, "channels_scoped": 0}
+            return {
+                "groups_reconciled": 0, "groups_partial_failure": 0,
+                "groups_with_selection": 0, "channels_scoped": 0,
+            }
+
+    live_rule_ids = await _resolve_live_rule_ids()
 
     target_gids = groups_with_selection(all_settings)
-
-    # Dedupe by EFFECTIVE group id (Should-Fix 6). A Channel Group Override
-    # makes a SOURCE group's channels live in its TARGET group, so if BOTH the
-    # source and the target carry a selection they would each reconcile the SAME
-    # channels — non-deterministically last-writer-wins by dict order. Collapse
-    # to one selection per effective group, preferring the TARGET group's own
-    # selection when it has one (the group whose channels physically live there
-    # outranks a source that merely redirects into it). Groups with no override
-    # resolve to themselves, so this is a no-op for the common case.
-    effective_to_gid: dict[int, int] = {}
-    for gid in target_gids:
-        eff = resolve_effective_master_group_id(all_settings, gid)
-        if eff not in effective_to_gid or gid == eff:
-            # First seen for this effective id, OR this gid IS the target group
-            # (its own selection wins over a source redirecting into it).
-            effective_to_gid[eff] = gid
-    reconcile_gids = list(effective_to_gid.values())
+    reconcile_gids = dedupe_gids_by_effective_group(all_settings, target_gids)
 
     groups_reconciled = 0
+    groups_partial_failure = 0
     channels_scoped = 0
     for gid in reconcile_gids:
         try:
-            result = await reconcile_group_profiles(client, all_settings, gid)
-            if result.get("status") == "reconciled":
+            result = await reconcile_group_profiles(
+                client, all_settings, gid, live_rule_ids=live_rule_ids
+            )
+            status = result.get("status")
+            if status == "reconciled":
                 groups_reconciled += 1
+                channels_scoped += result.get("channels_scoped", 0)
+            elif status == "partial_failure":
+                groups_partial_failure += 1
                 channels_scoped += result.get("channels_scoped", 0)
         except Exception as e:  # noqa: BLE001 - isolate per-group failures
             logger.warning(
@@ -367,12 +587,14 @@ async def reconcile_all_selected_groups(client, all_settings: dict | None = None
     if target_gids:
         logger.info(
             "[PROFILE-RECONCILE] swept %d group(s) with a selection (%d after "
-            "effective-group dedupe), reconciled %d, scoped %d channel(s)",
+            "effective-group dedupe), reconciled %d, partial_failure %d, "
+            "scoped %d channel(s)",
             len(target_gids), len(reconcile_gids), groups_reconciled,
-            channels_scoped,
+            groups_partial_failure, channels_scoped,
         )
     return {
         "groups_reconciled": groups_reconciled,
+        "groups_partial_failure": groups_partial_failure,
         "groups_with_selection": len(target_gids),
         "channels_scoped": channels_scoped,
     }

@@ -4935,9 +4935,9 @@ class TestAssignChannelProfileProvenanceMarker:
             group_name="Sports",
         )
 
-    def _run(self, executor, action, exec_ctx):
+    def _run(self, executor, action, exec_ctx, rule_id=None):
         return asyncio.get_event_loop().run_until_complete(
-            executor.execute(action, self.stream_ctx, exec_ctx)
+            executor.execute(action, self.stream_ctx, exec_ctx, rule_id=rule_id)
         )
 
     def _marker(self):
@@ -4946,6 +4946,10 @@ class TestAssignChannelProfileProvenanceMarker:
             PIPELINE_OWNERSHIP_MARKER_VALUE,
         )
         return PIPELINE_OWNERSHIP_MARKER_KEY, PIPELINE_OWNERSHIP_MARKER_VALUE
+
+    def _rule_id_key(self):
+        from services.profile_reconcile import PIPELINE_OWNERSHIP_RULE_ID_KEY
+        return PIPELINE_OWNERSHIP_RULE_ID_KEY
 
     def test_marker_written_on_assign(self):
         executor = ActionExecutor(self.client, all_profile_ids=[1, 2, 3])
@@ -5027,6 +5031,63 @@ class TestAssignChannelProfileProvenanceMarker:
 
         # Profiles were still applied; the marker failure is swallowed.
         assert result.success is True
+
+    def test_marker_stamps_owning_rule_id(self):
+        """Blocker 2 handoff: the owning rule id is stamped alongside the owner
+        marker so the reconcile can release the channel when the rule is gone."""
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        self._run(executor, action, exec_ctx, rule_id=42)
+
+        _cid, body = self.client.update_channel.call_args.args
+        key, value = self._marker()
+        assert body["custom_properties"][key] == value
+        assert body["custom_properties"][self._rule_id_key()] == 42
+
+    def test_marker_rewritten_when_owning_rule_id_changes(self):
+        """A channel already owned by rule 1 that is re-assigned by rule 2 gets
+        re-stamped (idempotency keys on owner AND rule id, not owner alone)."""
+        key, value = self._marker()
+        rid_key = self._rule_id_key()
+        existing = [
+            {"id": 99, "name": "ESPN2 HD",
+             "custom_properties": {key: value, rid_key: 1}}
+        ]
+        executor = ActionExecutor(
+            self.client, existing_channels=existing, all_profile_ids=[1, 2]
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        self._run(executor, action, exec_ctx, rule_id=2)
+
+        # Re-stamped because the owning rule changed 1 -> 2.
+        self.client.update_channel.assert_called_once()
+        _cid, body = self.client.update_channel.call_args.args
+        assert body["custom_properties"][rid_key] == 2
+
+    def test_marker_idempotent_when_same_rule_id(self):
+        """Same owner AND same rule id already present -> no redundant write."""
+        key, value = self._marker()
+        rid_key = self._rule_id_key()
+        existing = [
+            {"id": 99, "name": "ESPN2 HD",
+             "custom_properties": {key: value, rid_key: 5}}
+        ]
+        executor = ActionExecutor(
+            self.client, existing_channels=existing, all_profile_ids=[1, 2]
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+        action = {"type": "assign_channel_profile", "channel_profile_ids": [1]}
+
+        self._run(executor, action, exec_ctx, rule_id=5)
+
+        self.client.update_channel.assert_not_called()
 
 
 class TestAssignDefaultProfiles:

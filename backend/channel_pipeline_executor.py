@@ -759,7 +759,9 @@ class ActionExecutor:
         elif action_type == ActionType.ASSIGN_PROFILE:
             result = await self._execute_assign_profile(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.ASSIGN_CHANNEL_PROFILE:
-            result = await self._execute_assign_channel_profile(action, stream_ctx, exec_ctx)
+            result = await self._execute_assign_channel_profile(
+                action, stream_ctx, exec_ctx, rule_id=rule_id
+            )
         elif action_type == ActionType.SET_CHANNEL_NUMBER:
             result = await self._execute_set_channel_number(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_VARIABLE:
@@ -2847,8 +2849,15 @@ class ActionExecutor:
             )
 
     async def _execute_assign_channel_profile(self, action: Action, stream_ctx: StreamContext,
-                                               exec_ctx: ExecutionContext) -> ActionResult:
-        """Execute assign_channel_profile action."""
+                                               exec_ctx: ExecutionContext,
+                                               rule_id: int = None) -> ActionResult:
+        """Execute assign_channel_profile action.
+
+        ``rule_id`` (GH #720 Part B handoff): the id of the firing
+        assign_channel_profile rule, stamped into the channel's ownership
+        marker so the group reconcile can RELEASE the channel once that rule is
+        disabled/deleted/no-longer-assigns. None outside a rule run.
+        """
         if not exec_ctx.current_channel_id:
             return ActionResult(
                 success=False,
@@ -2992,7 +3001,7 @@ class ActionExecutor:
             # failure must NOT fail the assignment (profiles are already
             # applied). The default-profile path (_assign_default_profiles) is a
             # global default and is intentionally NOT stamped.
-            await self._mark_channel_profile_ownership(exec_ctx.current_channel_id)
+            await self._mark_channel_profile_ownership(exec_ctx.current_channel_id, rule_id)
 
             # y3m6o.1 review follow-up: ``modified`` is True only when at least
             # one profile's enabled-state actually flipped. An idempotent
@@ -3026,11 +3035,15 @@ class ActionExecutor:
 
     async def apply_channel_profile_to_channels(
         self, action: Action | dict, channel_ids: list[int],
-        exec_ctx: ExecutionContext,
+        exec_ctx: ExecutionContext, rule_id: int = None,
     ) -> list[ActionResult]:
         """Apply an ``assign_channel_profile`` action to an EXPLICIT set of
         channel ids (the event_sync execution path — GH #720 / y3m6o.1 Finding
         4).
+
+        ``rule_id`` (GH #720 Part B handoff) is threaded into the per-channel
+        ownership marker exactly as the standard path does, so event_sync-owned
+        channels are released when the owning rule is disabled/deleted.
 
         The standard Pass 1/2 path runs ``assign_channel_profile`` per matched
         stream against ``exec_ctx.current_channel_id``. event_sync rules do NOT
@@ -3068,7 +3081,7 @@ class ActionExecutor:
             for channel_id in ordered_ids:
                 exec_ctx.current_channel_id = channel_id
                 result = await self._execute_assign_channel_profile(
-                    action, dummy_ctx, exec_ctx
+                    action, dummy_ctx, exec_ctx, rule_id=rule_id
                 )
                 exec_ctx.add_result(result)
                 results.append(result)
@@ -3782,25 +3795,32 @@ class ActionExecutor:
 
         return ProfileMembershipResult(enabled_count, disabled_count, failed_profile_ids)
 
-    async def _mark_channel_profile_ownership(self, channel_id: int) -> None:
+    async def _mark_channel_profile_ownership(self, channel_id: int,
+                                              rule_id: int = None) -> None:
         """Stamp the pipeline-ownership provenance marker on a channel.
 
-        GH #720 Part B (decision 2b): records — in the channel's Dispatcharr
-        ``custom_properties`` — that this channel's profile membership was set
-        by a pipeline ``assign_channel_profile`` rule (standard OR event_sync
-        path — both funnel through ``_execute_assign_channel_profile``), so
-        ``services.profile_reconcile`` excludes it from group auto-sync
-        reconciliation (pipeline action > group selection). The marker is
-        MERGED over the channel's current ``custom_properties`` (Dispatcharr's
-        channel PATCH replaces the dict wholesale, so any other keys must be
-        preserved). Idempotent: an already-marked channel is skipped without a
-        write. Best-effort: failures are logged and swallowed — the profile
-        assignment has already succeeded and must not be reverted by a
+        GH #720 Part B (decision 2b + handoff): records — in the channel's
+        Dispatcharr ``custom_properties`` — that this channel's profile
+        membership was set by a pipeline ``assign_channel_profile`` rule
+        (standard OR event_sync path — both funnel through
+        ``_execute_assign_channel_profile``), so ``services.profile_reconcile``
+        excludes it from group auto-sync reconciliation (pipeline action >
+        group selection). Two keys are written: the owner marker
+        (``ecm_profile_owner="pipeline"``) AND the OWNING RULE ID
+        (``ecm_profile_owner_rule_id``) — the reconcile revalidates the rule id
+        against the live rule set so ownership is RELEASED once the rule is
+        disabled/deleted (automatic handoff). The marker is MERGED over the
+        channel's current ``custom_properties`` (Dispatcharr's channel PATCH
+        replaces the dict wholesale, so any other keys must be preserved).
+        Idempotent: skipped without a write when the SAME owner AND rule id are
+        already present. Best-effort: failures are logged and swallowed — the
+        profile assignment already succeeded and must not be reverted by a
         marker-write error.
         """
         from services.profile_reconcile import (
             PIPELINE_OWNERSHIP_MARKER_KEY,
             PIPELINE_OWNERSHIP_MARKER_VALUE,
+            PIPELINE_OWNERSHIP_RULE_ID_KEY,
         )
 
         try:
@@ -3814,9 +3834,19 @@ class ActionExecutor:
             cached = self._channel_by_id.get(channel_id) or {}
             current_cp = cached.get("custom_properties")
             merged_cp = dict(current_cp) if isinstance(current_cp, dict) else {}
-            if merged_cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) == PIPELINE_OWNERSHIP_MARKER_VALUE:
-                return  # Already marked — idempotent, skip the write.
+            already_owner = (
+                merged_cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) == PIPELINE_OWNERSHIP_MARKER_VALUE
+            )
+            same_rule = merged_cp.get(PIPELINE_OWNERSHIP_RULE_ID_KEY) == rule_id
+            if already_owner and same_rule:
+                return  # Already marked by this rule — idempotent, skip the write.
             merged_cp[PIPELINE_OWNERSHIP_MARKER_KEY] = PIPELINE_OWNERSHIP_MARKER_VALUE
+            # Stamp the owning rule id so the reconcile can hand ownership back
+            # when the rule goes away. None only outside a rule run (shouldn't
+            # happen for a real assign) — leave the key absent so the reconcile
+            # logs the legacy/conservative case rather than storing a null id.
+            if rule_id is not None:
+                merged_cp[PIPELINE_OWNERSHIP_RULE_ID_KEY] = rule_id
             await self.client.update_channel(
                 channel_id, {"custom_properties": merged_cp}
             )
@@ -3825,9 +3855,17 @@ class ActionExecutor:
             if isinstance(cached, dict):
                 cached["custom_properties"] = merged_cp
         except Exception as e:
+            # Should-Fix 10: the profile membership DID land, but the ownership
+            # marker did NOT — so precedence is NOT established. Surface it
+            # loudly: the group reconcile may treat this channel as unowned and
+            # move it until a later run re-stamps the marker. Not silently
+            # treated as owned.
             logger.warning(
-                "[CHANNEL-PIPELINE-EXEC] Failed to mark profile ownership for "
-                "channel %s: %s", channel_id, e,
+                "[CHANNEL-PIPELINE-EXEC] Profile assignment for channel %s "
+                "SUCCEEDED but the pipeline-ownership marker write FAILED (%s) — "
+                "precedence is NOT established; a group Auto-Sync selection may "
+                "move this channel until the next pipeline run re-stamps it",
+                channel_id, e,
             )
 
     def _current_profile_membership(self, channel_id: int) -> set[int]:
