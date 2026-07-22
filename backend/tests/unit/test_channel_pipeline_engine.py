@@ -1657,6 +1657,32 @@ class TestSortChannelGroupsPass:
         assert action["success"] is False
         assert "boom" in action["error"]
 
+    def test_failure_reaches_run_level_failed_actions(self):
+        """y3m6o.1 review (Blocker 1): a sort/renumber failure must funnel
+        through the SAME run-level aggregation the other phases use, not merely
+        log a success=False execution_log entry. Without this the run finalizes
+        green because finalization keys terminal status off
+        ``results["failed_actions"]``. Asserts BOTH the operator-visible log entry
+        (preserved) AND the run-level failed_actions record are produced."""
+        self.client.assign_channel_numbers = AsyncMock(side_effect=Exception("boom"))
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "asc", "starting_number": None, "strip_numbers": True, "ignore_country": False}}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(requests, self.executor, results, dry_run=False, settings=self.settings)
+        )
+
+        # (1) operator-visible execution_log entry is still present.
+        assert len(results["execution_log"]) == 1
+        assert results["execution_log"][0]["actions_executed"][0]["success"] is False
+
+        # (2) the failure is aggregated into the run-level list finalization reads.
+        assert "failed_actions" in results
+        assert len(results["failed_actions"]) == 1
+        fa = results["failed_actions"][0]
+        assert fa["action_type"] == "sort_group"
+        assert fa["entity_id"] == 5
+        assert "boom" in fa["error"]
+
 
 class TestChannelPipelineEngineExecutionTracking:
     """Tests for execution tracking methods."""
@@ -2893,6 +2919,95 @@ class TestRunLevelFailedActionStatus:
         assert result["failed_action_count"] >= 1
         # Nothing was written even in the failure preview.
         self.client.update_profile_channel.assert_not_called()
+
+
+class TestSortGroupFailureRunStatus:
+    """y3m6o.1 review (Blocker 1) at RUN level: a Pass 3.6 sort/renumber failure
+    must finalize the whole run ``completed_with_errors`` + non-success — NOT a
+    green ``completed`` with only a success=False execution_log entry. Drives the
+    REAL ``run_pipeline`` end to end: a rule with a ``sort_group`` action queues a
+    2-channel group for the post-run sort pass, and ``assign_channel_numbers``
+    raises, so the caught failure must reach ``results["failed_actions"]`` and
+    flip the terminal status."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        # Two pre-existing channels in group 5 → the sort pass has ≥2 channels
+        # and actually calls assign_channel_numbers (which we make fail).
+        self._channels = [
+            {"id": 101, "name": "Channel B", "channel_group_id": 5, "channel_number": 10},
+            {"id": 102, "name": "Channel A", "channel_group_id": 5, "channel_number": 11},
+        ]
+        self.client.get_channels = AsyncMock(
+            return_value={"count": 2, "results": self._channels}
+        )
+        self.client.get_channel_groups = AsyncMock(
+            return_value=[{"id": 5, "name": "Sports"}]
+        )
+        self.client.get_channel_profiles = AsyncMock(return_value=[{"id": 1}])
+        self.client.update_channel = AsyncMock()
+        # The Pass 3.6 renumber call fails — the whole point of the regression.
+        self.client.assign_channel_numbers = AsyncMock(
+            side_effect=RuntimeError("dispatcharr renumber rejected")
+        )
+        self.engine = ChannelPipelineEngine(self.client)
+
+    def _make_sort_rule(self):
+        from models import ChannelPipelineRule
+
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Sort Sports"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.set_conditions([{"type": "always"}])
+        # sort_group with an explicit group_id resolves without needing a prior
+        # create_channel — it queues group 5 for the post-run sort pass.
+        rule.set_actions([
+            {"type": "sort_group", "group_id": 5, "order": "asc"},
+        ])
+        return rule
+
+    def _run(self, rule, streams, dry_run=False):
+        self.engine._load_rules = AsyncMock(return_value=[rule])
+        self.engine._fetch_streams = AsyncMock(return_value=streams)
+        self.exec_mock = MagicMock(id=1, mode="execute")
+        self.engine._create_execution = AsyncMock(return_value=self.exec_mock)
+        self.engine._save_execution = AsyncMock()
+        self.engine._update_rule_stats = AsyncMock()
+        with patch("channel_pipeline_engine.get_session") as mock_get_session, \
+                patch("channel_pipeline_executor.journal.log_entries"):
+            mock_get_session.return_value = MagicMock()
+            return asyncio.get_event_loop().run_until_complete(
+                self.engine.run_pipeline(dry_run=dry_run)
+            )
+
+    def test_sort_group_failure_finalizes_completed_with_errors(self):
+        rule = self._make_sort_rule()
+        streams = [
+            StreamContext(stream_id=601, stream_name="ESPN", m3u_account_id=1)
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        # The renumber pass was actually attempted (2 channels in the group).
+        self.client.assign_channel_numbers.assert_awaited()
+        # (1) the STORED execution row is the errored terminal state, not green.
+        assert self.exec_mock.status == "completed_with_errors"
+        # (2) the top-level API result is non-success and counts the failure.
+        assert result["success"] is False
+        assert result["status"] == "completed_with_errors"
+        assert result["failed_action_count"] >= 1
+        # (3) the failure carries the sort_group phase + underlying error.
+        fa = [f for f in result["failed_actions"] if f["action_type"] == "sort_group"]
+        assert len(fa) == 1
+        assert "renumber rejected" in fa[0]["error"]
 
 
 class TestRunLevelFailureAggregationFullCoverage:

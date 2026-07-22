@@ -1902,6 +1902,20 @@ class ChannelPipelineEngine:
                         "error": str(e)
                     }]
                 })
+                # y3m6o.1 review: the operator-visible execution_log entry above
+                # is NOT enough on its own — finalization keys terminal status off
+                # results["failed_actions"], so a sort/renumber failure that only
+                # logs success=False still finalizes green. Funnel it through the
+                # SAME run-level aggregation chokepoint the other phase failures
+                # use so the run finalizes ``completed_with_errors`` with an honest
+                # failed_action_count. sort_group is a group-level phase action
+                # (no per-stream ActionResult), so _record_failed_phase is the
+                # matching recorder.
+                self._record_failed_phase(
+                    results, phase="sort_group",
+                    entity_id=group_id,
+                    error=f"Failed to sort group '{group_name}': {e}",
+                )
 
     # =========================================================================
     # Stream Processing
