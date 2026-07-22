@@ -211,15 +211,17 @@ class M3UChangeMonitorTask(TaskScheduler):
                     reconcile_warnings = (
                         recon.get("groups_partial_failure", 0)
                         + recon.get("groups_degraded", 0)
+                        + recon.get("groups_errored", 0)
                     )
                     if recon.get("groups_reconciled") or reconcile_warnings:
                         logger.info(
                             "[%s] Profile reconcile: %s group(s) reconciled, %s "
-                            "partial_failure, %s degraded, %s channel(s) scoped",
+                            "partial_failure, %s degraded, %s errored, %s channel(s) scoped",
                             self.task_id,
                             recon.get("groups_reconciled"),
                             recon.get("groups_partial_failure"),
                             recon.get("groups_degraded"),
+                            recon.get("groups_errored"),
                             recon.get("channels_scoped"),
                         )
                 except Exception as e:

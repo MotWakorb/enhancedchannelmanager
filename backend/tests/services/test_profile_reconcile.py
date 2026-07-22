@@ -94,11 +94,15 @@ class FakeClient:
         page_size=100,
         fail_profiles=None,
         raise_on_profiles=False,
+        raise_on_channels=False,
     ):
         self.channels_by_gid = channels_by_gid
         self.profiles = profiles
         self.page_size = page_size
         self.fail_profiles = set(fail_profiles or [])
+        # When True, get_channels raises — models a hard per-group failure that
+        # is NOT caught inside the locked body (Should-Fix 3).
+        self.raise_on_channels = raise_on_channels
         # When True, get_channel_profiles raises — models an unreachable
         # Dispatcharr so the universe fetch fails (universe-fetch-failure path).
         self.raise_on_profiles = raise_on_profiles
@@ -119,6 +123,8 @@ class FakeClient:
         return {"id": channel_id, "custom_properties": {}}
 
     async def get_channels(self, page=1, page_size=100, search=None, channel_group=None):
+        if self.raise_on_channels:
+            raise RuntimeError("get_channels boom")
         self.get_channels_gids.append(channel_group)
         rows = list(self.channels_by_gid.get(channel_group, []))
         # Paginate deterministically using this client's configured page size.
@@ -394,6 +400,62 @@ async def test_overlapping_reconciles_serialize_and_end_in_later_selection():
     assert client.max_concurrent_bulk == 1
     # Converged on the LATER selection [2]; channel never left in zero profiles.
     assert client.enabled_map() == {2: True, 1: False}
+
+
+@pytest.mark.asyncio
+async def test_divergent_snapshots_reacquire_lock_and_serialize():
+    """Should-Fix 2: two overlapping reconciles whose PRE-revalidation snapshots
+    resolve to DIFFERENT effective groups but revalidate (under the lock) to the
+    SAME effective group must still serialize — the lock is re-acquired under
+    the group actually mutated, so no interleave strands channels.
+
+    Run A snapshots group 100 with NO override (effective 100); run B snapshots
+    100 already overriding into 200 (effective 200). Both revalidate to the
+    committed state where 100->200, so both mutate group 200 and must serialize
+    under lock 200."""
+    channels = [_channel(10, group=200)]
+    client = FakeClient({200: channels, 100: []}, profiles=[1, 2])
+    client.bulk_delay = 0.005
+
+    committed = {
+        100: _setting(channel_profile_ids=[2], group_override=200),
+        200: {"auto_channel_sync": False, "custom_properties": {}},
+    }
+
+    async def _provider():
+        return committed
+
+    snap_a = {100: _setting(channel_profile_ids=[2])}                      # eff 100
+    snap_b = {100: _setting(channel_profile_ids=[2], group_override=200)}  # eff 200
+    await asyncio.gather(
+        reconcile_group_profiles(client, snap_a, 100, live_rule_ids=set(),
+                                 settings_provider=_provider),
+        reconcile_group_profiles(client, snap_b, 100, live_rule_ids=set(),
+                                 settings_provider=_provider),
+    )
+
+    assert client.max_concurrent_bulk == 1        # serialized under the SAME lock
+    assert client.enabled_map() == {2: True, 1: False}  # applied, never stranded
+
+
+@pytest.mark.asyncio
+async def test_sweep_counts_per_group_exception_as_errored(monkeypatch):
+    """Should-Fix 3: a group whose reconcile RAISES (get_channels throws, not
+    caught in the locked body) is counted in groups_errored so the monitor can
+    surface it as a warning instead of a clean success."""
+    async def _no_live_rules():
+        return set()
+    monkeypatch.setattr(
+        "services.profile_reconcile._resolve_live_rule_ids", _no_live_rules
+    )
+    client = FakeClient({100: [_channel(10, group=100)]}, profiles=[1, 2],
+                        raise_on_channels=True)
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    result = await reconcile_all_selected_groups(client, settings)
+
+    assert result["groups_errored"] == 1
+    assert result["groups_reconciled"] == 0
 
 
 @pytest.mark.asyncio

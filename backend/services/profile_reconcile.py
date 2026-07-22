@@ -84,6 +84,9 @@ logger = logging.getLogger(__name__)
 # atomic w.r.t. every other reconcile of that group. Lock creation is a single
 # synchronous dict get/set (no await between), so it needs no guard lock.
 _group_locks: dict[int, asyncio.Lock] = {}
+# Bound on lock re-acquisition when a concurrent override retarget keeps moving
+# the effective group under us (Should-Fix 2) — avoids a pathological flip-flop.
+_LOCK_REACQUIRE_MAX = 3
 
 
 def _get_group_lock(effective_gid: int) -> asyncio.Lock:
@@ -358,22 +361,38 @@ async def reconcile_group_profiles(
     if live_rule_ids is _UNSET:
         live_rule_ids = await _resolve_live_rule_ids()
 
-    # Lock key comes from the currently-known settings; overrides changing while
-    # we hold the lock is an accepted extreme edge (we keep the original key).
-    effective_gid = resolve_effective_master_group_id(all_settings, group_id)
-    async with _get_group_lock(effective_gid):
-        if settings_provider is not None:
-            try:
-                all_settings = await settings_provider()
-            except Exception as e:  # noqa: BLE001 - fall back to snapshot
-                logger.warning(
-                    "[PROFILE-RECONCILE] group=%s: revalidation fetch failed, "
-                    "using snapshot: %s", group_id, e,
-                )
+    # Acquire the lock on the group we will ACTUALLY mutate (Should-Fix 2). The
+    # effective group is derived from ``all_settings``, but revalidation may
+    # re-fetch settings under the lock and — if a concurrent Channel-Group-
+    # Override retarget happened — resolve to a DIFFERENT effective group. If we
+    # held the pre-revalidation lock we could mutate the new group while another
+    # task holds the new group's lock, interleaving enable/disable and stranding
+    # channels. So: revalidate, and if the effective group changed, RELEASE and
+    # RE-ACQUIRE under the new key. Bounded to avoid a pathological flip-flop.
+    for _attempt in range(_LOCK_REACQUIRE_MAX):
+        lock_key = resolve_effective_master_group_id(all_settings, group_id)
+        async with _get_group_lock(lock_key):
+            if settings_provider is not None:
+                try:
+                    all_settings = await settings_provider()
+                except Exception as e:  # noqa: BLE001 - fall back to snapshot
+                    logger.warning(
+                        "[PROFILE-RECONCILE] group=%s: revalidation fetch failed, "
+                        "using snapshot: %s", group_id, e,
+                    )
             effective_gid = resolve_effective_master_group_id(all_settings, group_id)
-        return await _reconcile_group_locked(
-            client, all_settings, group_id, effective_gid, live_rule_ids
-        )
+            if effective_gid == lock_key or _attempt == _LOCK_REACQUIRE_MAX - 1:
+                if effective_gid != lock_key:
+                    logger.warning(
+                        "[PROFILE-RECONCILE] group=%s: effective group kept "
+                        "changing under the lock (last %s vs key %s) — proceeding "
+                        "under the latest key after %d attempts",
+                        group_id, effective_gid, lock_key, _LOCK_REACQUIRE_MAX,
+                    )
+                return await _reconcile_group_locked(
+                    client, all_settings, group_id, effective_gid, live_rule_ids
+                )
+        # effective group changed under us — loop to re-acquire the correct lock.
 
 
 async def _reconcile_group_locked(
@@ -659,8 +678,8 @@ async def reconcile_all_selected_groups(
             logger.warning("[PROFILE-RECONCILE] failed to fetch group settings: %s", e)
             return {
                 "groups_reconciled": 0, "groups_partial_failure": 0,
-                "groups_degraded": 0, "groups_with_selection": 0,
-                "channels_scoped": 0,
+                "groups_degraded": 0, "groups_errored": 0,
+                "groups_with_selection": 0, "channels_scoped": 0,
             }
 
     live_rule_ids = await _resolve_live_rule_ids()
@@ -676,6 +695,7 @@ async def reconcile_all_selected_groups(
     groups_reconciled = 0
     groups_partial_failure = 0
     groups_degraded = 0
+    groups_errored = 0
     channels_scoped = 0
     for gid in reconcile_gids:
         if cancel_check is not None and cancel_check():
@@ -699,7 +719,13 @@ async def reconcile_all_selected_groups(
             elif status == "degraded":
                 groups_degraded += 1
                 channels_scoped += result.get("channels_scoped", 0)
+            elif status == "error":
+                groups_errored += 1
         except Exception as e:  # noqa: BLE001 - isolate per-group failures
+            # Should-Fix 3: a per-group EXCEPTION (e.g. get_channels raising)
+            # must count as an error so the monitor's warning aggregation sees
+            # it — otherwise a hard per-group failure reads as clean success.
+            groups_errored += 1
             logger.warning(
                 "[PROFILE-RECONCILE] group=%s reconcile failed: %s", gid, e
             )
@@ -708,14 +734,16 @@ async def reconcile_all_selected_groups(
         logger.info(
             "[PROFILE-RECONCILE] swept %d group(s) with a selection (%d after "
             "effective-group dedupe), reconciled %d, partial_failure %d, "
-            "degraded %d, scoped %d channel(s)",
+            "degraded %d, errored %d, scoped %d channel(s)",
             len(target_gids), len(reconcile_gids), groups_reconciled,
-            groups_partial_failure, groups_degraded, channels_scoped,
+            groups_partial_failure, groups_degraded, groups_errored,
+            channels_scoped,
         )
     return {
         "groups_reconciled": groups_reconciled,
         "groups_partial_failure": groups_partial_failure,
         "groups_degraded": groups_degraded,
+        "groups_errored": groups_errored,
         "groups_with_selection": len(target_gids),
         "channels_scoped": channels_scoped,
     }
