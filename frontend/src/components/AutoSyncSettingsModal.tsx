@@ -655,7 +655,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                       aria-labelledby="channel-profile-assignment-label"
                       aria-activedescendant={
                         channelProfiles.length
-                          ? `channel-profile-option-${channelProfiles[activeProfileIndex]?.id}`
+                          ? `channel-profile-option-${channelProfiles[Math.min(activeProfileIndex, channelProfiles.length - 1)]?.id}`
                           : undefined
                       }
                       tabIndex={0}
