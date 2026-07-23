@@ -214,6 +214,14 @@ app.add_middleware(
 )
 
 
+# GH #720 Part B round-9 (B4 — MAIN IS THE SOLE WRITER): in the HTTPS subprocess
+# ONLY, forward the profile-mutating route allowlist to the main process so
+# channel-profile writes + reconcile execute only there (the in-process lock is
+# authoritative). No-op in the main process. See tls/subprocess_proxy.py.
+from tls.subprocess_proxy import subprocess_proxy_middleware  # noqa: E402
+app.middleware("http")(subprocess_proxy_middleware)
+
+
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     """Add security headers to all responses."""
