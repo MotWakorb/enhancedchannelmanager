@@ -117,6 +117,20 @@ async def test_counter_invariants_hold_when_sweep_fetch_failed(test_session):
 
 
 @pytest.mark.asyncio
+async def test_counter_invariants_hold_zero_accounts_and_sweep_raised(test_session):
+    """Counter edge (double-fault): accounts_checked == 0 AND the sweep RAISED —
+    total_items == 0 by domain sum but failed_count == 1. The max()-guard must
+    keep failed_count <= total_items (and success_count <= total_items)."""
+    result = await _run_monitor(
+        test_session, accounts=[], snapshot_ts=None,
+        sweep_side_effect=RuntimeError("sweep boom"),
+    )
+    assert result.failed_count >= 1
+    assert result.total_items >= result.failed_count
+    assert result.total_items >= result.success_count
+
+
+@pytest.mark.asyncio
 async def test_monitor_counts_capture_exceptions_as_warnings(test_session):
     """Honesty (B2): an account change-capture EXCEPTION is counted as a task
     warning (failed_count), not silently swallowed."""

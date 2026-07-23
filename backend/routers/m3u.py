@@ -1316,6 +1316,11 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         # per-group OUTCOME is returned in the response so the modal can warn on
         # an incomplete apply (#9).
         profile_apply_summary: list[dict] = []
+        # Whether we ACTUALLY wrote group settings to Dispatcharr. The journal
+        # (the operator's recovery breadcrumb — snapshot restore does NOT revert
+        # group settings) must only record changes that were applied, so the
+        # fail-closed no-write path below must NOT emit a phantom entry.
+        save_applied = False
         edited_gids = [
             gs.get("channel_group")
             for gs in (data.get("group_settings") or [])
@@ -1352,6 +1357,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                 client, account_id, data, data.get("group_settings") or [],
                 before_groups, settings_for_apply,
             )
+            save_applied = True  # the primary PATCH was performed
             if propagation_error:
                 # Finding 3 (A) + B4: an INCOMPLETE propagation — including an
                 # incomplete CLEAR — must be surfaced honestly and name the
@@ -1419,17 +1425,21 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                 "error": "group settings unavailable; the profile-selection change "
                          "was NOT applied (fail-closed) — retry the save",
             })
-            result = {}  # no write performed
+            result = {}  # no write performed (save_applied stays False)
         else:
             # No selection change (field-only edit, or no edited groups) — safe to
             # save the group settings without the enforced-global lock.
             result = await client.update_m3u_group_settings(account_id, data)
+            save_applied = True
 
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[M3U] Updated group settings for account %s in %.1fms", account_id, elapsed_ms)
 
-        # Log to journal - compare before/after states for all settings
-        group_settings = data.get("group_settings", [])
+        # Log to journal - compare before/after states for all settings. Gated on
+        # save_applied so the fail-closed NO-WRITE path never emits a phantom
+        # "Updated group settings" entry (the journal is the operator's recovery
+        # breadcrumb and must record only changes actually applied to Dispatcharr).
+        group_settings = data.get("group_settings", []) if save_applied else []
         if group_settings:
             enabled_names = []
             disabled_names = []

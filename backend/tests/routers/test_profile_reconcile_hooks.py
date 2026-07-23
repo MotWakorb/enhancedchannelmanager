@@ -490,7 +490,7 @@ async def test_save_fails_closed_on_lock_key_fetch_failure_for_selection_change(
     client.get_all_m3u_group_settings.side_effect = RuntimeError("settings down")
 
     with patch("routers.m3u.get_client", return_value=client), \
-         patch("routers.m3u.journal"), \
+         patch("routers.m3u.journal") as mock_journal, \
          patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules):
         resp = await async_client.patch(
             "/api/m3u/accounts/11/group-settings",
@@ -502,6 +502,8 @@ async def test_save_fails_closed_on_lock_key_fetch_failure_for_selection_change(
     assert resp.status_code == 200
     # No unlocked primary write was performed.
     client.update_m3u_group_settings.assert_not_called()
+    # BLOCKER: no PHANTOM journal entry for a change that was never applied.
+    mock_journal.log_entry.assert_not_called()
     summary = resp.json().get("ecm_profile_apply", [])
     assert any(o.get("status") == "error" for o in summary)
     assert any("fail-closed" in (o.get("error") or "") for o in summary)
