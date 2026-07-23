@@ -647,7 +647,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                   className="dropdown-trigger"
                   aria-haspopup="listbox"
                   aria-expanded={profileDropdownOpen}
-                  aria-labelledby="channel-profile-assignment-label"
+                  aria-controls="channel-profile-listbox"
+                  // F1 (a11y): the accessible NAME includes the current
+                  // selection so screen-reader users hear what is selected, not
+                  // just the field label.
+                  aria-label={`Channel Profile Assignment: ${selectedProfileNames}`}
                   onClick={() => (profileDropdownOpen ? closeProfileListbox(false) : openProfileListbox())}
                 >
                   <span className="dropdown-value">{selectedProfileNames}</span>
@@ -664,6 +668,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                       </button>
                     </div>
                     <div
+                      id="channel-profile-listbox"
                       className="dropdown-options"
                       ref={profileListboxRef}
                       role="listbox"

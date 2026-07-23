@@ -50,10 +50,10 @@ def _reset_group_locks():
     event loop) so a module-level lock from a prior loop is never reused."""
     import services.profile_reconcile as pr
     pr._group_locks.clear()
-    pr._sweep_in_progress = False
+    pr._sweep_in_progress = False; pr._sweep_pending = False
     yield
     pr._group_locks.clear()
-    pr._sweep_in_progress = False
+    pr._sweep_in_progress = False; pr._sweep_pending = False
 
 
 def _channel(cid: int, *, group: int = 100, owned: bool = False,
@@ -676,6 +676,28 @@ async def test_normalize_converges_divergent_sibling(monkeypatch):
     assert writes
     row = writes[0][1][0]
     assert row["custom_properties"]["channel_profile_ids"] == [1]
+
+
+@pytest.mark.asyncio
+async def test_normalize_account_list_fetch_failure_counted(monkeypatch):
+    """Honesty (B1): a failed account-list fetch in normalize is counted as a
+    failure (not silently zero), so the sweep reflects it."""
+    async def _no_live_rules():
+        return set()
+    monkeypatch.setattr(
+        "services.profile_reconcile._resolve_live_rule_ids", _no_live_rules
+    )
+
+    class _NoAccountsClient(_NormalizeClient):
+        async def get_m3u_accounts(self):
+            raise RuntimeError("accounts fetch boom")
+
+    client = _NoAccountsClient({100: [_channel(10, group=100)]}, profiles=[1, 2])
+    settings = {100: _setting(channel_profile_ids=[1])}
+
+    result = await reconcile_all_selected_groups(client, settings)
+
+    assert result["accounts_normalize_failed"] >= 1
 
 
 @pytest.mark.asyncio

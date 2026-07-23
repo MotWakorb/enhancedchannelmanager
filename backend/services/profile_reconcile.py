@@ -77,14 +77,26 @@ from services.event_sync_preflight import resolve_effective_master_group_id
 
 logger = logging.getLogger(__name__)
 
-# --- Per-effective-group serialization (Blocker 1) -------------------------
-# The three reconcile entrypoints (save hook, post-refresh poll, monitor
-# every-pass sweep) run as separate async tasks and can interleave for the
-# SAME effective group: enable{A} -> enable{B} -> disable{A} -> disable{B}
-# would leave the channels in ZERO profiles. We serialize per effective group
-# id with a lazily-created asyncio.Lock so a group's enable+disable phases are
-# atomic w.r.t. every other reconcile of that group. Lock creation is a single
-# synchronous dict get/set (no await between), so it needs no guard lock.
+# --- Per-effective-group serialization (SAME-PROCESS only) -----------------
+# The reconcile entrypoints (save hook, post-refresh poll, monitor every-pass
+# sweep) and the Channel Pipeline's assign_channel_profile write run as separate
+# async tasks; without serialization they could interleave for the SAME
+# effective group (enable{A} -> enable{B} -> disable{A} -> disable{B}) and leave
+# channels in ZERO profiles. A lazily-created asyncio.Lock per effective group id
+# serializes them WITHIN THIS PROCESS.
+#
+# HONEST GUARANTEE (right-sized for a single-operator home-lab tool): this is an
+# IN-PROCESS lock. It does NOT serialize concurrent mutations across processes.
+# The background monitor/scheduler runs only in the MAIN process (the HTTPS
+# subprocess, ECM_HTTPS_SUBPROCESS=1, skips background services — main.py), but
+# that subprocess STILL serves HTTP requests, so a group-settings save handled
+# there can run concurrently with a main-process sweep unserialized. Cross-
+# process serialization (a distributed lock / single-writer TLS proxy) is OUT OF
+# SCOPE at this tier and DEFERRED to bead nq3ed. The design assumption here is a
+# single operator making one change at a time.
+#
+# Lock creation is a single synchronous dict get/set (no await between), so it
+# needs no guard lock.
 _group_locks: dict[int, asyncio.Lock] = {}
 # Bound on lock re-acquisition when a concurrent override retarget keeps moving
 # the effective group under us (Should-Fix 2) — avoids a pathological flip-flop.
@@ -92,8 +104,11 @@ _LOCK_REACQUIRE_MAX = 3
 
 # Coalescing guard: a full selected-group sweep already running short-circuits a
 # redundant queued one (the monitor fires every pass; an equivalent sweep in
-# flight makes another a no-op) — Finding: coalesce redundant sweeps.
+# flight makes another a no-op) — Finding: coalesce redundant sweeps. F3: a
+# follower that coalesces sets _sweep_pending so ONE trailing pass runs after the
+# current sweep — a non-equivalent follower is deferred, not fully dropped.
 _sweep_in_progress = False
+_sweep_pending = False
 
 
 def _get_group_lock(effective_gid: int) -> asyncio.Lock:
@@ -108,9 +123,10 @@ def effective_group_lock(effective_gid: int) -> asyncio.Lock:
     """Public accessor for the per-effective-group lock registry (Finding 4).
 
     The Channel Pipeline's assign_channel_profile write acquires the SAME lock
-    the reconcile uses so a pipeline membership write and a group reconcile can
-    never touch the same effective group's channels concurrently. Same registry,
-    same key resolution (``resolve_effective_master_group_id``)."""
+    the reconcile uses so a pipeline membership write and a group reconcile do
+    not touch the same effective group's channels concurrently WITHIN THIS
+    PROCESS. Cross-process serialization is out of scope (see bead nq3ed). Same
+    registry, same key resolution (``resolve_effective_master_group_id``)."""
     return _get_group_lock(effective_gid)
 
 
@@ -854,11 +870,21 @@ async def normalize_group_selections(client, all_settings: dict, cancel_check=No
     winner) to EVERY M3U account row for that group that DIVERGES.
 
     Runs every sweep, UNCONDITIONALLY (not gated on "changed this request"), so a
-    partially-failed save cascade, a divergent sibling, or a stale row self-heals
-    without an operator action. Writes are serialized under the per-effective-
-    group locks (shared with reconcile) so a normalize can't interleave with a
-    concurrent save cascade or membership reconcile. Best-effort — never raises;
-    returns ``{normalized_accounts, failed_accounts}``.
+    partially-failed NON-EMPTY cascade, a divergent sibling, or a stale row
+    self-heals without an operator action. Writes are serialized under the
+    per-effective-group locks (shared with reconcile). Best-effort — never
+    raises; returns ``{normalized_accounts, failed_accounts, fetch_failed?}``.
+
+    RIGHT-SIZING BOUNDARY (Finding 3 / bead nq3ed): normalize converges to the
+    COLLAPSE WINNER, which prefers a row that HAS a selection. So a partially-
+    failed CLEAR (operator cleared the selection but one sibling clear PATCH
+    failed) leaves a stale has-selection sibling that the collapse re-elects, and
+    normalize will then RESURRECT that stale selection into the cleared rows.
+    Durably completing a clear needs an explicit "cleared" tombstone to
+    distinguish it from "never managed" — that versioned/tombstone desired-state
+    is DEFERRED to bead nq3ed. Here the save surfaces an incomplete clear
+    honestly (degraded + named accounts) so the operator can retry; normalize
+    does NOT durably auto-heal a partially-failed clear.
     """
     winning: dict[int, list[int]] = {}
     for gid, setting in all_settings.items():
@@ -871,10 +897,14 @@ async def normalize_group_selections(client, all_settings: dict, cancel_check=No
     try:
         accounts = await client.get_m3u_accounts()
     except Exception as e:  # noqa: BLE001
+        # Honesty finding (B1): a failed account-list fetch is NOT zero failures —
+        # normalize could not converge ANY divergent sibling this pass. Count it
+        # so the sweep/monitor reflect a warning instead of a false green.
         logger.warning("[PROFILE-RECONCILE] normalize: could not list accounts: %s", e)
-        return {"normalized_accounts": 0, "failed_accounts": 0}
+        return {"normalized_accounts": 0, "failed_accounts": 1, "fetch_failed": True}
     if not isinstance(accounts, list):
-        return {"normalized_accounts": 0, "failed_accounts": 0}
+        logger.warning("[PROFILE-RECONCILE] normalize: account list unavailable (got %r)", type(accounts))
+        return {"normalized_accounts": 0, "failed_accounts": 1, "fetch_failed": True}
 
     normalized = 0
     failed = 0
@@ -938,20 +968,31 @@ async def reconcile_all_selected_groups(
 ) -> dict:
     """Reconcile every group that carries a profile selection (COALESCED).
 
-    Finding: coalesce redundant sweeps — if an equivalent full sweep is already
-    in flight (the monitor fires every pass; a post-refresh poll may overlap),
-    this call short-circuits to a ``coalesced`` no-op instead of duplicating the
-    work. The in-flight sweep already converges the same state.
+    Finding: coalesce redundant sweeps — if a full sweep is already in flight
+    (the monitor fires every pass; a post-refresh poll may overlap), this call
+    short-circuits to a ``coalesced`` no-op instead of duplicating the work. F3:
+    a coalesced follower sets a pending flag so exactly ONE trailing pass runs
+    after the current sweep (bounded loop, drains at the request rate) — a
+    follower that arrived after the current sweep started reading state is
+    deferred, not fully dropped.
     """
-    global _sweep_in_progress
+    global _sweep_in_progress, _sweep_pending
     if _sweep_in_progress:
-        logger.info("[PROFILE-RECONCILE] sweep already in progress — coalescing")
+        _sweep_pending = True
+        logger.info("[PROFILE-RECONCILE] sweep already in progress — coalescing (trailing pass queued)")
         return _coalesced_result()
     _sweep_in_progress = True
     try:
-        return await _run_selected_group_sweep(client, all_settings, cancel_check)
+        result = await _run_selected_group_sweep(client, all_settings, cancel_check)
+        # F3: run trailing passes for any followers that coalesced during this
+        # run (single bool -> multiple followers collapse to one trailing pass).
+        while _sweep_pending:
+            _sweep_pending = False
+            result = await _run_selected_group_sweep(client, all_settings, cancel_check)
+        return result
     finally:
         _sweep_in_progress = False
+        _sweep_pending = False
 
 
 async def _run_selected_group_sweep(

@@ -117,6 +117,33 @@ async def test_counter_invariants_hold_when_sweep_fetch_failed(test_session):
 
 
 @pytest.mark.asyncio
+async def test_monitor_counts_capture_exceptions_as_warnings(test_session):
+    """Honesty (B2): an account change-capture EXCEPTION is counted as a task
+    warning (failed_count), not silently swallowed."""
+    # Snapshot T0 != account T1 -> should_capture -> capture raises.
+    test_session.add(
+        M3USnapshot(m3u_account_id=11, dispatcharr_updated_at="T0", total_streams=0)
+    )
+    test_session.commit()
+    account = {"id": 11, "name": "HD Homerun", "is_active": True, "updated_at": "T1"}
+    client = AsyncMock()
+    client.get_m3u_accounts.return_value = [account]
+    fake_sweep = AsyncMock(return_value={"groups_with_selection": 0})
+    task = M3UChangeMonitorTask()
+
+    with patch("tasks.m3u_change_monitor.get_client", return_value=client), \
+         patch("tasks.m3u_change_monitor.get_session", return_value=test_session), \
+         patch("tasks.m3u_refresh.capture_m3u_changes", AsyncMock(side_effect=RuntimeError("capture boom"))), \
+         patch("tasks.m3u_digest.send_immediate_digest", AsyncMock()), \
+         patch("services.profile_reconcile.reconcile_all_selected_groups", fake_sweep):
+        result = await task.execute()
+
+    assert result.failed_count >= 1
+    assert "change capture" in result.message
+    assert result.total_items >= result.failed_count
+
+
+@pytest.mark.asyncio
 async def test_monitor_runs_sweep_even_with_no_accounts_to_check(test_session):
     """Finding: even when account filtering yields NO accounts, the profile
     sweep still runs (it is the durable convergence backbone, independent of

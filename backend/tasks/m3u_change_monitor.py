@@ -109,6 +109,7 @@ class M3UChangeMonitorTask(TaskScheduler):
             # Check each account for changes
             changes_detected = 0
             accounts_checked = 0
+            capture_failures = 0  # Honesty finding (B2): counted as task warnings
             changed_accounts = []
 
             db = get_session()
@@ -180,6 +181,7 @@ class M3UChangeMonitorTask(TaskScheduler):
 
                         except Exception as e:
                             logger.error("[%s] Failed to capture changes for %s: %s", self.task_id, account_name, e)
+                            capture_failures += 1  # B2: surfaced as a task warning
 
                     accounts_checked += 1
 
@@ -260,7 +262,8 @@ class M3UChangeMonitorTask(TaskScheduler):
             groups_with_selection = recon.get("groups_with_selection", 0)
             normalize_failed = recon.get("accounts_normalize_failed", 0)
             normalize_attempted = recon.get("accounts_normalized", 0) + normalize_failed
-            failed_count = reconcile_warnings + normalize_failed
+            # B2: account-capture exceptions are account-domain failures too.
+            failed_count = reconcile_warnings + normalize_failed + capture_failures
             total_items = max(
                 accounts_checked + groups_with_selection + normalize_attempted,
                 changes_detected,
@@ -271,6 +274,8 @@ class M3UChangeMonitorTask(TaskScheduler):
                 warn_bits.append(f"{reconcile_warnings} profile group(s) incomplete")
             if normalize_failed:
                 warn_bits.append(f"{normalize_failed} account(s) not normalized")
+            if capture_failures:
+                warn_bits.append(f"{capture_failures} account(s) failed change capture")
             recon_suffix = f" ({', '.join(warn_bits)})" if warn_bits else ""
 
             if changes_detected > 0:
