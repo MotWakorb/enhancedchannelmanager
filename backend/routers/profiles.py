@@ -62,6 +62,12 @@ async def get_channel_profiles():
         logger.debug("[PROFILES] Fetched channel profiles in %.1fms", elapsed_ms)
         return result
     except Exception as e:
+        # An upstream 4xx (e.g. auth/validation) surfaces the actionable status
+        # + detail instead of an opaque 500 (bd-lsctv, GH #720).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[PROFILES] Fetch channel profiles rejected by Dispatcharr: %s", e)
+            raise mapped
         logger.exception("[PROFILES] Failed to fetch channel profiles")
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -79,6 +85,12 @@ async def create_channel_profile(request: Request):
         logger.info("[PROFILES] Created channel profile id=%s name=%s in %.1fms", result.get("id"), result.get("name"), elapsed_ms)
         return result
     except Exception as e:
+        # An upstream 4xx (e.g. validation, name conflict) surfaces the
+        # actionable status + detail instead of an opaque 500 (bd-lsctv, GH #720).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[PROFILES] Create channel profile rejected by Dispatcharr: %s", e)
+            raise mapped
         logger.exception("[PROFILES] Failed to create channel profile")
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -95,6 +107,12 @@ async def get_channel_profile(profile_id: int):
         logger.debug("[PROFILES] Fetched channel profile id=%s in %.1fms", profile_id, elapsed_ms)
         return result
     except Exception as e:
+        # An upstream 4xx (e.g. a 404 for a missing profile) surfaces the
+        # actionable status + detail instead of an opaque 500 (bd-lsctv, GH #720).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[PROFILES] Fetch channel profile %s rejected by Dispatcharr: %s", profile_id, e)
+            raise mapped
         logger.exception("[PROFILES] Failed to fetch channel profile id=%s", profile_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -112,6 +130,13 @@ async def update_channel_profile(profile_id: int, request: Request):
         logger.info("[PROFILES] Updated channel profile id=%s in %.1fms", profile_id, elapsed_ms)
         return result
     except Exception as e:
+        # An upstream 4xx (e.g. validation, name conflict, missing profile)
+        # surfaces the actionable status + detail instead of an opaque 500
+        # (bd-lsctv, GH #720).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[PROFILES] Update channel profile %s rejected by Dispatcharr: %s", profile_id, e)
+            raise mapped
         logger.exception("[PROFILES] Failed to update channel profile id=%s", profile_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -128,6 +153,13 @@ async def delete_channel_profile(profile_id: int):
         logger.info("[PROFILES] Deleted channel profile id=%s in %.1fms", profile_id, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
+        # An upstream 4xx (e.g. a 404 for a missing profile, or a conflict)
+        # surfaces the actionable status + detail instead of an opaque 500
+        # (bd-lsctv, GH #720).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[PROFILES] Delete channel profile %s rejected by Dispatcharr: %s", profile_id, e)
+            raise mapped
         logger.exception("[PROFILES] Failed to delete channel profile id=%s", profile_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -168,5 +200,12 @@ async def update_profile_channel(profile_id: int, channel_id: int, request: Requ
         logger.info("[PROFILES] Updated channel %s in profile %s in %.1fms", channel_id, profile_id, elapsed_ms)
         return result
     except Exception as e:
+        # An upstream 4xx (e.g. a missing profile/channel id, or validation)
+        # surfaces the actionable status + detail instead of an opaque 500
+        # (bd-lsctv, GH #720).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[PROFILES] Update profile %s channel %s rejected by Dispatcharr: %s", profile_id, channel_id, e)
+            raise mapped
         logger.exception("[PROFILES] Failed to update profile channel profile_id=%s channel_id=%s", profile_id, channel_id)
         raise HTTPException(status_code=500, detail="Internal server error")
