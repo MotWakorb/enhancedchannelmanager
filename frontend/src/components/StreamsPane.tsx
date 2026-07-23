@@ -14,6 +14,7 @@ import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
 import { ShowMoreRows } from './ShowMoreRows';
 import { StreamDedupModal } from './StreamDedupModal';
+import { CatchupBadge } from './CatchupBadge';
 import { logger } from '../utils/logger';
 import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import './StreamsPane.css';
@@ -2070,6 +2071,10 @@ export function StreamsPane({
                                 STALE
                               </span>
                             )}
+                            {/* Catch-up (timeshift) support — bead
+                                enhancedchannelmanager-sy1sz. Renders only when
+                                Dispatcharr flags the stream is_catchup. */}
+                            <CatchupBadge isCatchup={stream.is_catchup} catchupDays={stream.catchup_days} />
                             {showStreamUrls && stream.url && (
                               <span className="stream-url" title={stream.url}>
                                 {stream.url}

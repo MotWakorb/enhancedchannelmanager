@@ -1,0 +1,40 @@
+/* CatchupBadge.css (bead enhancedchannelmanager-sy1sz)
+ *
+ * Mirrors the row `.meta-tag` indicator style (StreamListItem / StreamsPane)
+ * for visual consistency with the other channel/stream row badges (STALE,
+ * probe status, etc.). Icon + text — no color-only differentiation — so it
+ * stays legible to screen readers and in high-contrast modes. Theme-safe
+ * tokens only (no --accent-* on background/border per style guide).
+ */
+
+.catchup-badge {
+  display: inline-flex;
+  align-items: center;
+  /* Stay compact wherever it's dropped: the stream-row containers
+     (.inline-stream-info / .stream-info) are `flex-direction: column` with the
+     default `align-items: stretch`, which would otherwise stretch this badge to
+     the full column width as its own bar. flex-start pins it to content width;
+     flex-shrink:0 keeps it intact next to flex:1 siblings on row layouts
+     (e.g. channel-line1). Bead enhancedchannelmanager-sy1sz. */
+  align-self: flex-start;
+  flex-shrink: 0;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+  border: 1px solid var(--border-primary, rgba(255, 255, 255, 0.1));
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.catchup-badge__icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.catchup-badge__text {
+  line-height: 1;
+}
