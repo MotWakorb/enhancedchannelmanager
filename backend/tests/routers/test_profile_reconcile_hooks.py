@@ -575,9 +575,95 @@ async def test_clear_aborts_before_primary_when_sibling_clear_fails(async_client
     # The AUTHORITATIVE PRIMARY (account 11) was NOT cleared — no resurrection.
     assert 11 not in calls
     assert 22 in calls  # sibling was attempted first (and failed)
-    # No phantom journal entry, and the recovery names the affected account.
+    # No phantom journal entry (NOTHING actually changed), recovery names 22.
     mock_journal.log_entry.assert_not_called()
     assert "22" in resp.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_clear_partial_reports_truthfully_and_journals_changed(async_client):
+    """Finding 4 (TRUTHFUL partial CLEAR): when clearing across 3 accounts and
+    sibling A clears but sibling B fails, the response must NOT claim 'nothing
+    changed'. It must (1) 503, (2) NOT clear the authoritative primary, (3) name
+    BOTH the cleared account and the failed account, and (4) JOURNAL the account
+    that ACTUALLY changed (the operator's recovery breadcrumb)."""
+    calls = []
+
+    client = _mock_client()
+    client.get_m3u_account.return_value = _account(11, 1304, [12])  # prior HAD [12]
+    client.get_all_m3u_group_settings.return_value = {1304: {"custom_properties": {}}}
+    # 3 accounts: 11 primary, 22 clears OK, 33's clear PATCH fails.
+    client.get_m3u_accounts.return_value = [
+        _account(11, 1304, [12]),
+        _account(22, 1304, [12]),
+        _account(33, 1304, [12]),
+    ]
+
+    async def _update(aid, data):
+        calls.append(aid)
+        if aid == 33:
+            raise RuntimeError("sibling 33 PATCH failed")
+        return {"message": "ok"}
+    client.update_m3u_group_settings.side_effect = _update
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal") as mock_journal, \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {}}  # clear
+            ]},
+        )
+
+    assert resp.status_code == 503
+    # Primary 11 NOT cleared (no resurrection); both siblings were attempted.
+    assert 11 not in calls
+    assert 22 in calls and 33 in calls
+    detail = resp.json().get("detail", "")
+    assert "22" in detail and "33" in detail  # names cleared AND failed
+    # The sibling that ACTUALLY changed (22) is journaled — truthful, not silent.
+    mock_journal.log_entry.assert_called_once()
+    kwargs = mock_journal.log_entry.call_args.kwargs
+    assert 22 in kwargs["after_value"]["cleared_siblings"]
+    assert 33 not in kwargs["after_value"]["cleared_siblings"]
+
+
+@pytest.mark.parametrize("bad", [None, {"not": "a list"}, "boom"])
+@pytest.mark.asyncio
+async def test_clear_fails_closed_on_malformed_account_list(async_client, bad):
+    """Finding 5 (fail-closed enumeration): a CLEAR requires a VALID fresh account
+    list read under the lock. A None / non-list / raised result must FAIL CLOSED —
+    503, ZERO writes (primary NOT cleared), and NO journal entry — never clear the
+    authoritative primary on an unverified/malformed account enumeration."""
+    calls = []
+
+    client = _mock_client()
+    client.get_m3u_account.return_value = _account(11, 1304, [12])  # prior HAD [12]
+    client.get_all_m3u_group_settings.return_value = {1304: {"custom_properties": {}}}
+    if bad == "boom":
+        client.get_m3u_accounts.side_effect = RuntimeError("account list unavailable")
+    else:
+        client.get_m3u_accounts.return_value = bad
+
+    async def _update(aid, data):
+        calls.append(aid)
+        return {"message": "ok"}
+    client.update_m3u_group_settings.side_effect = _update
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal") as mock_journal, \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {}}  # clear
+            ]},
+        )
+
+    assert resp.status_code == 503
+    assert calls == []  # ZERO writes — primary NOT cleared, no sibling touched
+    mock_journal.log_entry.assert_not_called()  # nothing changed -> no journal
 
 
 @pytest.mark.asyncio

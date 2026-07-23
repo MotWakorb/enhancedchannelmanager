@@ -1150,16 +1150,19 @@ def _compute_changed_selections(edited_rows, before_groups):
 async def _cascade_to_siblings(client, primary_account_id, desired, all_accounts):
     """Write the changed selection into every SIBLING account row (the primary
     account is written separately, under the SAME lock, by the caller). NO lock
-    here — the caller holds the effective-group locks. Best-effort per sibling;
-    returns ``None`` or a short error string."""
+    here — the caller holds the effective-group locks. Best-effort per sibling.
+
+    Returns ``(error_str_or_None, changed_ids, failed_ids)`` — ``changed_ids``
+    are the sibling accounts whose row WAS mutated (finding 4: the caller must
+    report/journal these truthfully, never claim 'no write' when a sibling
+    actually changed); ``failed_ids`` are the accounts whose PATCH raised."""
+    changed = []
     failures = []
     for acct in all_accounts:
         aid = acct.get("id")
         if aid is None or aid == primary_account_id:
             continue  # primary written by the caller under the same lock
         sibling_rows = []
-        # Staleness window (Should-Fix 5): sibling rows come from one up-front
-        # get_m3u_accounts(); the monitor normalize heals any residual divergence.
         for row in acct.get("channel_groups", []):
             gid = row.get("channel_group")
             if gid not in desired:
@@ -1182,6 +1185,7 @@ async def _cascade_to_siblings(client, primary_account_id, desired, all_accounts
             continue
         try:
             await client.update_m3u_group_settings(aid, {"group_settings": sibling_rows})
+            changed.append(aid)
             logger.info(
                 "[M3U] enforced-global: propagated selection to account %s (%d group row(s))",
                 aid, len(sibling_rows),
@@ -1189,9 +1193,8 @@ async def _cascade_to_siblings(client, primary_account_id, desired, all_accounts
         except Exception as e:  # noqa: BLE001 - best-effort per sibling
             logger.warning("[M3U] enforced-global propagation to account %s failed: %s", aid, e)
             failures.append(aid)
-    if failures:
-        return f"{len(failures)} sibling account(s) not updated: {failures}"
-    return None
+    err = f"{len(failures)} sibling account(s) not updated: {failures}" if failures else None
+    return err, changed, failures
 
 
 async def _apply_enforced_global_save(
@@ -1216,9 +1219,11 @@ async def _apply_enforced_global_save(
     collapse winner would re-elect and RESURRECT). On abort the group stays in
     its prior consistent state and the operator retries.
 
-    Returns ``(primary_result, propagation_error, applied)`` — ``applied`` is
-    False when a clear was ABORTED before the primary write (nothing saved for
-    the clear; the caller must not report success)."""
+    Returns ``(primary_result, propagation_error, applied, changed_siblings)``.
+    ``applied`` is False when a clear was ABORTED before the primary write (the
+    primary keeps its selection). ``changed_siblings`` are the sibling accounts
+    whose row WAS mutated before the abort — the caller journals them and reports
+    the truthful partial (finding 4), never "no write" when a sibling changed."""
     from services.profile_reconcile import (
         acquire_effective_group_locks, resolve_effective_master_group_id,
     )
@@ -1241,40 +1246,52 @@ async def _apply_enforced_global_save(
 
     async with acquire_effective_group_locks(eff_gids):
         if has_clear:
-            # Siblings FIRST, from a FRESH read under the lock. Abort before the
-            # primary if any sibling clear fails.
+            # Finding 5: a CLEAR requires a VALID fresh account list read UNDER
+            # the lock. A malformed (None/non-list) or raised result -> FAIL
+            # CLOSED (no primary clear, no writes, no journal) — never clear the
+            # authoritative primary without having verified/updated the siblings.
             try:
                 fresh = await client.get_m3u_accounts()
-                if isinstance(fresh, list):
-                    all_accounts = fresh
-            except Exception as e:  # noqa: BLE001 - fall back to the pre-lock read
-                logger.warning("[M3U] enforced-global clear: fresh account read failed: %s", e)
-            sibling_err = None
-            if all_accounts:
-                sibling_err = await _cascade_to_siblings(
-                    client, primary_account_id, desired, all_accounts
-                )
-            propagation_error = account_err or sibling_err
-            if propagation_error:
-                # ABORT before clearing the primary — no resurrection.
-                logger.warning(
-                    "[M3U] enforced-global clear ABORTED before primary write "
-                    "(sibling clear failed): %s", propagation_error,
-                )
-                return None, propagation_error, False
+            except Exception as e:  # noqa: BLE001 - fail closed
+                logger.warning("[M3U] enforced-global clear: fresh account read FAILED: %s", e)
+                return None, f"account list unavailable ({e}); clear NOT applied", False, []
+            if not isinstance(fresh, list):
+                logger.warning("[M3U] enforced-global clear: fresh account read malformed (%r)", type(fresh))
+                return None, "account list unavailable (malformed); clear NOT applied", False, []
+            all_accounts = fresh
+
+            # Siblings FIRST; abort BEFORE the primary if ANY sibling clear fails.
+            sibling_err, changed, failed = await _cascade_to_siblings(
+                client, primary_account_id, desired, all_accounts
+            )
+            if sibling_err:
+                # Finding 4 (honesty): the `changed` siblings WERE mutated — do
+                # NOT claim "no write / preserved". Report the TRUTHFUL partial;
+                # the primary is NOT cleared (no resurrection), and the caller
+                # journals the siblings that actually changed. State is safe: the
+                # next normalize sweep re-fills the cleared siblings from the
+                # still-selected primary, converging back to the old selection.
+                if changed:
+                    detail = (f"partially applied: account(s) {changed} cleared, "
+                              f"{failed} failed — primary NOT cleared; re-save to complete")
+                else:
+                    detail = (f"NOT saved: account(s) {failed} failed to clear — "
+                              f"primary NOT cleared; retry")
+                logger.warning("[M3U] enforced-global clear ABORTED before primary write: %s", detail)
+                return None, detail, False, changed
             # All siblings cleared — now clear the AUTHORITATIVE primary LAST.
             result = await client.update_m3u_group_settings(primary_account_id, data)
-            return result, None, True
+            return result, None, True, changed
 
         # SET (or non-clear) change: primary FIRST under the lock, then cascade.
         result = await client.update_m3u_group_settings(primary_account_id, data)
         propagation_error = account_err
         if desired and all_accounts:
-            sibling_err = await _cascade_to_siblings(
+            sibling_err, _changed, _failed = await _cascade_to_siblings(
                 client, primary_account_id, desired, all_accounts
             )
             propagation_error = propagation_error or sibling_err
-        return result, propagation_error, True
+        return result, propagation_error, True, []
 
 
 @router.patch("/accounts/{account_id}/group-settings")
@@ -1392,22 +1409,45 @@ async def update_m3u_group_settings(account_id: int, request: Request):
             # last-writer-wins. (The cascade is sequential remote PATCHes, not a
             # single atomic transaction; an incomplete propagation is surfaced
             # below. Cross-process saves are not serialized — bead nq3ed.)
-            result, propagation_error, applied = await _apply_enforced_global_save(
-                client, account_id, data, data.get("group_settings") or [],
-                before_groups, settings_for_apply,
+            result, propagation_error, applied, clear_changed_siblings = (
+                await _apply_enforced_global_save(
+                    client, account_id, data, data.get("group_settings") or [],
+                    before_groups, settings_for_apply,
+                )
             )
             save_applied = applied
             if not applied:
                 # DATA-INTEGRITY: a CLEAR was aborted BEFORE the primary write
-                # (a sibling clear failed) — the selection was NOT cleared (prior
-                # state preserved, no resurrection). Nothing was saved for the
-                # change, so it must NOT read as success — return a retryable 503
-                # naming the affected account(s).
+                # (a sibling clear failed, OR the fresh account list was
+                # unavailable/malformed — finding 5 fail-closed). The primary was
+                # NOT cleared (prior selection preserved, no resurrection).
+                #
+                # Finding 4 (TRUTHFUL partial): some siblings MAY already have
+                # been cleared before the abort. Do NOT claim "nothing changed" —
+                # journal the siblings that ACTUALLY changed (the operator's
+                # recovery breadcrumb) and return a 503 whose detail names the
+                # partial outcome + the re-save recovery action. When zero
+                # siblings changed (fail-closed before any write, finding 5),
+                # there is nothing to journal.
+                if clear_changed_siblings:
+                    journal.log_entry(
+                        category="m3u",
+                        action_type="update",
+                        entity_id=account_id,
+                        entity_name=account_name,
+                        description=(
+                            "Partial channel-profile CLEAR — cleared on account(s) "
+                            f"{clear_changed_siblings} before aborting; primary "
+                            f"{account_id} NOT cleared (re-save to complete)"
+                        ),
+                        before_value={"aborted": True},
+                        after_value={"cleared_siblings": clear_changed_siblings},
+                    )
                 raise HTTPException(
                     status_code=503,
-                    detail=(f"The channel-profile selection was NOT cleared — it could "
-                            f"not be applied to all M3U accounts ({propagation_error}). "
-                            f"The prior selection is preserved; please retry."),
+                    detail=(f"The channel-profile selection was NOT fully cleared "
+                            f"({propagation_error}). The authoritative account keeps its "
+                            f"selection; please re-save to complete the change."),
                 )
             if propagation_error:
                 # Finding 3 (A) + B4: an INCOMPLETE propagation — including an
