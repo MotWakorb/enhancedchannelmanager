@@ -666,6 +666,46 @@ async def test_clear_fails_closed_on_malformed_account_list(async_client, bad):
     mock_journal.log_entry.assert_not_called()  # nothing changed -> no journal
 
 
+@pytest.mark.parametrize("accounts_label", ["empty", "primary_absent"])
+@pytest.mark.asyncio
+async def test_clear_fails_closed_on_empty_or_primary_absent_list(async_client, accounts_label):
+    """Finding 5 (gap): an EMPTY list — or any list that OMITS the account being
+    edited — passes isinstance(list) yet is a detectably-INVALID enumeration
+    (degraded/truncated upstream). Iterating it would clear the authoritative
+    primary while real, unenumerated siblings still hold the selection and
+    RESURRECT it on the next sweep. Both must FAIL CLOSED: 503, ZERO writes
+    (primary NOT cleared), NO journal."""
+    calls = []
+
+    client = _mock_client()
+    client.get_m3u_account.return_value = _account(11, 1304, [12])  # prior HAD [12]
+    client.get_all_m3u_group_settings.return_value = {1304: {"custom_properties": {}}}
+    if accounts_label == "empty":
+        client.get_m3u_accounts.return_value = []
+    else:  # a non-empty list that DOES NOT contain the edited account (11)
+        client.get_m3u_accounts.return_value = [_account(22, 1304, [12])]
+
+    async def _update(aid, data):
+        calls.append(aid)
+        return {"message": "ok"}
+    client.update_m3u_group_settings.side_effect = _update
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal") as mock_journal, \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {}}  # clear
+            ]},
+        )
+
+    assert resp.status_code == 503
+    assert 11 not in calls  # authoritative primary NOT cleared
+    assert calls == []      # ZERO writes at all — no sibling touched either
+    mock_journal.log_entry.assert_not_called()  # nothing changed -> no journal
+
+
 @pytest.mark.asyncio
 async def test_concurrent_opposing_saves_converge_no_divergent_interim():
     """Finding 3: two concurrent opposing enforced-global saves for the SAME

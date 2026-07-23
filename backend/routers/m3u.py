@@ -1258,6 +1258,20 @@ async def _apply_enforced_global_save(
             if not isinstance(fresh, list):
                 logger.warning("[M3U] enforced-global clear: fresh account read malformed (%r)", type(fresh))
                 return None, "account list unavailable (malformed); clear NOT applied", False, []
+            # An EMPTY list — or any list that OMITS the account being edited — is a
+            # detectably-INVALID enumeration (degraded/truncated upstream), NOT a
+            # plausible-but-stale one: iterating it would clear the authoritative
+            # primary while real, unenumerated siblings still hold the selection and
+            # RESURRECT it on the next collapse/sweep. Require the primary to be
+            # present (a non-empty list that contains it) or FAIL CLOSED.
+            fresh_ids = {a.get("id") for a in fresh if isinstance(a, dict)}
+            if primary_account_id not in fresh_ids:
+                logger.warning(
+                    "[M3U] enforced-global clear: fresh account list omits primary %s "
+                    "(size=%d) — failing closed", primary_account_id, len(fresh),
+                )
+                return None, ("account list incomplete (primary account absent); "
+                              "clear NOT applied"), False, []
             all_accounts = fresh
 
             # Siblings FIRST; abort BEFORE the primary if ANY sibling clear fails.

@@ -281,8 +281,16 @@ class M3UChangeMonitorTask(TaskScheduler):
                 reconcile_warnings + normalize_failed + capture_failures
                 + (1 if reconcile_deferred else 0)
             )
+            # The deferred sweep is itself a unit of work accounted for this pass,
+            # so it belongs in the natural denominator — not just caught by the
+            # failed_count safety-net below. Without it, a deferred sweep with zero
+            # backing items (accounts_checked=0, or all captures failed) would leave
+            # the primary sum at 0 while failed_count is 1. failed_count stays in
+            # max() as the belt-and-suspenders guarantee that the invariant holds by
+            # construction on every path.
             total_items = max(
-                accounts_checked + groups_with_selection + normalize_attempted,
+                accounts_checked + groups_with_selection + normalize_attempted
+                + (1 if reconcile_deferred else 0),
                 changes_detected,
                 failed_count,
             )

@@ -131,6 +131,22 @@ async def test_counter_invariants_hold_zero_accounts_and_sweep_raised(test_sessi
 
 
 @pytest.mark.asyncio
+async def test_counter_invariants_hold_deferred_with_zero_accounts(test_session):
+    """Counter nit (deferred domain): a DEFERRED (queued) sweep with ZERO backing
+    items — no accounts checked, no groups, no normalize — still adds 1 to
+    failed_count for the deferral. total_items must include that deferred unit so
+    the invariant total_items >= failed_count (and >= success_count) holds."""
+    result = await _run_monitor(
+        test_session, accounts=[], snapshot_ts=None,
+        sweep_return={"status": "queued", "coalesced": True},
+    )
+    assert result.failed_count >= 1
+    assert "deferred" in result.message
+    assert result.total_items >= result.failed_count
+    assert result.total_items >= result.success_count
+
+
+@pytest.mark.asyncio
 async def test_monitor_counts_capture_exceptions_as_warnings(test_session):
     """Honesty (B2): an account change-capture EXCEPTION is counted as a task
     warning (failed_count), not silently swallowed."""
