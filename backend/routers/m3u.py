@@ -1213,11 +1213,16 @@ async def _apply_enforced_global_save(
     CLEAR ORDERING (Round-9, DBA proposal — closes the resurrect WITHOUT
     tombstones): when a genuine CLEAR is present (a group whose selection went
     present -> empty), the AUTHORITATIVE PRIMARY is cleared LAST — siblings are
-    cleared FIRST (from a fresh-under-lock account read), and if ANY sibling
-    clear fails we ABORT BEFORE clearing the primary. So we never end up
-    primary-cleared + a stale sibling still carrying the selection (which the
-    collapse winner would re-elect and RESURRECT). On abort the group stays in
-    its prior consistent state and the operator retries.
+    cleared FIRST (from a fresh-under-lock account read that must be non-empty and
+    contain the primary, else fail closed), and if ANY sibling clear fails we
+    ABORT BEFORE clearing the primary. So the PRIMARY is NEVER cleared on a
+    failure — no primary-cleared + stale-sibling state the collapse winner could
+    re-elect and RESURRECT. NOTE the abort is NOT all-or-nothing: an earlier
+    sibling may already have been cleared before a later one failed. That partial
+    mutation is reported truthfully (503 naming cleared + failed accounts) and the
+    cleared siblings are JOURNALED; the primary still carries the selection, so
+    the next normalize sweep re-fills those cleared siblings from it, self-healing
+    back to the prior selection until the operator re-saves.
 
     Returns ``(primary_result, propagation_error, applied, changed_siblings)``.
     ``applied`` is False when a clear was ABORTED before the primary write (the

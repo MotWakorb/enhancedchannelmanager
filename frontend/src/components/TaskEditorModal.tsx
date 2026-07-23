@@ -363,15 +363,24 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
         }
       } else if (showNotifications) {
         // Only show toast if show_notifications is enabled
-        if (result.success) {
-          notifications.success(
-            `${task.task_name} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
-            'Task Completed'
-          );
-        } else {
+        if (!result.success) {
           notifications.error(
             result.message || `${task.task_name} failed`,
             'Task Failed'
+          );
+        } else if (result.failed_count > 0) {
+          // Completed WITH WARNINGS (e.g. a coalesced/deferred profile reconcile
+          // returns success=true, failed_count>0): never render deferred/partial
+          // work as a plain green success — surface the message amber, matching
+          // the Task History panel.
+          notifications.warning(
+            result.message || `${task.task_name} completed with warnings: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Completed with warnings'
+          );
+        } else {
+          notifications.success(
+            `${task.task_name} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Task Completed'
           );
         }
       }
