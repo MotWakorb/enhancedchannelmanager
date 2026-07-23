@@ -43,14 +43,20 @@ def _fake_httpx(status=200, content=b'{"ok":true}'):
     return factory, client
 
 
-def test_allowlist_matches_only_profile_mutating_routes():
+def test_allowlist_matches_only_profile_mutating_and_task_routes():
     assert _should_forward("PATCH", "/api/m3u/accounts/5/group-settings")
+    assert _should_forward("POST", "/api/m3u/refresh/5")            # GAP A
     assert _should_forward("POST", "/api/channel-pipeline/run")
     assert _should_forward("POST", "/api/channel-pipeline/rules/7/run")
+    assert _should_forward("POST", "/api/tasks/m3u_change_monitor/run")  # GAP B (non-numeric id)
+    assert _should_forward("POST", "/api/tasks/channel_pipeline/run")
     # Not allowlisted:
     assert not _should_forward("GET", "/api/m3u/accounts/5/group-settings")
     assert not _should_forward("PATCH", "/api/m3u/accounts")
     assert not _should_forward("POST", "/api/channels")
+    assert not _should_forward("POST", "/api/m3u/refresh")          # bulk refresh (no poll) stays local
+    assert not _should_forward("GET", "/api/tasks/m3u_change_monitor/run")
+    assert not _should_forward("POST", "/api/tasks/x/run/extra")    # anchored — no sub-path
 
 
 @pytest.mark.asyncio
@@ -73,6 +79,46 @@ async def test_subprocess_forwards_mutating_route_to_main_not_local():
     assert http_client.request.await_args.args[0] == "PATCH"
     assert "127.0.0.1:6100/api/m3u/accounts/5/group-settings" in http_client.request.await_args.args[1]
     assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_subprocess_forwards_m3u_refresh_to_main_not_local():
+    """GAP A: the single-account M3U refresh (which spawns the post-refresh poll
+    -> full reconcile sweep) is FORWARDED to main; the local handler/poll does
+    NOT run in the subprocess."""
+    factory, http_client = _fake_httpx(status=200, content=b'{"ok":true}')
+    call_next = AsyncMock()  # local refresh handler + poll spawn — must NOT run
+
+    with patch("tls.https_server.is_https_subprocess", return_value=True), \
+         patch("config.get_http_port", return_value=6100), \
+         patch("tls.subprocess_proxy.httpx.AsyncClient", factory):
+        resp = await subprocess_proxy_middleware(
+            _request("POST", "/api/m3u/refresh/5"), call_next
+        )
+
+    call_next.assert_not_awaited()
+    assert http_client.request.await_args.args[0] == "POST"
+    assert "127.0.0.1:6100/api/m3u/refresh/5" in http_client.request.await_args.args[1]
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_subprocess_forwards_task_run_to_main_not_local():
+    """GAP B: a task run (m3u_change_monitor / channel_pipeline execute inline)
+    is FORWARDED to main; the local run_task does NOT execute in the subprocess."""
+    factory, http_client = _fake_httpx(status=202, content=b'{"queued":true}')
+    call_next = AsyncMock()  # local run_task — must NOT execute
+
+    with patch("tls.https_server.is_https_subprocess", return_value=True), \
+         patch("config.get_http_port", return_value=6100), \
+         patch("tls.subprocess_proxy.httpx.AsyncClient", factory):
+        resp = await subprocess_proxy_middleware(
+            _request("POST", "/api/tasks/m3u_change_monitor/run"), call_next
+        )
+
+    call_next.assert_not_awaited()
+    assert "127.0.0.1:6100/api/tasks/m3u_change_monitor/run" in http_client.request.await_args.args[1]
+    assert resp.status_code == 202
 
 
 @pytest.mark.asyncio

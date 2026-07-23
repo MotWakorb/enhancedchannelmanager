@@ -29,13 +29,22 @@ from starlette.responses import Response
 logger = logging.getLogger(__name__)
 
 # (HTTP method, compiled path regex) — the ONLY routes forwarded to main. These
-# are the routes that mutate channel-profile membership or trigger a reconcile:
+# are the routes that mutate channel-profile membership or trigger a reconcile /
+# background task, so they must execute ONLY in the main process (where the
+# per-effective-group lock is authoritative and the scheduler runs):
 #   - the M3U group-settings save (cascade + instant reconcile)
+#   - the single-account M3U refresh (spawns the post-refresh poll -> full sweep)
 #   - the Channel Pipeline run endpoints (an assign_channel_profile action)
+#   - ANY task run (the task registry IS populated in the subprocess, so a
+#     subprocess run of m3u_change_monitor would sweep and channel_pipeline would
+#     write membership — with a per-process _active_tasks that can't see main's
+#     scheduled run of the same task; tasks are background work for main only)
 _FORWARD_ALLOWLIST = [
     ("PATCH", re.compile(r"^/api/m3u/accounts/\d+/group-settings$")),
+    ("POST", re.compile(r"^/api/m3u/refresh/\d+$")),
     ("POST", re.compile(r"^/api/channel-pipeline/run$")),
     ("POST", re.compile(r"^/api/channel-pipeline/rules/\d+/run$")),
+    ("POST", re.compile(r"^/api/tasks/[^/]+/run$")),
 ]
 
 # Hop-by-hop / length headers that must NOT be copied verbatim (httpx / the
