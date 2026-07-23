@@ -1,21 +1,36 @@
-"""HTTPS-subprocess -> main-process proxy for profile-mutating routes (B4).
+"""HTTPS-subprocess -> main-process proxy for the lock-participating write paths.
 
-GH #720 Part B round-9 (PO decision: MAIN IS THE SOLE WRITER). In TLS mode a
-second request-serving ``uvicorn main:app`` subprocess (env
-``ECM_HTTPS_SUBPROCESS=1``) can serve profile-mutating saves, while the monitor
-sweep runs only in the main process — so an HTTPS save could overlap the main
-sweep and the IN-PROCESS per-effective-group locks would not coordinate across
-the two processes.
+GH #720 Part B (PO decision: MAIN IS THE SOLE WRITER OF THE AUTO-SYNC RECONCILE).
+In TLS mode a second request-serving ``uvicorn main:app`` subprocess (env
+``ECM_HTTPS_SUBPROCESS=1``) can serve requests, while the monitor sweep + the
+scheduler run only in the main process. So a request that triggers the auto-sync
+reconcile / an ``assign_channel_profile`` pipeline write, or that runs a
+background task, could execute in the subprocess and race the main process — and
+the IN-PROCESS per-effective-group lock (and the per-process task engine) would
+not coordinate across the two processes.
 
 This middleware — active ONLY in the HTTPS subprocess — forwards the small,
-explicit allowlist of profile-mutating JSON routes to the MAIN process's local
-HTTP port and relays the response verbatim. So channel-profile membership writes
-and reconcile triggers execute ONLY in the main process, where the existing lock
-is authoritative. Every other route is served locally, unchanged.
+explicit allowlist of those routes to the MAIN process's local HTTP port and
+relays the response verbatim, so the LOCK-PARTICIPATING writes (the group-
+settings save's cascade + reconcile, the channel-pipeline / auto-creation run,
+the post-refresh sweep) and ALL background task runs execute ONLY in the main
+process, where the lock + scheduler are authoritative. Every other route is
+served locally, unchanged.
+
+SCOPE (honest): this covers the AUTO-SYNC RECONCILE + ``assign_channel_profile``
+pipeline paths (the ones that participate in ``_group_locks``) and background
+task runs — NOT every channel-profile membership write. The DIRECT membership-
+edit endpoints (``PATCH /api/channel-profiles/{id}/channels[/bulk-update]``) are
+a SEPARATE, PRE-EXISTING concern: they never participated in ``_group_locks``
+(even in main they run unlocked), so forwarding them would be theater. They are
+tracked in bead nq3ed, not addressed here.
 
 Security: hard-coded target (127.0.0.1 + the main HTTP port), an exact
 method+path allowlist (JSON routes only — no streaming, no websockets, no open
-proxy), and a plain header/body pass-through (auth headers preserved).
+proxy), and a plain header/body pass-through (auth headers preserved). No proxy
+timeout ceiling is imposed — the MAIN process's own request-timeout middleware
+is authoritative (it 504s non-exempt routes and exempts long-running task runs),
+so the proxy must NOT cut a legitimately long task run to a 502.
 """
 from __future__ import annotations
 
@@ -42,9 +57,17 @@ logger = logging.getLogger(__name__)
 _FORWARD_ALLOWLIST = [
     ("PATCH", re.compile(r"^/api/m3u/accounts/\d+/group-settings$")),
     ("POST", re.compile(r"^/api/m3u/refresh/\d+$")),
+    # channel_pipeline_router is dual-mounted: the canonical /api/channel-pipeline
+    # AND the deprecated alias /api/auto-creation (main.py). BOTH run the same
+    # reconcile/assign-profile handler, so BOTH must be forwarded (1a).
     ("POST", re.compile(r"^/api/channel-pipeline/run$")),
     ("POST", re.compile(r"^/api/channel-pipeline/rules/\d+/run$")),
+    ("POST", re.compile(r"^/api/auto-creation/run$")),
+    ("POST", re.compile(r"^/api/auto-creation/rules/\d+/run$")),
+    # Task run AND cancel — both must hit the SAME (main) engine, else a
+    # forwarded run cannot be cancelled from HTTPS (per-process _active_tasks).
     ("POST", re.compile(r"^/api/tasks/[^/]+/run$")),
+    ("POST", re.compile(r"^/api/tasks/[^/]+/cancel$")),
 ]
 
 # Hop-by-hop / length headers that must NOT be copied verbatim (httpx / the
@@ -80,7 +103,13 @@ async def subprocess_proxy_middleware(request: Request, call_next):
         if k.lower() not in _STRIP_REQUEST_HEADERS
     }
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # timeout=None (finding 2): the MAIN process's request-timeout middleware
+        # is authoritative — it 504s non-exempt routes at its budget and EXEMPTS
+        # long-running task runs (/api/tasks/, /api/backup/). A proxy ceiling
+        # would cut a legitimately long forwarded task run to a false 502 while
+        # it keeps running in main. So we impose no ceiling and relay whatever
+        # main returns (including main's own 504).
+        async with httpx.AsyncClient(timeout=None) as client:
             upstream = await client.request(
                 request.method, target, content=body, headers=fwd_headers,
             )

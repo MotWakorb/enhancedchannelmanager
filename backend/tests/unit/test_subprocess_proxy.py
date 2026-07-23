@@ -48,8 +48,14 @@ def test_allowlist_matches_only_profile_mutating_and_task_routes():
     assert _should_forward("POST", "/api/m3u/refresh/5")            # GAP A
     assert _should_forward("POST", "/api/channel-pipeline/run")
     assert _should_forward("POST", "/api/channel-pipeline/rules/7/run")
+    # Finding 1a: channel_pipeline_router is dual-mounted; the DEPRECATED alias
+    # /api/auto-creation runs the SAME reconcile handler, so it must forward too.
+    assert _should_forward("POST", "/api/auto-creation/run")
+    assert _should_forward("POST", "/api/auto-creation/rules/7/run")
     assert _should_forward("POST", "/api/tasks/m3u_change_monitor/run")  # GAP B (non-numeric id)
     assert _should_forward("POST", "/api/tasks/channel_pipeline/run")
+    # Finding 2: a task CANCEL must hit the same (main) engine as its run.
+    assert _should_forward("POST", "/api/tasks/m3u_change_monitor/cancel")
     # Not allowlisted:
     assert not _should_forward("GET", "/api/m3u/accounts/5/group-settings")
     assert not _should_forward("PATCH", "/api/m3u/accounts")
@@ -119,6 +125,67 @@ async def test_subprocess_forwards_task_run_to_main_not_local():
     call_next.assert_not_awaited()
     assert "127.0.0.1:6100/api/tasks/m3u_change_monitor/run" in http_client.request.await_args.args[1]
     assert resp.status_code == 202
+
+
+@pytest.mark.parametrize("path", [
+    "/api/auto-creation/run",
+    "/api/auto-creation/rules/7/run",
+])
+@pytest.mark.asyncio
+async def test_subprocess_forwards_auto_creation_alias_to_main(path):
+    """Finding 1a: the deprecated /api/auto-creation alias of the channel-pipeline
+    router runs the SAME assign-profile handler, so it MUST forward to main — not
+    run its membership write locally in the subprocess."""
+    factory, http_client = _fake_httpx(status=200, content=b'{"ok":true}')
+    call_next = AsyncMock()  # local pipeline handler — must NOT run
+
+    with patch("tls.https_server.is_https_subprocess", return_value=True), \
+         patch("config.get_http_port", return_value=6100), \
+         patch("tls.subprocess_proxy.httpx.AsyncClient", factory):
+        resp = await subprocess_proxy_middleware(_request("POST", path), call_next)
+
+    call_next.assert_not_awaited()
+    assert f"127.0.0.1:6100{path}" in http_client.request.await_args.args[1]
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_subprocess_forwards_task_cancel_to_main_not_local():
+    """Finding 2: a task CANCEL must reach the SAME (main) engine as the run —
+    a forwarded run tracked in main's _active_tasks can only be cancelled there
+    (the subprocess has a DIFFERENT per-process _active_tasks)."""
+    factory, http_client = _fake_httpx(status=200, content=b'{"cancelled":true}')
+    call_next = AsyncMock()  # local cancel — must NOT run
+
+    with patch("tls.https_server.is_https_subprocess", return_value=True), \
+         patch("config.get_http_port", return_value=6100), \
+         patch("tls.subprocess_proxy.httpx.AsyncClient", factory):
+        resp = await subprocess_proxy_middleware(
+            _request("POST", "/api/tasks/m3u_change_monitor/cancel"), call_next
+        )
+
+    call_next.assert_not_awaited()
+    assert "127.0.0.1:6100/api/tasks/m3u_change_monitor/cancel" in http_client.request.await_args.args[1]
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_proxy_imposes_no_timeout_ceiling_on_forwarded_run():
+    """Finding 2: the proxy imposes NO timeout ceiling (httpx timeout=None) — main's
+    own request-timeout middleware is authoritative and EXEMPTS long task runs, so
+    the proxy must NOT cut a legitimately long forwarded run to a false 502."""
+    factory, _ = _fake_httpx(status=202, content=b'{"queued":true}')
+    call_next = AsyncMock()
+
+    with patch("tls.https_server.is_https_subprocess", return_value=True), \
+         patch("config.get_http_port", return_value=6100), \
+         patch("tls.subprocess_proxy.httpx.AsyncClient", factory):
+        await subprocess_proxy_middleware(
+            _request("POST", "/api/tasks/m3u_change_monitor/run"), call_next
+        )
+
+    # The AsyncClient was constructed with NO ceiling — main decides the budget.
+    assert factory.call_args.kwargs.get("timeout", "MISSING") is None
 
 
 @pytest.mark.asyncio
