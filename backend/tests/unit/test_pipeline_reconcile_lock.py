@@ -17,10 +17,10 @@ from channel_pipeline_evaluator import StreamContext
 @pytest.fixture(autouse=True)
 def _reset_locks():
     pr._group_locks.clear()
-    pr._sweep_in_progress = False
+    pr._sweep_in_progress = False; pr._sweep_pending = False
     yield
     pr._group_locks.clear()
-    pr._sweep_in_progress = False
+    pr._sweep_in_progress = False; pr._sweep_pending = False
 
 
 class SharedClient:
@@ -132,6 +132,47 @@ async def test_pipeline_assign_and_reconcile_same_group_serialize():
     # Pipeline's choice stands: channel 10 enabled in 2, disabled in 1.
     assert client.member.get((10, 2)) is True
     assert client.member.get((10, 1)) is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_assign_fails_closed_when_lock_key_unresolvable():
+    """Finding 2: a channel that HAS a group but whose shared lock key can't be
+    established (group-settings fetch fails) must FAIL CLOSED — no unlocked
+    profile write — rather than risk a clobber."""
+    class _NoSettingsClient(SharedClient):
+        async def get_all_m3u_group_settings(self):
+            raise RuntimeError("settings fetch boom")
+
+    client = _NoSettingsClient(all_settings={}, channels_by_gid={}, universe=[1, 2])
+    result = await _run_executor_assign(client, 10, 100, [2], rule_id=99)
+
+    assert result.success is False
+    assert "unresolvable" in (result.error or "").lower()
+    assert client.member == {}  # NO membership write issued
+
+
+@pytest.mark.asyncio
+async def test_pipeline_assign_groupless_channel_proceeds_unlocked():
+    """A genuinely GROUP-LESS channel (nothing can contend) proceeds without the
+    lock even when settings are unavailable — nullcontext, not fail-closed."""
+    class _NoSettingsClient(SharedClient):
+        async def get_all_m3u_group_settings(self):
+            raise RuntimeError("settings fetch boom")
+
+    client = _NoSettingsClient(all_settings={}, channels_by_gid={}, universe=[1, 2])
+    # Channel with NO group.
+    from channel_pipeline_executor import ActionExecutor, ExecutionContext
+    executor = ActionExecutor(
+        client, existing_channels=[{"id": 10, "name": "CH10", "custom_properties": {}}],
+        all_profile_ids=[1, 2],
+    )
+    exec_ctx = ExecutionContext()
+    exec_ctx.current_channel_id = 10
+    result = await executor.execute(
+        {"type": "assign_channel_profile", "channel_profile_ids": [2]},
+        StreamContext(stream_id=1, stream_name="S", m3u_account_id=1), exec_ctx, rule_id=99,
+    )
+    assert result.success is True  # applied unlocked (nothing to serialize)
 
 
 @pytest.mark.asyncio

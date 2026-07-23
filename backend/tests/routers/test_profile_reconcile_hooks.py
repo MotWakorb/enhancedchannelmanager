@@ -480,6 +480,102 @@ async def test_numeric_string_selection_normalized_to_int_in_payload(async_clien
 
 
 @pytest.mark.asyncio
+async def test_save_fails_closed_on_lock_key_fetch_failure_for_selection_change(async_client):
+    """Finding D: a SELECTION CHANGE saved while the lock-key group-settings
+    fetch fails must FAIL CLOSED — NO unlocked primary write — and surface an
+    error entry naming the recovery action."""
+    client = _mock_client()
+    # Prior state has NO selection so saving [12] is a genuine change.
+    client.get_m3u_account.return_value = _account(11, 1304, None)
+    client.get_all_m3u_group_settings.side_effect = RuntimeError("settings down")
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {"channel_profile_ids": [12]}}
+            ]},
+        )
+
+    assert resp.status_code == 200
+    # No unlocked primary write was performed.
+    client.update_m3u_group_settings.assert_not_called()
+    summary = resp.json().get("ecm_profile_apply", [])
+    assert any(o.get("status") == "error" for o in summary)
+    assert any("fail-closed" in (o.get("error") or "") for o in summary)
+
+
+@pytest.mark.asyncio
+async def test_save_field_only_edit_still_saves_when_lock_keys_unavailable(async_client):
+    """Finding D corollary: a FIELD-ONLY edit (no selection change) still saves
+    even when the lock-key fetch fails — fail-closed applies only to selection
+    changes."""
+    client = _mock_client()
+    # Prior state 1304 has [12]; the save keeps [12] (no selection change) but
+    # bumps a field.
+    client.get_m3u_account.return_value = _account(11, 1304, [12])
+    client.get_all_m3u_group_settings.side_effect = RuntimeError("settings down")
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "auto_sync_channel_start": 50,
+                 "custom_properties": {"channel_profile_ids": [12]}}
+            ]},
+        )
+
+    assert resp.status_code == 200
+    client.update_m3u_group_settings.assert_called()  # field-only save proceeded
+
+
+@pytest.mark.asyncio
+async def test_incomplete_clear_surfaces_named_account_error(async_client):
+    """Finding 3 (A): clearing a selection where a SIBLING clear PATCH fails must
+    surface an error naming the affected account + recovery — not silent
+    success."""
+    client = _mock_client()
+    client.get_m3u_account.return_value = _account(11, 1304, [12])  # prior HAD [12]
+    client.get_all_m3u_group_settings.return_value = {
+        1304: {"custom_properties": {}},  # winner cleared
+    }
+    client.get_m3u_accounts.return_value = [
+        _account(11, 1304, None),
+        _account(22, 1304, [12]),  # sibling still has [12]; its clear PATCH fails
+    ]
+
+    async def _update(aid, data):
+        if aid == 22:
+            raise RuntimeError("sibling 22 PATCH failed")
+        return {"message": "ok"}
+    client.update_m3u_group_settings.side_effect = _update
+
+    with patch("routers.m3u.get_client", return_value=client), \
+         patch("routers.m3u.journal"), \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules), \
+         patch("services.profile_reconcile.reconcile_group_profiles",
+               AsyncMock(return_value={"status": "no_selection", "group_id": 1304})):
+        resp = await async_client.patch(
+            "/api/m3u/accounts/11/group-settings",
+            json={"group_settings": [
+                {"channel_group": 1304, "custom_properties": {}}  # clear
+            ]},
+        )
+
+    assert resp.status_code == 200
+    summary = resp.json().get("ecm_profile_apply", [])
+    err = [o for o in summary if o.get("status") == "error"]
+    assert err
+    # Names the affected account (22) and the recovery action.
+    assert any("22" in (o.get("error") or "") for o in err)
+    assert any("Re-save" in (o.get("error") or "") for o in err)
+
+
+@pytest.mark.asyncio
 async def test_concurrent_opposing_saves_converge_no_divergent_interim():
     """Finding 3: two concurrent opposing enforced-global saves for the SAME
     group (account 1 -> [1], account 2 -> [2]) serialize under the effective-

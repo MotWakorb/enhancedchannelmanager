@@ -2870,33 +2870,44 @@ class ActionExecutor:
         """Resolve a channel's EFFECTIVE group id for the shared reconcile lock
         (Finding 4). Fetches ``get_all_m3u_group_settings`` ONCE per pipeline run
         (cached on ``exec_ctx``) — NOT per channel — then follows any Channel
-        Group Override. Returns ``None`` when the settings fetch failed or the
-        channel has no resolvable group (nothing to serialize against)."""
+        Group Override.
+
+        Returns ``(eff_gid, has_group)``:
+        * ``(gid, True)``  — resolved; acquire the shared lock.
+        * ``(None, True)`` — the channel HAS a group a reconcile could contend
+          on, but the lock key could NOT be established (settings fetch failed /
+          resolution error). The caller must FAIL CLOSED (Finding 2) — do NOT
+          write unlocked.
+        * ``(None, False)`` — the channel has NO group; nothing can contend, so
+          the caller may proceed unlocked.
+        """
         if not exec_ctx.group_settings_fetched:
             exec_ctx.group_settings_fetched = True
             try:
                 exec_ctx.group_settings_cache = await self.client.get_all_m3u_group_settings()
-            except Exception as e:  # noqa: BLE001 - lock is best-effort defense
+            except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "[CHANNEL-PIPELINE-EXEC] could not fetch group settings for the "
-                    "assign_channel_profile lock (%s) — proceeding WITHOUT the "
-                    "shared lock (re-check + marker-ordering still apply)", e,
+                    "assign_channel_profile lock: %s", e,
                 )
                 exec_ctx.group_settings_cache = None
-        all_settings = exec_ctx.group_settings_cache
-        if not isinstance(all_settings, dict) or not all_settings:
-            return None
         channel = self._channel_by_id.get(channel_id) or {}
         gid = channel.get("channel_group")
         if gid is None:
             gid = channel.get("channel_group_id")
-        if gid is None:
-            return None
+        has_group = gid is not None
+        all_settings = exec_ctx.group_settings_cache
+        if not isinstance(all_settings, dict) or not all_settings:
+            # Settings unavailable: if the channel has a group, the lock key is
+            # unresolvable -> fail closed; if group-less, nothing to serialize.
+            return None, has_group
+        if not has_group:
+            return None, False
         from services.event_sync_preflight import resolve_effective_master_group_id
         try:
-            return resolve_effective_master_group_id(all_settings, gid)
-        except Exception:  # noqa: BLE001 - resolution is best-effort
-            return None
+            return resolve_effective_master_group_id(all_settings, gid), True
+        except Exception:  # noqa: BLE001 - resolution error -> fail closed
+            return None, True
 
     async def _execute_assign_channel_profile(self, action: Action, stream_ctx: StreamContext,
                                                exec_ctx: ExecutionContext,
@@ -2983,10 +2994,12 @@ class ActionExecutor:
                 modified=bool(n_flips),
             )
 
-        # Finding 4 (close B2): acquire the SAME per-effective-group lock the
-        # reconcile uses around the (marker-stamp + membership-write) unit, so a
-        # pipeline assign_channel_profile and a group reconcile can NEVER touch
-        # this effective group's channels concurrently. The effective group is
+        # Finding 4 (close B2, SAME-PROCESS): acquire the SAME per-effective-group
+        # lock the reconcile uses around the (marker-stamp + membership-write)
+        # unit, so a pipeline assign_channel_profile and a group reconcile do not
+        # touch this effective group's channels concurrently WITHIN THIS PROCESS.
+        # (Cross-process contention — the HTTPS subprocess serves requests too —
+        # is out of scope at this tier; see bead nq3ed.) The effective group is
         # resolved from group settings fetched ONCE per run (cached on exec_ctx —
         # see _resolve_channel_effective_group), NOT per channel. Acquire/release
         # is per-channel with no nested holds: the executor is never invoked from
@@ -2997,9 +3010,31 @@ class ActionExecutor:
         # marker-before-membership ordering (defense-in-depth, still airtight in
         # combination for the resolvable case).
         from services.profile_reconcile import effective_group_lock
-        eff_gid = await self._resolve_channel_effective_group(
+        eff_gid, has_group = await self._resolve_channel_effective_group(
             exec_ctx.current_channel_id, exec_ctx
         )
+        if has_group and eff_gid is None:
+            # Finding 2 (FAIL CLOSED): the channel has a group a reconcile could
+            # contend on, but we could NOT establish the shared lock key (group-
+            # settings fetch failed / resolution error). Writing unlocked risks a
+            # clobber, so SKIP the write and report a retryable failure — nothing
+            # was applied. (Cross-process contention is out of scope at this tier
+            # — see bead nq3ed.)
+            logger.warning(
+                "[AUTO-CREATE-EXEC] assign_channel_profile for channel %s: lock "
+                "key unresolvable (group settings unavailable) — failing closed, "
+                "no profile write issued", exec_ctx.current_channel_id,
+            )
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="Channel profile assignment deferred: group lock unresolvable",
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                error="group lock key unresolvable; failed closed (no write)",
+            )
+        # nullcontext ONLY for a genuinely group-less channel (nothing to
+        # serialize against).
         lock_cm = (
             effective_group_lock(eff_gid) if eff_gid is not None
             else contextlib.nullcontext()
@@ -3935,6 +3970,11 @@ class ActionExecutor:
         # The fresh-fetch (below) only matters when a WRITE is actually needed,
         # so gating it behind this check preserves clobber-safety at zero extra
         # GETs on the common no-op path.
+        # F2 (accepted staleness): the cache is the run-start snapshot, so if the
+        # marker was removed EXTERNALLY mid-run this fast path would skip re-
+        # stamping it this run. Accepted for a single-operator tool — the next
+        # pipeline run reads a fresh snapshot and re-stamps; not worth a per-
+        # channel GET on the hot no-op path.
         if (cached_cp.get(PIPELINE_OWNERSHIP_MARKER_KEY) == PIPELINE_OWNERSHIP_MARKER_VALUE
                 and cached_cp.get(PIPELINE_OWNERSHIP_RULE_ID_KEY) == rule_id):
             return True  # Already marked by this rule per the cache — skip.
