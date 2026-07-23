@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0152",
+    version="0.17.6-0153",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -212,6 +212,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization"],
 )
+
+
+# GH #720 Part B round-9 (B4 — MAIN IS THE SOLE WRITER): in the HTTPS subprocess
+# ONLY, forward the profile-mutating route allowlist to the main process so
+# channel-profile writes + reconcile execute only there (the in-process lock is
+# authoritative). No-op in the main process. See tls/subprocess_proxy.py.
+from tls.subprocess_proxy import subprocess_proxy_middleware  # noqa: E402
+app.middleware("http")(subprocess_proxy_middleware)
 
 
 @app.middleware("http")

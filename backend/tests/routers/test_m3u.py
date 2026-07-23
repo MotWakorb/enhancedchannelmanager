@@ -543,7 +543,10 @@ class TestUpdateGroupSettings:
             })
 
         assert response.status_code == 200
-        assert response.json() == {"id": 1, "server_groups": []}
+        # GH #720 Part B (#9): the Dispatcharr result is passed through with an
+        # additive per-group profile-apply summary (empty here — no
+        # group_settings with a selection were edited).
+        assert response.json() == {"id": 1, "server_groups": [], "ecm_profile_apply": []}
         mock_client.update_m3u_group_settings.assert_called_once_with(1, {"auto_channel_sync": True})
 
 

@@ -448,15 +448,24 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
       if (result.error === 'CANCELLED') {
         logger.info(`${taskName} was cancelled (notification handled by cancel handler)`);
       } else if (task?.show_notifications !== false) {
-        if (result.success) {
-          notifications.success(
-            `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
-            'Task Completed'
-          );
-        } else {
+        if (!result.success) {
           notifications.error(
             result.message || `${taskName} failed`,
             'Task Failed'
+          );
+        } else if (result.failed_count > 0) {
+          // Completed WITH WARNINGS (e.g. a coalesced/deferred profile reconcile
+          // returns success=true, failed_count>0): never render deferred/partial
+          // work as a plain green success — surface the message amber, matching
+          // the Task History panel.
+          notifications.warning(
+            result.message || `${taskName} completed with warnings: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Completed with warnings'
+          );
+        } else {
+          notifications.success(
+            `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Task Completed'
           );
         }
       }

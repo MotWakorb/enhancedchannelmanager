@@ -235,8 +235,16 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
         custom_properties: g.custom_properties,
       }));
 
-      // Save this account first
-      await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+      // Save this account first. Capture the response so we can warn if the
+      // downstream channel-profile apply was incomplete (#9).
+      const primaryResp = await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+      // Accumulate the apply summary across EVERY save path (primary + linked)
+      // so a partial/conflict/degraded apply from any of them is surfaced with
+      // status-specific recovery guidance (#9 / Should-Fix 4).
+      const applySummary = [...(primaryResp?.ecm_profile_apply ?? [])];
+      // Linked-account SAVE failures tracked separately from profile-apply
+      // outcomes so they are labeled correctly (finding), not as apply errors.
+      const linkedSaveFailures: number[] = [];
 
       // Accounts to refresh after a successful save (Dispatcharr parity:
       // its modal's only save action is Save & Refresh — settings take
@@ -272,11 +280,15 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               };
             });
 
-            await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+            const linkedResp = await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+            applySummary.push(...(linkedResp?.ecm_profile_apply ?? []));
             refreshAccountIds.push(linkedAccountId);
           } catch (linkedErr) {
-            // Log error but continue with other linked accounts
+            // Finding: a linked-account SAVE failure is a save failure, NOT a
+            // profile-application failure — track it distinctly (do not fold it
+            // into the profile-apply summary, which would mislabel it).
             logger.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);
+            linkedSaveFailures.push(linkedAccountId);
           }
         }
       }
@@ -284,17 +296,30 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
       // Chain the M3U refresh (Save & Refresh, mirroring Dispatcharr's
       // native modal). Only fires after a successful save; a refresh
       // failure does not undo the save.
+      const applyWarning = api.profileApplyWarningMessage(applySummary);
+      const linkedWarning = linkedSaveFailures.length
+        ? `Saved, but ${linkedSaveFailures.length} linked account(s) could not be saved — retry from those accounts.`
+        : null;
+      // Finding: surface EVERY present warning rather than letting one hide
+      // another (a refresh failure must not mask an incomplete-apply warning,
+      // and vice versa). Returns true if any warning was emitted.
+      const emitWarnings = (refreshWarning?: string | null): boolean => {
+        const msgs = [refreshWarning, applyWarning, linkedWarning].filter(Boolean) as string[];
+        msgs.forEach(m => notifications.warning(m, 'M3U Groups'));
+        return msgs.length > 0;
+      };
       try {
         await Promise.all(refreshAccountIds.map(id => api.refreshM3UAccount(id)));
-        notifications.success(
-          `Group settings saved — M3U refresh started for ${account.name}`,
-          'M3U Groups'
-        );
+        if (!emitWarnings()) {
+          notifications.success(
+            `Group settings saved — M3U refresh started for ${account.name}`,
+            'M3U Groups'
+          );
+        }
       } catch (refreshErr) {
         logger.error('Failed to start M3U refresh after group settings save:', refreshErr);
-        notifications.warning(
-          'Group settings saved, but the M3U refresh failed to start — changes take effect on the next refresh',
-          'M3U Groups'
+        emitWarnings(
+          'Group settings saved, but the M3U refresh failed to start — changes take effect on the next refresh'
         );
       }
 

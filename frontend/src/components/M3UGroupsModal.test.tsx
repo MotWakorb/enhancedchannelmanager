@@ -18,12 +18,18 @@ import userEvent from '@testing-library/user-event';
 import { M3UGroupsModal } from './M3UGroupsModal';
 import type { M3UAccount } from '../types';
 
-vi.mock('../services/api', () => ({
-  getM3UAccount: vi.fn(),
-  getChannelGroups: vi.fn(),
-  updateM3UGroupSettings: vi.fn(),
-  refreshM3UAccount: vi.fn(),
-}));
+vi.mock('../services/api', async () => {
+  // Keep the real profileApplyIncomplete decision helper (#9) — only the
+  // network functions are stubbed.
+  const actual = await vi.importActual<typeof import('../services/api')>('../services/api');
+  return {
+    ...actual,
+    getM3UAccount: vi.fn(),
+    getChannelGroups: vi.fn(),
+    updateM3UGroupSettings: vi.fn(),
+    refreshM3UAccount: vi.fn(),
+  };
+});
 
 // Stable object reference (NOT recreated per call) — the real
 // NotificationContext memoizes its value with useMemo, and M3UGroupsModal's
@@ -401,6 +407,125 @@ describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)
 
     await waitFor(() => expect(api.updateM3UGroupSettings).toHaveBeenCalled());
     expect(api.refreshM3UAccount).not.toHaveBeenCalled();
+  });
+
+  it('Round-9 B1: a fail-closed (non-2xx) save reads as NOT saved — modal stays open, no refresh/onSaved', async () => {
+    // The backend returns 503 -> updateM3UGroupSettings throws with the detail.
+    vi.mocked(api.updateM3UGroupSettings).mockRejectedValue(
+      new Error('The channel-profile selection was NOT saved — please retry.')
+    );
+    const onClose = vi.fn();
+    const onSaved = vi.fn();
+    render(
+      <M3UGroupsModal
+        isOpen={true} onClose={onClose} onSaved={onSaved}
+        account={nativeConfiguredAccount} allAccounts={[nativeConfiguredAccount]}
+      />
+    );
+    await screen.findByText('Sports HD');
+    const row = screen.getByText('Sports HD').closest('.group-row') as HTMLElement;
+    const enabledCheckbox = within(row.querySelector('.group-enabled') as HTMLElement)
+      .getByRole('checkbox') as HTMLInputElement;
+    const user = userEvent.setup();
+    await user.click(enabledCheckbox);
+    await user.click(screen.getByRole('button', { name: /Save & Refresh/i }));
+
+    await waitFor(() => expect(api.updateM3UGroupSettings).toHaveBeenCalled());
+    // NOT saved: no refresh, no onSaved, modal NOT closed, and an error toast
+    // carrying the "NOT saved" message.
+    expect(api.refreshM3UAccount).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockNotifications.error).toHaveBeenCalledWith(
+      expect.stringContaining('NOT saved'), 'M3U Groups'
+    );
+  });
+
+  it('#9: warns (not plain success) when the save reports an incomplete profile apply', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
+      message: 'ok',
+      ecm_profile_apply: [
+        { status: 'partial_failure', group_id: 100, failed_profile_ids: [2] },
+      ],
+    });
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() =>
+      expect(mockNotifications.warning).toHaveBeenCalledWith(
+        expect.stringContaining('applying some channel profiles failed'),
+        'M3U Groups'
+      )
+    );
+    // The plain success toast is NOT shown in this case.
+    expect(mockNotifications.success).not.toHaveBeenCalledWith(
+      expect.stringContaining('Group settings saved — M3U refresh started'),
+      'M3U Groups'
+    );
+  });
+
+  it('#9 / NIT 6: warns with stale-specific guidance (no false auto-retry) when the selection is fully stale', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
+      message: 'ok',
+      ecm_profile_apply: [{ status: 'stale_selection', group_id: 100 }],
+    });
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() =>
+      expect(mockNotifications.warning).toHaveBeenCalledWith(
+        expect.stringContaining('no longer exist'),
+        'M3U Groups'
+      )
+    );
+  });
+
+  it('follow-up: degraded apply warns that profiles could not be fully enforced', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
+      message: 'ok',
+      ecm_profile_apply: [{ status: 'degraded', group_id: 100 }],
+    });
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() =>
+      expect(mockNotifications.warning).toHaveBeenCalledWith(
+        expect.stringContaining('could not be fully enforced'),
+        'M3U Groups'
+      )
+    );
+  });
+
+  it('follow-up: a cross-account conflict warns with normalize guidance', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
+      message: 'ok',
+      ecm_profile_apply: [{ status: 'reconciled', group_id: 100, conflict: true }],
+    });
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() =>
+      expect(mockNotifications.warning).toHaveBeenCalledWith(
+        expect.stringContaining('conflicting profile selections'),
+        'M3U Groups'
+      )
+    );
+  });
+
+  it('#9: shows plain success when the profile apply is clean', async () => {
+    vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
+      message: 'ok',
+      ecm_profile_apply: [{ status: 'reconciled', group_id: 100 }],
+    });
+
+    await toggleEnabledAndSave();
+
+    await waitFor(() =>
+      expect(mockNotifications.success).toHaveBeenCalledWith(
+        expect.stringContaining('Group settings saved'),
+        'M3U Groups'
+      )
+    );
   });
 });
 

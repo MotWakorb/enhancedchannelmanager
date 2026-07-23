@@ -683,6 +683,7 @@ export function M3UManagerTab({
         }
 
         // Update each account with the union result
+        const applySummary: api.ProfileApplyOutcome[] = [];
         for (const account of accountsData) {
           const groupSettings = account.channel_groups.map(g => ({
             channel_group: g.channel_group,
@@ -691,7 +692,15 @@ export function M3UManagerTab({
             auto_sync_channel_start: g.auto_sync_channel_start,
           }));
 
-          await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+          const resp = await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+          // A group untouched by THIS sync may still carry a channel_profile_ids
+          // selection whose reconcile ran and partially failed / conflicted —
+          // surface it rather than silently succeeding (#9 / Should-Fix 4).
+          applySummary.push(...(resp?.ecm_profile_apply ?? []));
+        }
+        const applyWarning = api.profileApplyWarningMessage(applySummary);
+        if (applyWarning) {
+          notifications.warning(applyWarning, 'M3U Manager');
         }
       }
 

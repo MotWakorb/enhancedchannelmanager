@@ -637,32 +637,98 @@ class DispatcharrClient:
         """Get group settings for all M3U accounts, returns dict mapping channel_group_id to settings.
 
         The channel_groups data is embedded in the accounts response, so we extract it from there.
-        When multiple accounts have settings for the same group, prefer the one with auto_channel_sync enabled.
+
+        GLOBAL-PER-CHANNEL-GROUP contract (GH #720 Part B, decision "global per
+        group"): when multiple accounts carry settings for the SAME global
+        channel-group id we collapse to ONE row DETERMINISTICALLY — precedence
+        is ``auto_channel_sync`` ON first, then the LOWEST ``m3u_account_id``.
+        (The prior "prefer auto_channel_sync, else first-seen" collapse was
+        order-dependent across accounts with the same auto_channel_sync state.)
+        The winning row also carries ``_ecm_channel_profile_conflict``: True
+        when two account rows for the group hold DIFFERENT non-empty
+        ``channel_profile_ids`` selections, so the profile reconcile can warn.
         """
         accounts = await self.get_m3u_accounts()
         logger.info("[DISPATCHARR] get_all_m3u_group_settings: Processing %s M3U accounts", len(accounts))
-        all_settings = {}
+
+        # Gather ALL account rows per global group id first, then pick a
+        # deterministic winner (auto_channel_sync ON first, then lowest account
+        # id). Collecting first also lets us detect cross-account selection
+        # conflicts.
+        rows_by_group: dict = {}
         total_groups_found = 0
         for account in accounts:
-            # channel_groups is embedded in the account response
             channel_groups = account.get("channel_groups", [])
             total_groups_found += len(channel_groups)
             logger.info("[DISPATCHARR]   Account %s: %s has %s channel_groups", account.get('id'), account.get('name'), len(channel_groups))
             for setting in channel_groups:
                 channel_group_id = setting.get("channel_group")
                 if channel_group_id:
-                    new_setting = {
+                    rows_by_group.setdefault(channel_group_id, []).append({
                         **setting,
                         "m3u_account_id": account["id"],
                         "m3u_account_name": account.get("name", ""),
-                    }
-                    # If this group already exists, only overwrite if new setting has auto_channel_sync
-                    # and existing one doesn't (prefer the one with auto_channel_sync enabled)
-                    existing = all_settings.get(channel_group_id)
-                    if existing is None:
-                        all_settings[channel_group_id] = new_setting
-                    elif new_setting.get("auto_channel_sync") and not existing.get("auto_channel_sync"):
-                        all_settings[channel_group_id] = new_setting
+                    })
+
+        # Finding 2: coerce ids exactly as _selection_from_setting does (numeric
+        # strings -> int) so the winner tiebreak, conflict detection, and
+        # normalize all see the SAME coerced ints. Int-only DROP here (while the
+        # reconcile coerces) made a legacy ["12"] row lose the has-selection
+        # tiebreak, never flag ["12"] vs [13] as a conflict, and never get
+        # normalized to int storage.
+        from services.profile_reconcile import coerce_profile_id
+
+        def _row_selection(r):
+            cp = r.get("custom_properties")
+            if isinstance(cp, dict):
+                sel = cp.get("channel_profile_ids")
+                if isinstance(sel, list) and sel:
+                    coerced = [coerce_profile_id(x) for x in sel]
+                    valid = [x for x in coerced if x is not None]
+                    if valid:
+                        return tuple(sorted(valid))
+            return None
+
+        all_settings = {}
+        for channel_group_id, rows in rows_by_group.items():
+            # Deterministic precedence: auto_channel_sync ON (0) before OFF (1),
+            # then — within a tier — prefer a row that HAS a non-empty selection
+            # (0) over one that does not (1) so an operator's real selection is
+            # never silently shadowed by a no-selection winner (Should-Fix 3),
+            # then LOWEST m3u_account_id.
+            winner = min(
+                rows,
+                key=lambda r: (
+                    0 if r.get("auto_channel_sync") else 1,
+                    0 if _row_selection(r) is not None else 1,
+                    r.get("m3u_account_id") if r.get("m3u_account_id") is not None else 1 << 62,
+                ),
+            )
+            distinct_selections = {
+                s for s in (_row_selection(r) for r in rows) if s is not None
+            }
+            winner_selection = _row_selection(winner)
+            # Conflict when either two rows carry DIFFERENT non-empty selections,
+            # OR some row carries a selection but the chosen winner does not
+            # (a selection-vs-no-selection disagreement that would otherwise
+            # silently ignore the operator's choice — Should-Fix 3).
+            conflict = len(distinct_selections) > 1 or (
+                bool(distinct_selections) and winner_selection is None
+            )
+            if conflict:
+                logger.warning(
+                    "[DISPATCHARR] group %s has CONFLICTING channel_profile_ids across "
+                    "accounts (selections=%s, winner account %s selection=%s)",
+                    channel_group_id, sorted(distinct_selections),
+                    winner.get("m3u_account_id"), winner_selection,
+                )
+            # NOTE: ``_ecm_channel_profile_conflict`` is an ECM-SYNTHETIC key —
+            # it is NOT a Dispatcharr field. It must be STRIPPED before any
+            # Dispatcharr group-settings PATCH (NIT 9). Today's save paths build
+            # explicit payloads and never round-trip it; a future consumer that
+            # forwards a collapsed row wholesale must drop this key first.
+            all_settings[channel_group_id] = {**winner, "_ecm_channel_profile_conflict": conflict}
+
         logger.info("[DISPATCHARR]   Total channel_groups entries across all accounts: %s", total_groups_found)
         logger.info("[DISPATCHARR]   Unique channel group IDs extracted: %s", len(all_settings))
         return all_settings

@@ -39,7 +39,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   const [nameRegexPattern, setNameRegexPattern] = useState<string>('');
   const [nameReplacePattern, setNameReplacePattern] = useState<string>('');
   const [channelNameFilter, setChannelNameFilter] = useState<string>('');
-  const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set());
+  const [selectedProfileIds, setSelectedProfileIds] = useState<Set<number>>(new Set());
   const [sortOrder, setSortOrder] = useState<string>('');
   const [sortReverse, setSortReverse] = useState<boolean>(false);
   const [streamProfileId, setStreamProfileId] = useState<string>('');
@@ -49,6 +49,8 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   const [regexError, setRegexError] = useState<string | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  // Roving active-option index for the accessible profile listbox.
+  const [activeProfileIndex, setActiveProfileIndex] = useState(0);
   const [logos, setLogos] = useState<Logo[]>([]);
   const [loadingLogos, setLoadingLogos] = useState(false);
   const [logoSearch, setLogoSearch] = useState('');
@@ -65,6 +67,8 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   const [streamProfileDropdownOpen, setStreamProfileDropdownOpen] = useState(false);
 
   const profileDropdownRef = useRef<HTMLDivElement>(null);
+  const profileTriggerRef = useRef<HTMLButtonElement>(null);
+  const profileListboxRef = useRef<HTMLDivElement>(null);
   const logoDropdownRef = useRef<HTMLDivElement>(null);
   const groupDropdownRef = useRef<HTMLDivElement>(null);
   const epgDropdownRef = useRef<HTMLDivElement>(null);
@@ -90,7 +94,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
       setNameRegexPattern(customProperties?.name_regex_pattern ?? '');
       setNameReplacePattern(customProperties?.name_replace_pattern ?? '');
       setChannelNameFilter(customProperties?.name_match_regex ?? '');
-      setSelectedProfileIds(new Set(customProperties?.channel_profile_ids ?? []));
+      setSelectedProfileIds(new Set(
+        (customProperties?.channel_profile_ids ?? [])
+          .map(Number)
+          .filter((n) => Number.isInteger(n))
+      ));
       setSortOrder(customProperties?.channel_sort_order ?? '');
       setSortReverse(customProperties?.channel_sort_reverse ?? false);
       setStreamProfileId(customProperties?.stream_profile_id?.toString() ?? '');
@@ -155,7 +163,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   }, [logos, customLogoId]);
 
   // Handle profile toggle
-  const handleToggleProfile = (profileId: string) => {
+  const handleToggleProfile = (profileId: number) => {
     setSelectedProfileIds(prev => {
       const next = new Set(prev);
       if (next.has(profileId)) {
@@ -167,14 +175,67 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
     });
   };
 
-  // Get selected profile names
-  const selectedProfileNames = useMemo(() => {
-    if (selectedProfileIds.size === 0) return 'None selected';
-    return channelProfiles
-      .filter(p => selectedProfileIds.has(p.id.toString()))
-      .map(p => p.name)
-      .join(', ');
+  // Open/close the accessible profile listbox; focus follows so keyboard users
+  // land on the options (open) or back on the trigger (close).
+  const openProfileListbox = () => {
+    setActiveProfileIndex(0);
+    setProfileDropdownOpen(true);
+    requestAnimationFrame(() => profileListboxRef.current?.focus());
+  };
+  const closeProfileListbox = (returnFocus = true) => {
+    setProfileDropdownOpen(false);
+    if (returnFocus) profileTriggerRef.current?.focus();
+  };
+
+  // Keyboard semantics for the listbox: Arrow/Home/End move the active option,
+  // Enter/Space toggle it, Escape closes and returns focus to the trigger.
+  const handleProfileListboxKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const count = channelProfiles.length;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeProfileListbox();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (count) setActiveProfileIndex(i => (i + 1) % count);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (count) setActiveProfileIndex(i => (i - 1 + count) % count);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      setActiveProfileIndex(0);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      if (count) setActiveProfileIndex(count - 1);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      const profile = channelProfiles[activeProfileIndex];
+      if (profile) handleToggleProfile(profile.id);
+    }
+  };
+
+  // Selected ids that no longer match ANY current profile (deleted in
+  // Dispatcharr). Surfaced so a stale selection is shown clearly instead of
+  // the picker silently rendering blank / dropping the missing choices.
+  const missingSelectedIds = useMemo(() => {
+    const known = new Set(channelProfiles.map(p => p.id));
+    return Array.from(selectedProfileIds).filter(id => !known.has(id));
   }, [selectedProfileIds, channelProfiles]);
+
+  // Get selected profile names. An EMPTY selection is NOT "clear everywhere":
+  // ECM stops MANAGING this group's profiles and leaves existing memberships
+  // untouched (GH #720 Part B, decision 1a) — the label reflects that. Stale
+  // ids (deleted profiles) are shown as an explicit "N unknown" count so the
+  // trigger is never blank when the whole selection is stale.
+  const selectedProfileNames = useMemo(() => {
+    if (selectedProfileIds.size === 0) return 'Not managed by Auto-Sync';
+    const knownNames = channelProfiles
+      .filter(p => selectedProfileIds.has(p.id))
+      .map(p => p.name);
+    const parts: string[] = [];
+    if (knownNames.length) parts.push(knownNames.join(', '));
+    if (missingSelectedIds.length) parts.push(`${missingSelectedIds.length} unknown profile(s)`);
+    return parts.join(', ');
+  }, [selectedProfileIds, channelProfiles, missingSelectedIds]);
 
   // Filter active EPG sources (include dummy)
   const activeEpgSources = useMemo(() => {
@@ -290,7 +351,14 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
     if (nameRegexPattern) props.name_regex_pattern = nameRegexPattern; else delete props.name_regex_pattern;
     if (nameReplacePattern !== undefined && nameRegexPattern) props.name_replace_pattern = nameReplacePattern; else delete props.name_replace_pattern;
     if (channelNameFilter) props.name_match_regex = channelNameFilter; else delete props.name_match_regex;
-    if (selectedProfileIds.size > 0) props.channel_profile_ids = Array.from(selectedProfileIds); else delete props.channel_profile_ids;
+    // Drop stale ids (profiles deleted in Dispatcharr) on save so the stored
+    // selection matches the "N unknown profile(s) ... will be dropped on save"
+    // copy — the saved value is exactly the currently-valid selection.
+    {
+      const known = new Set(channelProfiles.map(p => p.id));
+      const validIds = Array.from(selectedProfileIds).filter(id => known.has(id));
+      if (validIds.length > 0) props.channel_profile_ids = validIds; else delete props.channel_profile_ids;
+    }
     if (sortOrder) props.channel_sort_order = sortOrder as 'provider' | 'name' | 'tvg_id' | 'updated_at'; else delete props.channel_sort_order;
     if (sortReverse) props.channel_sort_reverse = sortReverse; else delete props.channel_sort_reverse;
     if (streamProfileId) props.stream_profile_id = parseInt(streamProfileId, 10); else delete props.stream_profile_id;
@@ -571,37 +639,71 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
 
             {/* Channel Profile Assignment */}
             <div className="modal-form-group" ref={profileDropdownRef}>
-              <label>Channel Profile Assignment</label>
+              <label id="channel-profile-assignment-label">Channel Profile Assignment</label>
               <div className="multi-select-dropdown">
                 <button
                   type="button"
+                  ref={profileTriggerRef}
                   className="dropdown-trigger"
-                  onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
+                  aria-haspopup="listbox"
+                  aria-expanded={profileDropdownOpen}
+                  aria-controls="channel-profile-listbox"
+                  // F1 (a11y): the accessible NAME includes the current
+                  // selection so screen-reader users hear what is selected, not
+                  // just the field label.
+                  aria-label={`Channel Profile Assignment: ${selectedProfileNames}`}
+                  onClick={() => (profileDropdownOpen ? closeProfileListbox(false) : openProfileListbox())}
                 >
                   <span className="dropdown-value">{selectedProfileNames}</span>
-                  <span className="material-icons">expand_more</span>
+                  <span className="material-icons" aria-hidden="true">expand_more</span>
                 </button>
                 {profileDropdownOpen && (
                   <div className="dropdown-menu">
                     <div className="dropdown-actions">
-                      <button type="button" onClick={() => setSelectedProfileIds(new Set(channelProfiles.map(p => p.id.toString())))}>
+                      <button type="button" onClick={() => setSelectedProfileIds(new Set(channelProfiles.map(p => p.id)))}>
                         Select All
                       </button>
                       <button type="button" onClick={() => setSelectedProfileIds(new Set())}>
-                        Clear All
+                        Stop managing profiles
                       </button>
                     </div>
-                    <div className="dropdown-options">
-                      {channelProfiles.map(profile => (
-                        <label key={profile.id} className="dropdown-option">
-                          <input
-                            type="checkbox"
-                            checked={selectedProfileIds.has(profile.id.toString())}
-                            onChange={() => handleToggleProfile(profile.id.toString())}
-                          />
-                          <span>{profile.name}</span>
-                        </label>
-                      ))}
+                    <div
+                      id="channel-profile-listbox"
+                      className="dropdown-options"
+                      ref={profileListboxRef}
+                      role="listbox"
+                      aria-multiselectable="true"
+                      aria-labelledby="channel-profile-assignment-label"
+                      aria-activedescendant={
+                        channelProfiles.length
+                          ? `channel-profile-option-${channelProfiles[Math.min(activeProfileIndex, channelProfiles.length - 1)]?.id}`
+                          : undefined
+                      }
+                      tabIndex={0}
+                      onKeyDown={handleProfileListboxKeyDown}
+                    >
+                      {channelProfiles.map((profile, idx) => {
+                        const selected = selectedProfileIds.has(profile.id);
+                        return (
+                          <div
+                            key={profile.id}
+                            id={`channel-profile-option-${profile.id}`}
+                            role="option"
+                            aria-selected={selected}
+                            className={`dropdown-option${idx === activeProfileIndex ? ' active' : ''}`}
+                            onClick={() => { setActiveProfileIndex(idx); handleToggleProfile(profile.id); }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              tabIndex={-1}
+                              aria-hidden="true"
+                              readOnly
+                            />
+                            <span>{profile.name}</span>
+                          </div>
+                        );
+                      })}
                       {channelProfiles.length === 0 && (
                         <span className="dropdown-empty">No profiles available</span>
                       )}
@@ -609,10 +711,24 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
                   </div>
                 )}
               </div>
+              {missingSelectedIds.length > 0 && (
+                <span className="form-hint form-hint-warning" role="alert">
+                  {missingSelectedIds.length} previously-selected profile(s) no longer exist and
+                  will be dropped on save — reopen and choose current profiles if needed.
+                </span>
+              )}
               <span className="form-hint">
                 Assigns Dispatcharr Channel Profiles (client-facing visibility) to channels
                 synced from this group — a different entity than the per-account &quot;Manage
                 Account Profiles&quot; screen, which sets M3U stream failover profiles.
+                {' '}Selecting profiles makes ECM keep this group&apos;s channels in exactly
+                those profiles. Leaving it empty (&quot;Stop managing profiles&quot;) means ECM
+                stops managing this group&apos;s profiles and leaves existing memberships
+                unchanged — it does NOT remove the channels from every profile. Channels whose
+                profile membership was set by a Channel Pipeline rule are excluded from
+                Auto-Sync profile management.
+                {' '}This selection is GLOBAL for the channel group: saving it here applies it
+                to this group across ALL M3U accounts, not just this one.
               </span>
             </div>
 

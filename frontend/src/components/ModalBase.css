@@ -776,6 +776,19 @@
   background-color: var(--input-bg, #1a1a2e);
 }
 
+/* Keyboard-active (roving aria-activedescendant) option in a listbox. */
+.dropdown-options[role="listbox"] { outline: none; }
+.dropdown-option.active {
+  background-color: var(--input-bg, #1a1a2e);
+  outline: 2px solid var(--accent, #6c8cff);
+  outline-offset: -2px;
+}
+
+/* Warning variant of the small helper text under a field. */
+.modal-form-group .form-hint.form-hint-warning {
+  color: var(--warning, #f0b429);
+}
+
 .dropdown-option-item.selected,
 .logo-option-none.selected {
   background-color: var(--accent-15);

@@ -584,6 +584,27 @@ class ChannelPipelineEngine:
                     f"stream/field changes this run made."
                 ),
             })
+        # GH #720 Part B (4b): channels whose profiles applied but the pipeline-
+        # ownership marker write failed — precedence not established. A run-level
+        # WARNING (the assignment succeeded, so the run stays completed, NOT
+        # completed_with_errors) so the Execution Details UI shows it honestly.
+        ownership_unestablished_ids = sorted(
+            results.pop("profile_ownership_unestablished_channel_ids", set())
+        )
+        if ownership_unestablished_ids:
+            run_warnings.append({
+                "type": "profile_ownership_not_established",
+                "count": len(ownership_unestablished_ids),
+                "channel_ids": ownership_unestablished_ids,
+                "message": (
+                    f"Channel profiles were applied on "
+                    f"{len(ownership_unestablished_ids)} channel(s), but the "
+                    f"pipeline-ownership marker could not be written, so "
+                    f"precedence is not established — a group Auto-Sync selection "
+                    f"may move these channels until the next pipeline run "
+                    f"re-stamps them."
+                ),
+            })
         execution.set_warnings(run_warnings)
 
         # enhancedchannelmanager-7wuhd: persist the structured event_sync
@@ -2322,6 +2343,9 @@ class ChannelPipelineEngine:
             # DISCLOSE that rollback/undo will not restore channel-profile
             # membership. A set (transient) — converted + popped before return.
             "non_reversible_channel_ids": set(),
+            # GH #720 Part B (4b): channels whose profile applied but the
+            # ownership marker write failed — surfaced as a run-level warning.
+            "profile_ownership_unestablished_channel_ids": set(),
         }
 
         # Track which streams have been processed by which rules
@@ -2728,6 +2752,9 @@ class ChannelPipelineEngine:
             # could not enforce a new channel's default membership is not green.
             results["non_reversible_channel_ids"].update(
                 exec_ctx.non_reversible_channel_ids
+            )
+            results["profile_ownership_unestablished_channel_ids"].update(
+                exec_ctx.profile_ownership_unestablished_channel_ids
             )
             self._record_default_profile_failures(
                 results, exec_ctx,
@@ -4227,6 +4254,9 @@ class ChannelPipelineEngine:
             results.setdefault("non_reversible_channel_ids", set()).update(
                 exec_ctx.non_reversible_channel_ids
             )
+            results.setdefault("profile_ownership_unestablished_channel_ids", set()).update(
+                exec_ctx.profile_ownership_unestablished_channel_ids
+            )
             self._record_default_profile_failures(
                 results, exec_ctx, stream_name=f"[EVENT-SYNC] {rule.name}",
             )
@@ -4479,7 +4509,7 @@ class ChannelPipelineEngine:
         for action in profile_actions:
             step_results.extend(
                 await executor.apply_channel_profile_to_channels(
-                    action, touched_ids, exec_ctx,
+                    action, touched_ids, exec_ctx, rule_id=rule.id,
                 )
             )
 
