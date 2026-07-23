@@ -732,6 +732,19 @@ export async function getProviderGroupSettings(): Promise<Record<number, M3UGrou
   return fetchJson(`${API_BASE}/providers/group-settings`);
 }
 
+/** Per-provider catch-up availability for the M3U manager badge (bead 4dpiz).
+ *  `has_catchup` is authoritative (true when the provider has ≥1 catch-up
+ *  stream); `catchup_days` is the provider's sampled catch-up depth (null when
+ *  no catch-up). Keyed by M3U account id as a string. */
+export interface ProviderCatchupStatus {
+  has_catchup: boolean;
+  catchup_days: number | null;
+}
+
+export async function getProviderCatchupStatus(): Promise<Record<string, ProviderCatchupStatus>> {
+  return fetchJson(`${API_BASE}/providers/catchup-status`);
+}
+
 /** One (provider, channel-group) junction row — NON-collapsed. bead 38dzi:
  *  powers the provider-scoped Event Sync group picker (the same channel-group
  *  id can appear under multiple providers). Join on channel_group_id against

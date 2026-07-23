@@ -77,4 +77,17 @@ describe('CatchupBadge', () => {
     const { container } = render(<CatchupBadge isCatchup={true} catchupDays={7} className="my-extra-class" />);
     expect(container.querySelector('.catchup-badge.my-extra-class')).toBeInTheDocument();
   });
+
+  // --- title override (bead 4dpiz provider badge) ---
+
+  it('overrides the tooltip/aria-label with the title prop, leaving the compact label intact', () => {
+    const { container } = render(
+      <CatchupBadge isCatchup={true} catchupDays={7} title="Provider supports catch-up — up to 7 days" />
+    );
+    const badge = container.querySelector('.catchup-badge');
+    expect(badge?.getAttribute('title')).toBe('Provider supports catch-up — up to 7 days');
+    expect(badge?.getAttribute('aria-label')).toBe('Provider supports catch-up — up to 7 days');
+    // Visible compact label is unaffected by the title override.
+    expect(container.querySelector('.catchup-badge__text')?.textContent).toBe('7d');
+  });
 });

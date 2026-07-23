@@ -452,8 +452,16 @@ class DispatcharrClient:
         search: Optional[str] = None,
         channel_group_name: Optional[str] = None,
         m3u_account: Optional[int] = None,
+        is_catchup: Optional[bool] = None,
     ) -> dict:
-        """Get paginated list of streams."""
+        """Get paginated list of streams.
+
+        ``is_catchup`` filters by Dispatcharr's catch-up flag when set. The flag
+        is ``db_index=True`` upstream, so a ``page_size=1`` request with
+        ``is_catchup=True`` is a cheap indexed count query — used by the
+        provider catch-up badge (bead 4dpiz) to detect whether a provider has
+        any catch-up stream via the paginated ``count``.
+        """
         params = {"page": page, "page_size": page_size}
         if search:
             params["search"] = search
@@ -464,6 +472,9 @@ class DispatcharrClient:
         # channel_group=0 bug in get_channels).
         if m3u_account is not None:
             params["m3u_account"] = m3u_account
+        # Dispatcharr's BooleanFilter expects the lowercase string form.
+        if is_catchup is not None:
+            params["is_catchup"] = "true" if is_catchup else "false"
 
         response = await self._request("GET", "/api/channels/streams/", params=params)
         response.raise_for_status()

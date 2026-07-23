@@ -76,6 +76,8 @@ describe('M3UManagerTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getSettings).mockResolvedValue({} as never);
+    // Default: no catch-up anywhere (bead 4dpiz). Individual tests override.
+    vi.mocked(api.getProviderCatchupStatus).mockResolvedValue({});
   });
 
   describe('Server Groups management (bead hq3de.c)', () => {
@@ -176,6 +178,42 @@ describe('M3UManagerTab', () => {
       await waitFor(() => expect(screen.getByText('Xtream Account')).toBeInTheDocument());
 
       expect(screen.getByLabelText('Refresh VOD content')).toBeDisabled();
+    });
+  });
+
+  describe('Provider catch-up badge (bead 4dpiz)', () => {
+    it('renders the catch-up badge on a provider row when has_catchup is true', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([
+        makeAccount({ id: 1, name: 'Catchup Provider' }),
+      ]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+      vi.mocked(api.getProviderCatchupStatus).mockResolvedValue({
+        '1': { has_catchup: true, catchup_days: 5 },
+      });
+
+      renderWithProviders(<M3UManagerTab />);
+      await waitFor(() => expect(screen.getByText('Catchup Provider')).toBeInTheDocument());
+
+      await waitFor(() =>
+        expect(
+          screen.getByLabelText('Provider supports catch-up — up to 5 days')
+        ).toBeInTheDocument()
+      );
+    });
+
+    it('renders NO catch-up badge when has_catchup is false', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([
+        makeAccount({ id: 1, name: 'No Catchup Provider' }),
+      ]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+      vi.mocked(api.getProviderCatchupStatus).mockResolvedValue({
+        '1': { has_catchup: false, catchup_days: null },
+      });
+
+      renderWithProviders(<M3UManagerTab />);
+      await waitFor(() => expect(screen.getByText('No Catchup Provider')).toBeInTheDocument());
+
+      expect(screen.queryByLabelText(/provider supports catch-up/i)).not.toBeInTheDocument();
     });
   });
 

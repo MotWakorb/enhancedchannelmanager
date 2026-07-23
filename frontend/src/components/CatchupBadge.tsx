@@ -28,16 +28,24 @@ export interface CatchupBadgeProps {
   catchupDays?: number;
   /** Additional CSS class names on the outer <span>. */
   className?: string;
+  /**
+   * Tooltip / aria-label override. When omitted the badge derives its own
+   * copy from the day count (e.g. "Catch-up: 5 days"). Callers that need
+   * context-specific wording — the provider badge (bead 4dpiz) says
+   * "Provider supports catch-up …" — pass it here instead of forking the
+   * component. The visible compact label is unaffected.
+   */
+  title?: string;
 }
 
-export function CatchupBadge({ isCatchup, catchupDays, className }: CatchupBadgeProps) {
+export function CatchupBadge({ isCatchup, catchupDays, className, title }: CatchupBadgeProps) {
   // Flag is authoritative — never infer support from catchupDays.
   if (isCatchup !== true) return null;
 
   const hasDays = typeof catchupDays === 'number' && catchupDays > 0;
-  const label = hasDays
+  const label = title ?? (hasDays
     ? `Catch-up: ${catchupDays} day${catchupDays === 1 ? '' : 's'}`
-    : 'Catch-up available';
+    : 'Catch-up available');
   const classes = ['catchup-badge', className].filter(Boolean).join(' ');
 
   return (
