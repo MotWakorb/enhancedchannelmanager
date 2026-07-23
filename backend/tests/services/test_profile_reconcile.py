@@ -50,10 +50,10 @@ def _reset_group_locks():
     event loop) so a module-level lock from a prior loop is never reused."""
     import services.profile_reconcile as pr
     pr._group_locks.clear()
-    pr._sweep_in_progress = False; pr._sweep_pending = False
+    pr._sweep_in_progress = False
     yield
     pr._group_locks.clear()
-    pr._sweep_in_progress = False; pr._sweep_pending = False
+    pr._sweep_in_progress = False
 
 
 def _channel(cid: int, *, group: int = 100, owned: bool = False,
@@ -732,8 +732,10 @@ async def test_normalize_rewrites_legacy_string_row_to_int_storage(monkeypatch):
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_redundant_sweep_is_coalesced(monkeypatch):
-    """Finding: a sweep already in flight coalesces a second concurrent sweep."""
+async def test_redundant_sweep_returns_queued_not_success(monkeypatch):
+    """B2&B3: a sweep already in flight coalesces a second concurrent sweep to a
+    DISTINCT NON-TERMINAL ``queued`` outcome — NOT an all-zero completed result
+    that a caller could read as success. No trailing pass is scheduled."""
     import services.profile_reconcile as pr
 
     async def _no_live_rules():
@@ -758,7 +760,9 @@ async def test_redundant_sweep_is_coalesced(monkeypatch):
     release.set()
     await first
 
-    assert second.get("coalesced") is True
+    assert second.get("status") == "queued"
+    # It is NOT a completed sweep — no reconciled/failure counters to read as done.
+    assert "groups_reconciled" not in second
 
 
 @pytest.mark.asyncio

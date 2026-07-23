@@ -222,9 +222,20 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
     try:
         from services.profile_reconcile import reconcile_all_selected_groups
         recon = await reconcile_all_selected_groups(client)
-        # B3: surface an incomplete sweep (degraded/partial/errored groups or a
-        # failed normalize) — return a short reason so the CALLER can gate its
-        # refresh-success alert on it instead of firing an unconditional success.
+        # B2&B3: a coalesced follower returns {status: "queued"} — the reconcile
+        # did NOT run this call. Do NOT announce success; surface a soft
+        # "in progress" note (the running + scheduled sweeps converge it).
+        if recon.get("status") == "queued":
+            logger.info(
+                "[M3U-REFRESH] Post-refresh reconcile for '%s' coalesced (queued) — "
+                "another sweep is running; it converges on the scheduled sync",
+                account_name,
+            )
+            return ("a channel-profile reconcile is already running — it will "
+                    "complete on the next scheduled sync")
+        # B3: an INCOMPLETE sweep (degraded/partial/errored groups or a failed
+        # normalize) must not read as an unqualified success. These are
+        # idempotent/transient, so the scheduled sweep retries them.
         incomplete = (
             recon.get("groups_partial_failure", 0)
             + recon.get("groups_degraded", 0)
@@ -233,19 +244,22 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
         )
         if incomplete:
             reason = (
-                f"{recon.get('groups_partial_failure', 0)} partial_failure, "
+                f"the channel-profile apply was incomplete "
+                f"({recon.get('groups_partial_failure', 0)} partial_failure, "
                 f"{recon.get('groups_degraded', 0)} degraded, "
                 f"{recon.get('groups_errored', 0)} errored, "
-                f"{recon.get('accounts_normalize_failed', 0)} account(s) not normalized"
+                f"{recon.get('accounts_normalize_failed', 0)} account(s) not normalized) "
+                f"— it will retry on the next scheduled sync"
             )
             logger.warning(
-                "[M3U-REFRESH] Post-refresh profile reconcile for '%s' was "
-                "INCOMPLETE: %s", account_name, reason,
+                "[M3U-REFRESH] Post-refresh profile reconcile for '%s' INCOMPLETE: %s",
+                account_name, reason,
             )
             return reason
     except Exception as e:
         logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, e)
-        return f"profile reconcile failed: {e}"
+        return (f"the channel-profile reconcile failed ({e}) — it will retry on "
+                f"the next scheduled sync")
     return None
 
 
@@ -317,30 +331,21 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                     description=f"Refreshed M3U account '{account_name}' in {wait_duration:.1f}s",
                 )
 
-                # B3: gate the success alert on the reconcile outcome — an
-                # incomplete profile apply must NOT read as an unqualified success.
-                if reconcile_incomplete:
-                    await send_alert(
-                        title=f"M3U Refresh: {account_name}",
-                        message=(f"Refreshed M3U account '{account_name}' in {wait_duration:.1f}s, "
-                                 f"but the channel-profile apply was incomplete ({reconcile_incomplete}) "
-                                 f"— it will retry on the next sync."),
-                        notification_type="warning",
-                        source="M3U Refresh",
-                        metadata={"account_id": account_id, "account_name": account_name, "duration": wait_duration},
-                        alert_category="m3u_refresh",
-                        entity_id=account_id,
-                    )
-                else:
-                    await send_alert(
-                        title=f"M3U Refresh: {account_name}",
-                        message=f"Successfully refreshed M3U account '{account_name}' in {wait_duration:.1f}s",
-                        notification_type="success",
-                        source="M3U Refresh",
-                        metadata={"account_id": account_id, "account_name": account_name, "duration": wait_duration},
-                        alert_category="m3u_refresh",
-                        entity_id=account_id,
-                    )
+                # B3: gate the success alert on the reconcile outcome — the helper
+                # returns a full, outcome-accurate message (queued / incomplete /
+                # failed) which must NOT read as an unqualified success.
+                await send_alert(
+                    title=f"M3U Refresh: {account_name}",
+                    message=(f"Refreshed M3U account '{account_name}' in {wait_duration:.1f}s, but "
+                             f"{reconcile_incomplete}.")
+                            if reconcile_incomplete
+                            else f"Successfully refreshed M3U account '{account_name}' in {wait_duration:.1f}s",
+                    notification_type="warning" if reconcile_incomplete else "success",
+                    source="M3U Refresh",
+                    metadata={"account_id": account_id, "account_name": account_name, "duration": wait_duration},
+                    alert_category="m3u_refresh",
+                    entity_id=account_id,
+                )
 
                 # ADR-011 (bd-ka7j9): no more hard chain. Advance the refresh
                 # watermark; the interval-scheduled ChannelPipelineTask self-fires.
@@ -377,12 +382,12 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                     description=f"Refreshed M3U account '{account_name}'",
                 )
 
-                # B3: gate the success alert on the reconcile outcome.
+                # B3: gate the success alert on the reconcile outcome (the helper
+                # returns a full, outcome-accurate message).
                 await send_alert(
                     title=f"M3U Refresh: {account_name}",
-                    message=(f"M3U account '{account_name}' refresh completed, but the "
-                             f"channel-profile apply was incomplete ({reconcile_incomplete}) "
-                             f"— it will retry on the next sync.")
+                    message=(f"M3U account '{account_name}' refresh completed, but "
+                             f"{reconcile_incomplete}.")
                             if reconcile_incomplete
                             else f"M3U account '{account_name}' refresh completed",
                     notification_type="warning" if reconcile_incomplete else "success",
@@ -1199,22 +1204,30 @@ async def _apply_enforced_global_save(
     serialize to last-writer-wins.
 
     HONEST GUARANTEE: the sibling cascade is a SEQUENCE of independent remote
-    PATCHes, NOT a single atomic transaction — a mid-cascade crash can leave some
-    siblings updated and others not; an incomplete propagation is surfaced to the
-    caller (named accounts) so the operator can retry, and the every-pass
-    normalize converges non-empty divergence. Serialization is IN-PROCESS only;
-    cross-process concurrent saves (the HTTPS subprocess also serves requests)
-    are NOT serialized and durable convergence of a partially-failed CLEAR is out
-    of scope at this tier (bead nq3ed). Returns ``(primary_result,
-    propagation_error)``."""
+    PATCHes, NOT a single atomic transaction. Serialization is IN-PROCESS only;
+    cross-process concurrent saves are out of scope (bead nq3ed).
+
+    CLEAR ORDERING (Round-9, DBA proposal — closes the resurrect WITHOUT
+    tombstones): when a genuine CLEAR is present (a group whose selection went
+    present -> empty), the AUTHORITATIVE PRIMARY is cleared LAST — siblings are
+    cleared FIRST (from a fresh-under-lock account read), and if ANY sibling
+    clear fails we ABORT BEFORE clearing the primary. So we never end up
+    primary-cleared + a stale sibling still carrying the selection (which the
+    collapse winner would re-elect and RESURRECT). On abort the group stays in
+    its prior consistent state and the operator retries.
+
+    Returns ``(primary_result, propagation_error, applied)`` — ``applied`` is
+    False when a clear was ABORTED before the primary write (nothing saved for
+    the clear; the caller must not report success)."""
     from services.profile_reconcile import (
         acquire_effective_group_locks, resolve_effective_master_group_id,
     )
 
     desired = _compute_changed_selections(edited_rows, before_groups)
     eff_gids = {resolve_effective_master_group_id(all_settings, gid) for gid in desired}
+    has_clear = any(len(sel) == 0 for sel in desired.values())
 
-    # Read the account list BEFORE the lock (the writes happen under it).
+    # Read the account list BEFORE the lock (writes happen under it).
     all_accounts = []
     account_err = None
     if desired:
@@ -1227,7 +1240,33 @@ async def _apply_enforced_global_save(
             all_accounts = []
 
     async with acquire_effective_group_locks(eff_gids):
-        # PRIMARY write UNDER the lock (Finding 3) — no divergent interim row.
+        if has_clear:
+            # Siblings FIRST, from a FRESH read under the lock. Abort before the
+            # primary if any sibling clear fails.
+            try:
+                fresh = await client.get_m3u_accounts()
+                if isinstance(fresh, list):
+                    all_accounts = fresh
+            except Exception as e:  # noqa: BLE001 - fall back to the pre-lock read
+                logger.warning("[M3U] enforced-global clear: fresh account read failed: %s", e)
+            sibling_err = None
+            if all_accounts:
+                sibling_err = await _cascade_to_siblings(
+                    client, primary_account_id, desired, all_accounts
+                )
+            propagation_error = account_err or sibling_err
+            if propagation_error:
+                # ABORT before clearing the primary — no resurrection.
+                logger.warning(
+                    "[M3U] enforced-global clear ABORTED before primary write "
+                    "(sibling clear failed): %s", propagation_error,
+                )
+                return None, propagation_error, False
+            # All siblings cleared — now clear the AUTHORITATIVE primary LAST.
+            result = await client.update_m3u_group_settings(primary_account_id, data)
+            return result, None, True
+
+        # SET (or non-clear) change: primary FIRST under the lock, then cascade.
         result = await client.update_m3u_group_settings(primary_account_id, data)
         propagation_error = account_err
         if desired and all_accounts:
@@ -1235,7 +1274,7 @@ async def _apply_enforced_global_save(
                 client, primary_account_id, desired, all_accounts
             )
             propagation_error = propagation_error or sibling_err
-    return result, propagation_error
+        return result, propagation_error, True
 
 
 @router.patch("/accounts/{account_id}/group-settings")
@@ -1353,11 +1392,23 @@ async def update_m3u_group_settings(account_id: int, request: Request):
             # last-writer-wins. (The cascade is sequential remote PATCHes, not a
             # single atomic transaction; an incomplete propagation is surfaced
             # below. Cross-process saves are not serialized — bead nq3ed.)
-            result, propagation_error = await _apply_enforced_global_save(
+            result, propagation_error, applied = await _apply_enforced_global_save(
                 client, account_id, data, data.get("group_settings") or [],
                 before_groups, settings_for_apply,
             )
-            save_applied = True  # the primary PATCH was performed
+            save_applied = applied
+            if not applied:
+                # DATA-INTEGRITY: a CLEAR was aborted BEFORE the primary write
+                # (a sibling clear failed) — the selection was NOT cleared (prior
+                # state preserved, no resurrection). Nothing was saved for the
+                # change, so it must NOT read as success — return a retryable 503
+                # naming the affected account(s).
+                raise HTTPException(
+                    status_code=503,
+                    detail=(f"The channel-profile selection was NOT cleared — it could "
+                            f"not be applied to all M3U accounts ({propagation_error}). "
+                            f"The prior selection is preserved; please retry."),
+                )
             if propagation_error:
                 # Finding 3 (A) + B4: an INCOMPLETE propagation — including an
                 # incomplete CLEAR — must be surfaced honestly and name the
@@ -1409,23 +1460,22 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     "status": "error", "group_id": None, "error": str(e),
                 })
         elif changed_selections:
-            # Finding D (FAIL CLOSED): a selection CHANGE but the lock keys are
-            # unresolvable (group-settings fetch failed above) — do NOT perform
-            # the unlocked primary write, which could clobber a concurrent
-            # mutation. The operator retries. The fetch-failure error entry above
-            # already surfaces this; add the recovery hint. (The deeper
-            # locks-before-authoritative-read hardening is out of scope here —
-            # see bead nq3ed.)
+            # Finding D + Round-9 B1 (FAIL CLOSED): a selection CHANGE but the
+            # lock keys are unresolvable (group-settings fetch failed) — do NOT
+            # perform the unlocked primary write (could clobber a concurrent
+            # mutation), and do NOT return 200 (nothing was saved, so it must not
+            # read as success in the UI). Return a RETRYABLE 503 carrying the
+            # recovery hint; the operator retries. No write, no journal entry.
             logger.warning(
                 "[M3U] account %s: lock keys unresolvable — failing closed on the "
-                "selection change (no unlocked write)", account_id,
+                "selection change (no write, HTTP 503)", account_id,
             )
-            profile_apply_summary.append({
-                "status": "error", "group_id": None,
-                "error": "group settings unavailable; the profile-selection change "
-                         "was NOT applied (fail-closed) — retry the save",
-            })
-            result = {}  # no write performed (save_applied stays False)
+            raise HTTPException(
+                status_code=503,
+                detail=("The channel-profile selection was NOT saved — Dispatcharr "
+                        "group settings were unavailable, so the change could not be "
+                        "applied safely. Please retry the save."),
+            )
         else:
             # No selection change (field-only edit, or no edited groups) — safe to
             # save the group settings without the enforced-global lock.

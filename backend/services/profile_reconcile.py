@@ -103,12 +103,12 @@ _group_locks: dict[int, asyncio.Lock] = {}
 _LOCK_REACQUIRE_MAX = 3
 
 # Coalescing guard: a full selected-group sweep already running short-circuits a
-# redundant queued one (the monitor fires every pass; an equivalent sweep in
-# flight makes another a no-op) — Finding: coalesce redundant sweeps. F3: a
-# follower that coalesces sets _sweep_pending so ONE trailing pass runs after the
-# current sweep — a non-equivalent follower is deferred, not fully dropped.
+# redundant one (the monitor fires every pass; an overlapping post-refresh poll
+# makes another a no-op). A coalesced follower gets a distinct ``queued`` outcome
+# (see _queued_result) — NEVER mapped to success — and the idempotent scheduled
+# sweep converges the deferred work. (Round-9: the earlier _sweep_pending
+# trailing-pass loop was unbounded + false-success and has been removed.)
 _sweep_in_progress = False
-_sweep_pending = False
 
 
 def _get_group_lock(effective_gid: int) -> asyncio.Lock:
@@ -954,13 +954,15 @@ async def normalize_group_selections(client, all_settings: dict, cancel_check=No
     return {"normalized_accounts": normalized, "failed_accounts": failed}
 
 
-def _coalesced_result() -> dict:
-    return {
-        "coalesced": True, "groups_reconciled": 0, "groups_partial_failure": 0,
-        "groups_degraded": 0, "groups_errored": 0, "accounts_normalized": 0,
-        "accounts_normalize_failed": 0, "groups_with_selection": 0,
-        "channels_scoped": 0,
-    }
+def _queued_result() -> dict:
+    """A coalesced follower's outcome. Round-9 (B2&B3): this is a DISTINCT
+    NON-TERMINAL status — ``queued`` — that NO caller may map to success. It is
+    NOT a completed sweep: the reconcile did not run this call. The idempotent
+    scheduled sweep (every ~5 min) is the convergence guarantee, so a follower
+    can safely be dropped WITHOUT a trailing pass (the earlier over-built
+    ``_sweep_pending`` trailing loop was unbounded and produced a false-success
+    all-zero result — removed)."""
+    return {"status": "queued", "coalesced": True}
 
 
 async def reconcile_all_selected_groups(
@@ -968,31 +970,21 @@ async def reconcile_all_selected_groups(
 ) -> dict:
     """Reconcile every group that carries a profile selection (COALESCED).
 
-    Finding: coalesce redundant sweeps — if a full sweep is already in flight
-    (the monitor fires every pass; a post-refresh poll may overlap), this call
-    short-circuits to a ``coalesced`` no-op instead of duplicating the work. F3:
-    a coalesced follower sets a pending flag so exactly ONE trailing pass runs
-    after the current sweep (bounded loop, drains at the request rate) — a
-    follower that arrived after the current sweep started reading state is
-    deferred, not fully dropped.
+    Coalesce redundant sweeps — if a full sweep is already in flight (the monitor
+    fires every pass; a post-refresh poll may overlap), this call short-circuits
+    and returns a ``{status: "queued"}`` NON-TERMINAL outcome that no caller maps
+    to success. The in-flight sweep + the idempotent every-~5-min scheduled sweep
+    are the convergence guarantee; the deferred follower needs no trailing pass.
     """
-    global _sweep_in_progress, _sweep_pending
+    global _sweep_in_progress
     if _sweep_in_progress:
-        _sweep_pending = True
-        logger.info("[PROFILE-RECONCILE] sweep already in progress — coalescing (trailing pass queued)")
-        return _coalesced_result()
+        logger.info("[PROFILE-RECONCILE] sweep already in progress — coalescing (queued)")
+        return _queued_result()
     _sweep_in_progress = True
     try:
-        result = await _run_selected_group_sweep(client, all_settings, cancel_check)
-        # F3: run trailing passes for any followers that coalesced during this
-        # run (single bool -> multiple followers collapse to one trailing pass).
-        while _sweep_pending:
-            _sweep_pending = False
-            result = await _run_selected_group_sweep(client, all_settings, cancel_check)
-        return result
+        return await _run_selected_group_sweep(client, all_settings, cancel_check)
     finally:
         _sweep_in_progress = False
-        _sweep_pending = False
 
 
 async def _run_selected_group_sweep(

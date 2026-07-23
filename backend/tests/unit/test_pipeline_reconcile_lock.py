@@ -17,10 +17,10 @@ from channel_pipeline_evaluator import StreamContext
 @pytest.fixture(autouse=True)
 def _reset_locks():
     pr._group_locks.clear()
-    pr._sweep_in_progress = False; pr._sweep_pending = False
+    pr._sweep_in_progress = False
     yield
     pr._group_locks.clear()
-    pr._sweep_in_progress = False; pr._sweep_pending = False
+    pr._sweep_in_progress = False
 
 
 class SharedClient:

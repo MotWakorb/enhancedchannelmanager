@@ -499,14 +499,15 @@ async def test_save_fails_closed_on_lock_key_fetch_failure_for_selection_change(
             ]},
         )
 
-    assert resp.status_code == 200
+    # Round-9 B1: a fail-closed selection change must NOT read as success — it
+    # returns a retryable 503, not a 200.
+    assert resp.status_code == 503
     # No unlocked primary write was performed.
     client.update_m3u_group_settings.assert_not_called()
-    # BLOCKER: no PHANTOM journal entry for a change that was never applied.
+    # No PHANTOM journal entry for a change that was never applied.
     mock_journal.log_entry.assert_not_called()
-    summary = resp.json().get("ecm_profile_apply", [])
-    assert any(o.get("status") == "error" for o in summary)
-    assert any("fail-closed" in (o.get("error") or "") for o in summary)
+    # The 503 body carries the recovery hint.
+    assert "NOT saved" in resp.json().get("detail", "")
 
 
 @pytest.mark.asyncio
@@ -536,10 +537,13 @@ async def test_save_field_only_edit_still_saves_when_lock_keys_unavailable(async
 
 
 @pytest.mark.asyncio
-async def test_incomplete_clear_surfaces_named_account_error(async_client):
-    """Finding 3 (A): clearing a selection where a SIBLING clear PATCH fails must
-    surface an error naming the affected account + recovery — not silent
-    success."""
+async def test_clear_aborts_before_primary_when_sibling_clear_fails(async_client):
+    """DATA-INTEGRITY (DBA clear-ordering): clearing a selection where a SIBLING
+    clear PATCH fails must ABORT BEFORE clearing the AUTHORITATIVE PRIMARY — so
+    the primary keeps its selection (no resurrection) — and return a retryable
+    503 naming the affected account."""
+    calls = []
+
     client = _mock_client()
     client.get_m3u_account.return_value = _account(11, 1304, [12])  # prior HAD [12]
     client.get_all_m3u_group_settings.return_value = {
@@ -551,16 +555,15 @@ async def test_incomplete_clear_surfaces_named_account_error(async_client):
     ]
 
     async def _update(aid, data):
+        calls.append(aid)
         if aid == 22:
             raise RuntimeError("sibling 22 PATCH failed")
         return {"message": "ok"}
     client.update_m3u_group_settings.side_effect = _update
 
     with patch("routers.m3u.get_client", return_value=client), \
-         patch("routers.m3u.journal"), \
-         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules), \
-         patch("services.profile_reconcile.reconcile_group_profiles",
-               AsyncMock(return_value={"status": "no_selection", "group_id": 1304})):
+         patch("routers.m3u.journal") as mock_journal, \
+         patch("services.profile_reconcile._resolve_live_rule_ids", _no_live_rules):
         resp = await async_client.patch(
             "/api/m3u/accounts/11/group-settings",
             json={"group_settings": [
@@ -568,13 +571,13 @@ async def test_incomplete_clear_surfaces_named_account_error(async_client):
             ]},
         )
 
-    assert resp.status_code == 200
-    summary = resp.json().get("ecm_profile_apply", [])
-    err = [o for o in summary if o.get("status") == "error"]
-    assert err
-    # Names the affected account (22) and the recovery action.
-    assert any("22" in (o.get("error") or "") for o in err)
-    assert any("Re-save" in (o.get("error") or "") for o in err)
+    assert resp.status_code == 503
+    # The AUTHORITATIVE PRIMARY (account 11) was NOT cleared — no resurrection.
+    assert 11 not in calls
+    assert 22 in calls  # sibling was attempted first (and failed)
+    # No phantom journal entry, and the recovery names the affected account.
+    mock_journal.log_entry.assert_not_called()
+    assert "22" in resp.json().get("detail", "")
 
 
 @pytest.mark.asyncio
@@ -642,6 +645,21 @@ async def test_post_refresh_completion_hook_invokes_sweep():
 
     fake_sweep.assert_awaited_once()
     assert fake_sweep.await_args.args[0] is client
+
+
+@pytest.mark.asyncio
+async def test_post_refresh_queued_does_not_announce_success():
+    """B2&B3: when the post-refresh sweep COALESCES (queued), the helper returns
+    a soft 'in progress' note (NOT None), so the caller does NOT announce an
+    unqualified success."""
+    from routers.m3u import _reconcile_profiles_after_refresh
+
+    fake_sweep = AsyncMock(return_value={"status": "queued", "coalesced": True})
+    with patch("services.profile_reconcile.reconcile_all_selected_groups", fake_sweep):
+        msg = await _reconcile_profiles_after_refresh(AsyncMock(), "HD Homerun")
+
+    assert msg is not None            # NOT a clean success (None)
+    assert "already running" in msg   # soft in-progress note, no false success
 
 
 @pytest.mark.asyncio
