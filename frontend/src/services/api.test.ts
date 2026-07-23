@@ -1985,7 +1985,8 @@ describe('API Service', () => {
     it.each([
       ['partial_failure', [{ status: 'partial_failure' }], 'applying some channel profiles failed'],
       ['degraded', [{ status: 'degraded' }], 'could not be fully enforced'],
-      ['error', [{ status: 'error', error: 'boom' }], 'hit an error'],
+      ['error-with-detail', [{ status: 'error', error: 'account 22 not updated — Re-save' }], 'account 22 not updated'],
+      ['error-no-detail', [{ status: 'error' }], 'hit an error'],
       ['stale_selection', [{ status: 'stale_selection' }], 'no longer exist'],
       ['conflict', [{ status: 'reconciled', conflict: true }], 'conflicting profile selections'],
       ['failed_profile_ids', [{ status: 'reconciled', failed_profile_ids: [2] }], 'applying some channel profiles failed'],

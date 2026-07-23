@@ -409,6 +409,38 @@ describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)
     expect(api.refreshM3UAccount).not.toHaveBeenCalled();
   });
 
+  it('Round-9 B1: a fail-closed (non-2xx) save reads as NOT saved — modal stays open, no refresh/onSaved', async () => {
+    // The backend returns 503 -> updateM3UGroupSettings throws with the detail.
+    vi.mocked(api.updateM3UGroupSettings).mockRejectedValue(
+      new Error('The channel-profile selection was NOT saved — please retry.')
+    );
+    const onClose = vi.fn();
+    const onSaved = vi.fn();
+    render(
+      <M3UGroupsModal
+        isOpen={true} onClose={onClose} onSaved={onSaved}
+        account={nativeConfiguredAccount} allAccounts={[nativeConfiguredAccount]}
+      />
+    );
+    await screen.findByText('Sports HD');
+    const row = screen.getByText('Sports HD').closest('.group-row') as HTMLElement;
+    const enabledCheckbox = within(row.querySelector('.group-enabled') as HTMLElement)
+      .getByRole('checkbox') as HTMLInputElement;
+    const user = userEvent.setup();
+    await user.click(enabledCheckbox);
+    await user.click(screen.getByRole('button', { name: /Save & Refresh/i }));
+
+    await waitFor(() => expect(api.updateM3UGroupSettings).toHaveBeenCalled());
+    // NOT saved: no refresh, no onSaved, modal NOT closed, and an error toast
+    // carrying the "NOT saved" message.
+    expect(api.refreshM3UAccount).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockNotifications.error).toHaveBeenCalledWith(
+      expect.stringContaining('NOT saved'), 'M3U Groups'
+    );
+  });
+
   it('#9: warns (not plain success) when the save reports an incomplete profile apply', async () => {
     vi.mocked(api.updateM3UGroupSettings).mockResolvedValue({
       message: 'ok',

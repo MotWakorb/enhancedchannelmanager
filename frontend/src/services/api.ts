@@ -961,6 +961,13 @@ export function profileApplyWarningMessage(
   if (items.some((o) => o.status === 'degraded')) {
     return 'Saved, but channel profiles could not be fully enforced (the profile list was unreachable). It will retry automatically on the next sync.';
   }
+  // Cheap honesty: the backend already NAMES the affected account(s) + the
+  // recovery action in outcome.error — surface it instead of a generic
+  // "check the logs" when present.
+  const errWithDetail = items.find((o) => o.status === 'error' && o.error);
+  if (errWithDetail) {
+    return `Saved, but ${errWithDetail.error}`;
+  }
   if (items.some((o) => o.status === 'error')) {
     return 'Saved, but applying channel profiles hit an error — check the logs.';
   }
