@@ -180,6 +180,25 @@ async def test_monitor_runs_sweep_even_with_no_accounts_to_check(test_session):
 
 
 @pytest.mark.asyncio
+async def test_monitor_reflects_queued_sweep_as_deferred_warning(test_session):
+    """Finding 3: a COALESCED sweep returns {status:"queued"} — it did NOT run
+    this pass (another sweep was already in progress). It must read as DEFERRED
+    (a warning surfaced in failed_count + message), never a clean green success,
+    so task history is truthful about work not done this pass."""
+    account = {"id": 11, "name": "HD Homerun", "is_active": True, "updated_at": "T1"}
+    result = await _run_monitor(
+        test_session, accounts=[account], snapshot_ts="T1",  # matches -> no change
+        sweep_return={"status": "queued", "coalesced": True},
+    )
+    # Best-effort poll still succeeds, but the deferral is a counted warning.
+    assert result.success
+    assert result.failed_count >= 1
+    assert "deferred" in result.message
+    assert result.total_items >= result.failed_count
+    assert result.total_items >= result.success_count
+
+
+@pytest.mark.asyncio
 async def test_monitor_reflects_reconcile_degraded_as_warning(test_session):
     """Blocker 3c: a sweep that ended with degraded/partial_failure groups is
     reflected in the TaskResult (failed_count > 0 -> 'completed with warnings')

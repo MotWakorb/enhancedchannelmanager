@@ -198,6 +198,7 @@ class M3UChangeMonitorTask(TaskScheduler):
             # running it every ~5 minutes is cheap. Best-effort: a reconcile
             # failure never fails the monitor poll.
             reconcile_warnings = 0  # partial_failure + degraded groups this pass
+            reconcile_deferred = False  # finding 3: sweep coalesced (queued)
             recon: dict = {}
             if not self._cancel_requested:
                 try:
@@ -206,6 +207,17 @@ class M3UChangeMonitorTask(TaskScheduler):
                     recon = await reconcile_all_selected_groups(
                         client, cancel_check=lambda: self._cancel_requested
                     )
+                    # Finding 3: a COALESCED sweep returns {status:"queued"} — it
+                    # did NOT run this pass (another sweep was in progress). It
+                    # must read as DEFERRED (a warning), never green success, so
+                    # task history is truthful about work not done this pass.
+                    if recon.get("status") == "queued":
+                        reconcile_deferred = True
+                        logger.info(
+                            "[%s] Profile reconcile DEFERRED (coalesced — another "
+                            "sweep in progress); converges on the next sweep",
+                            self.task_id,
+                        )
                     reconcile_warnings = (
                         recon.get("groups_partial_failure", 0)
                         + recon.get("groups_degraded", 0)
@@ -263,7 +275,12 @@ class M3UChangeMonitorTask(TaskScheduler):
             normalize_failed = recon.get("accounts_normalize_failed", 0)
             normalize_attempted = recon.get("accounts_normalized", 0) + normalize_failed
             # B2: account-capture exceptions are account-domain failures too.
-            failed_count = reconcile_warnings + normalize_failed + capture_failures
+            # Finding 3: a deferred (coalesced) reconcile is a warning too — it
+            # did not run this pass, so the task is NOT a clean success.
+            failed_count = (
+                reconcile_warnings + normalize_failed + capture_failures
+                + (1 if reconcile_deferred else 0)
+            )
             total_items = max(
                 accounts_checked + groups_with_selection + normalize_attempted,
                 changes_detected,
@@ -276,6 +293,8 @@ class M3UChangeMonitorTask(TaskScheduler):
                 warn_bits.append(f"{normalize_failed} account(s) not normalized")
             if capture_failures:
                 warn_bits.append(f"{capture_failures} account(s) failed change capture")
+            if reconcile_deferred:
+                warn_bits.append("profile reconcile deferred (another sweep in progress)")
             recon_suffix = f" ({', '.join(warn_bits)})" if warn_bits else ""
 
             if changes_detected > 0:
