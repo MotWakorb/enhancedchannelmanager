@@ -4,6 +4,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Stream, StreamStats } from '../types';
 import { openInVLC } from '../utils/vlc';
+import { CatchupBadge } from './CatchupBadge';
 
 export interface StreamListItemProps {
   stream: Stream;
@@ -159,6 +160,9 @@ export const StreamListItem = memo(function StreamListItem({
             STALE
           </span>
         )}
+        {/* Catch-up (timeshift) support — bead enhancedchannelmanager-sy1sz.
+            Renders only when Dispatcharr flags the stream is_catchup. */}
+        <CatchupBadge isCatchup={stream.is_catchup} catchupDays={stream.catchup_days} />
         {/* Probe status indicator for failed/timeout */}
         {streamStats && (streamStats.probe_status === 'failed' || streamStats.probe_status === 'timeout') && (
           <span

@@ -306,3 +306,43 @@ describe('ChannelListItem — stale-stream indicator (bead enhancedchannelmanage
     expect(document.querySelector('.streams-count-icon')).not.toBeInTheDocument();
   });
 });
+
+describe('ChannelListItem — catch-up badge (bead enhancedchannelmanager-sy1sz)', () => {
+  const baseChannel: Channel = {
+    id: 42,
+    channel_number: 7,
+    name: 'ESPN HD',
+    channel_group_id: null,
+    tvg_id: null,
+    tvc_guide_stationid: null,
+    epg_data_id: null,
+    streams: [],
+    stream_profile_id: null,
+    uuid: 'u-42',
+    logo_id: null,
+    auto_created: false,
+    auto_created_by: null,
+    auto_created_by_name: null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the catch-up badge when the channel is_catchup is true', () => {
+    renderRow({ channel: { ...baseChannel, is_catchup: true, catchup_days: 7 } });
+    const badge = document.querySelector('.catchup-badge');
+    expect(badge).toBeInTheDocument();
+    expect(badge?.getAttribute('title')).toBe('Catch-up: 7 days');
+  });
+
+  it('does not show the catch-up badge when the channel does not support catch-up', () => {
+    renderRow({ channel: { ...baseChannel, is_catchup: false, catchup_days: 5 } });
+    expect(document.querySelector('.catchup-badge')).not.toBeInTheDocument();
+  });
+
+  it('does not show the catch-up badge when the fields are absent', () => {
+    renderRow({ channel: { ...baseChannel } });
+    expect(document.querySelector('.catchup-badge')).not.toBeInTheDocument();
+  });
+});

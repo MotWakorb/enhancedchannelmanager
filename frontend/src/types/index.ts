@@ -13,6 +13,13 @@ export interface Channel {
   auto_created: boolean;
   auto_created_by: number | null;
   auto_created_by_name: string | null;
+  // Dispatcharr catch-up (timeshift) fields (bead enhancedchannelmanager-sy1sz).
+  // Passed through verbatim by /api/channels. `is_catchup` is the authoritative
+  // "catch-up supported" flag; `catchup_days` is the archive depth (channel-level
+  // = max across the channel's streams). Never infer support from catchup_days —
+  // the flag wins (a channel can have days:0 but is_catchup:true).
+  is_catchup?: boolean;
+  catchup_days?: number;
   // Client-side only: temporary logo URL for staged channels before commit
   _stagedLogoUrl?: string;
 }
@@ -181,6 +188,13 @@ export interface Stream {
   // refresh no longer re-matched this stream in the source playlist.
   is_stale?: boolean;
   last_seen?: string | null;
+  // Dispatcharr catch-up (timeshift) fields (bead enhancedchannelmanager-sy1sz).
+  // Passed through verbatim by /api/channels/{id}/streams and /api/streams/by-ids.
+  // `is_catchup` is the authoritative "catch-up supported" flag; `catchup_days`
+  // is the archive depth in days. Never infer support from catchup_days — the
+  // flag wins (a stream can have days:0 but is_catchup:true).
+  is_catchup?: boolean;
+  catchup_days?: number;
 }
 
 // Response shape for GET /api/streams/stale-ids — the cached, paged-scan

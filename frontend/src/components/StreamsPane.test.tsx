@@ -246,3 +246,38 @@ describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696
     expect(badge.closest('.meta-tag')).toHaveAttribute('title', expect.stringContaining('2026-07-01T00:00:00Z'));
   });
 });
+
+describe('StreamsPane catch-up badge (bead enhancedchannelmanager-sy1sz)', () => {
+  const CATCHUP_STREAMS: Stream[] = [
+    makeStream({ id: 201, name: 'Catchup Stream', channel_group_name: 'UK | Sports', is_catchup: true, catchup_days: 7 }),
+    makeStream({ id: 202, name: 'Plain Stream', channel_group_name: 'UK | Sports', is_catchup: false, catchup_days: 5 }),
+  ];
+  const CATCHUP_STREAM_GROUPS: StreamGroupInfo[] = [
+    { name: 'UK | Sports', count: 2 },
+  ];
+
+  function renderCatchupPane(overrides: Partial<React.ComponentProps<typeof StreamsPane>> = {}) {
+    return renderPane({
+      streams: CATCHUP_STREAMS,
+      streamGroups: CATCHUP_STREAM_GROUPS,
+      ...overrides,
+    });
+  }
+
+  it('renders the catch-up badge on a supported stream row but not on an unsupported one', async () => {
+    const user = userEvent.setup();
+    renderCatchupPane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const catchupRow = screen.getByText('Catchup Stream').closest('.stream-item');
+    const plainRow = screen.getByText('Plain Stream').closest('.stream-item');
+    expect(catchupRow).not.toBeNull();
+    expect(plainRow).not.toBeNull();
+
+    const badge = (catchupRow as HTMLElement).querySelector('.catchup-badge');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute('title', 'Catch-up: 7 days');
+    // Flag is authoritative — is_catchup:false wins even with catchup_days:5.
+    expect((plainRow as HTMLElement).querySelector('.catchup-badge')).not.toBeInTheDocument();
+  });
+});

@@ -4,6 +4,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Channel } from '../types';
 import { openInVLC } from '../utils/vlc';
+import { CatchupBadge } from './CatchupBadge';
 
 export interface ChannelListItemProps {
   channel: Channel;
@@ -436,6 +437,9 @@ export const ChannelListItem = memo(function ChannelListItem({
               {channel.name}
             </span>
           )}
+          {/* Catch-up (timeshift) support — bead enhancedchannelmanager-sy1sz.
+              Renders only when Dispatcharr flags the channel is_catchup. */}
+          <CatchupBadge isCatchup={channel.is_catchup} catchupDays={channel.catchup_days} />
           {proposedNormalizedName && !isEditingName && (
             <button
               type="button"

@@ -111,3 +111,54 @@ describe('StreamListItem — stale-stream badge (bead enhancedchannelmanager-po7
     expect(screen.getByTitle('connection refused')).toBeInTheDocument();
   });
 });
+
+describe('StreamListItem — catch-up badge (bead enhancedchannelmanager-sy1sz)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the catch-up badge when the stream is_catchup is true', () => {
+    const { container } = renderItem({
+      stream: {
+        id: 10,
+        name: 'ESPN Feed',
+        url: 'http://example.com/stream.m3u8',
+        m3u_account: 1,
+        logo_url: null,
+        tvg_id: null,
+        channel_group: null,
+        channel_group_name: null,
+        is_custom: false,
+        is_catchup: true,
+        catchup_days: 7,
+      },
+    });
+    const badge = container.querySelector('.catchup-badge');
+    expect(badge).toBeInTheDocument();
+    expect(badge?.getAttribute('title')).toBe('Catch-up: 7 days');
+  });
+
+  it('does not show the catch-up badge when the stream does not support catch-up', () => {
+    const { container } = renderItem({
+      stream: {
+        id: 10,
+        name: 'ESPN Feed',
+        url: 'http://example.com/stream.m3u8',
+        m3u_account: 1,
+        logo_url: null,
+        tvg_id: null,
+        channel_group: null,
+        channel_group_name: null,
+        is_custom: false,
+        is_catchup: false,
+        catchup_days: 5,
+      },
+    });
+    expect(container.querySelector('.catchup-badge')).not.toBeInTheDocument();
+  });
+
+  it('does not show the catch-up badge when the fields are absent', () => {
+    const { container } = renderItem();
+    expect(container.querySelector('.catchup-badge')).not.toBeInTheDocument();
+  });
+});
