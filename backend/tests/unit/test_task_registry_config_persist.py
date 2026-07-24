@@ -232,6 +232,211 @@ class TestRestartRoundtrip:
         assert inst.get_config() == JournalNoisePurgeTask().get_config()
 
 
+class TestScheduleOverlayNotPersisted:
+    """Delta re-review BLOCK (gjb01): per-schedule TaskSchedule.parameters are
+    applied onto the shared singleton instance at execution time
+    (task_engine._execute_task) and the post-run sync_to_database call must
+    NOT snapshot that overlaid state — otherwise one schedule's
+    channel_groups/timeout become the task-wide default after restart.
+
+    Invariant: ScheduledTask.config is always "the operator's last explicit
+    save" (update_task_config / router PATCH) or clean defaults for a fresh
+    startup row. Schedule overlays mutate the live instance for the run,
+    never the stored config; restart restores the operator's saved config.
+    """
+
+    def test_post_run_sync_keeps_operator_saved_config(self, test_session, monkeypatch):
+        """Registry-level invariant on the REAL StreamProbeTask (one of the
+        three QA-reproduced leakage shapes): operator saves timeout=30 →
+        a scheduled run overlays channel_groups=["sports"], timeout=17 →
+        the post-run sync (no persist flag — task_engine's exact call) →
+        the stored snapshot still holds the operator's save, and a fresh
+        registry reconstructs the operator config, not the overlay."""
+        from tasks.stream_probe import StreamProbeTask
+
+        monkeypatch.setattr("task_registry.get_session", lambda: test_session)
+        reg = TaskRegistry()
+        reg.register(StreamProbeTask)
+        reg.sync_from_database()
+
+        # Operator's explicit save.
+        reg.update_task_config("stream_probe", task_config={"timeout": 30})
+        stored = json.loads(
+            test_session.query(ScheduledTask)
+            .filter_by(task_id="stream_probe").first().config
+        )
+        assert stored["timeout"] == 30
+
+        # Execution-time overlay + post-run sync — the exact task_engine
+        # sequence (_execute_task :848 update_config, :945 sync_to_database).
+        inst = reg.get_task_instance("stream_probe")
+        inst.update_config({"channel_groups": ["sports"], "timeout": 17})
+        reg.sync_to_database("stream_probe")
+
+        stored = json.loads(
+            test_session.query(ScheduledTask)
+            .filter_by(task_id="stream_probe").first().config
+        )
+        assert stored["timeout"] == 30
+        # None-valued keys are "unset" and are omitted from the snapshot
+        # (they fall back to code defaults at hydration) — replaying an
+        # explicit None would trip setters that coerce None differently
+        # from an absent key (stream_probe: None → [] would flip
+        # "probe all" into "probe nothing").
+        assert "channel_groups" not in stored
+
+        # Simulated restart: the operator's save comes back, not the overlay,
+        # and the unset channel_groups is still None (probe all).
+        reg_b = TaskRegistry()
+        reg_b.register(StreamProbeTask)
+        reg_b.sync_from_database()
+        rehydrated = reg_b.get_task_instance("stream_probe")
+        assert rehydrated.get_config()["timeout"] == 30
+        assert rehydrated.get_config()["channel_groups"] is None
+
+    def test_explicit_empty_channel_groups_roundtrips(self, test_session, monkeypatch):
+        """stream_probe distinguishes None (not configured — probe all) from
+        [] (explicitly empty — probe nothing). An operator's explicit []
+        must survive restart as [], while unset stays None (previous test)."""
+        from tasks.stream_probe import StreamProbeTask
+
+        monkeypatch.setattr("task_registry.get_session", lambda: test_session)
+        reg = TaskRegistry()
+        reg.register(StreamProbeTask)
+        reg.sync_from_database()
+
+        reg.update_task_config("stream_probe", task_config={"channel_groups": []})
+
+        reg_b = TaskRegistry()
+        reg_b.register(StreamProbeTask)
+        reg_b.sync_from_database()
+        assert reg_b.get_task_instance("stream_probe").get_config()["channel_groups"] == []
+
+    def test_post_run_sync_on_missing_row_does_not_capture_overlay(
+        self, test_session, monkeypatch
+    ):
+        """Create-branch guard: if the first-ever save of a task happens
+        POST-RUN with an overlaid instance (row missing at run time), the
+        created row must NOT capture the overlay — it stores no config, so
+        restart yields clean code defaults."""
+        from tasks.stream_probe import StreamProbeTask
+
+        monkeypatch.setattr("task_registry.get_session", lambda: test_session)
+        reg = TaskRegistry()
+        reg.register(StreamProbeTask)
+        # Seed the live instance directly (no DB row), then overlay + post-run
+        # sync — the row is created by the post-run save.
+        reg._instances["stream_probe"] = StreamProbeTask()
+        reg.get_task_instance("stream_probe").update_config(
+            {"channel_groups": ["sports"], "timeout": 17}
+        )
+
+        reg.sync_to_database("stream_probe")
+
+        row = test_session.query(ScheduledTask).filter_by(task_id="stream_probe").first()
+        assert row is not None
+        assert row.config is None
+
+    @pytest.mark.asyncio
+    async def test_engine_run_with_schedule_parameters_does_not_persist_overlay(
+        self, test_engine, test_session, monkeypatch
+    ):
+        """Engine-path regression: a real TaskEngine._execute_task run WITH
+        schedule parameters (stream_probe-shaped config surface) must leave
+        ScheduledTask.config at the operator's save; a fresh registry
+        reconstructed from the DB carries the operator config, not the
+        run's parameters."""
+        import database
+        from sqlalchemy.orm import sessionmaker
+
+        import task_registry as task_registry_module
+        from task_engine import TaskEngine
+        from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskScheduler
+
+        class _ProbeShapedTask(TaskScheduler):
+            task_id = "test_gjb01_probe_shaped"
+            task_name = "gjb01 Probe-Shaped Test"
+            task_description = "Synthetic stream_probe-shaped config surface."
+            default_enabled = False
+
+            def __init__(self, schedule_config=None):
+                if schedule_config is None:
+                    schedule_config = ScheduleConfig(schedule_type=ScheduleType.MANUAL)
+                super().__init__(schedule_config)
+                self.channel_groups = None
+                self.timeout = 60
+
+            def get_config(self) -> dict:
+                return {"channel_groups": self.channel_groups, "timeout": self.timeout}
+
+            def update_config(self, config: dict) -> None:
+                if "channel_groups" in config:
+                    self.channel_groups = config["channel_groups"]
+                if "timeout" in config:
+                    self.timeout = config["timeout"]
+
+            async def execute(self) -> TaskResult:
+                now = datetime.utcnow()
+                return TaskResult(
+                    success=True, message="ok",
+                    started_at=now, completed_at=now,
+                    total_items=1, success_count=1,
+                )
+
+        # Route every get_session() (registry, engine, journal) to the test DB.
+        monkeypatch.setattr(
+            database, "_SessionLocal",
+            sessionmaker(
+                autocommit=False, autoflush=False,
+                bind=test_engine, expire_on_commit=False,
+            ),
+        )
+
+        registry = task_registry_module.get_registry()
+        registry.register(_ProbeShapedTask)
+        registry._instances[_ProbeShapedTask.task_id] = _ProbeShapedTask()
+        try:
+            # Operator's explicit save persists timeout=30.
+            registry.update_task_config(
+                _ProbeShapedTask.task_id, task_config={"timeout": 30}
+            )
+
+            engine = TaskEngine()
+            result = await engine._execute_task(
+                task_id=_ProbeShapedTask.task_id,
+                triggered_by="schedule",
+                parameters={"channel_groups": ["sports"], "timeout": 17},
+            )
+            assert result is not None and result.success is True
+            # The overlay DID reach the live instance for the run.
+            live = registry.get_task_instance(_ProbeShapedTask.task_id)
+            assert live.channel_groups == ["sports"]
+            assert live.timeout == 17
+
+            # ...but the stored snapshot is still the operator's save.
+            row = (
+                test_session.query(ScheduledTask)
+                .filter_by(task_id=_ProbeShapedTask.task_id).first()
+            )
+            assert row is not None
+            stored = json.loads(row.config)
+            # channel_groups was None (unset) at operator-save time, so it
+            # is omitted from the snapshot; only the explicit save persists.
+            assert stored == {"timeout": 30}
+
+            # Simulated restart: fresh registry from the DB — operator
+            # config, not the run parameters.
+            reg_b = TaskRegistry()
+            reg_b.register(_ProbeShapedTask)
+            reg_b.sync_from_database()
+            rehydrated = reg_b.get_task_instance(_ProbeShapedTask.task_id)
+            assert rehydrated.channel_groups is None
+            assert rehydrated.timeout == 30
+        finally:
+            registry.unregister(_ProbeShapedTask.task_id)
+            registry._instances.pop(_ProbeShapedTask.task_id, None)
+
+
 class TestPersistConfigOptOut:
     """Tasks with ``persist_config = False`` are neither persisted nor
     hydrated: their config surface is per-invocation state (dbas_restore /
