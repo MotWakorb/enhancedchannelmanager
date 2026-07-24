@@ -11,6 +11,7 @@ import { M3UFiltersModal } from '../M3UFiltersModal';
 import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
+import { CatchupBadge } from '../CatchupBadge';
 import { PageHeader } from '../PageHeader';
 import { OverflowMenu } from '../OverflowMenu';
 import type { OverflowMenuItem } from '../OverflowMenu';
@@ -49,6 +50,10 @@ interface M3UAccountRowProps {
   onPriorityChange?: (accountId: number, priority: number) => void;
   isBeingRefreshed?: boolean;  // Whether we're tracking this account as still refreshing
   isRefreshingVod?: boolean;
+  // Provider catch-up badge (bead 4dpiz): true when ANY stream on this provider
+  // supports catch-up; catchupDays is the provider's sampled catch-up depth.
+  hasCatchup?: boolean;
+  catchupDays?: number;
 }
 
 function M3UAccountRow({
@@ -67,6 +72,8 @@ function M3UAccountRow({
   onPriorityChange,
   isBeingRefreshed = false,
   isRefreshingVod = false,
+  hasCatchup = false,
+  catchupDays,
 }: M3UAccountRowProps) {
   // Consider refreshing if status says so OR if we're tracking it as refreshing
   const isRefreshing = isBeingRefreshed || account.status === 'fetching' || account.status === 'parsing';
@@ -148,6 +155,15 @@ function M3UAccountRow({
               <span className="profile-count">{account.profiles.length - 1}</span>
             </span>
           )}
+          <CatchupBadge
+            isCatchup={hasCatchup}
+            catchupDays={catchupDays}
+            title={
+              typeof catchupDays === 'number' && catchupDays > 0
+                ? `Provider supports catch-up — up to ${catchupDays} day${catchupDays === 1 ? '' : 's'}`
+                : 'Provider supports catch-up'
+            }
+          />
         </div>
         <div className="account-details">
           <span className={`account-type ${account.account_type.toLowerCase()}`}>
@@ -307,6 +323,8 @@ export function M3UManagerTab({
 }: M3UManagerTabProps) {
   const notifications = useNotifications();
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
+  // Per-provider catch-up status (bead 4dpiz), keyed by account id string.
+  const [catchupStatus, setCatchupStatus] = useState<Record<string, api.ProviderCatchupStatus>>({});
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -366,6 +384,13 @@ export function M3UManagerTab({
       notifications.error(err instanceof Error ? err.message : 'Failed to load M3U accounts', 'M3U Manager');
     } finally {
       setLoading(false);
+    }
+    // Best-effort catch-up badges (bead 4dpiz): a failure here must never block
+    // or fault the M3U manager — degrade silently to no badges.
+    try {
+      setCatchupStatus((await api.getProviderCatchupStatus()) ?? {});
+    } catch {
+      setCatchupStatus({});
     }
   }, [notifications]);
 
@@ -881,6 +906,8 @@ export function M3UManagerTab({
                 priority={pendingPriorities[String(account.id)] ?? 0}
                 onPriorityChange={handlePriorityChange}
                 isBeingRefreshed={refreshingAccounts.has(account.id)}
+                hasCatchup={catchupStatus[String(account.id)]?.has_catchup ?? false}
+                catchupDays={catchupStatus[String(account.id)]?.catchup_days ?? undefined}
               />
             ))}
           </div>

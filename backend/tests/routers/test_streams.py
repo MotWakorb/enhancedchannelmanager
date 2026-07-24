@@ -243,6 +243,86 @@ class TestGetProviders:
         assert response.status_code == 500
 
 
+class TestGetProviderCatchupStatus:
+    """Tests for GET /api/providers/catchup-status endpoint (bead 4dpiz)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_has_catchup_per_account(self, async_client):
+        """has_catchup=true for an account with a catch-up stream, false without."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 1, "name": "HasCatchup"},
+            {"id": 2, "name": "NoCatchup"},
+        ]
+
+        def fake_get_streams(*, m3u_account, is_catchup, page_size):
+            # The endpoint must ask for exactly one catch-up stream.
+            assert is_catchup is True
+            assert page_size == 1
+            if m3u_account == 1:
+                return {"count": 42, "results": [{"catchup_days": 5}]}
+            return {"count": 0, "results": []}
+
+        mock_client.get_streams.side_effect = fake_get_streams
+
+        with patch("routers.streams.get_client", return_value=mock_client):
+            response = await async_client.get("/api/providers/catchup-status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["1"] == {"has_catchup": True, "catchup_days": 5}
+        assert data["2"] == {"has_catchup": False, "catchup_days": None}
+
+    @pytest.mark.asyncio
+    async def test_account_probe_failure_degrades_to_false(self, async_client):
+        """A per-account upstream failure degrades to has_catchup=false, not a 500."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 1, "name": "Healthy"},
+            {"id": 2, "name": "Broken"},
+        ]
+
+        def fake_get_streams(*, m3u_account, is_catchup, page_size):
+            if m3u_account == 2:
+                raise Exception("upstream 500")
+            return {"count": 3, "results": [{"catchup_days": 2}]}
+
+        mock_client.get_streams.side_effect = fake_get_streams
+
+        with patch("routers.streams.get_client", return_value=mock_client):
+            response = await async_client.get("/api/providers/catchup-status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["1"] == {"has_catchup": True, "catchup_days": 2}
+        assert data["2"] == {"has_catchup": False, "catchup_days": None}
+
+    @pytest.mark.asyncio
+    async def test_accounts_list_failure_returns_500(self, async_client):
+        """If the account list itself can't be fetched, surface a 500."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_accounts.side_effect = Exception("Timeout")
+
+        with patch("routers.streams.get_client", return_value=mock_client):
+            response = await async_client.get("/api/providers/catchup-status")
+
+        assert response.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_catchup_days_omitted_when_no_catchup(self, async_client):
+        """catchup_days is null when the provider has no catch-up streams even if
+        a stray row is returned (count is authoritative)."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_accounts.return_value = [{"id": 7, "name": "Empty"}]
+        mock_client.get_streams.return_value = {"count": 0, "results": []}
+
+        with patch("routers.streams.get_client", return_value=mock_client):
+            response = await async_client.get("/api/providers/catchup-status")
+
+        assert response.status_code == 200
+        assert response.json()["7"] == {"has_catchup": False, "catchup_days": None}
+
+
 class TestGetProviderGroupSettings:
     """Tests for GET /api/providers/group-settings endpoint."""
 

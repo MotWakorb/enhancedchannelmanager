@@ -4,6 +4,7 @@ Streams & providers router — stream listing and provider endpoints.
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 Enriched with server-side normalization in v0.15.0.
 """
+import asyncio
 import logging
 import time
 from enum import Enum
@@ -396,6 +397,68 @@ async def get_providers():
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/api/providers/catchup-status", tags=["Providers"])
+async def get_provider_catchup_status():
+    """Per-M3U-account catch-up availability for the M3U manager badge (bead 4dpiz).
+
+    For each provider we ask Dispatcharr for a single catch-up stream
+    (``is_catchup=true``, ``page_size=1``) and read the paginated ``count``:
+    ``count > 0`` means the provider has at least one catch-up stream. The one
+    returned row's ``catchup_days`` is sampled as the provider's catch-up depth
+    — Dispatcharr sets catch-up depth per-provider (verified provider-uniform on
+    live data), and its streams endpoint does NOT honour an ``ordering`` param,
+    so a guaranteed maximum would require an O(catch-up-streams) scan we
+    deliberately avoid.
+
+    ``is_catchup`` is ``db_index=True`` upstream, so each probe is a cheap
+    indexed count query — O(providers) total, run concurrently. Best-effort per
+    account: a probe failure degrades that account to ``has_catchup=false``
+    (logged), never 500s the whole M3U manager.
+
+    Returns ``{ "<account_id>": {"has_catchup": bool, "catchup_days": int|null} }``.
+    """
+    logger.debug("[STREAMS] GET /api/providers/catchup-status")
+    client = get_client()
+    try:
+        accounts = await client.get_m3u_accounts()
+    except Exception as e:
+        logger.warning("[STREAMS] catchup-status: could not list M3U accounts: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def _probe(account: dict):
+        account_id = account.get("id")
+        try:
+            page = await client.get_streams(
+                m3u_account=account_id, is_catchup=True, page_size=1
+            )
+            count = page.get("count") or 0
+            results = page.get("results") or []
+            days = results[0].get("catchup_days") if results else None
+            return account_id, {
+                "has_catchup": count > 0,
+                "catchup_days": days if count > 0 else None,
+            }
+        except Exception as e:
+            logger.warning(
+                "[STREAMS] catchup-status: probe failed for account %s: %s",
+                account_id, e,
+            )
+            return account_id, {"has_catchup": False, "catchup_days": None}
+
+    start = time.time()
+    probes = await asyncio.gather(*(_probe(a) for a in accounts))
+    elapsed_ms = (time.time() - start) * 1000
+    logger.debug(
+        "[STREAMS] Probed catch-up status for %d providers in %.1fms",
+        len(probes), elapsed_ms,
+    )
+    return {
+        str(account_id): status
+        for account_id, status in probes
+        if account_id is not None
+    }
 
 
 @router.get("/api/providers/group-settings", tags=["Providers"])
