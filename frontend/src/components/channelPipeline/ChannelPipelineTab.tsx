@@ -1337,16 +1337,21 @@ export function ChannelPipelineTab() {
                     >
                       <span className="material-icons">info</span>
                     </button>
-                    {(execution.status === 'completed' || execution.status === 'completed_with_errors') && execution.mode === 'execute' && (
+                    {/* h2oxl: Rollback (POST /rollback, no confirm=true) only
+                        works on legacy no-snapshot runs — on snapshot-backed
+                        runs the backend requires confirm=true and 409s, so hide
+                        Rollback there and leave only "Undo this run", the correct
+                        full-restore action for those runs. */}
+                    {!execution.has_snapshot && (execution.status === 'completed' || execution.status === 'completed_with_errors') && execution.mode === 'execute' && (
                       <button
                         className="action-btn danger"
                         onClick={() => handleRollbackClick(execution)}
                         aria-label="Rollback"
                         title={
                           'Rollback — deletes the channel(s) this run created and reverts the ' +
-                          "channel(s) it modified, using this run's own recorded changes. This is " +
-                          'the legacy per-run undo; it does not use the full pre-run snapshot ' +
-                          '(see "Undo this run").' +
+                          "channel(s) it modified, using this run's own recorded changes. This " +
+                          'run has no pre-run snapshot, so this legacy per-run undo is the only ' +
+                          'restore available for it.' +
                           (execution.has_non_reversible_profile_changes
                             ? ' Note: channel-profile membership changed this run will NOT be restored.'
                             : '')
@@ -1614,11 +1619,11 @@ export function ChannelPipelineTab() {
                 This is the legacy per-run undo: it deletes the{' '}
                 <strong>{showRollbackConfirm.channels_created}</strong> channel(s) this run
                 created and reverts any channels it modified, using this run's own recorded
-                changes — <strong>not</strong> the full pre-run snapshot.
+                changes.
               </p>
               <p className="revert-warning-detail">
-                For a complete restore to the exact pre-run state (including edits made after
-                this run), cancel and use &quot;Undo this run&quot; instead.
+                This run has <strong>no pre-run snapshot</strong>, so this legacy rollback is
+                the only restore available for it.
               </p>
               {showRollbackConfirm.has_non_reversible_profile_changes && (
                 <p className="revert-warning-detail" data-testid="rollback-profile-disclosure">
