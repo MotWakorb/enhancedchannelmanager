@@ -1,7 +1,8 @@
-"""Tests for the automated-noise journal purge (enhancedchannelmanager-uliyr).
+"""Tests for the automated-noise journal purge (enhancedchannelmanager-uliyr
+buckets a/b; enhancedchannelmanager-gjb01 buckets c/d).
 
-PO policy decision 2026-07-17: auto-purge journal entries older than 3 DAYS
-for exactly TWO automated-noise buckets:
+PO policy decision 2026-07-17 (uliyr): auto-purge journal entries older than
+3 DAYS for two automated-noise buckets:
 
 (a) Watch events — ``category="watch"``, ``action_type in ("start", "stop")``,
     written ONLY by ``bandwidth_tracker`` with ``user_initiated=False``.
@@ -22,15 +23,30 @@ distinguishes them:
 
 so bucket (b)'s predicate is ``automated_client IS NOT FALSE``.
 
-ALL other categories and all other ``auto_creation`` action types (update,
-import, bulk_update, run_on_refresh_skipped, rollback, restore_snapshot,
-circuit_breaker_reset) must be untouched — the existing manual Purge control
-(``journal.purge_old_entries``) remains the tool for everything else.
+PO decision 2026-07-19 (gjb01): two further buckets, same task, same
+settings surface, defaulting to enabled at the shared retention:
 
-The purge runs as a new daily scheduled task ``JournalNoisePurgeTask``
-(task_scheduler pattern) with settings-visible config:
-``retention_days`` (PO-decided default 3), ``purge_watch_events`` and
-``purge_pipeline_rule_pairs`` toggles.
+(c) Auto-creation run-on-refresh suppression notices —
+    ``category="auto_creation"``, ``action_type="run_on_refresh_skipped"``,
+    written ONLY by ``tasks/channel_pipeline.py`` (circuit-breaker /
+    break-glass suppression path), always ``user_initiated=False``.
+(d) Task start/complete lifecycle rows — ``category="task"``,
+    ``action_type in ("start", "complete")``, written ONLY by
+    ``task_engine.py``. Scheduled runs (``user_initiated=False``) age out;
+    manually-triggered runs (``user_initiated=True``) are operator audit
+    trail and are KEPT (same fail-safe direction as bucket b's operator
+    rows). The anomaly action types — ``cancel``, ``fail``, ``error`` —
+    are NOT in the allowlist and survive regardless of age.
+
+ALL other categories and all other action types must be untouched — the
+existing manual Purge control (``journal.purge_old_entries``) remains the
+tool for everything else.
+
+The purge runs as the daily scheduled task ``JournalNoisePurgeTask``
+(task_scheduler pattern) with settings-visible config: ``retention_days``
+(PO-decided default 3, shared by all four buckets) and one toggle per
+bucket: ``purge_watch_events``, ``purge_pipeline_rule_pairs``,
+``purge_run_on_refresh_skipped``, ``purge_task_start_complete``.
 """
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -172,49 +188,67 @@ class TestPurgeNoiseEntriesPredicates:
         how old — the manual Purge control owns those."""
         from journal import purge_noise_entries
 
+        # NOTE: category="task" moved out of this list when bucket (d)
+        # landed (gjb01) — its isolation is proven action-type-by-action-type
+        # in TestTaskStartCompleteBucket instead. Rows here are seeded with
+        # user_initiated=False so survival is proven by CATEGORY alone, not
+        # by the operator guard.
         other_categories = [
             ("channel", "create"),
             ("channel", "delete"),
             ("epg", "delete"),
             ("m3u", "refresh"),
             ("event_sync", "merge_stream"),
-            ("task", "start"),
-            ("task", "complete"),
             ("settings", "update"),
             ("sync", "create"),
             ("backup", "create"),
         ]
         with patch("journal.get_session", return_value=test_session):
             kept_ids = [
-                _add_entry(test_session, cat, action, timedelta(days=400))
+                _add_entry(
+                    test_session, cat, action, timedelta(days=400),
+                    user_initiated=False,
+                )
                 for cat, action in other_categories
             ]
 
             counts = purge_noise_entries(days=3)
 
-        assert counts == {"watch_events": 0, "pipeline_rule_pairs": 0}
+        assert counts == {
+            "watch_events": 0,
+            "pipeline_rule_pairs": 0,
+            "run_on_refresh_skipped": 0,
+            "task_start_complete": 0,
+        }
         remaining_ids = {r.id for r in test_session.query(JournalEntry.id).all()}
         assert set(kept_ids) <= remaining_ids
 
     def test_keeps_other_auto_creation_action_types(self, test_session):
-        """Only the create/delete PAIR ages out — updates, imports, the
-        run_on_refresh_skipped noise, and snapshot/rollback audit rows all
-        survive (they were NOT part of the PO decision)."""
+        """Only the create/delete PAIR ages out of bucket (b) — updates,
+        imports, and snapshot/rollback audit rows all survive.
+        (``run_on_refresh_skipped`` left this list when it became bucket (c)
+        under gjb01; its scoping is proven in TestRunOnRefreshSkippedBucket.)
+        Rows are seeded ``user_initiated=False`` so survival is proven by the
+        action-type allowlist alone, not by the operator guard."""
         from journal import purge_noise_entries
 
         preserved_actions = [
-            "update", "bulk_update", "import", "run_on_refresh_skipped",
+            "update", "bulk_update", "import",
             "rollback", "restore_snapshot", "circuit_breaker_reset",
         ]
         with patch("journal.get_session", return_value=test_session):
             kept_ids = [
-                _add_entry(test_session, "auto_creation", action, timedelta(days=400))
+                _add_entry(
+                    test_session, "auto_creation", action, timedelta(days=400),
+                    user_initiated=False,
+                )
                 for action in preserved_actions
             ]
 
             counts = purge_noise_entries(days=3)
 
         assert counts["pipeline_rule_pairs"] == 0
+        assert counts["run_on_refresh_skipped"] == 0
         remaining_ids = {r.id for r in test_session.query(JournalEntry.id).all()}
         assert set(kept_ids) <= remaining_ids
 
@@ -278,7 +312,12 @@ class TestPurgeNoiseEntriesPredicates:
 
             counts = purge_noise_entries(days=3, purge_watch_events=False)
 
-        assert counts == {"watch_events": 0, "pipeline_rule_pairs": 1}
+        assert counts == {
+            "watch_events": 0,
+            "pipeline_rule_pairs": 1,
+            "run_on_refresh_skipped": 0,
+            "task_start_complete": 0,
+        }
         assert test_session.get(JournalEntry, watch_id) is not None
         assert test_session.get(JournalEntry, pair_id) is None
 
@@ -293,7 +332,12 @@ class TestPurgeNoiseEntriesPredicates:
 
             counts = purge_noise_entries(days=3, purge_pipeline_rule_pairs=False)
 
-        assert counts == {"watch_events": 1, "pipeline_rule_pairs": 0}
+        assert counts == {
+            "watch_events": 1,
+            "pipeline_rule_pairs": 0,
+            "run_on_refresh_skipped": 0,
+            "task_start_complete": 0,
+        }
         assert test_session.get(JournalEntry, watch_id) is None
         assert test_session.get(JournalEntry, pair_id) is not None
 
@@ -309,6 +353,238 @@ class TestPurgeNoiseEntriesPredicates:
                 purge_noise_entries(days=0)
 
         assert test_session.query(JournalEntry).count() == 1
+
+
+class TestRunOnRefreshSkippedBucket:
+    """Bucket (c) — gjb01. ``category="auto_creation"``,
+    ``action_type="run_on_refresh_skipped"``, written ONLY by the
+    circuit-breaker / break-glass suppression path in
+    ``tasks/channel_pipeline.py`` (always ``user_initiated=False``)."""
+
+    def test_deletes_old_run_on_refresh_skipped_entries(self, test_session):
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            old_id = _add_entry(
+                test_session, "auto_creation", "run_on_refresh_skipped", OLD,
+                entity_name="Auto-Creation", user_initiated=False,
+            )
+
+            counts = purge_noise_entries(days=3)
+
+        assert counts["run_on_refresh_skipped"] == 1
+        assert test_session.get(JournalEntry, old_id) is None
+
+    def test_keeps_fresh_run_on_refresh_skipped_entries(self, test_session):
+        """Strict ``timestamp < cutoff``: inside-window rows survive."""
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            fresh_id = _add_entry(
+                test_session, "auto_creation", "run_on_refresh_skipped", FRESH,
+                entity_name="Auto-Creation", user_initiated=False,
+            )
+
+            counts = purge_noise_entries(days=3)
+
+        assert counts["run_on_refresh_skipped"] == 0
+        assert test_session.get(JournalEntry, fresh_id) is not None
+
+    def test_keeps_user_initiated_run_on_refresh_skipped_rows(self, test_session):
+        """Defensive guard (same shape as the watch bucket): the only writer
+        always sets user_initiated=False, so any hypothetical operator row
+        is not provably automated noise and must survive."""
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            kept = _add_entry(
+                test_session, "auto_creation", "run_on_refresh_skipped",
+                timedelta(days=400), user_initiated=True,
+            )
+
+            counts = purge_noise_entries(days=3)
+
+        assert counts["run_on_refresh_skipped"] == 0
+        assert test_session.get(JournalEntry, kept) is not None
+
+    def test_toggle_off_leaves_run_on_refresh_skipped_untouched(self, test_session):
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            kept = _add_entry(
+                test_session, "auto_creation", "run_on_refresh_skipped", OLD,
+                user_initiated=False,
+            )
+            other_bucket = _add_entry(
+                test_session, "watch", "start", OLD, user_initiated=False,
+            )
+
+            counts = purge_noise_entries(
+                days=3, purge_run_on_refresh_skipped=False,
+            )
+
+        assert counts == {
+            "watch_events": 1,
+            "pipeline_rule_pairs": 0,
+            "run_on_refresh_skipped": 0,
+            "task_start_complete": 0,
+        }
+        assert test_session.get(JournalEntry, kept) is not None
+        assert test_session.get(JournalEntry, other_bucket) is None
+
+
+class TestTaskStartCompleteBucket:
+    """Bucket (d) — gjb01. ``category="task"`` is written ONLY by
+    ``task_engine.py`` with exactly five action types: start, complete,
+    cancel, fail, error. Only routine start/complete lifecycle rows from
+    SCHEDULED runs age out; the anomaly rows (cancel/fail/error) and
+    manually-triggered runs are forensic audit trail and survive."""
+
+    def test_deletes_old_scheduled_start_and_complete_entries(self, test_session):
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            start_id = _add_entry(
+                test_session, "task", "start", OLD,
+                entity_name="M3U Refresh", user_initiated=False,
+            )
+            complete_id = _add_entry(
+                test_session, "task", "complete", OLD,
+                entity_name="M3U Refresh", user_initiated=False,
+            )
+
+            counts = purge_noise_entries(days=3)
+
+        assert counts["task_start_complete"] == 2
+        assert test_session.get(JournalEntry, start_id) is None
+        assert test_session.get(JournalEntry, complete_id) is None
+
+    def test_keeps_fresh_scheduled_start_and_complete_entries(self, test_session):
+        """Strict ``timestamp < cutoff``: inside-window rows survive."""
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            fresh_id = _add_entry(
+                test_session, "task", "complete", FRESH,
+                entity_name="M3U Refresh", user_initiated=False,
+            )
+
+            counts = purge_noise_entries(days=3)
+
+        assert counts["task_start_complete"] == 0
+        assert test_session.get(JournalEntry, fresh_id) is not None
+
+    def test_keeps_task_cancel_fail_error_rows(self, test_session):
+        """SURVIVAL: the anomaly action types written by task_engine.py
+        (cancel, fail, error) are NOT in the allowlist and survive no
+        matter how old — they are exactly the rows an operator digs up
+        when investigating a misbehaving task. Seeded user_initiated=False
+        so survival is proven by the action-type allowlist alone."""
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            kept_ids = [
+                _add_entry(
+                    test_session, "task", action, timedelta(days=400),
+                    entity_name="Stream Probe", user_initiated=False,
+                )
+                for action in ("cancel", "fail", "error")
+            ]
+
+            counts = purge_noise_entries(days=3)
+
+        assert counts["task_start_complete"] == 0
+        remaining_ids = {r.id for r in test_session.query(JournalEntry.id).all()}
+        assert set(kept_ids) <= remaining_ids
+
+    def test_keeps_manual_task_start_complete_rows(self, test_session):
+        """SURVIVAL: manually-triggered runs (task_engine writes
+        ``user_initiated=(triggered_by == "manual")``) are operator audit
+        trail — same fail-safe direction as bucket (b)'s operator rows.
+        Same shape, same age as a scheduled row; only the flag differs."""
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            kept_start = _add_entry(
+                test_session, "task", "start", timedelta(days=400),
+                entity_name="Cleanup", user_initiated=True,
+            )
+            kept_complete = _add_entry(
+                test_session, "task", "complete", timedelta(days=400),
+                entity_name="Cleanup", user_initiated=True,
+            )
+            purged = _add_entry(
+                test_session, "task", "complete", timedelta(days=400),
+                entity_name="Cleanup", user_initiated=False,
+            )
+
+            counts = purge_noise_entries(days=3)
+
+        assert counts["task_start_complete"] == 1
+        assert test_session.get(JournalEntry, kept_start) is not None
+        assert test_session.get(JournalEntry, kept_complete) is not None
+        assert test_session.get(JournalEntry, purged) is None
+
+    def test_keeps_task_rows_with_unknown_action_types(self, test_session):
+        """A future task action type outside start/complete is not swept."""
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            kept = _add_entry(
+                test_session, "task", "retry", OLD, user_initiated=False,
+            )
+
+            purge_noise_entries(days=3)
+
+        assert test_session.get(JournalEntry, kept) is not None
+
+    def test_toggle_off_leaves_task_rows_untouched(self, test_session):
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            kept = _add_entry(
+                test_session, "task", "start", OLD, user_initiated=False,
+            )
+            other_bucket = _add_entry(
+                test_session, "watch", "start", OLD, user_initiated=False,
+            )
+
+            counts = purge_noise_entries(
+                days=3, purge_task_start_complete=False,
+            )
+
+        assert counts == {
+            "watch_events": 1,
+            "pipeline_rule_pairs": 0,
+            "run_on_refresh_skipped": 0,
+            "task_start_complete": 0,
+        }
+        assert test_session.get(JournalEntry, kept) is not None
+        assert test_session.get(JournalEntry, other_bucket) is None
+
+    def test_start_complete_in_other_categories_survive(self, test_session):
+        """SURVIVAL: the (start, complete) action types exist in OTHER
+        categories too (watch start rows, hypothetical future writers) —
+        bucket (d) must match on category="task" AND the allowlist, never
+        on action type alone. user_initiated=True watch rows are outside
+        every bucket."""
+        from journal import purge_noise_entries
+
+        with patch("journal.get_session", return_value=test_session):
+            kept_watch = _add_entry(
+                test_session, "watch", "start", timedelta(days=400),
+                user_initiated=True,
+            )
+            kept_backup = _add_entry(
+                test_session, "backup", "complete", timedelta(days=400),
+                user_initiated=False,
+            )
+
+            counts = purge_noise_entries(days=3)
+
+        assert counts["task_start_complete"] == 0
+        assert test_session.get(JournalEntry, kept_watch) is not None
+        assert test_session.get(JournalEntry, kept_backup) is not None
 
 
 class TestAutomatedClientCapture:
@@ -381,6 +657,8 @@ class TestJournalNoisePurgeTaskConfig:
     """Config schema round-trips (the Settings UI reads/writes these keys)."""
 
     def test_default_config_matches_po_policy(self):
+        """All four buckets default to enabled at the shared 3-day
+        retention (uliyr for a/b, gjb01 for c/d)."""
         from tasks.journal_noise_purge import JournalNoisePurgeTask
 
         config = JournalNoisePurgeTask().get_config()
@@ -389,6 +667,8 @@ class TestJournalNoisePurgeTaskConfig:
             "retention_days": 3,
             "purge_watch_events": True,
             "purge_pipeline_rule_pairs": True,
+            "purge_run_on_refresh_skipped": True,
+            "purge_task_start_complete": True,
         }
 
     def test_update_config_round_trip(self):
@@ -399,11 +679,15 @@ class TestJournalNoisePurgeTaskConfig:
             "retention_days": 7,
             "purge_watch_events": False,
             "purge_pipeline_rule_pairs": False,
+            "purge_run_on_refresh_skipped": False,
+            "purge_task_start_complete": False,
         })
 
         assert task.retention_days == 7
         assert task.purge_watch_events is False
         assert task.purge_pipeline_rule_pairs is False
+        assert task.purge_run_on_refresh_skipped is False
+        assert task.purge_task_start_complete is False
 
     def test_partial_update_leaves_other_keys(self):
         from tasks.journal_noise_purge import JournalNoisePurgeTask
@@ -414,6 +698,8 @@ class TestJournalNoisePurgeTaskConfig:
         assert task.retention_days == 14
         assert task.purge_watch_events is True
         assert task.purge_pipeline_rule_pairs is True
+        assert task.purge_run_on_refresh_skipped is True
+        assert task.purge_task_start_complete is True
 
     def test_update_config_rejects_retention_below_one(self):
         from tasks.journal_noise_purge import JournalNoisePurgeTask
@@ -468,11 +754,21 @@ class TestJournalNoisePurgeTaskExecute:
             _add_entry(test_session, "watch", "stop", OLD, user_initiated=False)
             _add_entry(test_session, "auto_creation", "create", OLD)
             _add_entry(test_session, "auto_creation", "delete", OLD)
+            _add_entry(
+                test_session, "auto_creation", "run_on_refresh_skipped", OLD,
+                user_initiated=False,
+            )
+            _add_entry(test_session, "task", "start", OLD, user_initiated=False)
+            _add_entry(test_session, "task", "complete", OLD, user_initiated=False)
             fresh_watch = _add_entry(
                 test_session, "watch", "start", FRESH, user_initiated=False,
             )
             other_category = _add_entry(
                 test_session, "channel", "delete", timedelta(days=400),
+            )
+            task_anomaly = _add_entry(
+                test_session, "task", "fail", timedelta(days=400),
+                user_initiated=False,
             )
 
             result = await JournalNoisePurgeTask().execute()
@@ -481,10 +777,12 @@ class TestJournalNoisePurgeTaskExecute:
         assert result.details["deleted"] == {
             "watch_events": 2,
             "pipeline_rule_pairs": 2,
+            "run_on_refresh_skipped": 1,
+            "task_start_complete": 2,
         }
         assert result.details["retention_days"] == 3
         remaining_ids = {r.id for r in test_session.query(JournalEntry.id).all()}
-        assert remaining_ids == {fresh_watch, other_category}
+        assert remaining_ids == {fresh_watch, other_category, task_anomaly}
 
     @pytest.mark.asyncio
     async def test_execute_reports_failure_on_purge_error(self, test_session):

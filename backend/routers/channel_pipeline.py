@@ -1294,6 +1294,25 @@ async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnable
             session.commit()
             session.refresh(new_rule)
 
+            # Log to journal (gjb01 audit-trail fix): duplication creates a
+            # rule, so it journals a create entry like POST /rules does —
+            # previously a duplicated-then-deleted rule left a delete-only
+            # pair in the journal.
+            journal.log_entry(
+                category="auto_creation",
+                action_type="create",
+                entity_id=new_rule.id,
+                entity_name=new_rule.name,
+                description=(
+                    f"Created auto-creation rule '{new_rule.name}' "
+                    f"(duplicated from '{rule.name}')"
+                ),
+            )
+
+            logger.info(
+                "[AUTO-CREATE] Duplicated rule id=%s into id=%s name='%s'",
+                rule_id, new_rule.id, new_rule.name,
+            )
             return new_rule.to_dict()
         finally:
             session.close()

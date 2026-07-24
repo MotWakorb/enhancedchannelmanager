@@ -418,8 +418,9 @@ def get_stats() -> dict[str, Any]:
 # =========================================================================
 # Automated-noise purge (enhancedchannelmanager-uliyr)
 # =========================================================================
-# PO policy decision 2026-07-17: auto-purge entries older than 3 days for
-# exactly TWO automated-noise buckets. Everything else is untouched — the
+# PO policy decisions 2026-07-17 (uliyr: buckets a/b) and 2026-07-19
+# (gjb01: buckets c/d): auto-purge entries older than 3 days for exactly
+# FOUR automated-noise buckets. Everything else is untouched — the
 # manual Purge control (``purge_old_entries`` via DELETE /api/journal/purge)
 # remains the tool for all other categories.
 #
@@ -444,24 +445,54 @@ def get_stats() -> dict[str, Any]:
 #   False (a request without the automation header —
 #          a real UI/MCP operator)                        → KEPT
 # All other auto_creation action types (update, bulk_update, import,
-# run_on_refresh_skipped, rollback, restore_snapshot,
-# circuit_breaker_reset) survive regardless of marker.
+# rollback, restore_snapshot, circuit_breaker_reset) survive regardless
+# of marker.
+#
+# Bucket (c) — run-on-refresh suppression notices (gjb01).
+# ``category="auto_creation"``, ``action_type="run_on_refresh_skipped"``
+# is written ONLY by the circuit-breaker / break-glass suppression path in
+# ``tasks/channel_pipeline.py`` (always ``user_initiated=False``). The
+# ``user_initiated == False`` guard mirrors the watch bucket: any
+# hypothetical operator-initiated row is not provably automated noise and
+# survives.
+#
+# Bucket (d) — task start/complete lifecycle rows (gjb01).
+# ``category="task"`` is written ONLY by ``task_engine.py``, with exactly
+# five action types: start, complete, cancel, fail, error. Only the
+# routine start/complete pair from SCHEDULED runs
+# (``user_initiated=False`` — task_engine writes
+# ``user_initiated=(triggered_by == "manual")``) ages out:
+#   - cancel/fail/error are anomaly forensics and are NOT in the
+#     allowlist — they survive regardless of age;
+#   - manually-triggered runs (``user_initiated=True``) are operator
+#     audit trail and are KEPT, the same fail-safe direction as bucket
+#     (b)'s operator rows.
+# The richer per-run forensic record (duration, counts, error, details)
+# lives in the ``task_executions`` table (CleanupTask's
+# ``task_history_days``, default 30), so purging these journal rows
+# does not lose execution history.
 NOISE_RETENTION_DEFAULT_DAYS = 3
 NOISE_WATCH_CATEGORY = "watch"
 NOISE_WATCH_ACTION_TYPES = ("start", "stop")
 NOISE_PIPELINE_CATEGORY = "auto_creation"
 NOISE_PIPELINE_ACTION_TYPES = ("create", "delete")
+NOISE_REFRESH_SKIPPED_CATEGORY = "auto_creation"
+NOISE_REFRESH_SKIPPED_ACTION_TYPE = "run_on_refresh_skipped"
+NOISE_TASK_CATEGORY = "task"
+NOISE_TASK_ACTION_TYPES = ("start", "complete")
 
 
 def purge_noise_entries(
     days: int = NOISE_RETENTION_DEFAULT_DAYS,
     purge_watch_events: bool = True,
     purge_pipeline_rule_pairs: bool = True,
+    purge_run_on_refresh_skipped: bool = True,
+    purge_task_start_complete: bool = True,
 ) -> dict[str, int]:
     """
     Delete automated-noise journal entries older than ``days`` days.
 
-    Scoped STRICTLY to the two PO-decided noise buckets (see module
+    Scoped STRICTLY to the four PO-decided noise buckets (see module
     comment above); every other category/action combination survives.
     Cutoff math matches :func:`purge_old_entries`: UTC now minus ``days``,
     strict ``timestamp < cutoff``.
@@ -472,18 +503,31 @@ def purge_noise_entries(
         purge_watch_events: Include the watch start/stop bucket.
         purge_pipeline_rule_pairs: Include the Channel Pipeline rule
             create/delete bucket.
+        purge_run_on_refresh_skipped: Include the run-on-refresh
+            suppression-notice bucket.
+        purge_task_start_complete: Include the scheduled-task
+            start/complete lifecycle bucket.
 
     Returns:
-        Per-bucket deleted counts: ``{"watch_events": n, "pipeline_rule_pairs": m}``
+        Per-bucket deleted counts:
+        ``{"watch_events": n, "pipeline_rule_pairs": m,
+        "run_on_refresh_skipped": k, "task_start_complete": j}``
     """
     if days < 1:
         raise ValueError(f"Noise purge retention must be >= 1 day, got {days}")
 
     cutoff_date = datetime.utcnow() - timedelta(days=days)
-    counts = {"watch_events": 0, "pipeline_rule_pairs": 0}
+    counts = {
+        "watch_events": 0,
+        "pipeline_rule_pairs": 0,
+        "run_on_refresh_skipped": 0,
+        "task_start_complete": 0,
+    }
     logger.debug(
-        "[JOURNAL] Purging noise entries older than %s days (watch=%s pipeline_pairs=%s)",
+        "[JOURNAL] Purging noise entries older than %s days (watch=%s "
+        "pipeline_pairs=%s refresh_skipped=%s task_start_complete=%s)",
         days, purge_watch_events, purge_pipeline_rule_pairs,
+        purge_run_on_refresh_skipped, purge_task_start_complete,
     )
     session: Session = get_session()
     try:
@@ -512,11 +556,39 @@ def purge_noise_entries(
                 )
                 .delete(synchronize_session=False)
             )
+        if purge_run_on_refresh_skipped:
+            counts["run_on_refresh_skipped"] = (
+                session.query(JournalEntry)
+                .filter(
+                    JournalEntry.category == NOISE_REFRESH_SKIPPED_CATEGORY,
+                    JournalEntry.action_type == NOISE_REFRESH_SKIPPED_ACTION_TYPE,
+                    JournalEntry.user_initiated.is_(False),
+                    JournalEntry.timestamp < cutoff_date,
+                )
+                .delete(synchronize_session=False)
+            )
+        if purge_task_start_complete:
+            counts["task_start_complete"] = (
+                session.query(JournalEntry)
+                .filter(
+                    JournalEntry.category == NOISE_TASK_CATEGORY,
+                    JournalEntry.action_type.in_(NOISE_TASK_ACTION_TYPES),
+                    # Manually-triggered runs (user_initiated=True) are
+                    # operator audit trail and are KEPT; cancel/fail/error
+                    # rows never match the allowlist. See bucket (d) above.
+                    JournalEntry.user_initiated.is_(False),
+                    JournalEntry.timestamp < cutoff_date,
+                )
+                .delete(synchronize_session=False)
+            )
         session.commit()
         logger.info(
-            "[JOURNAL] Noise purge deleted %s watch event and %s pipeline rule "
-            "create/delete entries older than %s days",
-            counts["watch_events"], counts["pipeline_rule_pairs"], days,
+            "[JOURNAL] Noise purge deleted %s watch event, %s pipeline rule "
+            "create/delete, %s run-on-refresh-skipped, and %s task "
+            "start/complete entries older than %s days",
+            counts["watch_events"], counts["pipeline_rule_pairs"],
+            counts["run_on_refresh_skipped"], counts["task_start_complete"],
+            days,
         )
         return counts
     except Exception as e:
