@@ -52,8 +52,12 @@ def _stored_config(test_session) -> dict | None:
 
 
 class TestPersist:
-    def test_update_task_config_persists_config_json(self, test_session, monkeypatch):
-        """The operator save path writes the full config surface to the DB."""
+    def test_update_task_config_persists_explicit_intent_only(self, test_session, monkeypatch):
+        """The operator save path stores the PATCH's explicit task_config keys
+        (final-delta review: the stored snapshot is the accumulation of
+        explicit operator saves — NEVER a reading of the live instance, which
+        may carry execution-time schedule overlays). Unpatched keys are
+        absent and fall back to code defaults at hydration."""
         reg = _make_registry(monkeypatch, test_session)
         reg.sync_from_database()
 
@@ -66,23 +70,63 @@ class TestPersist:
         )
 
         stored = _stored_config(test_session)
-        assert stored is not None
-        assert stored["purge_run_on_refresh_skipped"] is False
-        assert stored["purge_task_start_complete"] is False
-        # Untouched keys are persisted at their current (default) values so
-        # the stored surface is complete, not a delta.
-        assert stored["retention_days"] == 3
-        assert stored["purge_watch_events"] is True
-        assert stored["purge_pipeline_rule_pairs"] is True
+        assert stored == {
+            "purge_run_on_refresh_skipped": False,
+            "purge_task_start_complete": False,
+        }
 
-    def test_fresh_row_creation_persists_default_config(self, test_session, monkeypatch):
-        """A task first saved to the DB (no existing row) stores its defaults."""
+    def test_fresh_row_creation_stores_no_config(self, test_session, monkeypatch):
+        """A task first saved to the DB (no existing row) stores config=NULL:
+        pure code defaults are expressed by ABSENCE, and the write side never
+        reads an instance's config surface at all — the stored snapshot only
+        ever accumulates explicit operator saves."""
         reg = _make_registry(monkeypatch, test_session)
 
-        reg.sync_from_database()  # no row yet → created with defaults
+        reg.sync_from_database()  # no row yet → created, defaults-by-absence
+
+        row = test_session.query(ScheduledTask).filter_by(
+            task_id="journal_noise_purge"
+        ).first()
+        assert row is not None
+        assert row.config is None
+        # And a later startup on that row reconstructs pure defaults.
+        reg_b = _make_registry(monkeypatch, test_session)
+        reg_b.sync_from_database()
+        inst = reg_b.get_task_instance("journal_noise_purge")
+        assert inst.get_config() == JournalNoisePurgeTask().get_config()
+
+    def test_config_saves_accumulate_across_patches(self, test_session, monkeypatch):
+        """Successive config PATCHes merge: each save contributes its keys
+        over the previous stored snapshot."""
+        reg = _make_registry(monkeypatch, test_session)
+        reg.sync_from_database()
+
+        reg.update_task_config(
+            "journal_noise_purge", task_config={"retention_days": 7}
+        )
+        reg.update_task_config(
+            "journal_noise_purge", task_config={"purge_watch_events": False}
+        )
 
         stored = _stored_config(test_session)
-        assert stored == JournalNoisePurgeTask().get_config()
+        assert stored == {"retention_days": 7, "purge_watch_events": False}
+
+    def test_explicit_none_in_patch_unsets_stored_key(self, test_session, monkeypatch):
+        """None in a PATCH means "unset — revert to the code default": the
+        key is REMOVED from the stored snapshot (expressed by absence), so
+        hydration falls back to the default instead of replaying a null."""
+        reg = _make_registry(monkeypatch, test_session)
+        reg.sync_from_database()
+        reg.update_task_config(
+            "journal_noise_purge", task_config={"retention_days": 7}
+        )
+        assert _stored_config(test_session) == {"retention_days": 7}
+
+        reg.update_task_config(
+            "journal_noise_purge", task_config={"retention_days": None}
+        )
+
+        assert _stored_config(test_session) is None
 
 
 class TestRestartRoundtrip:
@@ -294,6 +338,110 @@ class TestScheduleOverlayNotPersisted:
         assert rehydrated.get_config()["timeout"] == 30
         assert rehydrated.get_config()["channel_groups"] is None
 
+    def test_enabled_only_patch_does_not_capture_live_overlay(
+        self, test_session, monkeypatch
+    ):
+        """Final-delta BLOCK 1 (the review's exact sequence): operator saves
+        timeout=30 → scheduled run leaves an overlay live on the singleton →
+        post-run sync (correctly) persists nothing → operator toggles ONLY
+        enabled via the REAL update path → the stored snapshot must still be
+        the operator's save, not the live overlay; restart restores it."""
+        from tasks.stream_probe import StreamProbeTask
+
+        monkeypatch.setattr("task_registry.get_session", lambda: test_session)
+        reg = TaskRegistry()
+        reg.register(StreamProbeTask)
+        reg.sync_from_database()
+        reg.update_task_config("stream_probe", task_config={"timeout": 30})
+
+        # Engine sequence: overlay applied to the live singleton, post-run sync.
+        inst = reg.get_task_instance("stream_probe")
+        inst.update_config({"channel_groups": ["sports"], "timeout": 17})
+        reg.sync_to_database("stream_probe")
+
+        # Enabled-only PATCH (task_config=None — the standard UI toggle).
+        reg.update_task_config("stream_probe", enabled=False)
+
+        stored = json.loads(
+            test_session.query(ScheduledTask)
+            .filter_by(task_id="stream_probe").first().config
+        )
+        assert stored == {"timeout": 30}
+
+        reg_b = TaskRegistry()
+        reg_b.register(StreamProbeTask)
+        reg_b.sync_from_database()
+        rehydrated = reg_b.get_task_instance("stream_probe")
+        assert rehydrated.get_config()["timeout"] == 30
+        assert rehydrated.get_config()["channel_groups"] is None
+
+    def test_partial_config_patch_while_overlay_live_leaks_nothing(
+        self, test_session, monkeypatch
+    ):
+        """Final-delta BLOCK 1, partial-PATCH shape: a config PATCH that sets
+        only SOME keys (timeout) while a channel_groups overlay is live on
+        the instance stores exactly the patched keys — the overlay cannot
+        leak because persistence never reads the instance."""
+        from tasks.stream_probe import StreamProbeTask
+
+        monkeypatch.setattr("task_registry.get_session", lambda: test_session)
+        reg = TaskRegistry()
+        reg.register(StreamProbeTask)
+        reg.sync_from_database()
+
+        # Overlay live on the singleton (engine applied schedule parameters).
+        reg.get_task_instance("stream_probe").update_config(
+            {"channel_groups": ["sports"], "timeout": 17}
+        )
+
+        # Operator PATCHes only timeout.
+        reg.update_task_config("stream_probe", task_config={"timeout": 45})
+
+        stored = json.loads(
+            test_session.query(ScheduledTask)
+            .filter_by(task_id="stream_probe").first().config
+        )
+        assert stored == {"timeout": 45}
+
+        reg_b = TaskRegistry()
+        reg_b.register(StreamProbeTask)
+        reg_b.sync_from_database()
+        rehydrated = reg_b.get_task_instance("stream_probe")
+        assert rehydrated.get_config()["timeout"] == 45
+        assert rehydrated.get_config()["channel_groups"] is None
+
+    def test_stored_field_level_null_hydrates_as_unset(
+        self, test_session, monkeypatch
+    ):
+        """Final-delta BLOCK 2: snapshots written by the intermediate head
+        (124b5423, pre-None-omit) contain field-level nulls like
+        '"channel_groups": null'. StreamProbeTask coerces an explicit None
+        to [] ("probe nothing"), so hydration must strip None-valued fields
+        before applying — None means unset, expressed by absence."""
+        from tests.fixtures.factories import create_scheduled_task
+        from tasks.stream_probe import StreamProbeTask
+
+        row = create_scheduled_task(
+            test_session,
+            task_id="stream_probe",
+            task_name="Stream Probe",
+            description="x",
+            enabled=True,
+            schedule_type="manual",
+        )
+        # Field-level null, NOT SQL NULL — the exact 124b5423 legacy shape.
+        row.config = '{"channel_groups": null, "timeout": 30}'
+        test_session.commit()
+
+        monkeypatch.setattr("task_registry.get_session", lambda: test_session)
+        reg = TaskRegistry()
+        reg.register(StreamProbeTask)
+        reg.sync_from_database()
+
+        inst = reg.get_task_instance("stream_probe")
+        assert inst.get_config()["channel_groups"] is None  # probe all, NOT []
+        assert inst.get_config()["timeout"] == 30
+
     def test_explicit_empty_channel_groups_roundtrips(self, test_session, monkeypatch):
         """stream_probe distinguishes None (not configured — probe all) from
         [] (explicitly empty — probe nothing). An operator's explicit []
@@ -423,6 +571,17 @@ class TestScheduleOverlayNotPersisted:
             # channel_groups was None (unset) at operator-save time, so it
             # is omitted from the snapshot; only the explicit save persists.
             assert stored == {"timeout": 30}
+
+            # Final-delta BLOCK 1: an enabled-only PATCH through the real
+            # update path, with the run's overlay still live on the
+            # singleton, must not capture the overlay either.
+            registry.update_task_config(_ProbeShapedTask.task_id, enabled=False)
+            test_session.expire_all()
+            row = (
+                test_session.query(ScheduledTask)
+                .filter_by(task_id=_ProbeShapedTask.task_id).first()
+            )
+            assert json.loads(row.config) == {"timeout": 30}
 
             # Simulated restart: fresh registry from the DB — operator
             # config, not the run parameters.
