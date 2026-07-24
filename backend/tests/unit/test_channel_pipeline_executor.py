@@ -4471,8 +4471,11 @@ class TestAssignChannelProfileAction:
         result = self._run(executor, action, exec_ctx)
 
         assert result.success is True
-        # Diff-aware dry-run wording (y3m6o.1 review follow-up).
-        assert "Would change channel-profile membership" in result.description
+        # Exclusive-semantics dry-run wording (y3m6o.2): the preview names BOTH
+        # halves — the enabled/selected impact AND the subtractive removal from
+        # every other profile.
+        assert "EXCLUSIVE" in result.description
+        assert "REMOVE from all" in result.description
         self.client.update_profile_channel.assert_not_called()
 
     def test_no_channel_context_fails(self):
@@ -4650,7 +4653,8 @@ class TestAssignChannelProfileAction:
         result = self._run(executor, action, exec_ctx)
 
         assert result.success is True
-        assert "Would change channel-profile membership" in result.description
+        assert "EXCLUSIVE" in result.description
+        assert "REMOVE from all" in result.description
         self.client.update_profile_channel.assert_not_called()
 
     def test_total_write_failure_is_not_modified(self):
@@ -4889,8 +4893,34 @@ class TestProfileMembershipDiffOnlyWrites:
 
         assert result.success is True
         assert result.modified is False
-        assert "already correct" in result.description.lower()
+        # y3m6o.2: even a no-change preview states the exclusive/subtractive
+        # contract (would still enforce removal from all other profiles).
+        assert "no change" in result.description.lower()
+        assert "EXCLUSIVE" in result.description
+        assert "removal from all" in result.description.lower()
         self.client.update_profile_channel.assert_not_called()
+
+    def test_dry_run_states_both_halves_and_makes_no_writes(self):
+        """y3m6o.2 (acceptance criterion 1): a CHANGE preview names BOTH the
+        selected/enabled impact AND the subtractive removal from every OTHER
+        profile, computed WITHOUT any mutating client call. Channel 99 is a
+        member of {1, 2}; selecting {1} disables 2 and (subtractively) removes
+        it from profile 3 as well — the complement the operator must be told
+        about."""
+        executor = self._executor(universe=[1, 2, 3], membership={99: {1, 2}})
+        result, _ = self._assign(executor, 99, selected=(1,), dry_run=True)
+
+        assert result.success is True
+        assert result.modified is True
+        # Both halves stated: enable in the selected set AND remove from all
+        # other channel profiles (the destructive complement).
+        assert "EXCLUSIVE" in result.description
+        assert "[1]" in result.description  # names the selected set
+        assert "REMOVE from all 2 other channel profile(s)" in result.description
+        # No-mutation guarantee: the dry-run touched no write method on the
+        # Dispatcharr client.
+        self.client.update_profile_channel.assert_not_called()
+        assert self._calls() == {}
 
     def test_event_sync_path_diffs_and_noops_when_correct(self):
         """The event_sync entry point (apply_channel_profile_to_channels) inherits

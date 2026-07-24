@@ -120,7 +120,7 @@ const ACTION_TYPES: {
   { type: 'assign_tvg_id', label: 'Assign TVG-ID', description: 'Set the TVG-ID for the channel', category: 'assignment', hasValue: true },
   { type: 'assign_epg', label: 'Assign EPG', description: 'Assign EPG data source', category: 'assignment', hasEpgId: true },
   { type: 'assign_profile', label: 'Assign Profile', description: 'Assign a stream profile', category: 'assignment', hasProfileId: true },
-  { type: 'assign_channel_profile', label: 'Set Channel Profile', description: 'Assign a channel profile', category: 'assignment', hasChannelProfileId: true },
+  { type: 'assign_channel_profile', label: 'Set Channel Profile', description: 'Enable the selected channel profiles and remove the channel from all others (exclusive membership)', category: 'assignment', hasChannelProfileId: true },
   { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
   // Variables
   { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
@@ -1310,6 +1310,14 @@ export function ActionEditor({
                 </div>
               )}
             </div>
+            {/* y3m6o.2: assign_channel_profile is EXCLUSIVE (subtractive). Warn
+                the operator that unselected profiles are removed — the copy
+                previously read as additive ("assign to these profiles"). */}
+            <span className="field-hint" data-testid="channel-profile-exclusive-hint">
+              Exclusive membership: the channel is <strong>enabled</strong> in the selected profiles
+              and <strong>removed from all other</strong> channel profiles. Profiles you do not select
+              here will have this channel disabled.
+            </span>
           </div>
         )}
 

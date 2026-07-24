@@ -432,6 +432,27 @@ describe('ActionEditor', () => {
     });
   });
 
+  describe('assign_channel_profile action', () => {
+    // y3m6o.2: the copy must state the EXCLUSIVE (subtractive) semantics —
+    // selected profiles are enabled AND the channel is removed from every
+    // other profile — not the additive "assign to selected" it read as before.
+    it('shows the exclusive-membership hint (enabled in selected, removed from all others)', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_channel_profile', channel_profile_ids: [] }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const hint = screen.getByTestId('channel-profile-exclusive-hint');
+      expect(hint).toBeInTheDocument();
+      expect(hint).toHaveTextContent(/exclusive membership/i);
+      expect(hint).toHaveTextContent(/enabled/i);
+      expect(hint).toHaveTextContent(/removed from all other/i);
+    });
+  });
+
   describe('set_channel_number action', () => {
     it('renders channel number input', () => {
       render(
