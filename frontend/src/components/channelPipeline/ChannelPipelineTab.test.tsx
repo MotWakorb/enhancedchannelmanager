@@ -1183,22 +1183,52 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
-    // bead 09x38.9: the Rollback and "Undo this run" row actions were
-    // asymmetrically explained (Rollback had zero tooltip elaboration next
-    // to a fully-explained sibling) — a user couldn't tell what distinguishes
-    // them before clicking. These tests lock the explanatory, cross-referencing
-    // copy in place.
-    it('gives the Rollback button an explanatory tooltip distinguishing it from "Undo this run"', async () => {
+    // bead 09x38.9 gave Rollback an explanatory tooltip. bead h2oxl then hid
+    // Rollback on snapshot-backed runs (option (b)) — so on the runs where it
+    // still renders there is neither a snapshot nor an "Undo this run" sibling,
+    // and the tooltip explains it is the only restore available for a
+    // no-snapshot run rather than cross-referencing a button that isn't there.
+    it('gives the Rollback button a tooltip explaining it is the only restore for a no-snapshot run', async () => {
       mockDataStore.channelPipelineExecutions.push(
-        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute' })
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: false })
       );
 
       renderWithProviders(<ChannelPipelineTab />);
 
       const rollbackBtn = await screen.findByRole('button', { name: /rollback/i });
       expect(rollbackBtn.title).toMatch(/this run's own recorded changes/i);
-      expect(rollbackBtn.title).toMatch(/does not use the full pre-run snapshot/i);
-      expect(rollbackBtn.title).toMatch(/undo this run/i);
+      expect(rollbackBtn.title).toMatch(/no pre-run snapshot/i);
+      expect(rollbackBtn.title).toMatch(/only\s+restore available/i);
+    });
+
+    // bead h2oxl: Rollback (POST /rollback without confirm=true) 409s on
+    // snapshot-backed runs, so option (b) hides it there — only "Undo this run"
+    // (restore-snapshot?confirm=true) renders, which is the correct full-restore
+    // action for a snapshot-backed run.
+    it('hides Rollback on a snapshot-backed run and shows only "Undo this run"', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      // Undo this run is the correct affordance on a snapshot-backed run.
+      expect(await screen.findByRole('button', { name: /undo this run/i })).toBeInTheDocument();
+      // Rollback would 409, so it must not render here.
+      expect(screen.queryByRole('button', { name: /rollback/i })).toBeNull();
+    });
+
+    it('shows Rollback on a legacy no-snapshot run', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: false })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      // /rollback works on legacy runs, so Rollback still renders...
+      expect(await screen.findByRole('button', { name: /rollback/i })).toBeInTheDocument();
+      // ...and there is no snapshot-restore action to offer.
+      expect(screen.queryByRole('button', { name: /undo this run/i })).toBeNull();
     });
 
     it('does not call the rollback API when the confirm dialog is cancelled', async () => {
@@ -1222,12 +1252,12 @@ describe('ChannelPipelineTab', () => {
       await waitFor(() => {
         expect(screen.getByText(/confirm.*rollback/i)).toBeInTheDocument();
       });
-      // The dialog explains the legacy-undo mechanism and points to the
-      // alternative full-restore action, not just a bare confirmation.
+      // The dialog explains the legacy-undo mechanism and (h2oxl) that this
+      // run has no snapshot, not just a bare confirmation.
       expect(screen.getByText(/legacy per-run undo/i)).toBeInTheDocument();
-      // Text spans a <strong> boundary ("not"), so match against the dialog's
-      // full text content rather than a single node.
-      expect(screen.getByRole('dialog').textContent).toMatch(/not.*the full pre-run snapshot/i);
+      // Text spans a <strong> boundary ("no pre-run snapshot"), so match against
+      // the dialog's full text content rather than a single node.
+      expect(screen.getByRole('dialog').textContent).toMatch(/no pre-run snapshot/i);
 
       await user.click(screen.getByRole('button', { name: /cancel/i }));
 
