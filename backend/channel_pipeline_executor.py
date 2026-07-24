@@ -2975,19 +2975,45 @@ class ActionExecutor:
             # y3m6o.1 review follow-up: preview the ACTUAL flips (read-only) so a
             # dry run of an already-correct channel reports modified=False rather
             # than a phantom "Would assign N" — matching the live no-op path.
+            #
+            # y3m6o.2: assign_channel_profile is EXCLUSIVE (subtractive) — it
+            # enables the selected profiles AND removes the channel from every
+            # OTHER profile. The prior "enable X, disable Y" counts hid that
+            # destructive complement (Y was only the profiles that happened to
+            # need a flip THIS run — 0 when the channel was already exclusive),
+            # so an operator previewing a channel already out of the other
+            # profiles saw "disable 0" and never learned the semantic. State the
+            # subtractive contract explicitly, naming the selected set and the
+            # count of other profiles the channel is (or will be) removed from.
+            # Read-only: _profile_flip_plan and the universe read never mutate.
             enable_pids, disable_pids = self._profile_flip_plan(
                 exec_ctx.current_channel_id, channel_profile_ids
             )
             n_flips = len(enable_pids) + len(disable_pids)
+            selected_set = set(channel_profile_ids)
+            universe = set(self._all_profile_ids or [])
+            other_count = len(universe - selected_set)
+            selected_sorted = sorted(selected_set)
+            exclusive_clause = (
+                f"enable in {len(selected_set)} selected profile(s) "
+                f"{selected_sorted} and REMOVE from all {other_count} other "
+                f"channel profile(s)"
+            )
             return ActionResult(
                 success=True,
                 action_type=action.type,
                 description=(
-                    f"Would change channel-profile membership on {n_flips} "
-                    f"profile(s) (enable {len(enable_pids)}, disable "
-                    f"{len(disable_pids)})"
+                    f"Would enforce EXCLUSIVE channel-profile membership: "
+                    f"{exclusive_clause} (this run flips {n_flips}: enable "
+                    f"{len(enable_pids)}, disable {len(disable_pids)})"
                     if n_flips
-                    else "Channel-profile membership already correct (no change)"
+                    else (
+                        f"Channel already has EXCLUSIVE membership in exactly "
+                        f"the {len(selected_set)} selected profile(s) "
+                        f"{selected_sorted} and no others — no change "
+                        f"(would still enforce removal from all {other_count} "
+                        f"other channel profile(s))"
+                    )
                 ),
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
