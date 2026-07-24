@@ -146,6 +146,12 @@ class DbasSyncTask(TaskScheduler):
         "Scheduled (operator opts into an interval) or manual."
     )
     default_enabled = False
+    # Per-invocation state, not durable settings: this task runs off
+    # schedule/run parameters (sync_target_id, confirm_apply — see module
+    # docstring), and confirm_apply arms a DESTRUCTIVE source-wins apply.
+    # The fail-safe direction on restart is disarmed, so the registry must
+    # neither persist nor rehydrate this surface (gjb01).
+    persist_config = False
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         if schedule_config is None:

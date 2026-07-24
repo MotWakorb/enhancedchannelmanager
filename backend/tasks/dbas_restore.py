@@ -105,6 +105,11 @@ class DbasRestoreTask(TaskScheduler):
         "dry-run by default; apply only when confirmed). Emits per-stage progress."
     )
     default_enabled = False
+    # Per-invocation state, not durable settings: artifact_path points at a
+    # temp upload deleted after the run, and confirm_apply arms a DESTRUCTIVE
+    # apply. The fail-safe direction on restart is disarmed/cleared, so the
+    # registry must neither persist nor rehydrate this surface (gjb01).
+    persist_config = False
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         if schedule_config is None:

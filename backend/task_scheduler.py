@@ -257,6 +257,16 @@ class TaskScheduler(ABC):
             "config": self.get_config(),
         }
 
+    # Whether the task-specific config surface (get_config/update_config) is
+    # DURABLE operator settings: persisted to ScheduledTask.config by the
+    # registry on save and re-applied (merge-over-defaults, via
+    # update_config) on startup reconstruction (gjb01 review blocker).
+    # Set False on tasks whose config is per-invocation/ephemeral state
+    # (e.g. dbas_restore/dbas_sync destructive arming flags, which must
+    # re-disarm on restart) or lives in its own store (m3u_digest settings
+    # table) — those are neither persisted nor hydrated.
+    persist_config: bool = True
+
     def get_config(self) -> dict:
         """
         Get task-specific configuration.

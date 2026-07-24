@@ -6,6 +6,7 @@ Provides a central registry for all scheduled tasks with:
 - Task lookup and validation
 - Database synchronization for task configurations
 """
+import json
 import logging
 from datetime import datetime
 from typing import Optional, Type
@@ -164,6 +165,26 @@ class TaskRegistry:
                         instance._last_run = db_task.last_run_at
                         instance._next_run = db_task.next_run_at
 
+                        # Rehydrate the persisted task-specific config (gjb01
+                        # review blocker) through the SAME update_config path
+                        # the live PATCH uses — one apply path. update_config
+                        # implementations only touch keys present in the dict,
+                        # so a stored config missing a newer key merges over
+                        # the code default; config=None (all pre-persistence
+                        # rows) skips cleanly to pure defaults. Malformed JSON
+                        # must never break startup.
+                        if instance.persist_config and db_task.config:
+                            try:
+                                stored_config = json.loads(db_task.config)
+                                if isinstance(stored_config, dict) and stored_config:
+                                    instance.update_config(stored_config)
+                            except Exception as e:
+                                logger.warning(
+                                    "[TASK-REGISTRY] Ignoring invalid stored "
+                                    "config for %s (using defaults): %s",
+                                    db_task.task_id, e,
+                                )
+
                         self._instances[db_task.task_id] = instance
                         logger.debug("[TASK-REGISTRY] Loaded task config from DB: %s", db_task.task_id)
 
@@ -235,8 +256,6 @@ class TaskRegistry:
 
     def _save_task_to_db(self, session, instance: TaskScheduler) -> None:
         """Save a single task instance to the database."""
-        import json
-
         db_task = session.query(ScheduledTask).filter(
             ScheduledTask.task_id == instance.task_id
         ).first()
@@ -268,6 +287,7 @@ class TaskRegistry:
             if not has_schedules:
                 db_task.next_run_at = instance._next_run
             db_task.updated_at = datetime.utcnow()
+            self._persist_task_config(db_task, instance)
         else:
             # Create new
             db_task = ScheduledTask(
@@ -283,12 +303,40 @@ class TaskRegistry:
                 last_run_at=instance._last_run,
                 next_run_at=instance._next_run,
             )
+            self._persist_task_config(db_task, instance)
             session.add(db_task)
 
             # If the task has a non-manual default schedule, create a TaskSchedule entry
             # so users can edit it through the UI
             if instance.schedule_config.schedule_type != ScheduleType.MANUAL:
                 self._create_default_task_schedule(session, instance)
+
+    def _persist_task_config(self, db_task: ScheduledTask, instance: TaskScheduler) -> None:
+        """Write the instance's task-specific config into ``ScheduledTask.config``.
+
+        gjb01 review blocker: the UI save path applied ``task_config`` only to
+        the live instance — ``ScheduledTask.config`` was never written, so every
+        task's settings-surface config silently reverted to code defaults on
+        restart. ``sync_from_database`` is the read side (see the hydration
+        block there); together they make operator saves durable.
+
+        Tasks with ``persist_config = False`` (per-invocation/ephemeral or
+        externally-stored config surfaces) are skipped entirely. A failure to
+        snapshot config (get_config hitting a broken store, unserializable
+        value) leaves the previously stored value in place rather than aborting
+        the whole task save.
+        """
+        if not instance.persist_config:
+            return
+        try:
+            config = instance.get_config()
+            db_task.config = json.dumps(config) if config else None
+        except Exception as e:
+            logger.warning(
+                "[TASK-REGISTRY] Failed to snapshot config for %s (keeping "
+                "previously stored value): %s",
+                instance.task_id, e,
+            )
 
     def _create_default_task_schedule(self, session, instance: TaskScheduler) -> None:
         """Create a default TaskSchedule entry for a task with a non-manual schedule.
