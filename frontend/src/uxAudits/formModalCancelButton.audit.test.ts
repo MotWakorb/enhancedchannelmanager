@@ -159,6 +159,18 @@ function staticButtonText(button: ts.JsxElement): string {
 
 function findViolationsInFile(file: string): Violation[] {
   const text = fs.readFileSync(file, 'utf8');
+
+  // Cheap prefilter before the expensive TS AST parse: this audit only ever
+  // fires inside a `<div className="...modal-footer...">` (FOOTER_CLASS_RE is
+  // tested against classNameText, whose content is a verbatim substring of the
+  // source). A file whose raw text never contains the literal `modal-footer`
+  // therefore cannot produce a violation *or* match an allowlist entry, so
+  // skipping the parse is behavior-preserving -- it changes nothing about the
+  // returned violation set. This cuts ~245 component files down to the ~dozen
+  // real modals and keeps the walk well under the timeout even on a loaded CI
+  // runner (bead enhancedchannelmanager-hw4ny).
+  if (!text.includes('modal-footer')) return [];
+
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const violations: Violation[] = [];
 
@@ -228,5 +240,14 @@ describe('form modal footers pair a mutating action with a Cancel/secondary (bea
     const violatingFiles = new Set(allViolations.map((v) => v.file));
     const staleAllowlistEntries = Object.keys(ALLOWLIST).filter((f) => !violatingFiles.has(f));
     expect(staleAllowlistEntries, 'stale allowlist entries (file no longer matches the pattern -- remove the entry)').toEqual([]);
-  });
+  },
+  // Static-analysis file walk: read + TS-AST-parse every `.modal-footer`-
+  // bearing .tsx under src/components. The default 5000ms vitest timeout is a
+  // wall-clock budget, not a hang guard, and it flaked in CI (coverage
+  // instrumentation + loaded runner pushed a ~484ms local run past 5s) with
+  // zero modal source touched -- a creeping flake as the component count grew.
+  // 30s gives generous headroom over the real runtime (now a few hundred ms
+  // thanks to the modal-footer prefilter above); if it ever legitimately takes
+  // that long, something is actually wrong (bead enhancedchannelmanager-hw4ny).
+  30_000);
 });
