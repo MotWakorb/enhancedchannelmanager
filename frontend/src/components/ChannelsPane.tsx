@@ -747,34 +747,21 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
       onDragOver={handleStreamDragOver}
       onDragLeave={handleStreamDragLeave}
       onDrop={handleStreamDrop}
-      role="button"
-      tabIndex={0}
-      aria-expanded={isExpanded}
-      onKeyDown={(e) => {
-        // Nested real <button>s (probe, three-dot menu) already stop
-        // propagation on click to avoid double-toggling the group when
-        // clicked -- but keydown fires and bubbles before that click is
-        // synthesized, so without this target check, pressing Enter/Space
-        // on one of those nested buttons would both trigger the button's
-        // own action AND toggle this group (bd-6n14l). Only handle the key
-        // when it originated on the row itself, not a focusable descendant.
-        if (e.target !== e.currentTarget) return;
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onToggle();
-        }
-      }}
     >
       {isEditMode && !isEmpty && (
         /* Semantic, keyboard-operable group select-all (bead
-           enhancedchannelmanager-s8xpd, mirroring StreamsPane's
-           group-selection-checkbox from bead zwhw4): a real <button> is
-           natively focusable and Space/Enter fire click; aria-pressed
-           announces the toggle state -- StreamsPane's group header uses the
-           same button+aria-pressed pattern for its equivalent select-all, so
-           this keeps the two panes' group-header semantics consistent. */
+           enhancedchannelmanager-s8xpd, tri-state fix from the round-2
+           review of that bead's PR): a real <button role="checkbox"> is
+           natively focusable and Space/Enter fire click; aria-checked
+           carries the true tri-state (true/false/"mixed") instead of the
+           boolean aria-pressed the first pass shipped, which announced
+           "none selected" and "some selected" identically. StreamsPane's
+           equivalent group-selection-checkbox got the same fix in the same
+           round, so the two panes' group-header semantics stay consistent. */
         <button
           type="button"
+          role="checkbox"
+          aria-checked={allSelected ? true : someSelected ? 'mixed' : false}
           className={`group-checkbox ${allSelected ? 'checked' : ''} ${someSelected ? 'indeterminate' : ''}`}
           onClick={handleCheckboxClick}
           onPointerDown={(e) => e.stopPropagation()}
@@ -783,7 +770,6 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
           draggable={false}
           title={allSelected ? 'Deselect all channels in group' : 'Select all channels in group'}
           aria-label={allSelected ? 'Deselect all channels in group' : 'Select all channels in group'}
-          aria-pressed={allSelected}
         >
           <span className="material-icons" aria-hidden="true">
             {allSelected ? 'check_box' : someSelected ? 'indeterminate_check_box' : 'check_box_outline_blank'}
@@ -799,13 +785,43 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
           ⋮⋮
         </span>
       )}
-      <span className="group-toggle">{isExpanded ? '▼︎' : '▶︎'}</span>
-      <span className="group-name">
-        {groupName}
-        {groupId === 'ungrouped' && (
-          <span className="group-subtext"> – Channels without a specific group</span>
-        )}
-      </span>
+      {/* Expand/collapse toggle, restructured to a sibling <button> (round-2
+          review of bead enhancedchannelmanager-s8xpd's PR): the group select-
+          all button above used to be nested inside this row's own
+          role="button" div, which is two conflicting interactive elements
+          one inside the other -- a nesting the accessibility tree and some
+          assistive tech handle poorly regardless of the click-guard below.
+          Pulling expand/collapse out into its own real <button> (native
+          Enter/Space handling, no manual keydown needed) makes it a sibling
+          of the select-all button instead of an ancestor, which removes the
+          nesting outright. The outer row keeps onClick={onToggle} as a
+          mouse-only "click anywhere in the row" convenience; every
+          interactive child (this button, the select-all checkbox, the probe
+          button, the group menu button) stops propagation on click so that
+          convenience handler can't double-fire. Because the row itself is
+          no longer focusable (no role="button"/tabIndex), it can never be
+          the keydown event's own target, which is the structurally safer
+          replacement for the old bd-6n14l target-check guard: that guard
+          existed only to stop this row's keydown handler reacting to
+          Enter/Space bubbling up from a focused nested button, and a
+          non-focusable row can't receive a keydown of its own to react to. */}
+      <button
+        type="button"
+        className="group-toggle-btn"
+        aria-expanded={isExpanded}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+      >
+        <span className="group-toggle">{isExpanded ? '▼︎' : '▶︎'}</span>
+        <span className="group-name">
+          {groupName}
+          {groupId === 'ungrouped' && (
+            <span className="group-subtext"> – Channels without a specific group</span>
+          )}
+        </span>
+      </button>
       {isAutoSync && (
         <span className="group-auto-sync-badge" title="Auto-populated by channel sync">
           Auto-Sync

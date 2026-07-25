@@ -439,6 +439,67 @@ describe('StreamsPane create-in menu replaces the right-click context menu (bead
   });
 });
 
+describe('StreamsPane group select-all tri-state (round-2 review of bead enhancedchannelmanager-s8xpd)', () => {
+  // The zwhw4 pass gave the row-level selector role="checkbox" +
+  // aria-checked but left the group-header select-all on a boolean
+  // aria-pressed, which announces "none selected" and "some selected"
+  // identically even though the glyph already shows an indeterminate
+  // state. This block proves the tri-state fix: role="checkbox" +
+  // aria-checked={true|false|'mixed'}, plus the same nesting-conflict fix
+  // ChannelsPane got -- the select-all button is a sibling of the
+  // expand/collapse toggle, not nested inside it, so it's reachable in the
+  // real tab order on its own.
+  const GROUP_SELECT_STREAMS: Stream[] = [
+    makeStream({ id: 501, name: 'US News Stream A', channel_group_name: 'US | News' }),
+    makeStream({ id: 502, name: 'US News Stream B', channel_group_name: 'US | News' }),
+  ];
+  const GROUP_SELECT_STREAM_GROUPS: StreamGroupInfo[] = [{ name: 'US | News', count: 2 }];
+
+  function renderGroupSelectPane(overrides: Partial<React.ComponentProps<typeof StreamsPane>> = {}) {
+    return renderPane({
+      streams: GROUP_SELECT_STREAMS,
+      streamGroups: GROUP_SELECT_STREAM_GROUPS,
+      isEditMode: true,
+      onBulkCreateFromGroup: vi.fn(),
+      ...overrides,
+    });
+  }
+
+  it('renders the group select-all as aria-checked="mixed" when only some streams in the group are selected', async () => {
+    const user = userEvent.setup();
+    renderGroupSelectPane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const groupSelector = screen.getByRole('checkbox', { name: 'Select all streams in group' });
+    expect(groupSelector).toHaveAttribute('aria-checked', 'false');
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select stream US News Stream A' }));
+
+    expect(groupSelector).toHaveAttribute('aria-checked', 'mixed');
+    expect(groupSelector).toHaveClass('group-selection-checkbox');
+  });
+
+  it('reaches and activates the group select-all via Tab + Space, zero pointer events', async () => {
+    const user = userEvent.setup();
+    renderGroupSelectPane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const groupSelector = screen.getByRole('checkbox', { name: 'Select all streams in group' });
+    expect(groupSelector).toHaveAttribute('aria-checked', 'false');
+
+    // Tab from the toolbar to the group selector -- no pointer involved.
+    // Proves the button is in the real tab order as a sibling of the
+    // expand/collapse toggle, not nested inside it.
+    await tabUntil(user, () => document.activeElement === groupSelector);
+
+    await user.keyboard(' ');
+    expect(screen.getByRole('checkbox', { name: 'Deselect all streams in group' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+  });
+});
+
 describe('StreamsPane catch-up badge (bead enhancedchannelmanager-sy1sz)', () => {
   const CATCHUP_STREAMS: Stream[] = [
     makeStream({ id: 201, name: 'Catchup Stream', channel_group_name: 'UK | Sports', is_catchup: true, catchup_days: 7 }),

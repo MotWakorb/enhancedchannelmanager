@@ -247,17 +247,97 @@ describe('ChannelsPane keyboard-operable selection (bead enhancedchannelmanager-
     expect(selector).not.toBeChecked();
   });
 
-  it('renders the group select-all as a semantic toggle button exposing aria-pressed state', () => {
+  it('renders the group select-all as a semantic tri-state checkbox exposing aria-checked state', () => {
     render(<StatefulPane selectAllGroup={true} />);
     fireEvent.click(document.querySelector('.group-header')!);
 
-    const groupSelector = screen.getByRole('button', { name: 'Select all channels in group' });
+    const groupSelector = screen.getByRole('checkbox', { name: 'Select all channels in group' });
     expect(groupSelector.tagName).toBe('BUTTON');
-    expect(groupSelector).toHaveAttribute('aria-pressed', 'false');
+    expect(groupSelector).toHaveAttribute('aria-checked', 'false');
 
     fireEvent.click(groupSelector);
-    expect(screen.getByRole('button', { name: 'Deselect all channels in group' })).toHaveAttribute(
-      'aria-pressed',
+    expect(screen.getByRole('checkbox', { name: 'Deselect all channels in group' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+  });
+
+  it('renders the group select-all as aria-checked="mixed" when only some channels in the group are selected', () => {
+    // Round-2 review of bead enhancedchannelmanager-s8xpd's PR: the first
+    // pass rendered the indeterminate glyph for a partial selection but
+    // announced it identically to "none selected" via a boolean
+    // aria-pressed. Two channels, one selected, proves the tri-state
+    // contract distinguishes "some" from "none" and from "all".
+    function TwoChannelStatefulPane() {
+      const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set([1]));
+      const channels = [makeChannel(1, 'Alpha'), makeChannel(2, 'Beta')];
+
+      const handleSelectGroupChannels = (channelIds: number[], select: boolean) => {
+        setSelectedChannelIds((prev) => {
+          const next = new Set(prev);
+          channelIds.forEach((id) => (select ? next.add(id) : next.delete(id)));
+          return next;
+        });
+      };
+
+      return (
+        <NotificationProvider>
+          <ChannelsPane
+            channelGroups={groups}
+            channels={channels}
+            streams={[]}
+            providers={[]}
+            selectedChannelId={null}
+            onChannelSelect={vi.fn()}
+            onChannelUpdate={vi.fn()}
+            onChannelDrop={vi.fn()}
+            onBulkStreamDrop={vi.fn()}
+            onChannelReorder={vi.fn()}
+            onCreateChannel={vi.fn()}
+            onDeleteChannel={vi.fn()}
+            searchTerm=""
+            onSearchChange={vi.fn()}
+            selectedGroups={[]}
+            onSelectedGroupsChange={vi.fn()}
+            loading={false}
+            autoRenameChannelNumber={false}
+            isEditMode={true}
+            selectedChannelIds={selectedChannelIds}
+            onToggleChannelSelection={vi.fn()}
+            onClearChannelSelection={() => setSelectedChannelIds(new Set())}
+            onSelectGroupChannels={handleSelectGroupChannels}
+            channelListFilters={makeFilters()}
+            onChannelListFiltersChange={vi.fn()}
+          />
+        </NotificationProvider>
+      );
+    }
+
+    render(<TwoChannelStatefulPane />);
+    fireEvent.click(document.querySelector('.group-header')!);
+
+    const groupSelector = screen.getByRole('checkbox', { name: 'Select all channels in group' });
+    expect(groupSelector).toHaveAttribute('aria-checked', 'mixed');
+    expect(groupSelector).toHaveClass('indeterminate');
+  });
+
+  it('reaches and activates the group select-all via Tab + Space, zero pointer events', async () => {
+    const user = userEvent.setup();
+    render(<StatefulPane selectAllGroup={true} />);
+    fireEvent.click(document.querySelector('.group-header')!);
+
+    const groupSelector = screen.getByRole('checkbox', { name: 'Select all channels in group' });
+    expect(groupSelector).toHaveAttribute('aria-checked', 'false');
+
+    // Tab from the top of the document to the group selector -- no pointer
+    // involved. Proves the button is in the real tab order (a sibling of
+    // the expand/collapse toggle, not nested inside it), not just
+    // programmatically focusable.
+    await tabUntil(user, () => document.activeElement === groupSelector, { max: 200 });
+
+    await user.keyboard(' ');
+    expect(screen.getByRole('checkbox', { name: 'Deselect all channels in group' })).toHaveAttribute(
+      'aria-checked',
       'true',
     );
   });
