@@ -239,8 +239,16 @@ describe('Multi-provider auto-sync toggle (bd-dgs64, GH #591)', () => {
     vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ allow_multi_provider_auto_sync: true }));
     renderOnGeneral();
 
+    // The checkbox is unconditionally rendered from the component's
+    // `useState(false)` default, so `findByLabelText` resolves as soon as the
+    // element exists in the DOM -- which can happen before the mocked
+    // `getSettings()` promise has resolved and re-rendered it as checked.
+    // Under CI's heavier scheduling (coverage instrumentation, loaded
+    // runner) that ordering isn't guaranteed, so read `.checked` inside
+    // `waitFor` and let it re-poll until the loaded value has actually
+    // landed, instead of asserting on a single synchronous read.
     const checkbox = await screen.findByLabelText(/Allow multi-provider auto-sync/i) as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
+    await waitFor(() => expect(checkbox.checked).toBe(true));
   });
 
   it('renders unchecked when loaded settings have it disabled (default)', async () => {
