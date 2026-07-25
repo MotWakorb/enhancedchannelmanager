@@ -270,9 +270,23 @@ describe('StreamsPane create-in menu replaces the right-click context menu (bead
   async function expandAndSelect(user: ReturnType<typeof userEvent.setup>, streamNames: string[]) {
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
     for (const name of streamNames) {
-      const row = screen.getByText(name).closest('.stream-item') as HTMLElement;
-      fireEvent.click(row.querySelector('.selection-checkbox')!);
+      await user.click(screen.getByRole('checkbox', { name: `Select stream ${name}` }));
     }
+  }
+
+  /** Presses Tab (or Shift+Tab) until `isTarget` reports the focused element,
+   *  failing loudly if the target is never reached — proves the target is in
+   *  the document tab order, not just programmatically focusable. */
+  async function tabUntil(
+    user: ReturnType<typeof userEvent.setup>,
+    isTarget: () => boolean,
+    { shift = false, max = 100 }: { shift?: boolean; max?: number } = {},
+  ) {
+    for (let i = 0; i < max; i++) {
+      if (isTarget()) return;
+      await user.tab({ shift });
+    }
+    throw new Error('tabUntil: target element never received focus');
   }
 
   it('right-clicking a stream row spawns no custom context menu', async () => {
@@ -299,6 +313,60 @@ describe('StreamsPane create-in menu replaces the right-click context menu (bead
 
     expect(document.querySelector('.streams-context-menu')).toBeNull();
     expect(document.querySelector('.streams-context-submenu')).toBeNull();
+  });
+
+  it('renders each stream selector as a semantic checkbox exposing aria-checked state', async () => {
+    const user = userEvent.setup();
+    renderEditPane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const selector = screen.getByRole('checkbox', { name: 'Select stream US News Stream 1' });
+    expect(selector.tagName).toBe('BUTTON');
+    expect(selector).not.toBeChecked();
+
+    await user.click(selector);
+    expect(selector).toBeChecked();
+
+    await user.click(selector);
+    expect(selector).not.toBeChecked();
+  });
+
+  it('supports the full keyboard-only single-stream flow: Tab to selector, Space selects, Create in… reachable and activatable', async () => {
+    const user = userEvent.setup();
+    renderEditPane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    // Tab from the toolbar to the stream's selector — no pointer involved.
+    const selector = screen.getByRole('checkbox', { name: 'Select stream US News Stream 1' });
+    await tabUntil(user, () => document.activeElement === selector);
+    expect(selector).not.toBeChecked();
+
+    // Space toggles the selection and updates aria-checked.
+    await user.keyboard(' ');
+    expect(selector).toBeChecked();
+
+    // The selection strip appears; Shift+Tab back up to the Create in…
+    // trigger (it precedes the list in DOM order) and open it with Enter.
+    const trigger = screen.getByRole('button', { name: 'Create in…' });
+    await tabUntil(user, () => document.activeElement === trigger, { shift: true });
+    await user.keyboard('{Enter}');
+
+    // Panel auto-focuses the filter; ArrowDown walks Entertainment →
+    // Sports TV → pinned "Create in new group…", Enter activates it.
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: /filter groups/i })).toHaveFocus()
+    );
+    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}');
+    expect(screen.getByRole('button', { name: 'Create in new group…' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+
+    // The bulk-create modal opens preset to the new-group option — the
+    // whole replacement flow completed without a single pointer event on
+    // the selection surface.
+    expect(
+      screen.getByRole('heading', { name: /Create Channels from 1 Selected Stream/i })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Create new group/i })).toBeChecked();
   });
 
   it('offers only the ENABLED channel groups in the Create in… chooser', async () => {

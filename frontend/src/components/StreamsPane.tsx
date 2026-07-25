@@ -2013,7 +2013,18 @@ export function StreamsPane({
                             </span>
                           )}
                           {isEditMode && (
-                            <span
+                            /* Semantic, keyboard-operable selector (bead
+                               zwhw4 review): a real <button> is natively
+                               focusable and Space/Enter fire click;
+                               role="checkbox" + aria-checked announce the
+                               actual selection state. The group-header
+                               select-all above is already a semantic
+                               <button aria-pressed>. */
+                            <button
+                              type="button"
+                              role="checkbox"
+                              aria-checked={isSelected(stream.id)}
+                              aria-label={`Select stream ${stream.name}`}
                               className="selection-checkbox"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -2025,10 +2036,10 @@ export function StreamsPane({
                               onTouchStart={(e) => e.stopPropagation()}
                               draggable={false}
                             >
-                              <span className="material-icons">
+                              <span className="material-icons" aria-hidden="true">
                                 {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
                               </span>
-                            </span>
+                            </button>
                           )}
                           {stream.logo_url && (
                             <img

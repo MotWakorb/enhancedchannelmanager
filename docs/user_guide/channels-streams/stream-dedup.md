@@ -13,7 +13,7 @@ The feature fires on three trigger paths:
 | Trigger | When it fires |
 |-|-|
 | Drag-drop | You drag a stream from the Streams pane onto a channel group |
-| Add Stream button | You right-click a channel-less stream and choose "Create channel(s) in group" |
+| Create in… menu | In Edit Mode, you select a single channel-less stream and use the selection strip's **Create in…** menu to pick a target channel group |
 | Bulk M3U refresh | ECM's Channel Pipeline processes an M3U import and finds candidate matches |
 
 Each trigger path routes to the same dedup decision surface: the **StreamDedupModal** (for interactive triggers) or the **Pending Merges queue** (for the bulk M3U path).
@@ -22,7 +22,7 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 
 ---
 
-## Interactive triggers: drag-drop and Add Stream
+## Interactive triggers: drag-drop and Create in…
 
 ### Drag-drop
 
@@ -30,11 +30,15 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 2. Drag it onto a channel group header or an existing channel row.
 3. If ECM finds a candidate channel — a channel whose name is at or above the configured dedup threshold — the **StreamDedupModal** appears.
 
-### Add Stream button (Create channel(s) in group)
+### Create in… menu (create channel in a chosen group)
 
-1. Right-click a channel-less stream in the Streams pane.
-2. Choose **Create channel(s) in group** from the context menu.
+1. Enter **Edit Mode** and select a single channel-less stream in the Streams pane (its row checkbox).
+2. In the selection strip at the top of the pane, open the **Create in…** menu and choose an enabled channel group (type to filter the list).
 3. If ECM finds a candidate channel in the target group, the **StreamDedupModal** appears.
+
+> Before build 0161 this trigger lived on a right-click context menu
+> ("Create channel(s) in group"). The menu was replaced by the keyboard-
+> accessible **Create in…** menu; the dedup behavior is unchanged.
 
 ### What the StreamDedupModal shows
 

@@ -343,10 +343,12 @@ The hook fires only on the M3U-refresh path. Scheduled / manual Channel Pipeline
 
 ### Interactive trigger flow
 
-For drag-drop and Add Stream triggers:
+For drag-drop and Create-in-group triggers (the latter via the Streams pane
+selection strip's "Create in…" menu since build 0161 — previously a
+right-click context menu):
 
 ```
-Operator action (drag-drop / right-click)
+Operator action (drag-drop / Create in… menu)
   └─ Frontend calls GET /api/channel-merges/candidates?stream_name=X&group_id=Y
        └─ Router → dedup_matcher.find_candidate()
             ├─ candidate found → StreamDedupModal displayed

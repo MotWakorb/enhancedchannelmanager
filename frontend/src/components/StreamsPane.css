@@ -485,6 +485,16 @@ button.group-selection-checkbox {
   margin-right: 0.25rem;
   color: var(--text-muted);
   cursor: pointer;
+  /* Reset button styles — the selector is a real <button role="checkbox">
+     (bead zwhw4 review), mirroring button.group-selection-checkbox above. */
+  background: none;
+  border: none;
+  font: inherit;
+}
+
+.selection-checkbox:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .selection-checkbox .material-icons {
