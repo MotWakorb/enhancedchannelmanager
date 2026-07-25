@@ -296,6 +296,22 @@ class M3UChangeDetector:
                 enabled=group.get("enabled", False),
             ))
 
+        # enhancedchannelmanager-wawwh: local (not module-level) import of the
+        # real per-group name-capture cap so the pure-rename guard below
+        # never drifts from the value the snapshot writer actually applies.
+        # Deliberately NOT imported at module scope: tasks.m3u_refresh
+        # defines M3URefreshTask decorated with @register_task, which runs
+        # get_registry().register(...) as an import-time side effect --
+        # pulling in task_scheduler/dispatcharr_client and the task registry
+        # just for a constant, for every caller of this lean module
+        # (including unit tests that import M3UChangeDetector directly).
+        # Same rationale services/event_sync_staleness.py documents for
+        # mirroring this constant instead of importing it; here we import
+        # the real one lazily rather than mirror it, since the call is
+        # already deep inside a method (no top-level cost) and a mirrored
+        # copy would reintroduce the "duplicated literal" problem instead.
+        from tasks.m3u_refresh import MAX_STREAM_NAMES as _stream_name_cap
+
         # Detect stream count changes in existing groups
         for group_name in prev_group_names & curr_group_names:
             prev_count = prev_groups[group_name].get("stream_count", 0)
@@ -351,7 +367,12 @@ class M3UChangeDetector:
                     count=diff,
                     enabled=curr_enabled,
                 ))
-            elif prev_stream_names and curr_stream_names:
+            elif (
+                prev_stream_names
+                and curr_stream_names
+                and prev_count < _stream_name_cap
+                and curr_count < _stream_name_cap
+            ):
                 # enhancedchannelmanager-wawwh: stream COUNT is unchanged but
                 # membership differs -- a pure rename (old name out, new name
                 # in, e.g. a PPV slot provider swapping "Event A" for "Event
@@ -361,12 +382,26 @@ class M3UChangeDetector:
                 # above for every common group each refresh (not just
                 # count-changed ones), so this reuses sets that are already
                 # in memory -- no additional fetch, and the set-difference
-                # itself is bounded by MAX_STREAM_NAMES (500) per side, same
-                # cost class as the added/removed branches above. Fails open
-                # like the other branches: only fires when BOTH snapshots
-                # captured names for this group, so a group whose names
-                # weren't captured (disabled, or the 500-name cap hid the
-                # swap) never produces a false rename record.
+                # itself is bounded by the capture cap per side, same cost
+                # class as the added/removed branches above.
+                #
+                # The count < cap check (not just "both sets non-empty") is
+                # load-bearing, not cosmetic: get_streams_grouped() caps each
+                # group's captured name list at MAX_STREAM_NAMES, and
+                # Dispatcharr's stream listing carries no explicit ordering
+                # param (DRF unordered-queryset gotcha) -- a >=cap group can
+                # get a different truncated *window* of names between two
+                # refreshes with byte-identical real membership, which would
+                # fabricate a phantom rename (prev/curr sets both non-empty,
+                # both size-500, but drawn from different pages). Requiring
+                # BOTH snapshots' TRUE totals (stream_count, not the
+                # truncated list length) to be below the cap guarantees each
+                # captured list is the group's COMPLETE membership, not a
+                # window of it, so the set diff is a real diff. A group at or
+                # above the cap stays silent here -- matching the codebase's
+                # existing philosophy for this exact cap (see
+                # services/event_sync_staleness.py: "the cap can cause missed
+                # detections, never false staleness").
                 added_streams = list(curr_stream_names - prev_stream_names)
                 removed_streams = list(prev_stream_names - curr_stream_names)
 

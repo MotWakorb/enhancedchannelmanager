@@ -581,6 +581,121 @@ class TestM3UChangeDetector:
         }
         assert len(change_set.streams_removed) == 0
 
+    def test_detect_changes_pure_rename_detected_just_below_cap(self, test_session):
+        """enhancedchannelmanager-wawwh review round (PR #740): one stream
+        under the per-group name-capture cap, the captured list is the
+        group's COMPLETE membership (no truncation possible), so a genuine
+        rename must still be detected. Guards against an over-broad fix
+        that silences everything near the cap instead of just at/above it."""
+        from tasks.m3u_refresh import MAX_STREAM_NAMES
+
+        detector = M3UChangeDetector(test_session)
+        total = MAX_STREAM_NAMES - 1  # fits under the cap, untruncated
+        names = [f"Stream {i}" for i in range(total)]
+
+        detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": names},
+        )
+
+        # Swap exactly one name; count is unchanged.
+        renamed = list(names)
+        renamed[0] = "Stream Renamed"
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": renamed},
+        )
+
+        added = [s for s in change_set.streams_added if s.group_name == "BigGroup"]
+        removed = [s for s in change_set.streams_removed if s.group_name == "BigGroup"]
+        assert len(added) == 1
+        assert added[0].stream_names == ["Stream Renamed"]
+        assert len(removed) == 1
+        assert removed[0].stream_names == [names[0]]
+
+    def test_detect_changes_pure_rename_guard_silent_at_exact_cap(self, test_session):
+        """enhancedchannelmanager-wawwh review round (PR #740): a group
+        whose TRUE count sits exactly AT the cap is ambiguous -- it could be
+        exactly cap-many real streams with nothing truncated, or a larger
+        group truncated down to the cap. The guard cannot tell the
+        difference from stream_count alone, so it must treat "at the cap"
+        the same as "above the cap" and stay silent rather than guess, even
+        though the two captured lists here differ by one swapped name."""
+        from tasks.m3u_refresh import MAX_STREAM_NAMES
+
+        detector = M3UChangeDetector(test_session)
+        total = MAX_STREAM_NAMES  # exactly at the cap
+        names = [f"Stream {i}" for i in range(total)]
+
+        detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": names},
+        )
+
+        renamed = list(names)
+        renamed[0] = "Stream Renamed"
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": renamed},
+        )
+
+        added = [s for s in change_set.streams_added if s.group_name == "BigGroup"]
+        removed = [s for s in change_set.streams_removed if s.group_name == "BigGroup"]
+        assert added == []
+        assert removed == []
+
+    def test_detect_changes_pure_rename_guard_silent_above_cap_order_jitter(self, test_session):
+        """enhancedchannelmanager-wawwh review round (PR #740) -- the
+        reviewer's empirical repro: a group one OVER the cap, with
+        byte-identical real membership between two refreshes, must not
+        fabricate a rename just because Dispatcharr's unordered stream
+        listing (no explicit ``ordering`` param) hands back a different
+        truncated PAGE of names each time. Ascending order on refresh 1,
+        reversed order on refresh 2 -- same 501 real streams, two different
+        500-name windows. The old guard (``prev_stream_names and
+        curr_stream_names``) could not tell "genuinely renamed" from "same
+        streams, different truncated window" and would record a phantom
+        1-added/1-removed pair; the count-below-cap guard must recognize
+        both captured lists as unreliable and stay silent."""
+        from tasks.m3u_refresh import MAX_STREAM_NAMES
+
+        detector = M3UChangeDetector(test_session)
+        total = MAX_STREAM_NAMES + 1  # exceeds the cap by exactly one
+        all_names = [f"Stream {i}" for i in range(total)]
+
+        prev_names = all_names[:MAX_STREAM_NAMES]
+        detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": prev_names},
+        )
+
+        curr_names = list(reversed(all_names))[:MAX_STREAM_NAMES]
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": curr_names},
+        )
+
+        # Sanity: the two captured windows really do differ (otherwise this
+        # test would pass for the wrong reason -- no jitter to guard against).
+        assert set(prev_names) != set(curr_names)
+
+        added = [s for s in change_set.streams_added if s.group_name == "BigGroup"]
+        removed = [s for s in change_set.streams_removed if s.group_name == "BigGroup"]
+        assert added == []
+        assert removed == []
+
     def test_detect_changes_with_stream_names(self, test_session):
         """Test detection with stream names provided."""
         detector = M3UChangeDetector(test_session)
