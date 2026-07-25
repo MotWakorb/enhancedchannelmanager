@@ -438,6 +438,149 @@ class TestM3UChangeDetector:
         assert change_set.streams_removed[0].group_name == "Sports"
         assert change_set.streams_removed[0].count == 10
 
+    def test_detect_changes_pure_rename_count_stable(self, test_session):
+        """enhancedchannelmanager-wawwh: a pure rename (one name out, one
+        name in, group stream COUNT unchanged) must still be recorded --
+        exactly how a PPV slot provider behaves (a dateless event name is
+        replaced in place without changing how many streams are in the
+        group)."""
+        detector = M3UChangeDetector(test_session)
+
+        # Initial state: PPV group has one slot, "Event A".
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 1, "enabled": True}],
+            1,
+            stream_names_by_group={"PPV": ["Event A"]},
+        )
+
+        # Provider swaps the slot's name; count stays at 1.
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 1, "enabled": True}],
+            1,
+            stream_names_by_group={"PPV": ["Event B"]},
+        )
+
+        assert len(change_set.streams_added) == 1
+        assert change_set.streams_added[0].group_name == "PPV"
+        assert change_set.streams_added[0].stream_names == ["Event B"]
+        assert change_set.streams_added[0].count == 1
+
+        assert len(change_set.streams_removed) == 1
+        assert change_set.streams_removed[0].group_name == "PPV"
+        assert change_set.streams_removed[0].stream_names == ["Event A"]
+        assert change_set.streams_removed[0].count == 1
+
+        # No group-level or count-delta changes -- membership changed, not
+        # size.
+        assert len(change_set.groups_added) == 0
+        assert len(change_set.groups_removed) == 0
+        assert change_set.stream_count_delta == 0
+        assert change_set.has_changes is True
+
+    def test_detect_changes_no_change_count_stable_same_names(self, test_session):
+        """Count stable AND names identical -- must record nothing. Guards
+        against the rename-detection branch firing on every stable group
+        just because it now runs a set comparison."""
+        detector = M3UChangeDetector(test_session)
+        stream_names_by_group = {"Sports": ["ESPN", "Fox Sports"]}
+
+        detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group=stream_names_by_group,
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group=dict(stream_names_by_group),
+        )
+
+        assert change_set.has_changes is False
+        assert len(change_set.streams_added) == 0
+        assert len(change_set.streams_removed) == 0
+
+    def test_detect_changes_pure_rename_multiple_swaps(self, test_session):
+        """Multiple simultaneous swaps within a count-stable group are all
+        captured in a single added/removed pair."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group={"PPV": ["Event A", "Event B", "Event C"]},
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group={"PPV": ["Event A", "Event D", "Event E"]},
+        )
+
+        assert set(change_set.streams_added[0].stream_names) == {"Event D", "Event E"}
+        assert change_set.streams_added[0].count == 2
+        assert set(change_set.streams_removed[0].stream_names) == {"Event B", "Event C"}
+        assert change_set.streams_removed[0].count == 2
+
+    def test_detect_changes_count_stable_no_names_captured_fails_open(self, test_session):
+        """Count stable and NO stream names available on either side (e.g.
+        the group is disabled, or names simply weren't captured) must not
+        fabricate a rename -- the guard fails open, same philosophy as the
+        jqwfq stale-dateless guard's snapshot check."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 5, "enabled": False}],
+            5,
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 5, "enabled": False}],
+            5,
+        )
+
+        assert change_set.has_changes is False
+        assert len(change_set.streams_added) == 0
+        assert len(change_set.streams_removed) == 0
+
+    def test_detect_changes_count_changed_behavior_unchanged(self, test_session):
+        """The existing count-changed detection path (added/removed streams
+        computed from prev/curr name sets) must be unaffected by the new
+        count-stable rename branch."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"Sports": ["ESPN", "Fox Sports"]},
+        )
+
+        # Count grows by one AND the surviving names are also renamed --
+        # exercises the branch computing added/removed from the diff, not
+        # just literal net-new entries.
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group={"Sports": ["ESPN HD", "Fox Sports 1", "NBC Sports"]},
+        )
+
+        assert len(change_set.streams_added) == 1
+        assert change_set.streams_added[0].count == 1
+        assert set(change_set.streams_added[0].stream_names) == {
+            "ESPN HD", "Fox Sports 1", "NBC Sports",
+        }
+        assert len(change_set.streams_removed) == 0
+
     def test_detect_changes_with_stream_names(self, test_session):
         """Test detection with stream names provided."""
         detector = M3UChangeDetector(test_session)

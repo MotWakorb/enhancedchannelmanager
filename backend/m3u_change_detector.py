@@ -351,6 +351,47 @@ class M3UChangeDetector:
                     count=diff,
                     enabled=curr_enabled,
                 ))
+            elif prev_stream_names and curr_stream_names:
+                # enhancedchannelmanager-wawwh: stream COUNT is unchanged but
+                # membership differs -- a pure rename (old name out, new name
+                # in, e.g. a PPV slot provider swapping "Event A" for "Event
+                # B" in place). The count-equality gate above only ever
+                # compared counts, so this case previously recorded nothing.
+                # prev_stream_names/curr_stream_names are already built
+                # above for every common group each refresh (not just
+                # count-changed ones), so this reuses sets that are already
+                # in memory -- no additional fetch, and the set-difference
+                # itself is bounded by MAX_STREAM_NAMES (500) per side, same
+                # cost class as the added/removed branches above. Fails open
+                # like the other branches: only fires when BOTH snapshots
+                # captured names for this group, so a group whose names
+                # weren't captured (disabled, or the 500-name cap hid the
+                # swap) never produces a false rename record.
+                added_streams = list(curr_stream_names - prev_stream_names)
+                removed_streams = list(prev_stream_names - curr_stream_names)
+
+                if added_streams or removed_streams:
+                    logger.info(
+                        "[M3U-CHANGE] Group '%s': count stable at %s but names changed "
+                        "(pure rename) -- %s added, %s removed",
+                        group_name, curr_count, len(added_streams), len(removed_streams)
+                    )
+                    if added_streams:
+                        change_set.streams_added.append(StreamChange(
+                            group_name=group_name,
+                            change_type="streams_added",
+                            stream_names=added_streams,
+                            count=len(added_streams),
+                            enabled=curr_enabled,
+                        ))
+                    if removed_streams:
+                        change_set.streams_removed.append(StreamChange(
+                            group_name=group_name,
+                            change_type="streams_removed",
+                            stream_names=removed_streams,
+                            count=len(removed_streams),
+                            enabled=curr_enabled,
+                        ))
 
         if change_set.has_changes:
             logger.info(
