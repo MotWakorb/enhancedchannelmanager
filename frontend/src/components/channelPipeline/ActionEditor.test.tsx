@@ -3,6 +3,8 @@
  *
  * These tests define the expected behavior of the component BEFORE implementation.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -1266,6 +1268,32 @@ describe('ActionEditor', () => {
       );
 
       expect(screen.queryByText(/requires.*channel/i)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('remove button hit area (GH #726)', () => {
+    // jsdom has no real layout, so the stretched-hit-area regression cannot be
+    // asserted via getBoundingClientRect. Instead, pin the CSS fix itself:
+    // .action-editor is a flex row whose children default to stretch, so the
+    // remove button MUST carry align-self: flex-start or its clickable area
+    // silently spans the card's full height and a blank-space click below the
+    // visible X deletes the action.
+    it('pins align-self: flex-start on .action-remove-btn so the hit area stays glyph-sized', () => {
+      // import.meta.url is not a file: URL under the jsdom test environment,
+      // so resolve from the Vitest root (frontend/) like the a11y/uxAudits
+      // source-scanning tests do.
+      const cssPath = path.resolve(
+        process.cwd(),
+        'src/components/channelPipeline/ActionEditor.css'
+      );
+      const css = fs.readFileSync(cssPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+      const rule = css.match(/\.action-remove-btn\s*\{[^}]*\}/);
+
+      expect(rule).not.toBeNull();
+      expect(rule![0]).toMatch(/align-self:\s*flex-start/);
+      // The original bug hid behind top padding that pushed the glyph down
+      // while the button spanned the card -- keep the hit area unpadded.
+      expect(rule![0]).not.toMatch(/padding-top/);
     });
   });
 });
