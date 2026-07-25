@@ -766,15 +766,29 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
       }}
     >
       {isEditMode && !isEmpty && (
-        <span
+        /* Semantic, keyboard-operable group select-all (bead
+           enhancedchannelmanager-s8xpd, mirroring StreamsPane's
+           group-selection-checkbox from bead zwhw4): a real <button> is
+           natively focusable and Space/Enter fire click; aria-pressed
+           announces the toggle state -- StreamsPane's group header uses the
+           same button+aria-pressed pattern for its equivalent select-all, so
+           this keeps the two panes' group-header semantics consistent. */
+        <button
+          type="button"
           className={`group-checkbox ${allSelected ? 'checked' : ''} ${someSelected ? 'indeterminate' : ''}`}
           onClick={handleCheckboxClick}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          draggable={false}
           title={allSelected ? 'Deselect all channels in group' : 'Select all channels in group'}
+          aria-label={allSelected ? 'Deselect all channels in group' : 'Select all channels in group'}
+          aria-pressed={allSelected}
         >
-          <span className="material-icons">
+          <span className="material-icons" aria-hidden="true">
             {allSelected ? 'check_box' : someSelected ? 'indeterminate_check_box' : 'check_box_outline_blank'}
           </span>
-        </span>
+        </button>
       )}
       {isEditMode && groupId !== 'ungrouped' && (
         <span

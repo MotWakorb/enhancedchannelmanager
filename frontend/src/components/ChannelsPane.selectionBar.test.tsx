@@ -11,11 +11,13 @@
  *    menu (deleted in favor of the bar's More menu);
  *  - the header 'More actions' kebab now carries only pane-level items.
  */
+import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChannelsPane } from './ChannelsPane';
 import { NotificationProvider } from '../contexts/NotificationContext';
+import { tabUntil } from '../test/utils/keyboardNav';
 import type { Channel, ChannelGroup, ChannelListFilterSettings } from '../types';
 
 vi.mock('../services/api', async () => {
@@ -157,5 +159,140 @@ describe('ChannelsPane selection action bar integration', () => {
     expect(labels.some((l) => l.includes('Normalize Names'))).toBe(false);
     expect(labels.some((l) => l.includes('Enable in Profile'))).toBe(false);
     expect(labels.some((l) => l.includes('Disable in Profile'))).toBe(false);
+  });
+});
+
+describe('ChannelsPane keyboard-operable selection (bead enhancedchannelmanager-s8xpd)', () => {
+  // Follow-on from bead zwhw4's StreamsPane review: the per-channel row
+  // selector (ChannelListItem's channel-select-indicator) and the group
+  // header select-all (ChannelsPane's group-checkbox) were bare clickable
+  // <span>s -- not focusable, no aria-checked/aria-pressed, no keyboard
+  // handler. A keyboard-only user could not select channels, which gated
+  // every selection-dependent action including the SelectionActionBar
+  // (bead 09x38.17). These tests need real selection state (not the fixed
+  // `selectedChannelIds` prop the other tests in this file pass), so they
+  // wire the same controlled-selection contract App.tsx uses.
+  function StatefulPane({ selectAllGroup = false }: { selectAllGroup?: boolean }) {
+    const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set());
+    const channels = [makeChannel(1, 'Alpha')];
+
+    const handleToggle = (channelId: number, addToSelection: boolean) => {
+      setSelectedChannelIds((prev) => {
+        const next = new Set(prev);
+        if (addToSelection) {
+          if (next.has(channelId)) next.delete(channelId);
+          else next.add(channelId);
+        } else {
+          next.clear();
+          next.add(channelId);
+        }
+        return next;
+      });
+    };
+
+    const handleSelectGroupChannels = (channelIds: number[], select: boolean) => {
+      setSelectedChannelIds((prev) => {
+        const next = new Set(prev);
+        channelIds.forEach((id) => (select ? next.add(id) : next.delete(id)));
+        return next;
+      });
+    };
+
+    return (
+      <NotificationProvider>
+        <ChannelsPane
+          channelGroups={groups}
+          channels={channels}
+          streams={[]}
+          providers={[]}
+          selectedChannelId={null}
+          onChannelSelect={vi.fn()}
+          onChannelUpdate={vi.fn()}
+          onChannelDrop={vi.fn()}
+          onBulkStreamDrop={vi.fn()}
+          onChannelReorder={vi.fn()}
+          onCreateChannel={vi.fn()}
+          onDeleteChannel={vi.fn()}
+          searchTerm=""
+          onSearchChange={vi.fn()}
+          selectedGroups={[]}
+          onSelectedGroupsChange={vi.fn()}
+          loading={false}
+          autoRenameChannelNumber={false}
+          isEditMode={true}
+          selectedChannelIds={selectedChannelIds}
+          onToggleChannelSelection={handleToggle}
+          onClearChannelSelection={() => setSelectedChannelIds(new Set())}
+          onSelectGroupChannels={selectAllGroup ? handleSelectGroupChannels : undefined}
+          channelListFilters={makeFilters()}
+          onChannelListFiltersChange={vi.fn()}
+        />
+      </NotificationProvider>
+    );
+  }
+
+  it('renders the channel row selector as a semantic checkbox exposing aria-checked state', () => {
+    render(<StatefulPane />);
+    // Channels live under the collapsed "Uncategorized" group -- expand it.
+    fireEvent.click(document.querySelector('.group-header')!);
+
+    const selector = screen.getByRole('checkbox', { name: 'Select channel Alpha' });
+    expect(selector.tagName).toBe('BUTTON');
+    expect(selector).not.toBeChecked();
+
+    fireEvent.click(selector);
+    expect(selector).toBeChecked();
+
+    fireEvent.click(selector);
+    expect(selector).not.toBeChecked();
+  });
+
+  it('renders the group select-all as a semantic toggle button exposing aria-pressed state', () => {
+    render(<StatefulPane selectAllGroup={true} />);
+    fireEvent.click(document.querySelector('.group-header')!);
+
+    const groupSelector = screen.getByRole('button', { name: 'Select all channels in group' });
+    expect(groupSelector.tagName).toBe('BUTTON');
+    expect(groupSelector).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(groupSelector);
+    expect(screen.getByRole('button', { name: 'Deselect all channels in group' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('supports the full keyboard-only selection flow: Tab to the row selector (real tab order), Space selects, reach and activate a SelectionActionBar action, zero pointer events', async () => {
+    const user = userEvent.setup();
+    render(<StatefulPane />);
+    // Expanding the group to reveal the row is setup, not part of the
+    // keyboard-selection proof -- same convention as StreamsPane's zwhw4
+    // tests, which click "Expand all groups" before the keyboard-only part.
+    fireEvent.click(document.querySelector('.group-header')!);
+
+    // Tab from the top of the document to the row selector -- no pointer
+    // involved. Proves the button is in the real tab order, not just
+    // programmatically focusable.
+    const selector = screen.getByRole('checkbox', { name: 'Select channel Alpha' });
+    await tabUntil(user, () => document.activeElement === selector, { max: 200 });
+    expect(selector).not.toBeChecked();
+
+    // Space toggles the selection and updates aria-checked; the floating
+    // SelectionActionBar mounts now that a channel is selected.
+    await user.keyboard(' ');
+    expect(selector).toBeChecked();
+    const bar = screen.getByRole('toolbar', { name: 'Selection actions' });
+    expect(bar).toBeInTheDocument();
+
+    // Keep tabbing forward (still from the selector, still keyboard-only)
+    // until the bar's "Clear selection" button receives focus, then
+    // activate it with Enter.
+    const clearBtn = screen.getByRole('button', { name: 'Clear selection' });
+    await tabUntil(user, () => document.activeElement === clearBtn, { max: 200 });
+    await user.keyboard('{Enter}');
+
+    // Selection cleared -- the bar unmounts, proving the action fired via
+    // a pure keyboard path (Tab + Space + Enter, no click/pointer events).
+    expect(screen.queryByRole('toolbar', { name: 'Selection actions' })).not.toBeInTheDocument();
   });
 });

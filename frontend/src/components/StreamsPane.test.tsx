@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { StreamsPane } from './StreamsPane';
 import { server } from '../test/mocks/server';
+import { tabUntil } from '../test/utils/keyboardNav';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup } from '../types';
 
 function makeStream(overrides: Partial<Stream> & { id: number; name: string; channel_group_name: string }): Stream {
@@ -272,21 +273,6 @@ describe('StreamsPane create-in menu replaces the right-click context menu (bead
     for (const name of streamNames) {
       await user.click(screen.getByRole('checkbox', { name: `Select stream ${name}` }));
     }
-  }
-
-  /** Presses Tab (or Shift+Tab) until `isTarget` reports the focused element,
-   *  failing loudly if the target is never reached — proves the target is in
-   *  the document tab order, not just programmatically focusable. */
-  async function tabUntil(
-    user: ReturnType<typeof userEvent.setup>,
-    isTarget: () => boolean,
-    { shift = false, max = 100 }: { shift?: boolean; max?: number } = {},
-  ) {
-    for (let i = 0; i < max; i++) {
-      if (isTarget()) return;
-      await user.tab({ shift });
-    }
-    throw new Error('tabUntil: target element never received focus');
   }
 
   it('right-clicking a stream row spawns no custom context menu', async () => {
