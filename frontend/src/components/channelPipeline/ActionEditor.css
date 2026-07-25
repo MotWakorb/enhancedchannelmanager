@@ -408,10 +408,16 @@
   cursor: pointer;
   border-radius: var(--radius-md);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  padding-top: 10px;
+  /* .action-editor is a flex row that defaults to stretching children, so
+     without the pin below the button's clickable area silently spans the
+     card's full height -- a click in the blank space under the visible X
+     deleted the action (GH #726). Pinning to the top keeps the hit area
+     glyph-sized, matching .condition-remove-btn. */
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 .action-remove-btn:hover {
