@@ -1883,23 +1883,6 @@ export function StreamsPane({
                       }
                       handleToggleGroup(group.name);
                     }}
-                    role="button"
-                    tabIndex={0}
-                    aria-expanded={group.expanded}
-                    onKeyDown={(e) => {
-                      // See bd-6n14l note in ChannelsPane's DroppableGroupHeader:
-                      // target check prevents nested buttons (selection
-                      // checkbox, drag handle) from double-firing their own
-                      // action plus this group's toggle on Enter/Space.
-                      if (e.target !== e.currentTarget) return;
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        if (!isGroupExpanded(group.name) && onGroupExpand) {
-                          onGroupExpand(group.name);
-                        }
-                        handleToggleGroup(group.name);
-                      }
-                    }}
                   >
                     {isEditMode && onBulkCreateFromGroup && (
                       <span
@@ -1919,34 +1902,69 @@ export function StreamsPane({
                         <span className="material-icons">drag_indicator</span>
                       </span>
                     )}
-                    {isEditMode && onBulkCreateFromGroup && (
-                      <button
-                        type="button"
-                        className="group-selection-checkbox"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          toggleGroupSelection(group);
-                        }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onTouchStart={(e) => e.stopPropagation()}
-                        draggable={false}
-                        title={isGroupFullySelected(group) || selectedGroupNames.has(group.name) ? 'Deselect all streams in group' : 'Select all streams in group'}
-                        aria-label={isGroupFullySelected(group) || selectedGroupNames.has(group.name) ? 'Deselect all streams in group' : 'Select all streams in group'}
-                        aria-pressed={isGroupFullySelected(group) || selectedGroupNames.has(group.name)}
-                      >
-                        <span className="material-icons" aria-hidden="true">
-                          {isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name))
-                            ? 'check_box'
-                            : isGroupPartiallySelected(group)
-                              ? 'indeterminate_check_box'
-                              : 'check_box_outline_blank'}
-                        </span>
-                      </button>
-                    )}
-                    <span className="expand-icon">{group.expanded ? '▼︎' : '▶︎'}</span>
-                    <span className="group-name">{group.name}</span>
+                    {isEditMode && onBulkCreateFromGroup && (() => {
+                      // Semantic, keyboard-operable group select-all
+                      // (round-2 review of bead enhancedchannelmanager-s8xpd's
+                      // PR): aria-checked now carries the true tri-state
+                      // (true/false/"mixed") instead of the boolean
+                      // aria-pressed the zwhw4 pass shipped, which announced
+                      // "none selected" and "some selected" identically.
+                      // ChannelsPane's equivalent group-checkbox got the same
+                      // fix in the same round, keeping both panes' group-
+                      // header semantics consistent.
+                      const fullySelected = isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name));
+                      const partiallySelected = isGroupPartiallySelected(group);
+                      return (
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={fullySelected ? true : partiallySelected ? 'mixed' : false}
+                          className="group-selection-checkbox"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            toggleGroupSelection(group);
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onTouchStart={(e) => e.stopPropagation()}
+                          draggable={false}
+                          title={fullySelected ? 'Deselect all streams in group' : 'Select all streams in group'}
+                          aria-label={fullySelected ? 'Deselect all streams in group' : 'Select all streams in group'}
+                        >
+                          <span className="material-icons" aria-hidden="true">
+                            {fullySelected ? 'check_box' : partiallySelected ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+                          </span>
+                        </button>
+                      );
+                    })()}
+                    {/* Expand/collapse toggle, restructured to a sibling
+                        <button> (round-2 review of bead
+                        enhancedchannelmanager-s8xpd's PR): the group
+                        select-all button above used to be nested inside
+                        this row's own role="button" div -- see the matching
+                        comment in ChannelsPane's DroppableGroupHeader for
+                        the full nesting-conflict rationale and why a
+                        non-focusable row plus a real nested <button> is
+                        structurally safer than the old bd-6n14l target-check
+                        guard. The row keeps onClick above as a mouse-only
+                        "click anywhere" convenience; this button stops
+                        propagation so that handler can't double-fire. */}
+                    <button
+                      type="button"
+                      className="group-toggle-btn"
+                      aria-expanded={group.expanded}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isGroupExpanded(group.name) && onGroupExpand) {
+                          onGroupExpand(group.name);
+                        }
+                        handleToggleGroup(group.name);
+                      }}
+                    >
+                      <span className="expand-icon">{group.expanded ? '▼︎' : '▶︎'}</span>
+                      <span className="group-name">{group.name}</span>
+                    </button>
                     <span className="group-count">{streamGroupCounts.get(group.name) ?? group.streams.length}</span>
                     {(() => {
                       // bead enhancedchannelmanager-po78p / GH #696 — group-level

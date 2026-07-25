@@ -339,7 +339,16 @@ export const ChannelListItem = memo(function ChannelListItem({
       onDrop={onStreamDrop}
     >
       {isEditMode && (
-        <span
+        /* Semantic, keyboard-operable selector (bead enhancedchannelmanager-
+           s8xpd, mirroring StreamsPane's stream-item selector from bead
+           zwhw4): a real <button> is natively focusable and Space/Enter fire
+           click; role="checkbox" + aria-checked announce the actual
+           selection state. */
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={isMultiSelected}
+          aria-label={`Select channel ${channel.name}`}
           className={`channel-select-indicator ${isMultiSelected ? 'selected' : ''}`}
           onClick={(e) => {
             e.stopPropagation();
@@ -349,14 +358,12 @@ export const ChannelListItem = memo(function ChannelListItem({
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
-          title="Click to select/deselect"
+          draggable={false}
         >
-          {isMultiSelected ? (
-            <span className="material-icons">check_box</span>
-          ) : (
-            <span className="material-icons">check_box_outline_blank</span>
-          )}
-        </span>
+          <span className="material-icons" aria-hidden="true">
+            {isMultiSelected ? 'check_box' : 'check_box_outline_blank'}
+          </span>
+        </button>
       )}
       <span
         className={`channel-drag-handle ${!isEditMode ? 'disabled' : ''}`}

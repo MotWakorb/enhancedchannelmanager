@@ -398,7 +398,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
       - name: Extract version and set release channel
@@ -506,11 +525,48 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
+      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
+      # Buildx-setup retry above and the build-push-action retry pattern.
       - name: Log in to Container Registry
+        id: login
         if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait before registry login retry
+        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
+        run: |
+          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Log in to Container Registry — retry
+        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -630,7 +686,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
       - name: Extract version and set release channel
@@ -684,11 +759,48 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
+      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
+      # Buildx-setup retry above and the build-push-action retry pattern.
       - name: Log in to Container Registry
+        id: login
         if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait before registry login retry
+        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
+        run: |
+          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Log in to Container Registry — retry
+        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -804,7 +916,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
       - name: Extract version and set release channel
@@ -854,10 +985,47 @@ jobs:
       packages: write
 
     steps:
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
+      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
+      # Buildx-setup retry above and the build-push-action retry pattern.
       - name: Log in to Container Registry
+        id: login
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait before registry login retry
+        if: steps.login.outcome == 'failure'
+        run: |
+          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Log in to Container Registry — retry
+        if: steps.login.outcome == 'failure'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -900,13 +1068,32 @@ jobs:
             type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
 
+      # Bounded retry with backoff on transient registry timeouts (bd-n6197):
+      # run 30144328147 failed this job's "Set up Docker Buildx" step, but
+      # `docker buildx imagetools create` talks to the registry too and can
+      # hit the same class of blip. A bash loop is simpler here than
+      # duplicating a `uses:` step, since this is already a `run:` step.
       - name: Create manifest list and push
         working-directory: /tmp
         run: |
-          docker buildx imagetools create \
-            $(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {}) \
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-amd64.outputs.digest }} \
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-arm64.outputs.digest }}
+          TAGS=$(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {})
+          SRC1="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-amd64.outputs.digest }}"
+          SRC2="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-arm64.outputs.digest }}"
+
+          MAX_ATTEMPTS=3
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            if docker buildx imagetools create $TAGS "$SRC1" "$SRC2"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              WAIT=$((attempt * 30))
+              echo "::warning::docker buildx imagetools create failed (attempt $attempt/$MAX_ATTEMPTS, likely transient registry timeout). Sleeping ${WAIT}s before retry."
+              sleep "$WAIT"
+            fi
+          done
+
+          echo "::error::docker buildx imagetools create failed after $MAX_ATTEMPTS attempts"
+          exit 1
 
   # ─── MCP Server Build Pipeline ───────────────────────────────────────
 
@@ -929,11 +1116,48 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
+      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
+      # Buildx-setup retry above and the build-push-action retry pattern.
       - name: Log in to Container Registry
+        id: login
         if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait before registry login retry
+        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
+        run: |
+          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Log in to Container Registry — retry
+        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -1035,11 +1259,48 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
+      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
+      # Buildx-setup retry above and the build-push-action retry pattern.
       - name: Log in to Container Registry
+        id: login
         if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait before registry login retry
+        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
+        run: |
+          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Log in to Container Registry — retry
+        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -1135,10 +1396,47 @@ jobs:
       packages: write
 
     steps:
+      # Retry on transient registry timeouts pulling the buildkit builder image
+      # (e.g. "net/http: request canceled while waiting for connection" against
+      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
+      # one-off Docker Hub blip while the build/push jobs on the same commit
+      # succeeded. docker/setup-buildx-action has no built-in retry input, so
+      # this duplicates the step with continue-on-error, matching the
+      # build-push-action retry pattern used elsewhere in this file.
       - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        continue-on-error: true
+
+      - name: Wait before Buildx retry
+        if: steps.buildx.outcome == 'failure'
+        run: |
+          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Set up Docker Buildx — retry
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
+      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
+      # Buildx-setup retry above and the build-push-action retry pattern.
       - name: Log in to Container Registry
+        id: login
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait before registry login retry
+        if: steps.login.outcome == 'failure'
+        run: |
+          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
+          sleep 15
+
+      - name: Log in to Container Registry — retry
+        if: steps.login.outcome == 'failure'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -1174,10 +1472,28 @@ jobs:
             type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
 
+      # Bounded retry with backoff on transient registry timeouts (bd-n6197):
+      # run 30144328147 failed THIS job's "Set up Docker Buildx" step. A bash
+      # loop is simpler here than duplicating a `uses:` step, since this is
+      # already a `run:` step.
       - name: Create manifest list and push
         working-directory: /tmp
         run: |
-          docker buildx imagetools create \
-            $(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {}) \
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-mcp-amd64.outputs.digest }} \
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-mcp-arm64.outputs.digest }}
+          TAGS=$(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {})
+          SRC1="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-mcp-amd64.outputs.digest }}"
+          SRC2="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-mcp-arm64.outputs.digest }}"
+
+          MAX_ATTEMPTS=3
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            if docker buildx imagetools create $TAGS "$SRC1" "$SRC2"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              WAIT=$((attempt * 30))
+              echo "::warning::docker buildx imagetools create failed (attempt $attempt/$MAX_ATTEMPTS, likely transient registry timeout). Sleeping ${WAIT}s before retry."
+              sleep "$WAIT"
+            fi
+          done
+
+          echo "::error::docker buildx imagetools create failed after $MAX_ATTEMPTS attempts"
+          exit 1

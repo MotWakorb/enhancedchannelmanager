@@ -6,6 +6,7 @@ Tests: 12 endpoints covering EPG sources CRUD, refresh, import,
 Mocks: get_client() to isolate from Dispatcharr.
 """
 import asyncio
+import base64
 import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -100,6 +101,28 @@ async def _poll_migration(async_client, accepted):
             return body
         await asyncio.sleep(0)
     raise AssertionError("migration job did not reach a terminal state")
+
+
+def _tamper_preview_signature(token: str) -> str:
+    """Return ``token`` with a genuinely-different signature.
+
+    Decoding the signature, flipping a byte, and re-encoding guarantees the
+    HMAC bytes differ. Flipping the last *base64 char* of the signature is not
+    a reliable tamper: the final char of a 32-byte signature only carries the
+    low nibble of the last byte, so its two low bits are padding. Changing it
+    within the same nibble group (e.g. "A" -> "B") re-encodes to identical
+    signature bytes, leaving the token valid ~1/16 of the time (flaky 202
+    instead of 409). See bead enhancedchannelmanager-zfp2z.
+    """
+    encoded, encoded_signature = token.split(".", 1)
+    signature = bytearray(
+        base64.urlsafe_b64decode(
+            encoded_signature + "=" * (-len(encoded_signature) % 4)
+        )
+    )
+    signature[0] ^= 0xFF
+    flipped = base64.urlsafe_b64encode(bytes(signature)).rstrip(b"=").decode()
+    return f"{encoded}.{flipped}"
 
 
 class TestGuideMigration:
@@ -743,7 +766,7 @@ class TestGuideMigration:
             now=0 if token_kind == "expired" else None,
         )
         if token_kind == "tampered":
-            token = token[:-1] + ("A" if token[-1] != "A" else "B")
+            token = _tamper_preview_signature(token)
         with patch("routers.epg.get_jwt_secret_key", return_value=secret):
             response = await async_client.post(
                 "/api/epg/migration/apply",

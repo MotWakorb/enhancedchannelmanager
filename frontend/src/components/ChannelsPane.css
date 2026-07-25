@@ -755,9 +755,32 @@
   background-color: var(--input-bg);
 }
 
-/* bd-6n14l: the header is a div with role="button" (not a native <button>),
-   so it needs an explicit visible focus indicator for keyboard users. */
-.group-header:focus-visible {
+/* Expand/collapse control, split out as a sibling <button> from the group
+   select-all button (round-2 review of bead enhancedchannelmanager-s8xpd)
+   to remove a focusable-inside-focusable nesting conflict -- the header row
+   itself is a plain div now (no role="button"/tabIndex), so this button is
+   the only keyboard-focusable path to expand/collapse. `flex: 1` plus an
+   internal flex row reproduces exactly what `.group-name`'s own `flex: 1`
+   did when it was a direct child of `.group-header` -- badges/counts after
+   it in the row are pushed right the same way. The reset properties strip
+   default <button> chrome (border, background, inherited font) so it's
+   visually identical to the old non-interactive wrapper. */
+.group-toggle-btn {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.group-toggle-btn:focus-visible {
   outline: 2px solid var(--accent-primary);
   outline-offset: -2px;
 }
@@ -766,10 +789,25 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  padding: 0.5rem;
+  margin: -0.5rem;
   margin-right: 0.25rem;
+  cursor: pointer;
   color: var(--text-muted);
   transition: color 0.15s ease;
+  position: relative;
+  z-index: var(--z-base);
+  /* Reset button styles -- the selector is a real <button role="checkbox">
+     (bead enhancedchannelmanager-s8xpd, tri-state fix in the round-2
+     review), mirroring StreamsPane's button.group-selection-checkbox. */
+  background: none;
+  border: none;
+  font: inherit;
+}
+
+.group-checkbox:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .group-checkbox:hover {
@@ -1007,6 +1045,17 @@
   margin-right: 0.25rem;
   color: var(--text-muted);
   cursor: pointer;
+  /* Reset button styles -- the selector is a real <button role="checkbox">
+     (bead enhancedchannelmanager-s8xpd), mirroring StreamsPane's
+     .selection-checkbox. */
+  background: none;
+  border: none;
+  font: inherit;
+}
+
+.channel-select-indicator:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .channel-select-indicator .material-icons {
