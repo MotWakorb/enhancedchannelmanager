@@ -7,9 +7,9 @@ import { categorizeStreamGroups } from '../utils/streamGroupCategories';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
-import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
+import { StreamCreateMenu } from './StreamCreateMenu';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
 import { ShowMoreRows } from './ShowMoreRows';
@@ -491,13 +491,6 @@ export function StreamsPane({
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
-  // Context menu management
-  const {
-    contextMenu,
-    showContextMenu,
-    hideContextMenu,
-  } = useContextMenu<{ streamIds: number[] }>();
-
   // Dropdown state
   const [groupSearchFilter, setGroupSearchFilter] = useState('');
   const groupSearchInputRef = useRef<HTMLInputElement>(null);
@@ -532,6 +525,13 @@ export function StreamsPane({
   // Determine if we're using multi-select mode
   const useMultiSelectProviders = !!onSelectedProvidersChange;
   const useMultiSelectGroups = !!onSelectedStreamGroupsChange;
+
+  // Enabled/visible channel groups offered by the "Create in…" menu — same
+  // filter the deleted right-click submenu applied (bead zwhw4).
+  const enabledChannelGroups = useMemo(
+    () => channelGroups.filter((group) => selectedChannelGroups.includes(group.id)),
+    [channelGroups, selectedChannelGroups]
+  );
 
   // Group and sort streams
   // Convert sorted stream groups to StreamGroup objects with expanded state
@@ -585,12 +585,12 @@ export function StreamsPane({
     }
   }, [isEditMode, clearSelection]);
 
-  // Keyboard shortcuts management
+  // Keyboard shortcuts management. The StreamCreateMenu handles its own
+  // Escape internally (close panel, refocus trigger) and stops propagation,
+  // so this document-level Escape only ever clears the selection.
   useKeyboardShortcuts({
     onSelectAll: selectAll,
     onClearSelection: clearSelection,
-    contextMenu,
-    onCloseContextMenu: hideContextMenu,
   });
 
 
@@ -892,28 +892,10 @@ export function StreamsPane({
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
-  // Context menu handlers
-  const closeContextMenu = useCallback(() => hideContextMenu(), [hideContextMenu]);
-
-  const handleContextMenu = useCallback((stream: Stream, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isEditMode) return;
-
-    // If right-clicked stream is not selected, select only it
-    let streamIds: number[];
-    if (!isSelected(stream.id)) {
-      clearSelection();
-      toggleSelect(stream.id);
-      streamIds = [stream.id];
-    } else {
-      streamIds = Array.from(selectedIds);
-    }
-
-    showContextMenu(e.clientX, e.clientY, { streamIds });
-  }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds, showContextMenu]);
-
-  // Handler for "Create channel(s) in existing group" from context menu.
+  // Handler for "Create channel(s) in <existing group>" from the selection
+  // strip's "Create in…" menu (bead zwhw4 — migrated from the deleted
+  // right-click context menu with unchanged semantics; acts on the current
+  // stream selection).
   //
   // BD-I / bd-1lznl integration (ADR-008 §D1, trigger_context='add_stream'):
   // For a SINGLE-stream selection the dedup hook intercepts the click to
@@ -922,9 +904,8 @@ export function StreamsPane({
   // Create New / Cancel. For multi-stream selections we proceed unchanged
   // — bulk dedup is BD-J's surface, not this one.
   const handleCreateInGroup = useCallback((groupId: number) => {
-    if (!contextMenu) return;
-    const streamIds = contextMenu.metadata.streamIds;
-    closeContextMenu();
+    const streamIds = Array.from(selectedIds);
+    if (streamIds.length === 0) return;
 
     if (streamIds.length === 1) {
       const cache = selectedStreamsCacheRef.current;
@@ -946,12 +927,19 @@ export function StreamsPane({
     // current page and not in the cache, the dedup hook would have no
     // stream_name to look up, so we let the bulk-create modal handle it.
     openBulkCreateModalForStreamIds(streamIds, groupId);
-  }, [contextMenu, openBulkCreateModalForStreamIds, closeContextMenu, streams, addStreamDedup]);
+  }, [selectedIds, openBulkCreateModalForStreamIds, streams, addStreamDedup]);
 
-  // Handler for "Create channel(s) in new group" from context menu
+  // Handler for "Create in new group…" from the selection strip's
+  // "Create in…" menu (bead zwhw4 — migrated from the deleted right-click
+  // context menu). Uses the selection cache so streams filtered out of the
+  // current page since being selected are still included, matching
+  // openBulkCreateModalForSelection.
   const handleCreateInNewGroup = useCallback(() => {
-    if (!contextMenu) return;
-    const streamsList = streams.filter(s => contextMenu.metadata.streamIds.includes(s.id));
+    const cache = selectedStreamsCacheRef.current;
+    const streamsList = Array.from(selectedIds)
+      .map(id => streams.find(s => s.id === id) || cache.get(id))
+      .filter((s): s is Stream => s !== undefined);
+    if (streamsList.length === 0) return;
     setBulkCreateGroup(null);
     setBulkCreateGroups([]);
     setBulkCreateStreams(streamsList);
@@ -976,20 +964,7 @@ export function StreamsPane({
     setChannelGroupExpanded(true); // Expand channel group section so user sees the "new group" option
     setTimezoneExpanded(false);
     setBulkCreateModalOpen(true);
-    closeContextMenu();
-  }, [contextMenu, streams, channelDefaults, closeContextMenu]);
-
-  // Handler for right-clicking on a stream group header
-  const handleGroupContextMenu = useCallback((group: StreamGroup, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isEditMode) return;
-
-    // Get all stream IDs in this group
-    const streamIds = group.streams.map(s => s.id);
-
-    showContextMenu(e.clientX, e.clientY, { streamIds });
-  }, [isEditMode, showContextMenu]);
+  }, [selectedIds, streams, channelDefaults]);
 
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
@@ -1605,6 +1580,13 @@ export function StreamsPane({
                 Create
               </button>
             )}
+            {isEditMode && onBulkCreateFromGroup && (
+              <StreamCreateMenu
+                groups={enabledChannelGroups}
+                onCreateInGroup={handleCreateInGroup}
+                onCreateInNewGroup={handleCreateInNewGroup}
+              />
+            )}
             <button className="clear-selection-btn" onClick={() => {
               clearSelection();
               setSelectedGroupNames(new Set());
@@ -1901,7 +1883,6 @@ export function StreamsPane({
                       }
                       handleToggleGroup(group.name);
                     }}
-                    onContextMenu={(e) => handleGroupContextMenu(group, e)}
                     role="button"
                     tabIndex={0}
                     aria-expanded={group.expanded}
@@ -2019,7 +2000,6 @@ export function StreamsPane({
                             // Outside edit mode, clicking the row does nothing either
                             e.stopPropagation();
                           }}
-                          onContextMenu={(e) => handleContextMenu(stream, e)}
                         >
                           {/* Drag handle - only in edit mode, positioned first like channel groups */}
                           {isEditMode && (
@@ -2151,89 +2131,6 @@ export function StreamsPane({
           </>
         )}
       </div>
-
-      {/* Context Menu */}
-      {contextMenu && (
-        <div
-          className="streams-context-menu"
-          style={{
-            position: 'fixed',
-            left: contextMenu.x,
-            top: contextMenu.y,
-            zIndex: 10000,
-          }}
-        >
-          <div
-            className="streams-context-menu-item"
-            onClick={(e) => {
-              e.stopPropagation();
-              // Create submenu with channel groups
-              const submenu = document.createElement('div');
-              submenu.className = 'streams-context-submenu';
-              submenu.style.cssText = `position:fixed;left:${contextMenu.x + 220}px;top:${contextMenu.y}px;z-index:10001;`;
-
-              // Add channel groups as options (only enabled/visible groups)
-              const enabledGroups = channelGroups.filter(group => selectedChannelGroups.includes(group.id));
-              enabledGroups.forEach(group => {
-                const option = document.createElement('div');
-                option.className = 'streams-context-menu-item';
-                option.textContent = group.name;
-                option.onclick = () => {
-                  handleCreateInGroup(group.id);
-                  if (document.body.contains(submenu)) {
-                    document.body.removeChild(submenu);
-                  }
-                };
-                submenu.appendChild(option);
-              });
-
-              // Add "no groups" message if empty
-              if (enabledGroups.length === 0) {
-                const noGroups = document.createElement('div');
-                noGroups.className = 'streams-context-menu-item disabled';
-                noGroups.textContent = 'No enabled channel groups';
-                submenu.appendChild(noGroups);
-              }
-
-              document.body.appendChild(submenu);
-
-              // Add scroll indicator if content is scrollable
-              const checkScrollable = () => {
-                if (submenu.scrollHeight > submenu.clientHeight) {
-                  submenu.classList.add('scrollable');
-                  // Update scroll indicator based on position
-                  const updateScrollIndicator = () => {
-                    const atTop = submenu.scrollTop <= 0;
-                    const atBottom = submenu.scrollTop + submenu.clientHeight >= submenu.scrollHeight - 1;
-                    submenu.classList.toggle('scroll-top', !atTop);
-                    submenu.classList.toggle('scroll-bottom', !atBottom);
-                  };
-                  updateScrollIndicator();
-                  submenu.addEventListener('scroll', updateScrollIndicator);
-                }
-              };
-              // Check after render
-              requestAnimationFrame(checkScrollable);
-
-              // Close submenu when clicking outside
-              const closeSubmenu = (evt: MouseEvent) => {
-                if (!submenu.contains(evt.target as Node)) {
-                  if (document.body.contains(submenu)) {
-                    document.body.removeChild(submenu);
-                  }
-                  document.removeEventListener('mousedown', closeSubmenu);
-                }
-              };
-              setTimeout(() => document.addEventListener('mousedown', closeSubmenu), 0);
-            }}
-          >
-            Create channel(s) in group <span className="streams-context-menu-arrow">▶</span>
-          </div>
-          <div className="streams-context-menu-item" onClick={handleCreateInNewGroup}>
-            Create channel(s) in new group
-          </div>
-        </div>
-      )}
 
       {/* Bulk Create Modal */}
       {bulkCreateModalOpen && (streamsToCreate.length > 0 || isManualEntry) && (

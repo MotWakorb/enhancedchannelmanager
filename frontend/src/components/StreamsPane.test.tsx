@@ -8,11 +8,13 @@
  * persist their expand/collapse state per session in localStorage, and
  * auto-surface while a search is active.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, afterAll } from 'vitest';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import { StreamsPane } from './StreamsPane';
-import type { Stream, StreamGroupInfo, M3UAccount } from '../types';
+import { server } from '../test/mocks/server';
+import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup } from '../types';
 
 function makeStream(overrides: Partial<Stream> & { id: number; name: string; channel_group_name: string }): Stream {
   const defaults: Stream = {
@@ -244,6 +246,142 @@ describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696
 
     const badge = screen.getByText('STALE');
     expect(badge.closest('.meta-tag')).toHaveAttribute('title', expect.stringContaining('2026-07-01T00:00:00Z'));
+  });
+});
+
+describe('StreamsPane create-in menu replaces the right-click context menu (bead enhancedchannelmanager-zwhw4)', () => {
+  const CHANNEL_GROUPS: ChannelGroup[] = [
+    { id: 10, name: 'Entertainment', channel_count: 0 },
+    { id: 11, name: 'Sports TV', channel_count: 0 },
+    { id: 12, name: 'Disabled Group', channel_count: 0 },
+  ];
+
+  function renderEditPane(overrides: Partial<React.ComponentProps<typeof StreamsPane>> = {}) {
+    return renderPane({
+      isEditMode: true,
+      onBulkCreateFromGroup: vi.fn(),
+      channelGroups: CHANNEL_GROUPS,
+      // Group 12 is deliberately NOT enabled — the menu must not offer it.
+      selectedChannelGroups: [10, 11],
+      ...overrides,
+    });
+  }
+
+  async function expandAndSelect(user: ReturnType<typeof userEvent.setup>, streamNames: string[]) {
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    for (const name of streamNames) {
+      const row = screen.getByText(name).closest('.stream-item') as HTMLElement;
+      fireEvent.click(row.querySelector('.selection-checkbox')!);
+    }
+  }
+
+  it('right-clicking a stream row spawns no custom context menu', async () => {
+    const user = userEvent.setup();
+    renderEditPane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const row = screen.getByText('US News Stream 1').closest('.stream-item');
+    expect(row).not.toBeNull();
+    fireEvent.contextMenu(row!);
+
+    expect(document.querySelector('.streams-context-menu')).toBeNull();
+    expect(document.querySelector('.streams-context-submenu')).toBeNull();
+  });
+
+  it('right-clicking a group header spawns no custom context menu', async () => {
+    const user = userEvent.setup();
+    renderEditPane();
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+
+    const header = screen.getByText('US | News').closest('.stream-group-header');
+    expect(header).not.toBeNull();
+    fireEvent.contextMenu(header!);
+
+    expect(document.querySelector('.streams-context-menu')).toBeNull();
+    expect(document.querySelector('.streams-context-submenu')).toBeNull();
+  });
+
+  it('offers only the ENABLED channel groups in the Create in… chooser', async () => {
+    const user = userEvent.setup();
+    renderEditPane();
+    await expandAndSelect(user, ['US News Stream 1']);
+
+    await user.click(screen.getByRole('button', { name: 'Create in…' }));
+
+    expect(screen.getByRole('button', { name: 'Entertainment' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sports TV' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Disabled Group' })).not.toBeInTheDocument();
+  });
+
+  it('multi-stream Create in… <group> opens the bulk-create modal preset to that group', async () => {
+    const user = userEvent.setup();
+    renderEditPane();
+    await expandAndSelect(user, ['US News Stream 1', 'UK Sports Stream 1']);
+
+    await user.click(screen.getByRole('button', { name: 'Create in…' }));
+    await user.click(screen.getByRole('button', { name: 'Entertainment' }));
+
+    expect(
+      screen.getByRole('heading', { name: /Create Channels from 2 Selected Streams/i })
+    ).toBeInTheDocument();
+    // The Channel Group section's collapsed summary shows the preset target
+    // group — proof the chosen group id was wired through (groupOption
+    // 'existing' + selectedGroupId 10).
+    expect(screen.getByText('"Entertainment"')).toBeInTheDocument();
+  });
+
+  it('Create in new group… opens the bulk-create modal with the new-group option expanded and selected', async () => {
+    const user = userEvent.setup();
+    renderEditPane();
+    await expandAndSelect(user, ['US News Stream 1', 'UK Sports Stream 1']);
+
+    await user.click(screen.getByRole('button', { name: 'Create in…' }));
+    await user.click(screen.getByRole('button', { name: 'Create in new group…' }));
+
+    expect(
+      screen.getByRole('heading', { name: /Create Channels from 2 Selected Streams/i })
+    ).toBeInTheDocument();
+    // groupOption 'new' + channelGroupExpanded: the radio is pre-selected
+    // and the new-group name input is immediately visible.
+    expect(screen.getByRole('radio', { name: /Create new group/i })).toBeChecked();
+    expect(screen.getByPlaceholderText('New group name')).toBeInTheDocument();
+  });
+
+  describe('single-stream dedup intercept (BD-I, ADR-008 §D1)', () => {
+    beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }));
+    afterEach(() => server.resetHandlers());
+    afterAll(() => server.close());
+
+    it('routes a single-stream Create in… <group> through the dedup candidates lookup before the modal', async () => {
+      const candidatesSpy = vi.fn();
+      server.use(
+        http.get('/api/channel-merges/candidates', ({ request }) => {
+          const url = new URL(request.url);
+          candidatesSpy(url.searchParams.get('stream_name'), url.searchParams.get('group_id'));
+          return HttpResponse.json({
+            stream_name: 'US News Stream 1',
+            candidates: [],
+            total: 0,
+            page: 1,
+            page_size: 1,
+            total_pages: 0,
+          });
+        })
+      );
+      const user = userEvent.setup();
+      renderEditPane();
+      await expandAndSelect(user, ['US News Stream 1']);
+
+      await user.click(screen.getByRole('button', { name: 'Create in…' }));
+      await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+      await waitFor(() => expect(candidatesSpy).toHaveBeenCalledTimes(1));
+      expect(candidatesSpy).toHaveBeenCalledWith('US News Stream 1', '11');
+      // Empty candidate list falls through to the bulk-create modal.
+      expect(
+        await screen.findByRole('heading', { name: /Create Channels from 1 Selected Stream/i })
+      ).toBeInTheDocument();
+    });
   });
 });
 
