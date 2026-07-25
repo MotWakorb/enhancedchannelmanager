@@ -1,8 +1,9 @@
 """
-Journal Noise Purge Task (enhancedchannelmanager-uliyr).
+Journal Noise Purge Task (enhancedchannelmanager-uliyr;
+extended by enhancedchannelmanager-gjb01).
 
-PO policy decision 2026-07-17: auto-purge journal entries older than 3 DAYS
-for exactly TWO automated-noise buckets:
+PO policy decision 2026-07-17 (uliyr): auto-purge journal entries older than
+3 DAYS for two automated-noise buckets:
 
 - Watch start/stop events (``category="watch"``, written only by the
   bandwidth tracker with ``user_initiated=False``).
@@ -13,6 +14,18 @@ for exactly TWO automated-noise buckets:
   ``X-ECM-Automated-Client`` header) and pre-marker legacy rows
   (``automated_client`` NULL) age out; operator-initiated rows
   (``automated_client=False``) are KEPT.
+
+PO decision 2026-07-19 (gjb01): two further buckets on the same settings
+surface, defaulting to enabled at the same shared retention:
+
+- Run-on-refresh suppression notices (``category="auto_creation"``,
+  ``action_type="run_on_refresh_skipped"``, written only by the
+  circuit-breaker/break-glass suppression path with ``user_initiated=False``).
+- Scheduled-task start/complete lifecycle rows (``category="task"``,
+  ``action_type`` "start"/"complete", written only by ``task_engine``).
+  Manually-triggered runs and the anomaly rows (cancel/fail/error) are
+  KEPT — the per-run forensic record also survives independently in the
+  ``task_executions`` table under CleanupTask's ``task_history_days``.
 
 ALL other categories are untouched — the manual Purge control on the Journal
 tab (and ``CleanupTask``'s general ``journal_days`` retention) remain the
@@ -45,19 +58,25 @@ class JournalNoisePurgeTask(TaskScheduler):
     Configuration options (stored in task config JSON, surfaced in the
     Scheduled Tasks settings UI — TaskEditorModal):
     - retention_days: Delete noise entries older than this many days
-      (default: 3 — PO-decided; minimum 1).
+      (default: 3 — PO-decided; minimum 1; shared by all four buckets).
     - purge_watch_events: Include the watch start/stop bucket (default: True).
     - purge_pipeline_rule_pairs: Include the Channel Pipeline rule
       create/delete bucket (default: True).
+    - purge_run_on_refresh_skipped: Include the run-on-refresh
+      suppression-notice bucket (default: True).
+    - purge_task_start_complete: Include the scheduled-task start/complete
+      lifecycle bucket (default: True).
     """
 
     task_id = "journal_noise_purge"
     task_name = "Journal Noise Purge"
     task_description = (
-        "Purge automated-noise journal entries (watch start/stop events and "
-        "automated Channel Pipeline rule create/delete pairs) older than the "
-        "retention window. Operator-initiated rule changes and all other "
-        "journal categories are untouched."
+        "Purge automated-noise journal entries (watch start/stop events, "
+        "automated Channel Pipeline rule create/delete pairs, run-on-refresh "
+        "suppression notices, and scheduled-task start/complete rows) older "
+        "than the retention window. Operator-initiated entries, task "
+        "cancel/fail/error rows, and all other journal categories are "
+        "untouched."
     )
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
@@ -75,6 +94,8 @@ class JournalNoisePurgeTask(TaskScheduler):
         self.retention_days: int = journal.NOISE_RETENTION_DEFAULT_DAYS
         self.purge_watch_events: bool = True
         self.purge_pipeline_rule_pairs: bool = True
+        self.purge_run_on_refresh_skipped: bool = True
+        self.purge_task_start_complete: bool = True
 
     def get_config(self) -> dict:
         """Get journal noise purge configuration."""
@@ -82,6 +103,8 @@ class JournalNoisePurgeTask(TaskScheduler):
             "retention_days": self.retention_days,
             "purge_watch_events": self.purge_watch_events,
             "purge_pipeline_rule_pairs": self.purge_pipeline_rule_pairs,
+            "purge_run_on_refresh_skipped": self.purge_run_on_refresh_skipped,
+            "purge_task_start_complete": self.purge_task_start_complete,
         }
 
     def update_config(self, config: dict) -> None:
@@ -107,6 +130,14 @@ class JournalNoisePurgeTask(TaskScheduler):
             self.purge_watch_events = bool(config["purge_watch_events"])
         if "purge_pipeline_rule_pairs" in config:
             self.purge_pipeline_rule_pairs = bool(config["purge_pipeline_rule_pairs"])
+        if "purge_run_on_refresh_skipped" in config:
+            self.purge_run_on_refresh_skipped = bool(
+                config["purge_run_on_refresh_skipped"]
+            )
+        if "purge_task_start_complete" in config:
+            self.purge_task_start_complete = bool(
+                config["purge_task_start_complete"]
+            )
 
     async def execute(self) -> TaskResult:
         """Execute the noise purge."""
@@ -123,6 +154,8 @@ class JournalNoisePurgeTask(TaskScheduler):
                 days=self.retention_days,
                 purge_watch_events=self.purge_watch_events,
                 purge_pipeline_rule_pairs=self.purge_pipeline_rule_pairs,
+                purge_run_on_refresh_skipped=self.purge_run_on_refresh_skipped,
+                purge_task_start_complete=self.purge_task_start_complete,
             )
         except Exception as e:
             logger.exception("[%s] Noise purge failed: %s", self.task_id, e)
@@ -134,7 +167,7 @@ class JournalNoisePurgeTask(TaskScheduler):
                 completed_at=datetime.utcnow(),
             )
 
-        total_deleted = counts["watch_events"] + counts["pipeline_rule_pairs"]
+        total_deleted = sum(counts.values())
         self._set_progress(
             current=1,
             success_count=total_deleted,
@@ -142,20 +175,25 @@ class JournalNoisePurgeTask(TaskScheduler):
             status="completed",
         )
         logger.info(
-            "[%s] Purged %s watch event and %s pipeline rule create/delete "
-            "journal entries older than %s days",
+            "[%s] Purged %s watch event, %s pipeline rule create/delete, "
+            "%s run-on-refresh-skipped, and %s task start/complete journal "
+            "entries older than %s days",
             self.task_id,
             counts["watch_events"],
             counts["pipeline_rule_pairs"],
+            counts["run_on_refresh_skipped"],
+            counts["task_start_complete"],
             self.retention_days,
         )
         return TaskResult(
             success=True,
             message=(
-                f"Purged {counts['watch_events']} watch event and "
+                f"Purged {counts['watch_events']} watch event, "
                 f"{counts['pipeline_rule_pairs']} Channel Pipeline rule "
-                f"create/delete journal entries older than "
-                f"{self.retention_days} days."
+                f"create/delete, {counts['run_on_refresh_skipped']} "
+                f"run-on-refresh-skipped, and "
+                f"{counts['task_start_complete']} task start/complete "
+                f"journal entries older than {self.retention_days} days."
             ),
             started_at=started_at,
             completed_at=datetime.utcnow(),

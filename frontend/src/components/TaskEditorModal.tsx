@@ -772,9 +772,9 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
           )}
 
           {/* Task-Specific Configuration: Journal Noise Purge
-              (bead enhancedchannelmanager-uliyr). Surfaces the PO-decided
-              auto-purge policy: the two automated-noise journal buckets and
-              the 3-day default retention window. */}
+              (beads enhancedchannelmanager-uliyr and -gjb01). Surfaces the
+              PO-decided auto-purge policy: the four automated-noise journal
+              buckets and the 3-day default retention window. */}
           {task.task_id === 'journal_noise_purge' && (
             <div className="config-section">
               <label className="section-label">Automated-Noise Retention</label>
@@ -791,7 +791,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                   />
                   <small className="form-hint">
                     Automated-noise journal entries older than this many days
-                    are deleted on each run. Default 3 days. Only the two
+                    are deleted on each run. Default 3 days. Only the
                     categories below are purged — all other journal categories
                     are untouched (use the Journal tab&apos;s Purge control for
                     those).
@@ -822,6 +822,33 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                   unmarked entries from before the automation marker existed).
                   Operator-initiated rule create/delete entries are kept, as
                   are rule updates, imports, rollbacks, and snapshot entries.
+                </small>
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.purge_run_on_refresh_skipped !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_run_on_refresh_skipped: e.target.checked })}
+                  />
+                  <span>Run-on-refresh suppression notices</span>
+                </label>
+                <small className="form-hint">
+                  &quot;Auto-creation after M3U refresh skipped&quot; entries
+                  written on every refresh while the circuit breaker or
+                  break-glass switch is active.
+                </small>
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.purge_task_start_complete !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_task_start_complete: e.target.checked })}
+                  />
+                  <span>Scheduled-task start/complete entries</span>
+                </label>
+                <small className="form-hint">
+                  Routine lifecycle rows from scheduled task runs.
+                  Manually-triggered runs and task cancel/fail/error entries
+                  are kept, and full execution history remains in Task
+                  History under its own retention.
                 </small>
               </div>
             </div>

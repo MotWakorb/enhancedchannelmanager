@@ -1,9 +1,10 @@
 /**
  * Unit tests for TaskEditorModal — Journal Noise Purge config section
- * (bead enhancedchannelmanager-uliyr). The PO-decided auto-purge policy
- * (two automated-noise journal buckets, 3-day default retention) must be
- * settings-visible: the task editor shows the retention-days input and the
- * two category toggles, and saves them back through the task config.
+ * (beads enhancedchannelmanager-uliyr and -gjb01). The PO-decided
+ * auto-purge policy (four automated-noise journal buckets, 3-day default
+ * retention) must be settings-visible: the task editor shows the
+ * retention-days input and the four category toggles, and saves them back
+ * through the task config.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -67,6 +68,8 @@ function makeJournalNoisePurgeTask(): TaskStatus {
       retention_days: 3,
       purge_watch_events: true,
       purge_pipeline_rule_pairs: true,
+      purge_run_on_refresh_skipped: true,
+      purge_task_start_complete: true,
     },
   };
 }
@@ -85,7 +88,7 @@ describe('TaskEditorModal — Journal Noise Purge config section', () => {
     expect(input).toHaveValue(3);
   });
 
-  it('lists both automated-noise categories as visible toggles, checked by default', async () => {
+  it('lists all four automated-noise categories as visible toggles, checked by default', async () => {
     render(
       <TaskEditorModal task={makeJournalNoisePurgeTask()} onClose={() => {}} onSaved={() => {}} />,
     );
@@ -96,6 +99,43 @@ describe('TaskEditorModal — Journal Noise Purge config section', () => {
     expect(
       screen.getByRole('checkbox', { name: /channel pipeline rule create\/delete entries/i }),
     ).toBeChecked();
+    expect(
+      screen.getByRole('checkbox', { name: /run-on-refresh suppression notices/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole('checkbox', { name: /scheduled-task start\/complete entries/i }),
+    ).toBeChecked();
+  });
+
+  it('states that manual runs and task anomaly entries are kept', async () => {
+    render(
+      <TaskEditorModal task={makeJournalNoisePurgeTask()} onClose={() => {}} onSaved={() => {}} />,
+    );
+
+    expect(
+      await screen.findByText(
+        /manually-triggered runs and task cancel\/fail\/error entries\s+are kept/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('saves a toggled-off gjb01 category through the task config', async () => {
+    render(
+      <TaskEditorModal task={makeJournalNoisePurgeTask()} onClose={() => {}} onSaved={() => {}} />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole('checkbox', { name: /scheduled-task start\/complete entries/i }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(api.updateTask).toHaveBeenCalled());
+    const [taskId, config] = vi.mocked(api.updateTask).mock.calls[0];
+    expect(taskId).toBe('journal_noise_purge');
+    expect(config.config).toMatchObject({
+      purge_run_on_refresh_skipped: true,
+      purge_task_start_complete: false,
+    });
   });
 
   it('states that all other journal categories are untouched', async () => {

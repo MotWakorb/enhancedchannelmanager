@@ -194,6 +194,14 @@ class M3UDigestTask(TaskScheduler):
     task_id = "m3u_digest"
     task_name = "M3U Change Digest"
     task_description = "Send email digest of M3U playlist changes"
+    # This task's config lives in its OWN store (the m3u digest settings
+    # table — get_config reads it, update_config writes it, and the
+    # /api/m3u digest-settings endpoints edit it directly without going
+    # through the registry). A ScheduledTask.config snapshot would go stale
+    # the moment those endpoints run, and hydrating it at startup would
+    # clobber the newer settings — so the registry must neither persist nor
+    # rehydrate this surface (gjb01).
+    persist_config = False
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         # Default to daily at 8 AM

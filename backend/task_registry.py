@@ -6,6 +6,7 @@ Provides a central registry for all scheduled tasks with:
 - Task lookup and validation
 - Database synchronization for task configurations
 """
+import json
 import logging
 from datetime import datetime
 from typing import Optional, Type
@@ -49,6 +50,25 @@ def auto_creation_parent_enabled() -> Optional[bool]:
     except Exception as e:  # pragma: no cover — advisory annotation only
         logger.debug("[TASK-REGISTRY] Failed to read auto_creation parent gate: %s", e)
         return None
+
+
+def _strip_unset_config_keys(config: dict) -> dict:
+    """Drop None-valued keys from a task-config dict.
+
+    In every task's config surface, None marks "unset — use the code
+    default", and that state must be expressed by the key's ABSENCE
+    (merge-over-defaults), never by replaying an explicit None through
+    ``update_config``: several setters coerce an explicit None differently
+    from an absent key (e.g. stream_probe maps channel_groups=None to [],
+    which would flip "probe all" into "probe nothing" across a restart).
+
+    Shared by BOTH sides of persistence (gjb01 final-delta review): the
+    write side strips None values out of the merged snapshot (an explicit
+    None in a PATCH thereby UNSETS the stored key), and hydration strips
+    field-level nulls from previously stored snapshots (rows written by the
+    intermediate pre-omit head) before applying them.
+    """
+    return {k: v for k, v in config.items() if v is not None}
 
 
 class TaskRegistry:
@@ -164,6 +184,34 @@ class TaskRegistry:
                         instance._last_run = db_task.last_run_at
                         instance._next_run = db_task.next_run_at
 
+                        # Rehydrate the persisted task-specific config (gjb01
+                        # review blocker) through the SAME update_config path
+                        # the live PATCH uses — one apply path. update_config
+                        # implementations only touch keys present in the dict,
+                        # so a stored config missing a newer key merges over
+                        # the code default; config=None (all pre-persistence
+                        # rows) skips cleanly to pure defaults. Field-level
+                        # nulls (snapshots written by the pre-omit head) are
+                        # stripped before applying — None means unset,
+                        # expressed by absence, never replayed through a
+                        # setter (gjb01 final-delta BLOCK 2). Malformed JSON
+                        # must never break startup.
+                        if instance.persist_config and db_task.config:
+                            try:
+                                stored_config = json.loads(db_task.config)
+                                if isinstance(stored_config, dict):
+                                    stored_config = _strip_unset_config_keys(
+                                        stored_config
+                                    )
+                                if isinstance(stored_config, dict) and stored_config:
+                                    instance.update_config(stored_config)
+                            except Exception as e:
+                                logger.warning(
+                                    "[TASK-REGISTRY] Ignoring invalid stored "
+                                    "config for %s (using defaults): %s",
+                                    db_task.task_id, e,
+                                )
+
                         self._instances[db_task.task_id] = instance
                         logger.debug("[TASK-REGISTRY] Loaded task config from DB: %s", db_task.task_id)
 
@@ -173,11 +221,15 @@ class TaskRegistry:
                     else:
                         logger.warning("[TASK-REGISTRY] Task %s in DB but not registered", db_task.task_id)
 
-                # Create instances for registered tasks not in DB
+                # Create instances for registered tasks not in DB. The row
+                # is created with config=NULL — pure code defaults are
+                # expressed by ABSENCE, so the write side never reads any
+                # instance's config surface and the stored snapshot only
+                # ever accumulates explicit operator saves (gjb01
+                # final-delta invariant).
                 for task_id, task_class in self._tasks.items():
                     if task_id not in self._instances:
                         self._instances[task_id] = task_class()
-                        # Save to database with defaults
                         self._save_task_to_db(session, self._instances[task_id])
                         logger.debug("[TASK-REGISTRY] Created default config for task: %s", task_id)
 
@@ -210,19 +262,37 @@ class TaskRegistry:
                 obs_err,
             )
 
-    def sync_to_database(self, task_id: Optional[str] = None) -> None:
+    def sync_to_database(
+        self,
+        task_id: Optional[str] = None,
+        config_intent: Optional[dict] = None,
+    ) -> None:
         """
         Save task configuration(s) to database.
 
         Args:
             task_id: Specific task to sync, or None to sync all
+            config_intent: The EXPLICIT task-config intent of this save (the
+                PATCH's ``task_config`` dict), merged into the stored
+                ``ScheduledTask.config`` snapshot. Only the operator save
+                path (``update_task_config`` / the router PATCH) passes it,
+                and only for a specific ``task_id``. The live instance's
+                config surface is never read for persistence, so
+                execution-time schedule-parameter overlays structurally
+                cannot leak into the stored snapshot — the post-run sync in
+                ``task_engine`` (and every other caller) omits it, updating
+                run bookkeeping (last_run etc.) while leaving the stored
+                snapshot untouched. See ``_persist_task_config``.
         """
         try:
             session = get_session()
             try:
                 if task_id:
                     if task_id in self._instances:
-                        self._save_task_to_db(session, self._instances[task_id])
+                        self._save_task_to_db(
+                            session, self._instances[task_id],
+                            config_intent=config_intent,
+                        )
                 else:
                     for instance in self._instances.values():
                         self._save_task_to_db(session, instance)
@@ -233,10 +303,22 @@ class TaskRegistry:
         except Exception as e:
             logger.exception("[TASK-REGISTRY] Failed to sync task to database: %s", e)
 
-    def _save_task_to_db(self, session, instance: TaskScheduler) -> None:
-        """Save a single task instance to the database."""
-        import json
+    def _save_task_to_db(
+        self,
+        session,
+        instance: TaskScheduler,
+        config_intent: Optional[dict] = None,
+    ) -> None:
+        """Save a single task instance to the database.
 
+        ``config_intent`` is the explicit task-config intent of THIS save
+        (or None for bookkeeping-only saves) and gates the stored-config
+        write in BOTH branches (update and create): the live instance may
+        carry execution-time schedule-parameter overlays and is never read
+        for persistence — even a first-ever save that happens post-run
+        against a missing row creates that row with no config, so restart
+        yields clean code defaults. See ``_persist_task_config``.
+        """
         db_task = session.query(ScheduledTask).filter(
             ScheduledTask.task_id == instance.task_id
         ).first()
@@ -268,6 +350,8 @@ class TaskRegistry:
             if not has_schedules:
                 db_task.next_run_at = instance._next_run
             db_task.updated_at = datetime.utcnow()
+            if config_intent:
+                self._persist_task_config(db_task, instance, config_intent)
         else:
             # Create new
             db_task = ScheduledTask(
@@ -283,12 +367,72 @@ class TaskRegistry:
                 last_run_at=instance._last_run,
                 next_run_at=instance._next_run,
             )
+            if config_intent:
+                self._persist_task_config(db_task, instance, config_intent)
             session.add(db_task)
 
             # If the task has a non-manual default schedule, create a TaskSchedule entry
             # so users can edit it through the UI
             if instance.schedule_config.schedule_type != ScheduleType.MANUAL:
                 self._create_default_task_schedule(session, instance)
+
+    def _persist_task_config(
+        self,
+        db_task: ScheduledTask,
+        instance: TaskScheduler,
+        explicit_config: dict,
+    ) -> None:
+        """Merge this save's EXPLICIT task-config intent into ``ScheduledTask.config``.
+
+        gjb01 review blocker: the UI save path applied ``task_config`` only to
+        the live instance — ``ScheduledTask.config`` was never written, so every
+        task's settings-surface config silently reverted to code defaults on
+        restart. ``sync_from_database`` is the read side (see the hydration
+        block there); together they make operator saves durable.
+
+        INVARIANT (gjb01 final-delta review): the stored snapshot is the
+        ACCUMULATION of explicit operator config saves — the merge of PATCHed
+        ``task_config`` keys over the previous stored snapshot — never a
+        reading of the live instance. The live singleton can carry
+        execution-time schedule-parameter overlays (``task_engine._execute_task``
+        applying ``TaskSchedule.parameters``), so its ``get_config()`` is not
+        consulted here at all: overlays structurally cannot leak into the
+        stored config regardless of PATCH shape (config PATCH, partial config
+        PATCH, or enabled/alert-only PATCH — the latter passes no intent and
+        leaves the snapshot untouched). Fresh startup rows store config=NULL
+        (pure defaults by absence). A None value in the intent UNSETS the
+        stored key (``_strip_unset_config_keys``); restart restores the
+        operator's accumulated saves and code defaults for everything else.
+
+        Tasks with ``persist_config = False`` (per-invocation/ephemeral or
+        externally-stored config surfaces) are skipped entirely. A failure to
+        merge/serialize leaves the previously stored value in place rather
+        than aborting the whole task save.
+        """
+        if not instance.persist_config:
+            return
+        try:
+            previous: dict = {}
+            if db_task.config:
+                try:
+                    loaded = json.loads(db_task.config)
+                    if isinstance(loaded, dict):
+                        previous = loaded
+                except (TypeError, ValueError):
+                    # A malformed previous snapshot must not block the
+                    # operator's save — start over from this save's intent.
+                    logger.warning(
+                        "[TASK-REGISTRY] Discarding malformed stored config "
+                        "for %s on operator save", instance.task_id,
+                    )
+            merged = _strip_unset_config_keys({**previous, **explicit_config})
+            db_task.config = json.dumps(merged) if merged else None
+        except Exception as e:
+            logger.warning(
+                "[TASK-REGISTRY] Failed to persist config intent for %s "
+                "(keeping previously stored value): %s",
+                instance.task_id, e,
+            )
 
     def _create_default_task_schedule(self, session, instance: TaskScheduler) -> None:
         """Create a default TaskSchedule entry for a task with a non-manual schedule.
@@ -563,8 +707,16 @@ class TaskRegistry:
             except Exception as e:
                 logger.error("[TASK-REGISTRY] Failed to update alert config for %s: %s", task_id, e)
 
-        # Persist schedule config to database
-        self.sync_to_database(task_id)
+        # Persist schedule config to database. The PATCH's explicit
+        # task_config dict — and ONLY that dict — is the config intent that
+        # reaches the stored snapshot; an enabled/alert/bookkeeping-only
+        # PATCH (task_config None or empty) leaves the snapshot untouched.
+        # The live instance is never read for persistence, so a run's
+        # schedule-parameter overlay cannot leak (gjb01 final-delta review).
+        self.sync_to_database(
+            task_id,
+            config_intent=task_config if task_config else None,
+        )
 
         return instance.get_status_dict()
 

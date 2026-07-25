@@ -1292,6 +1292,26 @@ class TestDuplicateChannelPipelineRule:
         assert data["priority"] == 6
 
     @pytest.mark.asyncio
+    async def test_duplicate_journals_create_entry(self, async_client, test_session):
+        """gjb01 audit-trail fix: duplicating a rule journals a create entry
+        (matching POST /rules), so a later delete of the copy has its
+        creation half in the journal — no more delete-only pairs."""
+        from models import JournalEntry
+
+        rule = _create_rule(test_session, name="Original", priority=5)
+
+        response = await async_client.post(f"/api/auto-creation/rules/{rule.id}/duplicate")
+        assert response.status_code == 200
+        new_id = response.json()["id"]
+
+        entry = test_session.query(JournalEntry).filter_by(
+            category="auto_creation", action_type="create",
+            entity_name="Original (Copy)",
+        ).one()
+        assert entry.entity_id == new_id
+        assert "Original" in entry.description
+
+    @pytest.mark.asyncio
     async def test_duplicate_preserves_active_window(self, async_client, test_session):
         rule = _create_rule(test_session, name="Season", active_from=date(2026, 9, 1),
                             active_until=date(2027, 2, 15))
