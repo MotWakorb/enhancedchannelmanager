@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { DndContext } from '@dnd-kit/core';
 import { SortableContext } from '@dnd-kit/sortable';
 import { ChannelListItem } from './ChannelListItem';
@@ -304,6 +305,59 @@ describe('ChannelListItem — stale-stream indicator (bead enhancedchannelmanage
   it('does not show the neutral streams icon when hasStaleStreams is true', () => {
     renderWithStreams({ hasStaleStreams: true, staleStreamCount: 1 });
     expect(document.querySelector('.streams-count-icon')).not.toBeInTheDocument();
+  });
+});
+
+describe('ChannelListItem — keyboard-operable row selector (bead enhancedchannelmanager-s8xpd)', () => {
+  // Follow-on from bead zwhw4's StreamsPane review: the per-channel
+  // selection indicator was a bare clickable <span> with no native control
+  // semantics -- not focusable, no aria-checked, no keyboard handler. Mirrors
+  // the shipped StreamsPane pattern: a real <button role="checkbox"> whose
+  // aria-checked reflects `isMultiSelected`.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not render the selector outside edit mode', () => {
+    renderRow({ isEditMode: false });
+    expect(screen.queryByRole('checkbox', { name: 'Select channel ESPN HD' })).not.toBeInTheDocument();
+  });
+
+  it('renders the selector as a semantic checkbox exposing aria-checked state', () => {
+    renderRow({ isEditMode: true, isMultiSelected: false });
+    const selector = screen.getByRole('checkbox', { name: 'Select channel ESPN HD' });
+    expect(selector.tagName).toBe('BUTTON');
+    expect(selector).not.toBeChecked();
+  });
+
+  it('reflects isMultiSelected=true as aria-checked="true" and the checked glyph', () => {
+    renderRow({ isEditMode: true, isMultiSelected: true });
+    const selector = screen.getByRole('checkbox', { name: 'Select channel ESPN HD' });
+    expect(selector).toBeChecked();
+    expect(selector.querySelector('.material-icons')).toHaveTextContent('check_box');
+  });
+
+  it('is keyboard-focusable and activates onToggleSelect on Space, with zero pointer events', async () => {
+    const user = userEvent.setup();
+    const onToggleSelect = vi.fn();
+    const onClick = vi.fn();
+    renderRow({ isEditMode: true, isMultiSelected: false, onToggleSelect, onClick });
+
+    const selector = screen.getByRole('checkbox', { name: 'Select channel ESPN HD' });
+    await user.tab();
+    expect(selector).toHaveFocus();
+
+    await user.keyboard(' ');
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+    // Row-level click must not fire — the button stops propagation so the
+    // row isn't also selected/expanded by the same keypress.
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('keeps the glyph icon aria-hidden so screen readers announce only the button role/state', () => {
+    renderRow({ isEditMode: true, isMultiSelected: false });
+    const selector = screen.getByRole('checkbox', { name: 'Select channel ESPN HD' });
+    expect(selector.querySelector('.material-icons')).toHaveAttribute('aria-hidden', 'true');
   });
 });
 
