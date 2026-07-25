@@ -528,6 +528,101 @@ class TestM3UChangeDetector:
         assert set(change_set.streams_removed[0].stream_names) == {"Event B", "Event C"}
         assert change_set.streams_removed[0].count == 2
 
+    def test_detect_changes_pure_rename_duplicate_name_replacement(self, test_session):
+        """enhancedchannelmanager-wawwh review round 2 (PR #740): the
+        captured per-group name lists preserve duplicates, so the diff must
+        use multiset (Counter) semantics, not set semantics. A plain set()
+        collapses ["Event A", "Event A"] to one entry, so
+        ["Event A", "Event A"] -> ["Event A", "Event B"] would previously
+        diff as "added Event B" with NO removal recorded -- the replaced
+        duplicate occurrence was invisible. With Counter-based diffing this
+        must record exactly one addition ("Event B") and one removal
+        ("Event A"), reflecting that one of the two "Event A" occurrences
+        was actually swapped out."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"PPV": ["Event A", "Event A"]},
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"PPV": ["Event A", "Event B"]},
+        )
+
+        assert len(change_set.streams_added) == 1
+        assert change_set.streams_added[0].stream_names == ["Event B"]
+        assert change_set.streams_added[0].count == 1
+
+        assert len(change_set.streams_removed) == 1
+        assert change_set.streams_removed[0].stream_names == ["Event A"]
+        assert change_set.streams_removed[0].count == 1
+
+    def test_detect_changes_pure_rename_duplicate_count_increase_within_stable_total(
+        self, test_session
+    ):
+        """A distinct name is replaced by a second occurrence of an
+        already-present name -- the total stream count stays the same, but
+        one name's duplicate count increases from 1 to 2 while a different
+        name drops out entirely. Multiset diffing must record the extra
+        duplicate as an addition and the dropped name as a removal, not
+        cancel them out via set equality (both names are present in both
+        snapshots' sets, so a naive set diff would see no change at all)."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"PPV": ["Event A", "Event B"]},
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"PPV": ["Event A", "Event A"]},
+        )
+
+        assert len(change_set.streams_added) == 1
+        assert change_set.streams_added[0].stream_names == ["Event A"]
+        assert change_set.streams_added[0].count == 1
+
+        assert len(change_set.streams_removed) == 1
+        assert change_set.streams_removed[0].stream_names == ["Event B"]
+        assert change_set.streams_removed[0].count == 1
+
+    def test_detect_changes_no_change_multiset_identical_with_duplicates(self, test_session):
+        """Count stable AND the multiset of names identical (including
+        matching duplicate counts) -- must record nothing. Guards against
+        Counter-based diffing firing spuriously on a group that legitimately
+        carries duplicate names but hasn't actually changed."""
+        detector = M3UChangeDetector(test_session)
+        stream_names_by_group = {"PPV": ["Event A", "Event A", "Event B"]}
+
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group=stream_names_by_group,
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group=dict(stream_names_by_group),
+        )
+
+        assert change_set.has_changes is False
+        assert len(change_set.streams_added) == 0
+        assert len(change_set.streams_removed) == 0
+
     def test_detect_changes_count_stable_no_names_captured_fails_open(self, test_session):
         """Count stable and NO stream names available on either side (e.g.
         the group is disabled, or names simply weren't captured) must not
