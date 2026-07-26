@@ -2251,8 +2251,9 @@ RESTORABLE_SECTIONS = {
     "dispatcharr_users": {
         "label": "Dispatcharr Users", "dispatcharr": True, "artifact_only": True,
     },
-    # lc6zu — the settings/agents producer set completing the 13-category
-    # round-trip. Same ``artifact_only`` rationale as channels /
+    # lc6zu — the settings/agents producer set completing coverage of all 12
+    # categories in the v0.18 scope (plugins remain excluded per ADR-012
+    # D10). Same ``artifact_only`` rationale as channels /
     # dispatcharr_users: produced into the DBAS artifact and consumed by the
     # Phase-2 settings_agents importer; the legacy per-section YAML path has no
     # restorer for them. ``core_settings`` + ``comskip`` are gathered from ONE
