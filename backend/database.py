@@ -1571,7 +1571,15 @@ def _populate_builtin_tags(conn) -> None:
     builtin_groups = {
         "Quality Tags": {
             "description": "Video quality indicators (HD, 4K, etc.)",
-            "tags": ["HD", "FHD", "UHD", "4K", "SD", "1080P", "1080I", "720P", "480P", "HEVC", "H264", "H265"]
+            "tags": [
+                "HD", "FHD", "UHD", "4K", "8K", "SD",
+                "1080P", "1080I", "720P", "480P",
+                # UHD resolution suffixes (bead lecyo): providers label 4K/8K
+                # streams by pixel height ("2160P" = 4K, "4320P" = 8K) or,
+                # loosely, by width ("3840P" = 4K)
+                "2160P", "3840P", "4320P",
+                "HEVC", "H264", "H265"
+            ]
         },
         "Country Tags": {
             "description": "Country codes and abbreviations",
