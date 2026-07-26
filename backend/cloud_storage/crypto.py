@@ -170,6 +170,37 @@ def _load_or_generate_key() -> bytes:
     return key
 
 
+def verify_key_integrity_at_startup() -> bool:
+    """Probe the encryption key's integrity at container startup (bead m40pn).
+
+    Runs the same load path as first crypto use (_get_fernet ->
+    _load_or_generate_key): mode-0600 drift is repaired, a missing key is
+    generated atomically (first boot), and an unfixable ownership violation
+    surfaces as an unmissable ERROR at every container start instead of at
+    the first scheduled backup.
+
+    Failure posture — log-loudly-but-boot: ECM's core is channel management,
+    and a backup-subsystem key problem must not take down the whole app, so
+    this probe NEVER raises. The lazy path stays fail-closed: on failure no
+    Fernet instance is cached, so the next real crypto use re-runs the check
+    and raises exactly as before.
+
+    Returns:
+        True if the key loaded (or was generated) cleanly, False on violation.
+    """
+    try:
+        _get_fernet()
+        return True
+    except Exception as e:
+        logger.error(
+            "[CRYPTO] STARTUP KEY INTEGRITY PROBE FAILED — cloud-backup "
+            "credential encryption is unavailable and actual crypto use will "
+            "fail closed until this is fixed: %s (key_status=startup_probe_failed)",
+            e,
+        )
+        return False
+
+
 def encrypt_credentials(data: dict) -> str:
     """Encrypt a credentials dict to a string.
 

@@ -536,6 +536,113 @@ class TestKeyIntegrity:
 
 
 # =============================================================================
+# Startup key-integrity probe — bead m40pn
+# =============================================================================
+
+
+class TestStartupKeyIntegrityProbe:
+    """Verify verify_key_integrity_at_startup() (bead m40pn).
+
+    Posture under test: log-loudly-but-boot. The probe NEVER raises — a
+    backup-subsystem key problem must not take down channel management —
+    but the lazy path stays fail-closed for actual crypto use.
+    """
+
+    def test_happy_path_returns_true_and_is_silent(self, tmp_path, caplog):
+        """Valid existing key, correct mode/owner -> True, no ERROR logged."""
+        import logging
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+        key_file.write_bytes(Fernet.generate_key())
+        key_file.chmod(0o600)
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                with caplog.at_level(logging.ERROR, logger="cloud_storage.crypto"):
+                    result = crypto.verify_key_integrity_at_startup()
+
+        assert result is True
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        reset_key_cache()
+
+    def test_first_boot_generates_key_0600(self, tmp_path):
+        """No key file yet -> probe generates one (same path as first crypto use)."""
+        import os
+        import stat as stat_mod
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+        assert not key_file.exists()
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                result = crypto.verify_key_integrity_at_startup()
+
+        assert result is True
+        assert key_file.exists()
+        assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
+        reset_key_cache()
+
+    def test_drifted_mode_repaired_by_probe(self, tmp_path):
+        """World-readable key at boot -> probe repairs to 0600 and returns True."""
+        import os
+        import stat as stat_mod
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+        key_file.write_bytes(Fernet.generate_key())
+        key_file.chmod(0o644)
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                result = crypto.verify_key_integrity_at_startup()
+
+        assert result is True
+        assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
+        reset_key_cache()
+
+    def test_ownership_violation_logs_error_never_raises(self, tmp_path, caplog):
+        """Unfixable foreign owner -> probe returns False + unmissable ERROR,
+        and the lazy path STILL fails closed on actual crypto use."""
+        import logging
+        import os
+        from cloud_storage import crypto
+
+        reset_key_cache()
+        key_file = tmp_path / ".export_key"
+        key_file.write_bytes(Fernet.generate_key())
+        key_file.chmod(0o600)
+
+        fake_uid = os.stat(key_file).st_uid + 4242
+        fake_stat = _fake_owner_stat(key_file, fake_uid)
+
+        with patch("cloud_storage.crypto.KEY_FILE", key_file):
+            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                with patch("cloud_storage.crypto.os.getuid", return_value=1000):
+                    with fake_stat:
+                        with caplog.at_level(
+                            logging.ERROR, logger="cloud_storage.crypto"
+                        ):
+                            # Probe must NOT raise — boot continues.
+                            result = crypto.verify_key_integrity_at_startup()
+
+                        # Lazy path must remain fail-closed for real crypto use.
+                        with pytest.raises(RuntimeError, match="ownership"):
+                            encrypt_credentials({"a": "b"})
+
+        assert result is False
+        error_msgs = [
+            r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR
+        ]
+        assert any("STARTUP KEY INTEGRITY PROBE FAILED" in m for m in error_msgs)
+        reset_key_cache()
+
+
+# =============================================================================
 # Cloud Target API
 # =============================================================================
 

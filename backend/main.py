@@ -940,6 +940,21 @@ async def startup_event():
     except Exception as _gauge_seed_err:
         logger.warning("[MAIN] Failed to seed pending_merges queue-depth gauge: %s", _gauge_seed_err)
 
+    # Probe the cloud-backup encryption key's integrity at startup (bead
+    # m40pn): mode/ownership violations surface at every container start
+    # instead of at the first scheduled backup. Log-loudly-but-boot — the
+    # probe never raises (it logs an unmissable ERROR itself), and actual
+    # crypto use remains fail-closed inside cloud_storage.crypto. The outer
+    # try only guards an unexpected import/probe crash.
+    try:
+        from cloud_storage.crypto import verify_key_integrity_at_startup
+        verify_key_integrity_at_startup()
+    except Exception as _key_probe_err:
+        logger.error(
+            "[MAIN] Cloud-backup key integrity startup probe crashed: %s",
+            _key_probe_err,
+        )
+
     # Purge all expired user sessions
     try:
         from models import UserSession
