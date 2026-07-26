@@ -44,6 +44,8 @@ export async function testCloudTarget(id: number): Promise<{ success: boolean; m
 export async function testCloudConnectionInline(data: {
   provider_type: string;
   credentials: Record<string, string>;
+  /** Top-level TLS opt-out — same policy source the saved target / upload uses. */
+  insecure?: boolean;
 }): Promise<{ success: boolean; message: string }> {
   return api<{ success: boolean; message: string }>(`${API_BASE}/test`, {
     method: 'POST',

@@ -12,11 +12,17 @@ interface CloudTargetEditorProps {
   onSaved: () => void;
 }
 
+// OneDrive and Dropbox are deferred this release (no SSRF hardening yet —
+// PO decision 2026-07-25): they stay visible but disabled so operators are
+// not invited to configure targets that only fail at Test Connection.
+// Existing onedrive/dropbox rows still render and edit — the provider select
+// is disabled while editing, so the disabled options never block an edit.
 const PROVIDER_OPTIONS = [
   { value: 's3', label: 'Amazon S3 / S3-Compatible' },
   { value: 'gdrive', label: 'Google Drive' },
-  { value: 'onedrive', label: 'OneDrive' },
-  { value: 'dropbox', label: 'Dropbox' },
+  { value: 'webdav', label: 'WebDAV (Nextcloud, ownCloud, NAS)' },
+  { value: 'onedrive', label: 'OneDrive (not yet supported)', disabled: true },
+  { value: 'dropbox', label: 'Dropbox (not yet supported)', disabled: true },
 ];
 
 interface CredentialField {
@@ -38,6 +44,11 @@ const PROVIDER_FIELDS: Record<string, CredentialField[]> = {
   gdrive: [
     { key: 'service_account_json', label: 'Service Account JSON', type: 'textarea', required: true },
     { key: 'folder_id', label: 'Folder ID', type: 'text', placeholder: 'Google Drive folder ID' },
+  ],
+  webdav: [
+    { key: 'base_url', label: 'WebDAV URL', type: 'text', placeholder: 'https://nas.example.com/remote.php/dav/files/admin', required: true },
+    { key: 'username', label: 'Username', type: 'text', placeholder: '(optional for anonymous endpoints)' },
+    { key: 'password', label: 'Password', type: 'password' },
   ],
   onedrive: [
     { key: 'client_id', label: 'Client ID', type: 'password', required: true },
@@ -63,6 +74,10 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
   const [credentials, setCredentials] = useState<Record<string, string>>({});
   const [uploadPath, setUploadPath] = useState(target?.upload_path || '/');
   const [enabled, setEnabled] = useState(target?.enabled ?? true);
+  // Top-level TLS opt-out (PR #743 item 2) — never a credentials key. Only
+  // surfaced for WebDAV (the self-signed-NAS case); the API rejects
+  // credentials.insecure so this flag is the single policy source.
+  const [insecure, setInsecure] = useState(target?.insecure ?? false);
 
   const isEditing = !!target;
   const fields = PROVIDER_FIELDS[providerType] || [];
@@ -104,6 +119,7 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
         result = await cloudApi.testCloudConnectionInline({
           provider_type: providerType,
           credentials: creds,
+          insecure,
         });
       }
       if (result.success) {
@@ -140,6 +156,7 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
         provider_type: providerType,
         upload_path: uploadPath,
         enabled,
+        insecure,
       };
       if (Object.keys(creds).length > 0) {
         data.credentials = creds;
@@ -220,6 +237,25 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
                 </div>
               ))}
             </div>
+
+            {providerType === 'webdav' && (
+              <div className="modal-form-group">
+                <label className="modal-checkbox-label">
+                  <input
+                    type="checkbox"
+                    data-testid="cloud-target-insecure"
+                    checked={insecure}
+                    onChange={e => setInsecure(e.target.checked)}
+                  />
+                  Skip TLS certificate verification (insecure)
+                </label>
+                <p className="form-hint" data-testid="cloud-target-insecure-warning">
+                  Advanced: only for self-signed endpoints you control. Without
+                  verification, connections can be intercepted — every upload and
+                  connection test that skips verification is audit-logged.
+                </p>
+              </div>
+            )}
 
             <div className="modal-form-group">
               <button className="modal-btn modal-btn-secondary" onClick={handleTest} disabled={testing}>

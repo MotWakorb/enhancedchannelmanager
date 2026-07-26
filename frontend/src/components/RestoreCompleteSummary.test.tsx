@@ -123,6 +123,19 @@ describe('RestoreCompleteSummary — per-entity counts', () => {
     render(<RestoreCompleteSummary report={report} />);
     expect(screen.getByTestId('rcs-empty')).toBeInTheDocument();
   });
+
+  it('labels the settings category (core settings / comskip apply counts)', () => {
+    // Bead lc6zu: the backend report carries an EntityType.SETTINGS category
+    // (updated/skipped apply counts for core_settings + comskip) — it must
+    // render with a human label, not an undefined lookup.
+    const report = appliedReport({
+      categories: [category({ entity_type: 'settings', updated: 2, skipped: 1 })],
+    });
+    render(<RestoreCompleteSummary report={report} />);
+    const row = screen.getByTestId('rcs-category-settings');
+    expect(within(row).getByText('Settings')).toBeInTheDocument();
+    expect(within(row).getByTestId('rcs-count-updated')).toHaveTextContent('2');
+  });
 });
 
 describe('RestoreCompleteSummary — expandable reasons', () => {

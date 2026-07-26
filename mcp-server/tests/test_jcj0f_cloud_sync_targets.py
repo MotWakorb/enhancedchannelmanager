@@ -66,6 +66,36 @@ class TestCreateCloudTarget:
         # The tool must not fabricate/echo the plaintext secret in its own message.
         assert "supersecret" not in text
 
+    @pytest.mark.asyncio
+    async def test_creates_webdav_target(self):
+        """webdav is a first-class provider_type (bead 0i2vt.8) — the tool
+        forwards it unchanged and never echoes the plaintext password."""
+        mcp = _cloud_mcp()
+        client = AsyncMock()
+        client.call_endpoint.return_value = {
+            "id": 3, "name": "NAS WebDAV", "provider_type": "webdav",
+            "credentials": {"base_url": "***", "username": "***", "password": "***"},
+        }
+
+        with patch("tools.cloud_targets.get_ecm_client", return_value=client):
+            result = await mcp.call_tool("create_cloud_target", {
+                "name": "NAS WebDAV", "provider_type": "webdav",
+                "credentials": {
+                    "base_url": "https://dav.example.com/files",
+                    "username": "ecm", "password": "davsecretpw",
+                },
+                "upload_path": "/ecm-backups",
+            })
+
+        body = client.call_endpoint.call_args.kwargs["body"]
+        assert body["provider_type"] == "webdav"
+        assert body["credentials"]["base_url"] == "https://dav.example.com/files"
+        assert body["upload_path"] == "/ecm-backups"
+        text = _text(result)
+        assert "id=3" in text
+        assert "provider=webdav" in text
+        assert "davsecretpw" not in text
+
 
 class TestUpdateCloudTarget:
     @pytest.mark.asyncio

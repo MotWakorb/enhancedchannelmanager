@@ -109,6 +109,7 @@ from dbas.restore_contracts import (
     FailureDetail,
     FailureReason,
     IdRemapTable,
+    LogoMissChannel,
     LogoMissDetail,
     RestoreReport,
     RollbackLedger,
@@ -415,6 +416,54 @@ def _validate_logo(archive_logo: dict) -> tuple[bytes | None, str | None, str | 
     return data, basename, None
 
 
+def _channels_by_logo_id(archive_channels: list[dict] | None) -> dict[int, list[dict]]:
+    """Index the archive channels by their ``logo_id`` FK (bead cm9bi).
+
+    The logo-miss drill-down lists the AFFECTED CHANNELS per missed logo. The
+    channel context lives in the archive's channel records (``logo_id`` points at
+    the SOURCE logo id); this index makes the per-miss lookup O(1) instead of a
+    rescan per miss.
+    """
+    index: dict[int, list[dict]] = {}
+    for channel in archive_channels or []:
+        logo_ref = channel.get("logo_id")
+        if isinstance(logo_ref, int) and not isinstance(logo_ref, bool):
+            index.setdefault(logo_ref, []).append(channel)
+    return index
+
+
+def _affected_channels(
+    source_logo_id: object,
+    channels_by_logo: dict[int, list[dict]],
+    remap: IdRemapTable,
+    is_dry_run: bool,
+) -> list[LogoMissChannel]:
+    """The affected-channel rows for ONE missed logo (bead cm9bi).
+
+    ``channel_id`` is the DESTINATION id resolved through the CHANNEL remap
+    namespace — the channels importer runs before this one, so on apply the
+    mapping is already populated. On dry-run the CHANNEL remap holds PROVISIONAL
+    ids (source id reused as a stand-in for would-creates, indistinguishable
+    from real matches), so dry-run NEVER emits a channel id — name only.
+    """
+    if not isinstance(source_logo_id, int) or isinstance(source_logo_id, bool):
+        return []
+    affected: list[LogoMissChannel] = []
+    for channel in channels_by_logo.get(source_logo_id, []):
+        name = channel.get("name")
+        dest_id = None
+        source_channel_id = channel.get("id")
+        if not is_dry_run and isinstance(source_channel_id, int):
+            dest_id = remap.resolve(EntityType.CHANNEL, source_channel_id)
+        affected.append(
+            LogoMissChannel(
+                channel_id=dest_id,
+                name=str(name) if name else "<unknown>",
+            )
+        )
+    return affected
+
+
 async def import_logos(
     *,
     archive_logos: list[dict],
@@ -425,6 +474,7 @@ async def import_logos(
     remap: IdRemapTable,
     is_dry_run: bool = False,
     clear_existing: bool = False,
+    archive_channels: list[dict] | None = None,
 ) -> LogoImportResult:
     """Restore the LOGO category: 3-tier match + streaming upload of the misses.
 
@@ -448,6 +498,12 @@ async def import_logos(
         clear_existing: ``True`` -> run the DESTRUCTIVE bulk-delete pre-step
             (clear all destination logos before upload). OFF by default; NEVER
             runs in dry-run.
+        archive_channels: The CHANNEL records from the export archive (bead
+            cm9bi). Read-only channel context for the logo-miss drill-down:
+            each miss lists the channels whose ``logo_id`` referenced it, with
+            the destination channel id resolved through the CHANNEL remap
+            namespace (populated by the channels importer, which runs earlier).
+            ``None``/empty -> misses carry an empty channel list.
 
     Returns:
         A :class:`LogoImportResult` with safe aggregate counters.
@@ -474,6 +530,10 @@ async def import_logos(
         clear_existing,
         len(archive_logos),
     )
+
+    # Index the archive channels by logo_id ONCE (bead cm9bi) so each miss can
+    # list its affected channels without rescanning the channel records.
+    channels_by_logo = _channels_by_logo_id(archive_channels)
 
     # Enumerate destination logos ONCE for the 3-tier match (safe: id/name/url).
     try:
@@ -545,11 +605,18 @@ async def import_logos(
 
         # A valid miss feeds the logo-miss aggregate (D9 red banner) regardless of
         # dry-run vs. apply — it is a logo the destination did not already have.
-        # It also records a per-logo detail row (id + name) for the drill-down
-        # behind the aggregate count (bead qhui4) — additive to the D9 banner.
+        # It also records a per-logo detail row (id + name, bead qhui4) with the
+        # AFFECTED CHANNELS (destination id where known + name, bead cm9bi) for
+        # the drill-down behind the aggregate count — additive to the D9 banner.
         report.logo_misses += 1
         report.logo_miss_details.append(
-            LogoMissDetail(source_export_id=source_id, label=label)
+            LogoMissDetail(
+                source_export_id=source_id,
+                label=label,
+                channels=_affected_channels(
+                    source_id, channels_by_logo, remap, is_dry_run
+                ),
+            )
         )
         result.misses += 1
 

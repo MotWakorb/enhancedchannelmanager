@@ -30,6 +30,7 @@ from sqlalchemy import text
 from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
 from dbas import artifact_crypto
+from dbas.importers.settings_agents import is_safe_setting_key
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
 from models import (
@@ -76,7 +77,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.17.6-0169"
+APP_VERSION = "0.17.6-0170"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -601,7 +602,65 @@ async def _gather_redacted_categories(include_credentials: bool = False) -> dict
     return out
 
 
-def _gather_logo_binary_subtree() -> tuple[list[tuple[Path, str]], dict, dict]:
+def _logo_basename_key(value) -> str | None:
+    """Lowercased basename of a logo url/path, the producer↔importer join key.
+
+    Mirrors ``dbas.importers.logos._basename_key`` (the importer's tier-3 file
+    match) so the producer-side source-id correlation and the restore-side file
+    match agree on what "same file" means.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    last = value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    last = last.strip().lower()
+    return last or None
+
+
+async def _fetch_source_logo_index() -> dict[str, dict]:
+    """Basename -> ``{"id", "name"}`` index of the SOURCE Dispatcharr logos.
+
+    PR #743 review item 1 (cm9bi): the restore importer's affected-channel
+    drill-down keys on the SOURCE logo id (archive channels reference logos via
+    ``logo_id``), but an on-disk logo file carries no id. This index joins each
+    archived file to its Dispatcharr logo record by URL basename so the builder
+    can preserve the id in ``binary/metadata.json``. Best-effort: an unavailable
+    client or listing failure degrades to an empty index (the artifact still
+    carries the files; misses then simply list no affected channels), never a
+    build failure. On a basename collision the lowest id wins — the same
+    tie-break the importer's file match uses.
+    """
+    try:
+        client = get_client()
+        if not client:
+            return {}
+        logos = await client.get_all_logos_paginated()
+    except Exception as e:  # noqa: BLE001 - correlation is best-effort
+        logger.warning("[BACKUP] Could not list source logos for id correlation: %s", e)
+        return {}
+
+    index: dict[str, dict] = {}
+    for logo in logos or []:
+        if not isinstance(logo, dict):
+            continue
+        logo_id = logo.get("id")
+        if not isinstance(logo_id, int) or isinstance(logo_id, bool):
+            continue
+        key = _logo_basename_key(logo.get("url")) or _logo_basename_key(logo.get("filename"))
+        if key is None:
+            continue
+        existing = index.get(key)
+        if existing is None or logo_id < existing["id"]:
+            entry: dict = {"id": logo_id}
+            name = logo.get("name")
+            if isinstance(name, str) and name.strip():
+                entry["name"] = name
+            index[key] = entry
+    return index
+
+
+def _gather_logo_binary_subtree(
+    source_logo_index: Optional[dict] = None,
+) -> tuple[list[tuple[Path, str]], dict, dict]:
     """Enumerate logo files for the binary subtree without reading them.
 
     Returns ``(entries, metadata, url_mappings)`` where:
@@ -609,13 +668,20 @@ def _gather_logo_binary_subtree() -> tuple[list[tuple[Path, str]], dict, dict]:
         ZIP one file at a time (D8 streaming-upload model — the builder writes
         each via zf.write(), which streams from disk, never buffering all logos
         in RAM).
-      - ``metadata`` is the inventory written to binary/metadata.json.
+      - ``metadata`` is the inventory written to binary/metadata.json. When
+        ``source_logo_index`` (see :func:`_fetch_source_logo_index`) resolves a
+        file's basename, the entry also carries the SOURCE Dispatcharr logo
+        ``id`` (+ display ``name``) — the correlation the restore decoder
+        attaches to each logo record so the importer's affected-channel lookup
+        works on genuine artifacts (PR #743 item 1). An uncorrelated file
+        carries no ``id`` (never fabricated).
       - ``url_mappings`` maps each archived logo filename to its (best-effort)
         source reference for restore-side re-hosting.
     """
     entries: list[tuple[Path, str]] = []
     files_meta: list[dict] = []
     url_mappings: dict[str, str] = {}
+    logo_index = source_logo_index or {}
 
     logos_dir = CONFIG_DIR / "uploads" / "logos"
     if logos_dir.exists() and logos_dir.is_dir():
@@ -629,7 +695,13 @@ def _gather_logo_binary_subtree() -> tuple[list[tuple[Path, str]], dict, dict]:
                 size = file_path.stat().st_size
             except OSError:
                 size = None
-            files_meta.append({"filename": rel, "size_bytes": size})
+            file_meta: dict = {"filename": rel, "size_bytes": size}
+            correlated = logo_index.get(_logo_basename_key(rel) or "")
+            if correlated is not None:
+                file_meta["id"] = correlated["id"]
+                if correlated.get("name"):
+                    file_meta["name"] = correlated["name"]
+            files_meta.append(file_meta)
             # Local logos are referenced by their on-disk relative path; the
             # restore importer (Phase 2, 0i2vt.15) re-hosts them. Remote logo
             # URL reconstruction is a restore-side concern and out of scope for
@@ -717,7 +789,12 @@ async def build_backup_artifact(
     # re-injects the approved migration creds (and only with a passphrase set,
     # validated above); redaction still runs over everything else.
     categories = await _gather_redacted_categories(include_credentials=include_credentials)
-    logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree()
+    # Source-logo id correlation (PR #743 item 1) — best-effort join of each
+    # on-disk logo file to its Dispatcharr logo record, carried in metadata.json.
+    source_logo_index = await _fetch_source_logo_index()
+    logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree(
+        source_logo_index=source_logo_index
+    )
 
     # e0r3h — the producer owns the CANONICAL timestamped name
     # ``ecm-backup-<UTC ts>.zip`` (no post-build rename in the task layer). This is
@@ -1891,6 +1968,79 @@ async def _gather_channels_with_streams(client) -> list[dict]:
     return enriched
 
 
+# Core-settings keys whose lower-cased name starts with this prefix belong to
+# the ``comskip`` artifact section, not ``core_settings``. Dispatcharr has NO
+# separate comskip endpoint: comskip config (``comskip_ini``, toggles, …) lives
+# in the same GET /api/core/settings/ namespace the settings importer PATCHes
+# per-key (see dispatcharr_client.get_core_settings / update_core_setting), so
+# the producer fetches once and SPLITS by this prefix. The split is disjoint —
+# no key can be applied twice on restore.
+_COMSKIP_KEY_PREFIX = "comskip"
+
+
+def _normalize_core_settings(raw) -> dict:
+    """Normalize the GET /api/core/settings/ payload into a flat key->value map.
+
+    Dispatcharr serializes core settings either as a mapping or as a list of
+    ``{key|name, value}`` records; the client deliberately returns the raw
+    payload and callers normalize (see ``dispatcharr_client.get_core_settings``).
+    Rows without a usable string key are dropped rather than guessed at.
+    """
+    if isinstance(raw, dict):
+        return dict(raw)
+    out: dict = {}
+    if isinstance(raw, list):
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            key = row.get("key")
+            if not isinstance(key, str) or not key:
+                key = row.get("name")
+            if isinstance(key, str) and key:
+                out[key] = row.get("value")
+    return out
+
+
+def _split_comskip_settings(settings: dict) -> tuple[dict, dict]:
+    """Split a normalized core-settings map into (core_settings, comskip) blobs.
+
+    A key whose lower-cased name starts with :data:`_COMSKIP_KEY_PREFIX` goes to
+    the comskip blob; everything else stays in core_settings. Disjoint by
+    construction, preserving iteration order within each blob.
+    """
+    core: dict = {}
+    comskip: dict = {}
+    for key, value in settings.items():
+        if isinstance(key, str) and key.lower().startswith(_COMSKIP_KEY_PREFIX):
+            comskip[key] = value
+        else:
+            core[key] = value
+    return core, comskip
+
+
+def _redact_marked_setting_values(blob: dict) -> dict:
+    """Redact the VALUE of any setting whose KEY the restore importer denylists.
+
+    Mirrors the importer-side conservative denylist (lc6zu): the settings
+    importer (``dbas.importers.settings_agents``) unconditionally SKIPS any key
+    failing :func:`is_safe_setting_key` — the SAME predicate imported here, so
+    the two sides can never drift. Because such a key is never applied on
+    restore, carrying its real value in the artifact is pure leak risk with
+    zero utility: the value is replaced with the REDACTED sentinel ALWAYS, even
+    on a cred-carrying (``include_credentials``) migration artifact. The key
+    NAME survives so the restore report can still surface the skip by name.
+    Falsy None/"" values are preserved (same rule as the deep redactor) so
+    "unset" stays distinguishable.
+    """
+    out: dict = {}
+    for key, value in blob.items():
+        if isinstance(key, str) and not is_safe_setting_key(key):
+            out[key] = REDACTED if value not in (None, "") else value
+        else:
+            out[key] = value
+    return out
+
+
 async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
     """Fetch full Dispatcharr data for selected sections.
 
@@ -1934,6 +2084,28 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
             # redactor scrubs any credential-class field as a backstop.
             users = await client.get_users()
             result["dispatcharr_users"] = users or []
+        # lc6zu — the settings/agents producer set consumed by the Phase-2
+        # settings_agents importer. User agents and DVR rules are benign entity
+        # lists; the deep redactor still runs over them as defense in depth.
+        if "user_agents" in needed:
+            agents = await client.get_user_agents()
+            result["user_agents"] = agents or []
+        if "dvr_rules" in needed:
+            rules = await client.get_dvr_rules()
+            result["dvr_rules"] = rules or []
+        if "core_settings" in needed or "comskip" in needed:
+            # ONE fetch backs both sections (no comskip endpoint exists — see
+            # _COMSKIP_KEY_PREFIX). Dangerous-marked setting VALUES are redacted
+            # here at the gather chokepoint so every downstream serialization
+            # (artifact category YAML, explicit ?sections= export) is covered.
+            raw_settings = await client.get_core_settings()
+            core_blob, comskip_blob = _split_comskip_settings(
+                _normalize_core_settings(raw_settings)
+            )
+            if "core_settings" in needed:
+                result["core_settings"] = _redact_marked_setting_values(core_blob)
+            if "comskip" in needed:
+                result["comskip"] = _redact_marked_setting_values(comskip_blob)
 
         return result
     except Exception as e:
@@ -2078,6 +2250,23 @@ RESTORABLE_SECTIONS = {
     "channels": {"label": "Channels", "dispatcharr": True, "artifact_only": True},
     "dispatcharr_users": {
         "label": "Dispatcharr Users", "dispatcharr": True, "artifact_only": True,
+    },
+    # lc6zu — the settings/agents producer set completing coverage of all 12
+    # categories in the v0.18 scope (plugins remain excluded per ADR-012
+    # D10). Same ``artifact_only`` rationale as channels /
+    # dispatcharr_users: produced into the DBAS artifact and consumed by the
+    # Phase-2 settings_agents importer; the legacy per-section YAML path has no
+    # restorer for them. ``core_settings`` + ``comskip`` are gathered from ONE
+    # endpoint (GET /api/core/settings/ — Dispatcharr has no separate comskip
+    # endpoint; the importer applies both via per-key PATCH on that same
+    # namespace) and split by the ``comskip`` key prefix.
+    "user_agents": {"label": "User Agents", "dispatcharr": True, "artifact_only": True},
+    "dvr_rules": {"label": "DVR Rules", "dispatcharr": True, "artifact_only": True},
+    "core_settings": {
+        "label": "Core Settings", "dispatcharr": True, "artifact_only": True,
+    },
+    "comskip": {
+        "label": "Comskip Settings", "dispatcharr": True, "artifact_only": True,
     },
 }
 

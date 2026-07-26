@@ -14,10 +14,16 @@
  * per-logo detail list (`logo_miss_details: LogoMissDetail[]`, each id + name).
  * The aggregate count gates the red banner (D9, unchanged); when the detail list
  * is present and non-empty the banner ADDS a drill-down enumerating which logos
- * are missing. The banner also names the count and links to the Dispatcharr
- * **Channels** admin page, where the operator fixes the affected channels
- * one-off. The link is built with the same `${dispatcharrUrl}/…` pattern the rest
- * of the app uses (see ChannelsPane).
+ * are missing. Since bead cm9bi each miss also carries its AFFECTED CHANNELS
+ * (`channels: LogoMissChannel[]` — destination Dispatcharr id where known +
+ * name); those render as nested per-channel rows, each with its own Dispatcharr
+ * link. Dispatcharr's SPA router exposes NO per-channel route (verified against
+ * the live bundle — only top-level paths like `/channels`; channel editing is a
+ * modal on that page), so per-channel links FALL BACK to the `/channels` list
+ * page while the row still names the channel + id for the operator to find it
+ * there. The banner also names the count and keeps the aggregate link to the
+ * Dispatcharr **Channels** admin page. All links are built with the same
+ * `${dispatcharrUrl}/…` pattern the rest of the app uses (see ChannelsPane).
  *
  * Colorblind-safe (WCAG 1.4.1): the meaning is carried by an icon + the word
  * "missing" in the copy, not by red colour alone. `role="alert"` so assistive
@@ -41,11 +47,17 @@ interface LogoMissBannerProps {
   dispatcharrUrl?: string;
 }
 
-/** Plain-language count phrase — singular vs. plural, never the raw field name. */
+/** Plain-language count phrase — singular vs. plural, never the raw field name.
+ *
+ * `logo_misses` counts MISSED LOGOS, not channels (one shared logo affecting
+ * several channels is ONE miss), so the aggregate copy is logo-oriented; the
+ * per-channel impact lives in the nested affected-channel rows (PR #743
+ * review item 3).
+ */
 function missCopy(count: number): string {
   return count === 1
-    ? '1 channel is missing its logo'
-    : `${count} channels are missing their logo`;
+    ? '1 logo is missing after this restore'
+    : `${count} logos are missing after this restore`;
 }
 
 export function LogoMissBanner({ report, dispatcharrUrl }: LogoMissBannerProps) {
@@ -58,7 +70,10 @@ export function LogoMissBanner({ report, dispatcharrUrl }: LogoMissBannerProps) 
   }
 
   // Build the Dispatcharr Channels-page link with the same `${base}/…` pattern
-  // ChannelsPane uses; strip a trailing slash so we never double it.
+  // ChannelsPane uses; strip a trailing slash so we never double it. Dispatcharr
+  // has no per-channel route (channel editing is a modal on /channels), so the
+  // per-channel links below share this same href — swap in a deep-link builder
+  // here if Dispatcharr ever grows one.
   const base = dispatcharrUrl?.replace(/\/+$/, '');
   const channelsHref = base ? `${base}/channels` : null;
 
@@ -75,19 +90,66 @@ export function LogoMissBanner({ report, dispatcharrUrl }: LogoMissBannerProps) 
       <div className="logo-miss-text">
         <span className="logo-miss-title">{missCopy(count)}</span>
         <span className="logo-miss-detail">
-          These channels were restored without a logo. Open them in Dispatcharr to set a logo on each.
+          The affected channels were restored without their logo. Open Dispatcharr to set a logo on each.
         </span>
         {hasDetails && (
           <ul className="logo-miss-detail-list" data-testid="logo-miss-detail-list">
-            {details.map((miss, index) => (
-              <li
-                className="logo-miss-detail-row"
-                data-testid="logo-miss-detail-row"
-                key={miss.source_export_id ?? `idx-${index}`}
-              >
-                {miss.label?.trim() || 'Unnamed logo'}
-              </li>
-            ))}
+            {details.map((miss, index) => {
+              const channels = miss.channels ?? [];
+              return (
+                <li
+                  className="logo-miss-detail-row"
+                  data-testid="logo-miss-detail-row"
+                  key={miss.source_export_id ?? `idx-${index}`}
+                >
+                  <span className="logo-miss-logo-name">
+                    {miss.label?.trim() || 'Unnamed logo'}
+                  </span>
+                  {channels.length > 0 && (
+                    <ul
+                      className="logo-miss-channel-list"
+                      data-testid="logo-miss-channel-list"
+                    >
+                      {channels.map((channel, channelIndex) => {
+                        const channelName = channel.name?.trim() || 'Unnamed channel';
+                        return (
+                          <li
+                            className="logo-miss-channel-row"
+                            data-testid="logo-miss-channel-row"
+                            key={channel.channel_id ?? `ch-${channelIndex}`}
+                          >
+                            <span className="logo-miss-channel-name">{channelName}</span>
+                            {typeof channel.channel_id === 'number' && (
+                              <span className="logo-miss-channel-id">
+                                (channel {channel.channel_id})
+                              </span>
+                            )}
+                            {channelsHref && (
+                              <a
+                                className="logo-miss-channel-link"
+                                data-testid="logo-miss-channel-link"
+                                href={channelsHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label={`Open ${channelName} in Dispatcharr`}
+                              >
+                                Open in Dispatcharr
+                                <span
+                                  className="material-icons logo-miss-link-icon"
+                                  aria-hidden="true"
+                                >
+                                  open_in_new
+                                </span>
+                              </a>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
         {channelsHref && (

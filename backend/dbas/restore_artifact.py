@@ -83,7 +83,21 @@ _SECTION_TO_ENTITY: dict[str, EntityType] = {
     # decoded to nothing and restore was a silent no-op.
     "channels": EntityType.CHANNEL,
     "dispatcharr_users": EntityType.USER,
+    # lc6zu — the settings/agents entity categories (importers:
+    # dbas/importers/settings_agents.py). The core_settings/comskip SETTINGS
+    # blobs are NOT listed here: they are key/value mappings, not entity lists,
+    # and decode through their own seam (_decode_settings_category).
+    "user_agents": EntityType.USER_AGENT,
+    "dvr_rules": EntityType.DVR_RULE,
 }
+
+# The SETTINGS-blob artifact sections (key/value mappings, not entity lists).
+# Both decode into the SINGLE ``EntityType.SETTINGS`` plan category as
+# self-describing records ``{"section": <name>, "values": {...}}`` — the
+# contract the orchestrator's settings step consumes
+# (restore_orchestrator._settings -> settings_agents.import_core_settings /
+# import_comskip). Order here is the fixed apply order.
+_SETTINGS_BLOB_SECTIONS: tuple[str, ...] = ("core_settings", "comskip")
 
 # Where in the parsed category YAML each section's entity list lives. The
 # Dispatcharr-managed sections sit under ``dispatcharr``; ECM DB sections under
@@ -160,22 +174,105 @@ def _decode_categories(zf: zipfile.ZipFile) -> list[PlanCategory]:
     return categories
 
 
+def _extract_section_blob(parsed: object, section_key: str) -> dict:
+    """Pull a SETTINGS-blob mapping for ``section_key`` from a parsed category YAML.
+
+    Mirrors :func:`_extract_section_entities` but for the key/value blob shape
+    (core_settings / comskip). Returns ``{}`` when the section is absent or not
+    a mapping — a malformed blob decodes to nothing, never a crash.
+    """
+    if not isinstance(parsed, dict):
+        return {}
+    for container in _YAML_CONTAINERS:
+        block = parsed.get(container)
+        if isinstance(block, dict) and section_key in block:
+            blob = block[section_key]
+            if isinstance(blob, dict):
+                return blob
+    return {}
+
+
+def _decode_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
+    """Decode the core_settings/comskip blobs into the SETTINGS plan category.
+
+    Each present, non-empty blob becomes one self-describing record
+    ``{"section": <name>, "values": {...}}`` (see
+    :data:`_SETTINGS_BLOB_SECTIONS`). The category is always returned — empty
+    when neither section carries values — so the operator sees "0" rather than
+    a gap, consistent with :func:`_decode_categories`.
+    """
+    entities: list[dict] = []
+    names = set(zf.namelist())
+    for section_key in _SETTINGS_BLOB_SECTIONS:
+        member = "%s/%s.yaml" % (_CATEGORY_DIR, section_key)
+        if member not in names or not _is_safe_member(member):
+            continue
+        try:
+            parsed = yaml.safe_load(zf.read(member).decode("utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError) as exc:
+            logger.warning(
+                "[DBAS-RESTORE] Settings section %s YAML unreadable; treating as empty: %s",
+                section_key, exc,
+            )
+            continue
+        blob = _extract_section_blob(parsed, section_key)
+        if blob:
+            entities.append({"section": section_key, "values": blob})
+    return PlanCategory(entity_type=EntityType.SETTINGS, entities=entities)
+
+
+def _parse_logo_metadata_index(zf: zipfile.ZipFile) -> dict[str, dict]:
+    """Parse ``binary/metadata.json`` into a filename -> entry index.
+
+    PR #743 review item 1 (cm9bi): the builder joins each archived logo file to
+    its SOURCE Dispatcharr logo record (``id`` + display ``name``) and carries
+    the correlation in the binary metadata. This index lets
+    :func:`_decode_logo_records` attach that id to each logo record — the key
+    the logos importer's affected-channel lookup (archive channels' ``logo_id``
+    FKs) resolves against. Best-effort: a missing/malformed metadata member
+    yields an empty index (records then decode id-less, as before).
+    """
+    import json
+
+    if _BINARY_METADATA not in zf.namelist():
+        return {}
+    try:
+        metadata = json.loads(zf.read(_BINARY_METADATA))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        logger.warning("[DBAS-RESTORE] Binary metadata unreadable during decode: %s", exc)
+        return {}
+    if not isinstance(metadata, dict):
+        return {}
+    index: dict[str, dict] = {}
+    for entry in metadata.get("logos") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("filename"), str):
+            index[entry["filename"]] = entry
+    return index
+
+
 def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
     """Decode the binary logo subtree into per-logo importer records.
 
     Each ``binary/logos/<rel>`` member becomes a record the logos importer (.15)
     consumes::
 
-        {"name": <basename-stem>, "filename": <basename>,
-         "content_b64": <base64 of the file bytes>, "size": <byte length>}
+        {"name": <display name or basename-stem>, "filename": <basename>,
+         "content_b64": <base64 of the file bytes>, "size": <byte length>,
+         "id": <source Dispatcharr logo id, when correlated>}
 
-    The artifact carries no source logo id, so tier-1 (src) match never applies;
-    the importer's tier-2 (name) / tier-3 (file) match handle reconciliation.
+    ``id`` + display ``name`` come from the builder's source-logo correlation in
+    ``binary/metadata.json`` (PR #743 item 1). The id is what makes the logo-miss
+    affected-channel drill-down work on GENUINE artifacts (archive channels
+    reference logos by ``logo_id``), and lets a matched/uploaded logo register
+    in the LOGO remap namespace. A file the builder could not correlate decodes
+    id-less with the basename-stem name fallback — exactly the pre-correlation
+    shape; the importer's tier-2 (name) / tier-3 (file) match still applies.
 
     Member names are screened by :func:`_is_safe_member` before read; an unsafe
     name is skipped (logged), never read.
     """
     records: list[dict] = []
+    metadata_index = _parse_logo_metadata_index(zf)
     prefix = _LOGO_DIR + "/"
     for name in zf.namelist():
         if not name.startswith(prefix) or name == prefix:
@@ -191,14 +288,23 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
         if not basename:
             continue
         stem = basename.rsplit(".", 1)[0]
-        records.append(
-            {
-                "name": stem,
-                "filename": basename,
-                "content_b64": base64.b64encode(raw).decode("ascii"),
-                "size": len(raw),
-            }
-        )
+        record = {
+            "name": stem,
+            "filename": basename,
+            "content_b64": base64.b64encode(raw).decode("ascii"),
+            "size": len(raw),
+        }
+        # Metadata is keyed by the file's logos-dir-relative path (== the member
+        # name minus the binary/logos/ prefix).
+        meta = metadata_index.get(name[len(prefix):])
+        if meta is not None:
+            source_id = meta.get("id")
+            if isinstance(source_id, int) and not isinstance(source_id, bool):
+                record["id"] = source_id
+            display_name = meta.get("name")
+            if isinstance(display_name, str) and display_name.strip():
+                record["name"] = display_name
+        records.append(record)
     return records
 
 
@@ -255,6 +361,12 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
 
     manifest = _parse_manifest(zf)
     categories = _decode_categories(zf)
+
+    # lc6zu — the SETTINGS category (core_settings + comskip blobs) decodes
+    # through its own seam: the sections are key/value mappings, not entity
+    # lists, and both land in ONE EntityType.SETTINGS category as
+    # {"section", "values"} records (the orchestrator settings-step contract).
+    categories.append(_decode_settings_category(zf))
 
     logo_records = _decode_logo_records(zf)
     categories.append(

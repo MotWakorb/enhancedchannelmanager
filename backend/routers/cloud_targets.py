@@ -56,40 +56,74 @@ def _validate_onedrive_credentials(provider_type: Optional[str], creds: Optional
     return creds
 
 
+def _reject_reserved_credential_keys(creds: Optional[dict]) -> Optional[dict]:
+    """Refuse a credentials dict that smuggles the RESERVED ``insecure`` key.
+
+    PR #743 review item 2 (0i2vt.8): TLS policy is derived ONLY from the
+    top-level ``insecure`` flag (persisted on ``CloudStorageTarget.insecure``,
+    audited on every skip). Before this guard, an arbitrary
+    ``credentials.insecure`` key silently disabled verification on the
+    saved/inline test paths while scheduled uploads overrode it from the
+    column — a split-brain where a test could succeed against an endpoint the
+    real upload would refuse (or vice versa). Reject-loudly at the API
+    boundary; the saved-test path additionally strips the key from LEGACY
+    stored rows before overriding from the column.
+    """
+    if creds and "insecure" in creds:
+        raise ValueError(
+            "credentials.insecure is reserved — use the top-level 'insecure' "
+            "flag to control TLS verification"
+        )
+    return creds
+
+
+def _validate_request_credentials(provider_type: Optional[str], creds: Optional[dict]) -> Optional[dict]:
+    """Shared credential validation for every cloud-target request model."""
+    _reject_reserved_credential_keys(creds)
+    return _validate_onedrive_credentials(provider_type, creds)
+
+
 class CloudTargetCreateRequest(BaseModel):
     name: str
-    provider_type: Literal["s3", "gdrive", "onedrive", "dropbox"]
+    provider_type: Literal["s3", "gdrive", "webdav", "onedrive", "dropbox"]
     credentials: dict
     upload_path: str = "/"
     enabled: bool = True
+    # Top-level TLS-verification skip (persists to CloudStorageTarget.insecure).
+    # The ONLY way to weaken TLS — credentials.insecure is rejected above.
+    insecure: bool = False
 
     @field_validator("credentials")
     @classmethod
     def _check_credentials(cls, v, info):
-        return _validate_onedrive_credentials(info.data.get("provider_type"), v)
+        return _validate_request_credentials(info.data.get("provider_type"), v)
 
 
 class CloudTargetUpdateRequest(BaseModel):
     name: Optional[str] = None
-    provider_type: Optional[Literal["s3", "gdrive", "onedrive", "dropbox"]] = None
+    provider_type: Optional[Literal["s3", "gdrive", "webdav", "onedrive", "dropbox"]] = None
     credentials: Optional[dict] = None
     upload_path: Optional[str] = None
     enabled: Optional[bool] = None
+    insecure: Optional[bool] = None
 
     @field_validator("credentials")
     @classmethod
     def _check_credentials(cls, v, info):
-        return _validate_onedrive_credentials(info.data.get("provider_type"), v)
+        return _validate_request_credentials(info.data.get("provider_type"), v)
 
 
 class CloudTargetTestRequest(BaseModel):
-    provider_type: Literal["s3", "gdrive", "onedrive", "dropbox"]
+    provider_type: Literal["s3", "gdrive", "webdav", "onedrive", "dropbox"]
     credentials: dict
+    # Inline-test TLS opt-out — same semantics as the saved target's column so
+    # a pre-save test exercises the same policy the scheduled upload will use.
+    insecure: bool = False
 
     @field_validator("credentials")
     @classmethod
     def _check_credentials(cls, v, info):
-        return _validate_onedrive_credentials(info.data.get("provider_type"), v)
+        return _validate_request_credentials(info.data.get("provider_type"), v)
 
 
 def _mask_credentials(creds: dict) -> dict:
@@ -148,6 +182,7 @@ async def create_cloud_target(req: CloudTargetCreateRequest):
             credentials=encrypted,
             upload_path=req.upload_path,
             enabled=req.enabled,
+            insecure=req.insecure,
         )
         db.add(target)
         db.commit()
@@ -198,6 +233,8 @@ async def update_cloud_target(target_id: int, req: CloudTargetUpdateRequest):
             target.upload_path = req.upload_path
         if req.enabled is not None:
             target.enabled = req.enabled
+        if req.insecure is not None:
+            target.insecure = req.insecure
         if req.credentials is not None:
             target.credentials = encrypt_credentials(req.credentials)
 
@@ -273,6 +310,48 @@ async def delete_cloud_target(target_id: int):
 # ---------------------------------------------------------------------------
 
 
+def _audit_insecure_test(
+    target_id: Optional[int], target_name: str, provider_type: str
+) -> None:
+    """Audit row for a connection test that SKIPS TLS verification.
+
+    Mirrors ``tasks.dbas_backup.DbasBackupTask._audit_insecure`` (the upload
+    path's row) so the insecure-TLS audit fires on test paths the same as on
+    uploads — PR #743 review item 2, requirement (d). Best-effort, never fails
+    the test call.
+    """
+    try:
+        journal.log_entry(
+            category="backup_outbound",
+            action_type="cloud_test_insecure_tls",
+            entity_name=target_name,
+            entity_id=target_id,
+            description=(
+                "TLS verification SKIPPED (insecure=true) for %s target "
+                "'%s' (id=%s) on a cloud-target connection test" % (
+                    provider_type, target_name, target_id,
+                )
+            ),
+            user_initiated=True,
+        )
+    except Exception as e:  # pragma: no cover — journal best-effort
+        logger.warning("[CLOUD-TARGETS] Failed to journal insecure-test audit: %s", e)
+
+
+def _adapter_credentials(creds: dict, insecure: bool) -> dict:
+    """Derive the adapter's credential dict with ONE TLS policy source.
+
+    Strips any (legacy) ``insecure`` key riding inside the stored credentials
+    and injects the authoritative top-level flag — the SAME override the
+    scheduled upload path applies (``tasks/dbas_backup.py``), so test behavior
+    always equals upload behavior (PR #743 item 2, requirement (c)).
+    """
+    out = dict(creds)
+    out.pop("insecure", None)
+    out["insecure"] = bool(insecure)
+    return out
+
+
 def _deferred_provider_result(provider_type: str) -> Optional[dict]:
     """Fail-closed test result for a DEFERRED (un-hardened) provider, else None.
 
@@ -303,6 +382,8 @@ async def test_cloud_target(target_id: int):
         if not target:
             raise HTTPException(status_code=404, detail="Cloud target not found")
         provider_type = target.provider_type
+        target_name = target.name
+        insecure = bool(target.insecure)
         creds = decrypt_credentials(target.credentials)
     finally:
         db.close()
@@ -311,6 +392,13 @@ async def test_cloud_target(target_id: int):
     if deferred is not None:
         logger.info("[CLOUD-TARGETS] Test refused for deferred provider '%s'", provider_type)
         return deferred
+
+    # ONE TLS policy source: the target's insecure column — never a key inside
+    # the stored credentials (parity with the scheduled upload path). Audit the
+    # skip BEFORE the request, same as uploads do.
+    creds = _adapter_credentials(creds, insecure)
+    if insecure:
+        _audit_insecure_test(target_id, target_name, provider_type)
 
     try:
         adapter = get_adapter(provider_type, creds)
@@ -351,8 +439,15 @@ async def test_cloud_target_inline(req: CloudTargetTestRequest):
         logger.info("[CLOUD-TARGETS] Inline test refused for deferred provider '%s'", req.provider_type)
         return deferred
 
+    # Same single-source TLS policy as the saved-test/upload paths: the request
+    # model rejected credentials.insecure; the top-level flag drives the adapter
+    # and the audit row fires on a skip, exactly as uploads audit.
+    creds = _adapter_credentials(req.credentials, req.insecure)
+    if req.insecure:
+        _audit_insecure_test(None, "(inline test)", req.provider_type)
+
     try:
-        adapter = get_adapter(req.provider_type, req.credentials)
+        adapter = get_adapter(req.provider_type, creds)
         result = await adapter.test_connection()
         return {
             "success": result.success,

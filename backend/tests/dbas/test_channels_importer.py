@@ -688,3 +688,35 @@ async def test_rollback_ledger_records_each_created_channel():
         assert entry.label in ("CNN", "ESPN")
     labels = {e.label for e in ledger.entries}
     assert labels == {"CNN", "ESPN"}
+
+
+# ---------------------------------------------------------------------------
+# Logo misses (bead cm9bi) — the channels importer records NONE
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_channels_importer_records_no_logo_misses():
+    """cm9bi invariant: the channels importer DROPS ``logo_id`` from the create
+    payload (non-remappable FK, owned by the logos bead) and has no logo-attach
+    path — logo misses (aggregate + details, incl. affected-channel context)
+    are recorded ONLY by the logos importer."""
+    client = _client()
+    report = _report()
+
+    await import_channels(
+        archive_channels=[{"id": 5, "name": "CNN", "channel_number": 1, "logo_id": 42}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    cat = report.category(EntityType.CHANNEL)
+    assert cat.created == 1
+    assert report.logo_misses == 0
+    assert report.logo_miss_details == []
+    # And the dropped FK never reaches the upstream create payload.
+    payload = client.create_channel.await_args.args[0]
+    assert "logo_id" not in payload

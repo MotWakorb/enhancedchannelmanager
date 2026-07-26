@@ -20,6 +20,7 @@ import './CloudTargetsCard.css';
 const PROVIDER_ICONS: Record<string, string> = {
   s3: 'cloud',
   gdrive: 'add_to_drive',
+  webdav: 'dns',
   onedrive: 'cloud_queue',
   dropbox: 'cloud_circle',
 };
@@ -27,6 +28,7 @@ const PROVIDER_ICONS: Record<string, string> = {
 const PROVIDER_LABELS: Record<string, string> = {
   s3: 'Amazon S3',
   gdrive: 'Google Drive',
+  webdav: 'WebDAV',
   onedrive: 'OneDrive',
   dropbox: 'Dropbox',
 };

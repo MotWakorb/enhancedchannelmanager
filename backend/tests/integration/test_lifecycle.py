@@ -84,6 +84,29 @@ class TestStartupInitialization:
             mock_init.assert_called_once()
 
 
+    @pytest.mark.asyncio
+    async def test_startup_probes_key_integrity(self):
+        """startup_event should probe the cloud-backup encryption key (bead m40pn)."""
+        with patch("main.init_db"), \
+             patch("main.get_settings") as mock_settings, \
+             patch("main.set_log_level"), \
+             patch("tls.https_server.is_https_subprocess", return_value=False), \
+             patch("main.asyncio"), \
+             patch("tls.settings.get_tls_settings", return_value=MagicMock(enabled=False)), \
+             patch("tls.https_server.start_https_if_configured", new_callable=AsyncMock), \
+             patch("cloud_storage.crypto.verify_key_integrity_at_startup") as mock_probe:
+            settings = MagicMock()
+            settings.is_configured.return_value = False
+            settings.backend_log_level = None
+            settings.url = ""
+            mock_settings.return_value = settings
+
+            from main import startup_event
+            await startup_event()
+
+            mock_probe.assert_called_once()
+
+
 class TestShutdownCleanup:
     """Verify shutdown_event cleans up gracefully."""
 

@@ -975,6 +975,11 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             remap=ctx.remap,
             is_dry_run=ctx.is_dry_run,
             clear_existing=False,
+            # Read-only channel context (bead cm9bi): each logo miss lists the
+            # affected channels (archive channels whose logo_id referenced it),
+            # with destination ids resolved through the CHANNEL remap the
+            # channels step populated earlier in this same run.
+            archive_channels=_entities(ctx, EntityType.CHANNEL),
         )
         return None
 

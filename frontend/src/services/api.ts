@@ -4281,6 +4281,9 @@ export type RestoreEntityType =
   | 'stream'
   | 'user_agent'
   | 'dvr_rule'
+  // Report-only category for core_settings + comskip apply results (updated/
+  // skipped, never created) — mirrors backend EntityType.SETTINGS (bead lc6zu).
+  | 'settings'
   | 'user'
   | 'logo';
 
@@ -4346,13 +4349,29 @@ export interface EntityCategoryReport {
 }
 
 /**
+ * One channel affected by a logo miss (bead cm9bi). `channel_id` is the
+ * DESTINATION Dispatcharr channel id when known — null when the channel could
+ * not be resolved (its create failed) or on dry-run (whose remap holds
+ * provisional ids that must never render as real Dispatcharr links). `name` is
+ * the operator-facing channel name; never a secret.
+ */
+export interface LogoMissChannel {
+  channel_id?: number | null;
+  name: string;
+}
+
+/**
  * One logo that could not be matched/applied on restore (bead qhui4) — the
  * per-logo drill-down behind the aggregate `logo_misses` count. `label` is the
- * operator-facing logo name; never a path or secret.
+ * operator-facing logo name; never a path or secret. `channels` (bead cm9bi)
+ * lists the AFFECTED CHANNELS — one miss stays one detail row (the aggregate
+ * counts logos, not channels); a logo shared by several channels lists them
+ * all. May be absent on reports produced before the field existed.
  */
 export interface LogoMissDetail {
   source_export_id?: number | null;
   label: string;
+  channels?: LogoMissChannel[];
 }
 
 /** The one restore response schema — dry-run, apply, and summary. */
