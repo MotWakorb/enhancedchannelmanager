@@ -49,19 +49,49 @@ describe('LogoMissBanner — render gating', () => {
 });
 
 describe('LogoMissBanner — copy names the count (plain language, colorblind-safe)', () => {
-  it('names the exact count in plain language', () => {
+  it('names the exact count in plain language — as LOGOS, matching what logo_misses counts', () => {
     render(<LogoMissBanner report={report({ logo_misses: 12 })} dispatcharrUrl={DISPATCHARR_URL} />);
     const banner = screen.getByTestId('logo-miss-banner');
-    // Count is surfaced and the word "missing" carries the meaning (not red-only;
-    // WCAG 1.4.1 — colorblind-safe).
-    expect(within(banner).getByText(/12 channels are missing their logo/i)).toBeInTheDocument();
+    // logo_misses counts MISSED LOGOS (one shared logo affecting several
+    // channels is ONE miss), so the aggregate copy must say logos, not
+    // channels (PR #743 review item 3). The word "missing" carries the meaning
+    // (not red-only; WCAG 1.4.1 — colorblind-safe).
+    expect(within(banner).getByText(/12 logos are missing after this restore/i)).toBeInTheDocument();
     expect(within(banner).getByText(/missing/i)).toBeInTheDocument();
   });
 
-  it('uses a singular phrasing for a single miss', () => {
+  it('uses a singular LOGO phrasing for a single miss', () => {
     render(<LogoMissBanner report={report({ logo_misses: 1 })} dispatcharrUrl={DISPATCHARR_URL} />);
     const banner = screen.getByTestId('logo-miss-banner');
-    expect(within(banner).getByText(/1 channel is missing its logo/i)).toBeInTheDocument();
+    expect(within(banner).getByText(/1 logo is missing after this restore/i)).toBeInTheDocument();
+  });
+
+  it('says "1 logo" (not "1 channel") when ONE shared missed logo affects TWO channels', () => {
+    // The shared-logo regression frozen by the PR #743 review: aggregate counts
+    // logos; the nested rows carry the affected channels.
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 21,
+              label: 'ESPN',
+              channels: [
+                { channel_id: 505, name: 'CNN' },
+                { channel_id: 506, name: 'CNN International' },
+              ],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const banner = screen.getByTestId('logo-miss-banner');
+    expect(within(banner).getByText(/1 logo is missing after this restore/i)).toBeInTheDocument();
+    expect(within(banner).queryByText(/1 channel is missing/i)).not.toBeInTheDocument();
+    // Both affected channels still render as nested rows under the one logo.
+    expect(within(banner).getAllByTestId('logo-miss-channel-row')).toHaveLength(2);
   });
 
   it('renders a warning icon (icon + text, never colour alone)', () => {
@@ -104,7 +134,7 @@ describe('LogoMissBanner — detail/fix link to the Dispatcharr Channels page', 
   it('omits the fix link (but still warns) when no Dispatcharr base url is known', () => {
     render(<LogoMissBanner report={report({ logo_misses: 7 })} />);
     expect(screen.getByTestId('logo-miss-banner')).toBeInTheDocument();
-    expect(within(screen.getByTestId('logo-miss-banner')).getByText(/7 channels/i)).toBeInTheDocument();
+    expect(within(screen.getByTestId('logo-miss-banner')).getByText(/7 logos/i)).toBeInTheDocument();
     expect(screen.queryByTestId('logo-miss-detail-link')).not.toBeInTheDocument();
   });
 });

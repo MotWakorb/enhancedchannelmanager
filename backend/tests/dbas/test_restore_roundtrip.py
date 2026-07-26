@@ -78,8 +78,19 @@ async def _build_real_artifact(tmp_path):
     client.get_channels = AsyncMock(
         return_value={
             "count": 1, "next": None,
-            "results": [{"id": 5, "name": "CNN", "channel_number": 1, "streams": [11]}],
+            # logo_id 21 references the source logo backing espn.png (below) so
+            # the logo-miss affected-channel drill-down is exercised END-TO-END
+            # from a genuinely produced artifact (PR #743 review item 1).
+            "results": [{"id": 5, "name": "CNN", "channel_number": 1,
+                         "streams": [11], "logo_id": 21}],
         }
+    )
+    # SOURCE Dispatcharr logos: espn.png on disk correlates to logo id 21 by URL
+    # basename — the producer must carry that id into binary/metadata.json.
+    client.get_all_logos_paginated = AsyncMock(
+        return_value=[
+            {"id": 21, "name": "ESPN", "url": "http://dispatcharr/media/logos/espn.png"},
+        ]
     )
     client.get_streams = AsyncMock(
         return_value={
@@ -157,8 +168,13 @@ async def test_build_then_decode_then_dry_run(tmp_path):
 
     # The decoded plan carries the two M3U accounts the builder gathered...
     assert len(plan.category(EntityType.M3U_ACCOUNT).entities) == 2
-    # ...and the one logo from the binary subtree.
-    assert len(plan.category(EntityType.LOGO).entities) == 1
+    # ...and the one logo from the binary subtree — WITH its source Dispatcharr
+    # id + display name preserved through build -> decode (PR #743 item 1), the
+    # correlation the importer's affected-channel lookup keys on.
+    logo_entities = plan.category(EntityType.LOGO).entities
+    assert len(logo_entities) == 1
+    assert logo_entities[0]["id"] == 21
+    assert logo_entities[0]["name"] == "ESPN"
     # ...and (7i8rf) the channel + dispatcharr user the producers now emit, which
     # used to decode to EMPTY because no producer wrote those categories.
     channel_cat = plan.category(EntityType.CHANNEL)
@@ -208,6 +224,15 @@ async def test_build_then_decode_then_dry_run(tmp_path):
     settings_report = report.category(EntityType.SETTINGS)
     assert settings_report.would_update == 2
     assert settings_report.would_skip == 1
+    # PR #743 item 1: from a GENUINE artifact, the missed logo (empty
+    # destination) reports its archived affected channel. Dry-run never emits a
+    # destination channel id (the remap holds provisional ids) — name only.
+    assert report.logo_misses == 1
+    assert len(report.logo_miss_details) == 1
+    miss = report.logo_miss_details[0]
+    assert miss.source_export_id == 21
+    assert miss.label == "ESPN"
+    assert [(c.channel_id, c.name) for c in miss.channels] == [(None, "CNN")]
 
 
 def test_producer_importer_category_parity():
@@ -427,3 +452,14 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
     assert apply_report.category(EntityType.SETTINGS).updated == 2
     assert apply_report.category(EntityType.SETTINGS).skipped == 1
     assert apply_report.category(EntityType.LOGO).created == 1
+
+    # --- 8. PR #743 item 1: the GENUINE-artifact logo miss lists its archived
+    # affected channel WITH the destination id resolved through the CHANNEL
+    # remap populated this run (source 5 -> dest 505). This is the regression
+    # the review froze: real artifacts previously lost the source logo id, so
+    # this list was always empty on genuine backups.
+    assert apply_report.logo_misses == 1
+    apply_miss = apply_report.logo_miss_details[0]
+    assert apply_miss.source_export_id == 21
+    assert apply_miss.label == "ESPN"
+    assert [(c.channel_id, c.name) for c in apply_miss.channels] == [(505, "CNN")]

@@ -149,6 +149,16 @@ def _patched_build(tmp_path, *, with_logos=False, dest_dir=None):
             {"id": 3, "key": "comskip_ini", "value": "[main]"},
         ]
     )
+    # PR #743 review item 1 (cm9bi): the SOURCE Dispatcharr logos list. The
+    # producer joins each archived logo FILE to its source logo record by URL
+    # basename so the artifact carries the stable source logo id the restore
+    # importer's affected-channel lookup keys on. abc.png matches source logo
+    # id 21; def.jpg deliberately has no source record (no id in metadata).
+    mock_client.get_all_logos_paginated = AsyncMock(
+        return_value=[
+            {"id": 21, "name": "ABC Logo", "url": "http://dispatcharr/media/logos/abc.png"},
+        ]
+    )
 
     session = MagicMock()
     session.query.return_value.all.return_value = []
@@ -312,6 +322,22 @@ class TestBinarySubtree:
         filenames = {e["filename"] for e in meta["logos"]}
         assert filenames == {"abc.png", "def.jpg"}
         assert set(mappings.keys()) == {"abc.png", "def.jpg"}
+
+    def test_metadata_carries_source_logo_id_correlation(self, tmp_path):
+        """PR #743 review item 1 (cm9bi): the artifact must preserve the SOURCE
+        Dispatcharr logo id per archived file (joined by URL basename) so the
+        restore importer's affected-channel drill-down works on REAL backups —
+        without it the decoder emits id-less logo rows and _affected_channels()
+        always returns []."""
+        art = _patched_build(tmp_path, with_logos=True)
+        with zipfile.ZipFile(art.zip_path) as zf:
+            meta = json.loads(zf.read("binary/metadata.json"))
+        by_filename = {e["filename"]: e for e in meta["logos"]}
+        # abc.png matched source logo 21 — id + display name carried.
+        assert by_filename["abc.png"]["id"] == 21
+        assert by_filename["abc.png"]["name"] == "ABC Logo"
+        # def.jpg has no source logo record — no fabricated id.
+        assert "id" not in by_filename["def.jpg"]
 
     def test_binary_subtree_present_but_empty_without_logos(self, tmp_path):
         art = _patched_build(tmp_path, with_logos=False)

@@ -221,22 +221,58 @@ def _decode_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
     return PlanCategory(entity_type=EntityType.SETTINGS, entities=entities)
 
 
+def _parse_logo_metadata_index(zf: zipfile.ZipFile) -> dict[str, dict]:
+    """Parse ``binary/metadata.json`` into a filename -> entry index.
+
+    PR #743 review item 1 (cm9bi): the builder joins each archived logo file to
+    its SOURCE Dispatcharr logo record (``id`` + display ``name``) and carries
+    the correlation in the binary metadata. This index lets
+    :func:`_decode_logo_records` attach that id to each logo record — the key
+    the logos importer's affected-channel lookup (archive channels' ``logo_id``
+    FKs) resolves against. Best-effort: a missing/malformed metadata member
+    yields an empty index (records then decode id-less, as before).
+    """
+    import json
+
+    if _BINARY_METADATA not in zf.namelist():
+        return {}
+    try:
+        metadata = json.loads(zf.read(_BINARY_METADATA))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        logger.warning("[DBAS-RESTORE] Binary metadata unreadable during decode: %s", exc)
+        return {}
+    if not isinstance(metadata, dict):
+        return {}
+    index: dict[str, dict] = {}
+    for entry in metadata.get("logos") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("filename"), str):
+            index[entry["filename"]] = entry
+    return index
+
+
 def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
     """Decode the binary logo subtree into per-logo importer records.
 
     Each ``binary/logos/<rel>`` member becomes a record the logos importer (.15)
     consumes::
 
-        {"name": <basename-stem>, "filename": <basename>,
-         "content_b64": <base64 of the file bytes>, "size": <byte length>}
+        {"name": <display name or basename-stem>, "filename": <basename>,
+         "content_b64": <base64 of the file bytes>, "size": <byte length>,
+         "id": <source Dispatcharr logo id, when correlated>}
 
-    The artifact carries no source logo id, so tier-1 (src) match never applies;
-    the importer's tier-2 (name) / tier-3 (file) match handle reconciliation.
+    ``id`` + display ``name`` come from the builder's source-logo correlation in
+    ``binary/metadata.json`` (PR #743 item 1). The id is what makes the logo-miss
+    affected-channel drill-down work on GENUINE artifacts (archive channels
+    reference logos by ``logo_id``), and lets a matched/uploaded logo register
+    in the LOGO remap namespace. A file the builder could not correlate decodes
+    id-less with the basename-stem name fallback — exactly the pre-correlation
+    shape; the importer's tier-2 (name) / tier-3 (file) match still applies.
 
     Member names are screened by :func:`_is_safe_member` before read; an unsafe
     name is skipped (logged), never read.
     """
     records: list[dict] = []
+    metadata_index = _parse_logo_metadata_index(zf)
     prefix = _LOGO_DIR + "/"
     for name in zf.namelist():
         if not name.startswith(prefix) or name == prefix:
@@ -252,14 +288,23 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
         if not basename:
             continue
         stem = basename.rsplit(".", 1)[0]
-        records.append(
-            {
-                "name": stem,
-                "filename": basename,
-                "content_b64": base64.b64encode(raw).decode("ascii"),
-                "size": len(raw),
-            }
-        )
+        record = {
+            "name": stem,
+            "filename": basename,
+            "content_b64": base64.b64encode(raw).decode("ascii"),
+            "size": len(raw),
+        }
+        # Metadata is keyed by the file's logos-dir-relative path (== the member
+        # name minus the binary/logos/ prefix).
+        meta = metadata_index.get(name[len(prefix):])
+        if meta is not None:
+            source_id = meta.get("id")
+            if isinstance(source_id, int) and not isinstance(source_id, bool):
+                record["id"] = source_id
+            display_name = meta.get("name")
+            if isinstance(display_name, str) and display_name.strip():
+                record["name"] = display_name
+        records.append(record)
     return records
 
 

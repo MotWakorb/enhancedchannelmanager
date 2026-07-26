@@ -51,6 +51,7 @@ def _build_artifact(
     core_settings=None,
     comskip=None,
     logos=None,
+    logo_metadata=None,
     schema_version=1,
     extra_members=None,
 ) -> bytes:
@@ -74,6 +75,8 @@ def _build_artifact(
         members["categories/comskip.yaml"] = _category_yaml("comskip", comskip)
     for filename, blob in (logos or {}).items():
         members["binary/logos/%s" % filename] = blob
+    if logo_metadata is not None:
+        members["binary/metadata.json"] = json.dumps(logo_metadata).encode("utf-8")
     if extra_members:
         members.update(extra_members)
 
@@ -217,6 +220,44 @@ class TestLogoDecode:
         logos = plan.category(EntityType.LOGO).entities
         # The decoder records the basename, not the nested path.
         assert logos[0]["filename"] == "cnn.png"
+
+    def test_logo_record_carries_source_id_and_name_from_metadata(self):
+        """PR #743 review item 1 (cm9bi): binary/metadata.json carries the SOURCE
+        Dispatcharr logo id + display name per file (producer-joined); the decoder
+        must attach them to the logo record so the importer's affected-channel
+        lookup (keyed on the integer source id) works on genuine artifacts."""
+        art = _build_artifact(
+            logos={"espn.png": _PNG_BYTES},
+            logo_metadata={
+                "logo_count": 1,
+                "logos": [
+                    {"filename": "espn.png", "size_bytes": len(_PNG_BYTES),
+                     "id": 21, "name": "ESPN"},
+                ],
+            },
+        )
+        with _open(art) as zf:
+            plan = decode_artifact_to_plan(zf)
+        rec = plan.category(EntityType.LOGO).entities[0]
+        assert rec["id"] == 21
+        assert rec["name"] == "ESPN"  # display name preferred over basename stem
+        assert rec["filename"] == "espn.png"
+
+    def test_logo_record_without_metadata_entry_has_no_id(self):
+        # A file the producer could not correlate decodes without a fabricated
+        # id — the importer then simply reports no affected channels for it.
+        art = _build_artifact(
+            logos={"espn.png": _PNG_BYTES},
+            logo_metadata={
+                "logo_count": 1,
+                "logos": [{"filename": "espn.png", "size_bytes": len(_PNG_BYTES)}],
+            },
+        )
+        with _open(art) as zf:
+            plan = decode_artifact_to_plan(zf)
+        rec = plan.category(EntityType.LOGO).entities[0]
+        assert "id" not in rec
+        assert rec["name"] == "espn"  # basename-stem fallback unchanged
 
     def test_no_logos_is_empty_category(self):
         art = _build_artifact(m3u=[{"id": 1, "name": "P"}])

@@ -602,7 +602,65 @@ async def _gather_redacted_categories(include_credentials: bool = False) -> dict
     return out
 
 
-def _gather_logo_binary_subtree() -> tuple[list[tuple[Path, str]], dict, dict]:
+def _logo_basename_key(value) -> str | None:
+    """Lowercased basename of a logo url/path, the producer↔importer join key.
+
+    Mirrors ``dbas.importers.logos._basename_key`` (the importer's tier-3 file
+    match) so the producer-side source-id correlation and the restore-side file
+    match agree on what "same file" means.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    last = value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    last = last.strip().lower()
+    return last or None
+
+
+async def _fetch_source_logo_index() -> dict[str, dict]:
+    """Basename -> ``{"id", "name"}`` index of the SOURCE Dispatcharr logos.
+
+    PR #743 review item 1 (cm9bi): the restore importer's affected-channel
+    drill-down keys on the SOURCE logo id (archive channels reference logos via
+    ``logo_id``), but an on-disk logo file carries no id. This index joins each
+    archived file to its Dispatcharr logo record by URL basename so the builder
+    can preserve the id in ``binary/metadata.json``. Best-effort: an unavailable
+    client or listing failure degrades to an empty index (the artifact still
+    carries the files; misses then simply list no affected channels), never a
+    build failure. On a basename collision the lowest id wins — the same
+    tie-break the importer's file match uses.
+    """
+    try:
+        client = get_client()
+        if not client:
+            return {}
+        logos = await client.get_all_logos_paginated()
+    except Exception as e:  # noqa: BLE001 - correlation is best-effort
+        logger.warning("[BACKUP] Could not list source logos for id correlation: %s", e)
+        return {}
+
+    index: dict[str, dict] = {}
+    for logo in logos or []:
+        if not isinstance(logo, dict):
+            continue
+        logo_id = logo.get("id")
+        if not isinstance(logo_id, int) or isinstance(logo_id, bool):
+            continue
+        key = _logo_basename_key(logo.get("url")) or _logo_basename_key(logo.get("filename"))
+        if key is None:
+            continue
+        existing = index.get(key)
+        if existing is None or logo_id < existing["id"]:
+            entry: dict = {"id": logo_id}
+            name = logo.get("name")
+            if isinstance(name, str) and name.strip():
+                entry["name"] = name
+            index[key] = entry
+    return index
+
+
+def _gather_logo_binary_subtree(
+    source_logo_index: Optional[dict] = None,
+) -> tuple[list[tuple[Path, str]], dict, dict]:
     """Enumerate logo files for the binary subtree without reading them.
 
     Returns ``(entries, metadata, url_mappings)`` where:
@@ -610,13 +668,20 @@ def _gather_logo_binary_subtree() -> tuple[list[tuple[Path, str]], dict, dict]:
         ZIP one file at a time (D8 streaming-upload model — the builder writes
         each via zf.write(), which streams from disk, never buffering all logos
         in RAM).
-      - ``metadata`` is the inventory written to binary/metadata.json.
+      - ``metadata`` is the inventory written to binary/metadata.json. When
+        ``source_logo_index`` (see :func:`_fetch_source_logo_index`) resolves a
+        file's basename, the entry also carries the SOURCE Dispatcharr logo
+        ``id`` (+ display ``name``) — the correlation the restore decoder
+        attaches to each logo record so the importer's affected-channel lookup
+        works on genuine artifacts (PR #743 item 1). An uncorrelated file
+        carries no ``id`` (never fabricated).
       - ``url_mappings`` maps each archived logo filename to its (best-effort)
         source reference for restore-side re-hosting.
     """
     entries: list[tuple[Path, str]] = []
     files_meta: list[dict] = []
     url_mappings: dict[str, str] = {}
+    logo_index = source_logo_index or {}
 
     logos_dir = CONFIG_DIR / "uploads" / "logos"
     if logos_dir.exists() and logos_dir.is_dir():
@@ -630,7 +695,13 @@ def _gather_logo_binary_subtree() -> tuple[list[tuple[Path, str]], dict, dict]:
                 size = file_path.stat().st_size
             except OSError:
                 size = None
-            files_meta.append({"filename": rel, "size_bytes": size})
+            file_meta: dict = {"filename": rel, "size_bytes": size}
+            correlated = logo_index.get(_logo_basename_key(rel) or "")
+            if correlated is not None:
+                file_meta["id"] = correlated["id"]
+                if correlated.get("name"):
+                    file_meta["name"] = correlated["name"]
+            files_meta.append(file_meta)
             # Local logos are referenced by their on-disk relative path; the
             # restore importer (Phase 2, 0i2vt.15) re-hosts them. Remote logo
             # URL reconstruction is a restore-side concern and out of scope for
@@ -718,7 +789,12 @@ async def build_backup_artifact(
     # re-injects the approved migration creds (and only with a passphrase set,
     # validated above); redaction still runs over everything else.
     categories = await _gather_redacted_categories(include_credentials=include_credentials)
-    logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree()
+    # Source-logo id correlation (PR #743 item 1) — best-effort join of each
+    # on-disk logo file to its Dispatcharr logo record, carried in metadata.json.
+    source_logo_index = await _fetch_source_logo_index()
+    logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree(
+        source_logo_index=source_logo_index
+    )
 
     # e0r3h — the producer owns the CANONICAL timestamped name
     # ``ecm-backup-<UTC ts>.zip`` (no post-build rename in the task layer). This is

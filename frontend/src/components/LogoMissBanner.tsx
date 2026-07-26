@@ -47,11 +47,17 @@ interface LogoMissBannerProps {
   dispatcharrUrl?: string;
 }
 
-/** Plain-language count phrase — singular vs. plural, never the raw field name. */
+/** Plain-language count phrase — singular vs. plural, never the raw field name.
+ *
+ * `logo_misses` counts MISSED LOGOS, not channels (one shared logo affecting
+ * several channels is ONE miss), so the aggregate copy is logo-oriented; the
+ * per-channel impact lives in the nested affected-channel rows (PR #743
+ * review item 3).
+ */
 function missCopy(count: number): string {
   return count === 1
-    ? '1 channel is missing its logo'
-    : `${count} channels are missing their logo`;
+    ? '1 logo is missing after this restore'
+    : `${count} logos are missing after this restore`;
 }
 
 export function LogoMissBanner({ report, dispatcharrUrl }: LogoMissBannerProps) {
@@ -84,7 +90,7 @@ export function LogoMissBanner({ report, dispatcharrUrl }: LogoMissBannerProps) 
       <div className="logo-miss-text">
         <span className="logo-miss-title">{missCopy(count)}</span>
         <span className="logo-miss-detail">
-          These channels were restored without a logo. Open them in Dispatcharr to set a logo on each.
+          The affected channels were restored without their logo. Open Dispatcharr to set a logo on each.
         </span>
         {hasDetails && (
           <ul className="logo-miss-detail-list" data-testid="logo-miss-detail-list">
