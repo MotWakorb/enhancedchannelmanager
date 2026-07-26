@@ -35,18 +35,29 @@ middleware body inside a guard that only wraps what's nested beneath it.
 
 This is a known, accepted structural ceiling of Starlette's
 `BaseHTTPMiddleware` model — not a defect in the containment fix. Closing it
-would require restructuring the outer middlewares (auth, CORS, etc.) as pure
-ASGI middleware so the guard could wrap them too; that hasn't been done,
-since no field occurrence has been observed (no `[EXIT-DIAG]` recurrence as
-of 2026-07-26, and a one-time audit of the outer middleware bodies found no
-`BaseException` sources).
+is a middleware-stack/order redesign, not a single-line move: the
+task-boundary (`BaseHTTPMiddleware`) layers would need to be removed, and
+containment placed or restructured so it actually wraps the bodies of the
+middlewares that currently sit outside it, with handler containment
+revalidated afterward. That hasn't been done, since no field occurrence has
+been observed (no confirmed recurrence as of 2026-07-26, and a one-time
+audit of the outer middleware bodies found no `BaseException` sources).
 
 **If this ever fires:** a `BaseException` raised inside an outer middleware
 body will still kill the process with `ExitCode 0` the way the pre-fix bug
-did, but the containment guard will not see it — no `[EXIT-DIAG]`/atexit
-diagnostic will be logged, so the *absence* of `[EXIT-DIAG]` output does not
-mean the containment fix failed. Symptoms to look for: a process exit with
-no traceback and no `[EXIT-DIAG]` entry, on a request that passed through
-`auth_middleware` or another outer `@app.middleware("http")` function rather
-than a route handler. Tracked in bead `enhancedchannelmanager-17v07`; attach
-any recurrence there so the raiser can be identified.
+did, and the atexit `[EXIT-DIAG]` line from `exit_diagnostics.log_atexit()`
+(installed process-wide, independent of this middleware) **will still be
+logged** — atexit hooks run on this normal-shutdown path, and only
+`os._exit()`/a hard signal would suppress it. What will be **absent** is a
+`[EXIT-DIAG]` CRITICAL traceback immediately above that atexit line: the
+containment middleware's own critical log only fires when it is the one that
+catches the exception, and a `SystemExit`-class exception never reaches
+`sys.excepthook` (so `log_uncaught_exception` doesn't fire for it either).
+Concretely, this is `exit_diagnostics.py`'s own documented "atexit line, no
+exception logged above it" `SystemExit` signature — an outer-middleware
+escape produces exactly that pattern in `docker logs`. Symptoms to look for:
+an `[EXIT-DIAG]` atexit line with no CRITICAL traceback directly above it, on
+a request that passed through `auth_middleware` or another outer
+`@app.middleware("http")` function rather than a route handler. Tracked in
+bead `enhancedchannelmanager-17v07`; attach any recurrence there so the
+raiser can be identified.
