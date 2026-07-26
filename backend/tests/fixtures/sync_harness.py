@@ -406,6 +406,18 @@ class StatefulDispatcharrFake:
         # references ``client.delete_user``. A 404 is the correct "already gone".
         raise FakeNotFoundError("user", user_id)
 
+    # ----- user agents / DVR rules / logos (not in the sync category set, but
+    #        _delete_dispatch references their compensators eagerly — kxcjf) ---
+
+    async def delete_user_agent(self, user_agent_id: int) -> None:
+        raise FakeNotFoundError("user_agent", user_agent_id)
+
+    async def delete_dvr_rule(self, rule_id: int) -> None:
+        raise FakeNotFoundError("dvr_rule", rule_id)
+
+    async def delete_logo(self, logo_id: int) -> None:
+        raise FakeNotFoundError("logo", logo_id)
+
     # ----- state snapshot (the convergence assertion surface) --------------
 
     def state_by_key(self) -> dict[str, set]:

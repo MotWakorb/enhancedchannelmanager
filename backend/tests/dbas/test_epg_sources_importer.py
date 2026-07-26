@@ -547,3 +547,140 @@ async def test_failure_message_does_not_leak_url_or_credentials(caplog):
     for marker in ("secret-provider", "token=abc123", "secret-user", "s3cr3t-pass"):
         assert marker not in message
         assert marker not in log_text
+
+
+# ---------------------------------------------------------------------------
+# 7. wait_for_epg_downloads (bead kxcjf — the unmet 0i2vt.11 acceptance item):
+# bounded 2-stage trigger+poll for Dispatcharr's EPG data download. Never hangs,
+# never raises, non-silent on timeout (completed=False for the caller to note).
+# ---------------------------------------------------------------------------
+
+
+def _wait_client(source_row):
+    client = AsyncMock()
+    client.refresh_epg_source = AsyncMock(return_value={})
+    client.get_epg_source = AsyncMock(return_value=source_row)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_wait_completes_immediately_on_terminal_status():
+    from dbas.importers.epg_sources import wait_for_epg_downloads
+
+    sleeps = []
+
+    async def _sleep(seconds):
+        sleeps.append(seconds)
+
+    client = _wait_client({"id": 7, "status": "success", "epg_count": 0})
+    summaries = await wait_for_epg_downloads(
+        source_ids=[7], client=client, sleep_fn=_sleep
+    )
+    assert summaries == [
+        {"epg_source_id": 7, "completed": True, "status": "success", "polls": 1}
+    ]
+    # Terminal on the FIRST check — zero sleeping (check-first, sleep-between).
+    assert sleeps == []
+    client.refresh_epg_source.assert_awaited_once_with(7)
+
+
+@pytest.mark.asyncio
+async def test_wait_epg_count_is_terminal_even_with_unknown_status():
+    # Future-proofing: if Dispatcharr's status vocabulary drifts, a positive
+    # epg_count still terminates the wait (data actually landed).
+    from dbas.importers.epg_sources import wait_for_epg_downloads
+
+    client = _wait_client({"id": 8, "status": "somenewstate", "epg_count": 120})
+
+    async def _sleep(_):
+        raise AssertionError("must not sleep when the first check is terminal")
+
+    summaries = await wait_for_epg_downloads(
+        source_ids=[8], client=client, sleep_fn=_sleep
+    )
+    assert summaries[0]["completed"] is True
+
+
+@pytest.mark.asyncio
+async def test_wait_polls_until_download_finishes():
+    from dbas.importers.epg_sources import wait_for_epg_downloads
+
+    rows = [
+        {"id": 9, "status": "fetching", "epg_count": 0},
+        {"id": 9, "status": "parsing", "epg_count": 0},
+        {"id": 9, "status": "success", "epg_count": 500},
+    ]
+    client = AsyncMock()
+    client.refresh_epg_source = AsyncMock(return_value={})
+    client.get_epg_source = AsyncMock(side_effect=rows)
+    sleeps = []
+
+    async def _sleep(seconds):
+        sleeps.append(seconds)
+
+    summaries = await wait_for_epg_downloads(
+        source_ids=[9], client=client, sleep_fn=_sleep, poll_interval_seconds=0.5
+    )
+    assert summaries[0]["completed"] is True
+    assert summaries[0]["polls"] == 3
+    # Two sleeps BETWEEN the three polls, at the configured interval.
+    assert sleeps == [0.5, 0.5]
+
+
+@pytest.mark.asyncio
+async def test_wait_times_out_bounded_and_reports_incomplete():
+    from dbas.importers.epg_sources import wait_for_epg_downloads
+
+    client = _wait_client({"id": 10, "status": "fetching", "epg_count": 0})
+
+    async def _sleep(_):
+        return None
+
+    summaries = await wait_for_epg_downloads(
+        source_ids=[10], client=client, sleep_fn=_sleep, max_polls=4
+    )
+    # Bounded: exactly max_polls probes, then a NON-SILENT incomplete result.
+    assert summaries[0]["completed"] is False
+    assert summaries[0]["polls"] == 4
+    assert client.get_epg_source.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_wait_trigger_and_probe_errors_are_nonfatal():
+    # A failing refresh trigger and failing probes never raise — the wait runs
+    # its bounded course and reports incomplete.
+    from dbas.importers.epg_sources import wait_for_epg_downloads
+
+    client = AsyncMock()
+    client.refresh_epg_source = AsyncMock(side_effect=RuntimeError("boom"))
+    client.get_epg_source = AsyncMock(side_effect=RuntimeError("probe down"))
+
+    async def _sleep(_):
+        return None
+
+    summaries = await wait_for_epg_downloads(
+        source_ids=[11], client=client, sleep_fn=_sleep, max_polls=2
+    )
+    assert summaries[0]["completed"] is False
+    assert summaries[0]["polls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_wait_covers_every_source_id():
+    from dbas.importers.epg_sources import wait_for_epg_downloads
+
+    client = AsyncMock()
+    client.refresh_epg_source = AsyncMock(return_value={})
+    client.get_epg_source = AsyncMock(
+        side_effect=lambda sid: {"id": sid, "status": "success", "epg_count": 1}
+    )
+
+    async def _sleep(_):
+        return None
+
+    summaries = await wait_for_epg_downloads(
+        source_ids=[21, 22, 23], client=client, sleep_fn=_sleep
+    )
+    assert [s["epg_source_id"] for s in summaries] == [21, 22, 23]
+    assert all(s["completed"] for s in summaries)
+    assert client.refresh_epg_source.await_count == 3

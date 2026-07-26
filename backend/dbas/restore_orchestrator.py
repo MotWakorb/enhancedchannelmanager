@@ -27,27 +27,32 @@ HARD ORDERING (ADR-012 D-table) + the DEFERRED phase
 
 Importers run in strict dependency order::
 
-    M3U accounts → EPG sources → channel groups/profiles/stream profiles
-      → user agents / settings → channels → logos
+    M3U accounts → EPG sources (+ bounded EPG-data download wait)
+      → channel groups/profiles/stream profiles → user agents / settings
+      → users → channels → DVR rules → logos
 
-then the DEFERRED phase applies LAST: the M3U importer (and EPG importer) return
-auto-sync/EPG-download settings that MUST NOT fire during the run (they race the
-logo import on the Dispatcharr side). The orchestrator collects each importer's
-deferred settings and applies them only after every category is done, via
-``dbas.importers.m3u_accounts.apply_deferred_auto_sync``.
+then the DEFERRED phase applies LAST: the M3U importer returns auto-sync
+settings that MUST NOT fire during the run (they race the logo import on the
+Dispatcharr side). The orchestrator collects each importer's deferred settings
+and applies them only after every category is done, via
+``dbas.importers.m3u_accounts.apply_deferred_auto_sync``. EPG data is the
+opposite: Dispatcharr's channel↔EPG matching needs the data BEFORE channels are
+created, so the apply registry's EPG step waits (bounded, non-fatal) for the
+download instead of deferring it — see :func:`_epg_step_with_download_wait`.
 
 ----------------------------------------------------------------------------
-WIRED vs SEAM (be precise — this is scaffolding for in-flight importers)
+FULL WIRING + dry-run/apply parity (bead kxcjf)
 ----------------------------------------------------------------------------
 
-The per-category importers are separate beads, not all built yet. The
-orchestrator runs whatever importer callables are registered in the
-:class:`ImporterStep` list it is given and treats a category with no registered
-importer as a no-op SEAM (logged, never a silent skip). The default registry
-(:func:`default_importer_steps`) wires the importers that EXIST today
-(M3U accounts, channels, users) and leaves explicit registration seams for the
-not-yet-built ones (EPG sources, channel groups/profiles, user agents/settings,
-logos). As each lands, it registers here without changing the orchestrator.
+Every per-category importer is WIRED into BOTH registries: the apply registry
+(:func:`default_importer_steps`) and the dry-run registry
+(:func:`dry_run_importer_steps`) cover the SAME category set, in the same
+order, through the SAME shared step builders — so the counts the default-ON
+dry-run preview promises are exactly what a confirmed apply delivers. The
+orchestrator still supports a step with ``importer=None`` as a logged no-op
+SEAM (never a silent skip) for callers that register partial step lists (e.g.
+the sync engine's config-only registry), but neither default registry carries
+one. PLUGINS are deliberately absent from both (ADR-012 D10).
 
 ----------------------------------------------------------------------------
 404-AS-SUCCESS + the credential-hygiene rule (the bead .8 lesson)
@@ -115,8 +120,9 @@ class ImporterStep:
     Attributes:
         entity_type: The category this step restores (its place in the order).
         importer: The async callable that applies the category, or ``None`` for a
-            registration SEAM — a category whose importer is a separate, not-yet-
-            built bead. A seam step is a logged no-op, never a silent skip.
+            registration SEAM — a deliberately-unwired slot in a caller-built
+            partial registry. A seam step is a logged no-op, never a silent
+            skip. (Both default registries are fully wired — bead kxcjf.)
         defers: Whether this step returns deferred settings (M3U / EPG) that the
             orchestrator must apply in the final deferred phase.
     """
@@ -193,6 +199,14 @@ def _delete_dispatch(client: DispatcharrClient) -> dict[EntityType, Callable[[in
         EntityType.CHANNEL: client.delete_channel,
         EntityType.STREAM: client.delete_stream,
         EntityType.USER: client.delete_user,
+        # kxcjf — the full-wiring bead: every ledgerable created-entity type has
+        # a compensator. SETTINGS is deliberately absent: a settings change is
+        # config, not a created entity — it is never ledgered, and run_restore
+        # surfaces "settings are not rolled back" in the report notes instead of
+        # silently claiming a full rollback.
+        EntityType.USER_AGENT: client.delete_user_agent,
+        EntityType.DVR_RULE: client.delete_dvr_rule,
+        EntityType.LOGO: client.delete_logo,
     }
 
 
@@ -593,6 +607,18 @@ async def run_restore(
                 f"rollback INCOMPLETE: {len(rollback.residue)} entity/entities could not be removed — "
                 "manual cleanup required."
             )
+        # Settings are config, not created entities — they are never ledgered
+        # and CANNOT be compensated (documented limitation, settings_agents.py).
+        # If any were applied before the failure, say so LOUDLY rather than let
+        # "rollback completed" read as a full undo (kxcjf).
+        settings_cat = next(
+            (c for c in report.categories if c.entity_type == EntityType.SETTINGS), None
+        )
+        if settings_cat is not None and settings_cat.updated > 0:
+            report.notes.append(
+                f"NOTE: {settings_cat.updated} applied setting(s) were NOT rolled back — "
+                "settings changes are not compensatable and remain applied."
+            )
 
     # --- 3b. Deferred phase (clean run only) — applied LAST. ---
     if not failure_occurred and not report.is_dry_run and ctx.deferred:
@@ -645,51 +671,113 @@ def new_restore_id() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Default importer registry — WIRED vs SEAM
+# Default importer registry — the FULL apply wiring (bead kxcjf)
 # ---------------------------------------------------------------------------
 
 
+def _epg_step_with_download_wait(epg_importer: ImporterCallable) -> ImporterCallable:
+    """Wrap the shared EPG step with the bounded EPG-data download wait (APPLY only).
+
+    Bead ``kxcjf`` folds in the unmet ``0i2vt.11`` acceptance item: after the
+    EPG-sources importer creates sources on the destination, Dispatcharr
+    downloads their EPG data asynchronously. The Channels importer must not run
+    before that download finishes, or Dispatcharr's channel↔EPG matching has no
+    rows to match against. This wrapper runs
+    :func:`dbas.importers.epg_sources.wait_for_epg_downloads` (a bounded,
+    non-fatal 2-stage trigger+poll mirroring the M3U deferred-auto-sync poll)
+    over the sources CREATED this run (read from the shared ledger — an
+    already-existing, skipped source has its data already).
+
+    Apply-registry only, deliberately:
+
+    * On a dry-run the wrapper is a pass-through (zero waiting, zero triggers —
+      a plan must stay read-only and fast).
+    * The sync registry (``tasks.dbas_sync_engine``) uses the UNWRAPPED shared
+      ``epg`` builder — a per-cycle sync must never re-trigger EPG downloads on
+      the destination (ADR-013 S9).
+
+    A source that does not finish within the bounded wait is surfaced as a
+    WARN-level :class:`RestoreReport` note — never a hang, never a failure
+    (channels still restore; only upstream EPG matching may be incomplete).
+    """
+
+    async def _epg_apply(ctx: ApplyContext) -> list[dict] | None:
+        from dbas.importers.epg_sources import wait_for_epg_downloads
+
+        result = await epg_importer(ctx)
+        if ctx.is_dry_run:
+            return result
+        created_ids = [
+            entry.destination_id
+            for entry in ctx.ledger.entries
+            if entry.entity_type == EntityType.EPG_SOURCE
+        ]
+        if not created_ids:
+            return result
+        summaries = await wait_for_epg_downloads(
+            source_ids=created_ids, client=ctx.client
+        )
+        for summary in summaries:
+            if not summary.get("completed"):
+                ctx.report.notes.append(
+                    "EPG source id=%s: EPG data download did not finish within the "
+                    "bounded wait; channel EPG matching may be incomplete."
+                    % summary.get("epg_source_id")
+                )
+        return result
+
+    return _epg_apply
+
+
 def default_importer_steps() -> list[ImporterStep]:
-    """The hard Phase-2 ordering with today's importers WIRED and the rest as seams.
+    """The hard Phase-2 ordering with EVERY importer WIRED for the real apply.
 
-    WIRED (importers that exist as of bead .18):
-      * M3U accounts (``…-0i2vt.10``) — defers auto-sync.
-      * channels (``…-4vouz``).
-      * users (``…-l1p4p``) — runs in the settings/users slot.
+    Bead ``kxcjf`` closed the silent-skip defect: this registry previously wired
+    only M3U accounts / users / channels and left EPG sources, channel
+    groups/profiles/stream profiles, user agents, DVR rules, settings, and logos
+    as ``importer=None`` seams — a confirmed apply silently no-opped those
+    categories while the default-ON dry-run preview promised their counts. Both
+    registries now cover the SAME category set (the dry-run/apply parity bar);
+    ``dry_run_importer_steps`` mirrors this order exactly.
 
-    SEAM (separate beads, registered as ``importer=None`` no-ops until they land):
-      * EPG sources (``…-0i2vt.11``) — will defer EPG download.
-      * channel groups / profiles / stream profiles (``…-0i2vt.12``).
-      * user agents (``…-0i2vt.13``).
-      * logos (``…-0i2vt.15``).
+    Ordering (dependency-driven, ADR-012 D-table):
 
-    The ORDER is the contract even where a slot is a seam — when an importer
-    lands it slots into its place without reshuffling the sequence.
+      * M3U accounts first (defers auto-sync to the final phase) — everything
+        downstream remaps ``m3u_account`` FKs through it.
+      * EPG sources second, WITH the bounded EPG-data download wait
+        (:func:`_epg_step_with_download_wait`) so Dispatcharr has EPG rows
+        before channels are created.
+      * channel groups / channel profiles / stream profiles before channels —
+        they populate the IdRemapTable namespaces the channels importer resolves.
+      * user agents + settings (core settings / comskip) before channels
+        (config in place before the big entity category).
+      * users before channels (the l1p4p slot; unchanged).
+      * channels, then DVR rules (a DVR rule's ``channel`` FK remaps through the
+        just-populated ``EntityType.CHANNEL`` namespace), then logos LAST
+        (attach to the created channels; slow streaming uploads at the tail).
+
+    PLUGINS stay excluded per ADR-012 D10 (RCE-vs-config unresolved) — there is
+    deliberately no plugins row in either registry.
     """
     s = _importer_step_builders()
-    # NOTE on the EPG-sources seam (…-0i2vt.11): the EPG importer's APPLY path is
-    # still a separate bead, so EPG sources occupy a documented ordering position
-    # between M3U and channel groups but are not yet a discrete ImporterStep row in
-    # this APPLY registry. Compensation, however, IS wired: EntityType.EPG_SOURCE
-    # (and EntityType.STREAM_PROFILE) now have rollback compensators in
-    # ``_delete_dispatch`` (enhancedchannelmanager-v1uz9), so any EPG-source /
-    # stream-profile row recorded in the ledger by an in-flight importer is undone
-    # cleanly on a late-step failure instead of being left as residue.
     return [
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
-        # <- EPG sources (…-0i2vt.11) order position; SEAM, see note above.
-        ImporterStep(EntityType.CHANNEL_GROUP, None),                  # SEAM …-0i2vt.12
-        ImporterStep(EntityType.CHANNEL_PROFILE, None),               # SEAM …-0i2vt.12
-        ImporterStep(EntityType.STREAM_PROFILE, None),                # SEAM …-0i2vt.12
-        ImporterStep(EntityType.USER_AGENT, None),                    # SEAM …-0i2vt.13
-        ImporterStep(EntityType.USER, s["users"]),                    # WIRED …-l1p4p
-        ImporterStep(EntityType.CHANNEL, s["channels"]),              # WIRED …-4vouz
-        # logos SEAM …-0i2vt.15 — no EntityType row of its own; attaches to channels
+        ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(s["epg"])),
+        ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
+        ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
+        ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
+        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        ImporterStep(EntityType.SETTINGS, s["settings"]),
+        ImporterStep(EntityType.USER, s["users"]),
+        ImporterStep(EntityType.CHANNEL, s["channels"]),
+        ImporterStep(EntityType.DVR_RULE, s["dvr_rules"]),
+        ImporterStep(EntityType.LOGO, s["logos"]),
     ]
 
 
 # ---------------------------------------------------------------------------
-# Dry-run registry — bead …-0i2vt.16. EVERY importer wired, counts-only.
+# Shared per-category step builders — ONE set of callables backs the apply
+# registry, the dry-run registry, and the sync engine's config-only registry.
 # ---------------------------------------------------------------------------
 
 
@@ -713,6 +801,12 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
     )
     from dbas.importers.logos import import_logos
     from dbas.importers.m3u_accounts import import_m3u_accounts
+    from dbas.importers.settings_agents import (
+        import_comskip,
+        import_core_settings,
+        import_dvr_rules,
+        import_user_agents,
+    )
     from dbas.importers.users import import_users
 
     def _entities(ctx: ApplyContext, entity_type: EntityType) -> list[dict]:
@@ -783,6 +877,67 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         )
         return None
 
+    async def _user_agents(ctx: ApplyContext) -> list[dict] | None:
+        await import_user_agents(
+            archive_user_agents=_entities(ctx, EntityType.USER_AGENT),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.USER_AGENT),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _dvr_rules(ctx: ApplyContext) -> list[dict] | None:
+        await import_dvr_rules(
+            archive_dvr_rules=_entities(ctx, EntityType.DVR_RULE),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.DVR_RULE),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _settings(ctx: ApplyContext) -> list[dict] | None:
+        # The SETTINGS plan slice carries the key/value blobs, not entity rows.
+        # Contract: each entity is ``{"section": "core_settings"|"comskip",
+        # "values": {...}}`` — self-describing so one plan category carries both
+        # blobs in a fixed apply order. Results land on the shared
+        # ``EntityType.SETTINGS`` report category (updated/skipped, never
+        # created, never ledgered — settings rollback is out of scope, see
+        # ``settings_agents.py``).
+        selected = _selected(ctx, EntityType.SETTINGS)
+        for record in _entities(ctx, EntityType.SETTINGS):
+            section = record.get("section")
+            values = record.get("values") or {}
+            if section == "core_settings":
+                await import_core_settings(
+                    archive_core_settings=values,
+                    client=ctx.client,
+                    selected=selected,
+                    report=ctx.report,
+                    ledger=ctx.ledger,
+                    is_dry_run=ctx.is_dry_run,
+                )
+            elif section == "comskip":
+                await import_comskip(
+                    archive_comskip=values,
+                    client=ctx.client,
+                    selected=selected,
+                    report=ctx.report,
+                    ledger=ctx.ledger,
+                    is_dry_run=ctx.is_dry_run,
+                )
+            else:
+                logger.warning(
+                    "[DBAS-RESTORE] Unknown settings section %r in plan; skipped.",
+                    section,
+                )
+        return None
+
     async def _users(ctx: ApplyContext) -> list[dict] | None:
         await import_users(
             archive_users=_entities(ctx, EntityType.USER),
@@ -829,6 +984,9 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         "channel_groups": _channel_groups,
         "channel_profiles": _channel_profiles,
         "stream_profiles": _stream_profiles,
+        "user_agents": _user_agents,
+        "dvr_rules": _dvr_rules,
+        "settings": _settings,
         "users": _users,
         "channels": _channels,
         "logos": _logos,
@@ -838,25 +996,17 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
 def dry_run_importer_steps() -> list[ImporterStep]:
     """The Phase-2 ordering with EVERY importer WIRED for the counts-only dry-run.
 
-    Bead ``…-0i2vt.16``. Unlike :func:`default_importer_steps` — whose seams for
-    EPG sources / groups-profiles / logos await each importer's apply-path +
-    rollback wiring (bead ``.18`` / their own beads) — the dry-run registry wires
-    ALL importers, because every importer is provably zero-mutation on a dry-run
-    (it only reads to plan and increments ``would_*``). Wiring them here lets the
-    dry-run aggregate the ``would_*`` counts for the WHOLE archive into one
-    :class:`RestoreReport`, which is the point of the engine.
+    Bead ``…-0i2vt.16`` (extended by ``kxcjf``). Mirrors
+    :func:`default_importer_steps` category-for-category and in the SAME order —
+    the dry-run/apply parity contract: the counts the operator previews are
+    produced by the same importers, over the same category set, that a confirmed
+    apply runs. Every importer is provably zero-mutation on a dry-run (it only
+    reads to plan and increments ``would_*``).
 
-    The order is the same hard Phase-2 sequence
-    (``M3U → EPG → groups/profiles → user-agents → users → channels → logos``);
-    on a dry-run the order is not load-bearing for mutation (there is none) but is
-    kept identical so the plan the operator previews mirrors what apply will do.
-
-    This registry is for DRY-RUN ONLY. It must not be handed to an apply
-    (``confirm_apply=True``) run until each wired importer's apply/rollback path is
-    registered in :func:`default_importer_steps` — the guardrail in
-    :func:`run_restore` forces ``is_dry_run`` when apply is not confirmed, so a
-    misuse degrades safely to a dry-run rather than mutating through an unwired
-    rollback path.
+    The only deliberate difference from the apply registry is the EPG step: the
+    dry-run uses the plain importer (no download trigger, no wait — a plan must
+    stay read-only and fast), while the apply wraps it with the bounded
+    EPG-data download wait (:func:`_epg_step_with_download_wait`).
     """
     s = _importer_step_builders()
     return [
@@ -865,9 +1015,11 @@ def dry_run_importer_steps() -> list[ImporterStep]:
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
-        ImporterStep(EntityType.USER_AGENT, None),  # SEAM …-0i2vt.13 (no importer yet)
+        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        ImporterStep(EntityType.SETTINGS, s["settings"]),
         ImporterStep(EntityType.USER, s["users"]),
         ImporterStep(EntityType.CHANNEL, s["channels"]),
+        ImporterStep(EntityType.DVR_RULE, s["dvr_rules"]),
         ImporterStep(EntityType.LOGO, s["logos"]),
     ]
 
