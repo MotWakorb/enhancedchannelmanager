@@ -4281,6 +4281,9 @@ export type RestoreEntityType =
   | 'stream'
   | 'user_agent'
   | 'dvr_rule'
+  // Report-only category for core_settings + comskip apply results (updated/
+  // skipped, never created) — mirrors backend EntityType.SETTINGS (bead lc6zu).
+  | 'settings'
   | 'user'
   | 'logo';
 

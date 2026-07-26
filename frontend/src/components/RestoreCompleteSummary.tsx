@@ -66,6 +66,7 @@ const ENTITY_LABELS: Record<RestoreEntityType, string> = {
   stream: 'Streams',
   user_agent: 'User agents',
   dvr_rule: 'DVR rules',
+  settings: 'Settings',
   user: 'Users',
   logo: 'Logos',
 };

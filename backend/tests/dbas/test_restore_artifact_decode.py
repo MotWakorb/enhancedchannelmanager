@@ -46,6 +46,10 @@ def _build_artifact(
     m3u=None,
     epg=None,
     groups=None,
+    user_agents=None,
+    dvr_rules=None,
+    core_settings=None,
+    comskip=None,
     logos=None,
     schema_version=1,
     extra_members=None,
@@ -58,6 +62,16 @@ def _build_artifact(
         members["categories/epg_sources.yaml"] = _category_yaml("epg_sources", epg)
     if groups is not None:
         members["categories/channel_groups.yaml"] = _category_yaml("channel_groups", groups)
+    if user_agents is not None:
+        members["categories/user_agents.yaml"] = _category_yaml("user_agents", user_agents)
+    if dvr_rules is not None:
+        members["categories/dvr_rules.yaml"] = _category_yaml("dvr_rules", dvr_rules)
+    # The two SETTINGS-blob sections are key/value MAPPINGS, not entity lists —
+    # _category_yaml serializes whatever it is given under the container.
+    if core_settings is not None:
+        members["categories/core_settings.yaml"] = _category_yaml("core_settings", core_settings)
+    if comskip is not None:
+        members["categories/comskip.yaml"] = _category_yaml("comskip", comskip)
     for filename, blob in (logos or {}).items():
         members["binary/logos/%s" % filename] = blob
     if extra_members:
@@ -130,6 +144,56 @@ class TestCategoryDecode:
         with _open(art) as zf:
             plan = decode_artifact_to_plan(zf)
         assert plan.category(EntityType.CHANNEL_GROUP).entities[0]["name"] == "DB-sourced"
+
+
+class TestSettingsAgentsDecode:
+    """lc6zu — user_agents / dvr_rules decode as entity categories; the
+    core_settings / comskip blobs decode into the single EntityType.SETTINGS
+    category as self-describing {"section", "values"} records (the orchestrator
+    settings-step contract — restore_orchestrator._settings)."""
+
+    def test_decodes_user_agents_and_dvr_rules(self):
+        art = _build_artifact(
+            user_agents=[{"id": 31, "name": "ECM UA", "user_agent": "ECM/1.0"}],
+            dvr_rules=[{"id": 41, "name": "Record CNN", "channel": 5}],
+        )
+        with _open(art) as zf:
+            plan = decode_artifact_to_plan(zf)
+        ua = plan.category(EntityType.USER_AGENT)
+        assert ua is not None
+        assert [e["name"] for e in ua.entities] == ["ECM UA"]
+        dvr = plan.category(EntityType.DVR_RULE)
+        assert dvr is not None
+        assert dvr.entities[0]["channel"] == 5
+
+    def test_decodes_settings_blobs_into_section_records(self):
+        art = _build_artifact(
+            core_settings={"default_user_agent": "ECM/1.0"},
+            comskip={"comskip_ini": "[main]"},
+        )
+        with _open(art) as zf:
+            plan = decode_artifact_to_plan(zf)
+        settings = plan.category(EntityType.SETTINGS)
+        assert settings is not None
+        assert settings.entities == [
+            {"section": "core_settings", "values": {"default_user_agent": "ECM/1.0"}},
+            {"section": "comskip", "values": {"comskip_ini": "[main]"}},
+        ]
+
+    def test_missing_settings_sections_yield_empty_settings_category(self):
+        art = _build_artifact(m3u=[{"id": 1, "name": "P"}])
+        with _open(art) as zf:
+            plan = decode_artifact_to_plan(zf)
+        settings = plan.category(EntityType.SETTINGS)
+        assert settings is not None and settings.entities == []
+
+    def test_non_mapping_settings_blob_is_ignored(self):
+        # A malformed (list-shaped) core_settings blob decodes to nothing rather
+        # than producing a record the importer would choke on.
+        art = _build_artifact(core_settings=[{"key": "x", "value": "y"}])
+        with _open(art) as zf:
+            plan = decode_artifact_to_plan(zf)
+        assert plan.category(EntityType.SETTINGS).entities == []
 
 
 class TestLogoDecode:

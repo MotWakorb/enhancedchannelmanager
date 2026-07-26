@@ -30,6 +30,7 @@ from sqlalchemy import text
 from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
 from dbas import artifact_crypto
+from dbas.importers.settings_agents import is_safe_setting_key
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
 from models import (
@@ -1891,6 +1892,79 @@ async def _gather_channels_with_streams(client) -> list[dict]:
     return enriched
 
 
+# Core-settings keys whose lower-cased name starts with this prefix belong to
+# the ``comskip`` artifact section, not ``core_settings``. Dispatcharr has NO
+# separate comskip endpoint: comskip config (``comskip_ini``, toggles, …) lives
+# in the same GET /api/core/settings/ namespace the settings importer PATCHes
+# per-key (see dispatcharr_client.get_core_settings / update_core_setting), so
+# the producer fetches once and SPLITS by this prefix. The split is disjoint —
+# no key can be applied twice on restore.
+_COMSKIP_KEY_PREFIX = "comskip"
+
+
+def _normalize_core_settings(raw) -> dict:
+    """Normalize the GET /api/core/settings/ payload into a flat key->value map.
+
+    Dispatcharr serializes core settings either as a mapping or as a list of
+    ``{key|name, value}`` records; the client deliberately returns the raw
+    payload and callers normalize (see ``dispatcharr_client.get_core_settings``).
+    Rows without a usable string key are dropped rather than guessed at.
+    """
+    if isinstance(raw, dict):
+        return dict(raw)
+    out: dict = {}
+    if isinstance(raw, list):
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            key = row.get("key")
+            if not isinstance(key, str) or not key:
+                key = row.get("name")
+            if isinstance(key, str) and key:
+                out[key] = row.get("value")
+    return out
+
+
+def _split_comskip_settings(settings: dict) -> tuple[dict, dict]:
+    """Split a normalized core-settings map into (core_settings, comskip) blobs.
+
+    A key whose lower-cased name starts with :data:`_COMSKIP_KEY_PREFIX` goes to
+    the comskip blob; everything else stays in core_settings. Disjoint by
+    construction, preserving iteration order within each blob.
+    """
+    core: dict = {}
+    comskip: dict = {}
+    for key, value in settings.items():
+        if isinstance(key, str) and key.lower().startswith(_COMSKIP_KEY_PREFIX):
+            comskip[key] = value
+        else:
+            core[key] = value
+    return core, comskip
+
+
+def _redact_marked_setting_values(blob: dict) -> dict:
+    """Redact the VALUE of any setting whose KEY the restore importer denylists.
+
+    Mirrors the importer-side conservative denylist (lc6zu): the settings
+    importer (``dbas.importers.settings_agents``) unconditionally SKIPS any key
+    failing :func:`is_safe_setting_key` — the SAME predicate imported here, so
+    the two sides can never drift. Because such a key is never applied on
+    restore, carrying its real value in the artifact is pure leak risk with
+    zero utility: the value is replaced with the REDACTED sentinel ALWAYS, even
+    on a cred-carrying (``include_credentials``) migration artifact. The key
+    NAME survives so the restore report can still surface the skip by name.
+    Falsy None/"" values are preserved (same rule as the deep redactor) so
+    "unset" stays distinguishable.
+    """
+    out: dict = {}
+    for key, value in blob.items():
+        if isinstance(key, str) and not is_safe_setting_key(key):
+            out[key] = REDACTED if value not in (None, "") else value
+        else:
+            out[key] = value
+    return out
+
+
 async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
     """Fetch full Dispatcharr data for selected sections.
 
@@ -1934,6 +2008,28 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
             # redactor scrubs any credential-class field as a backstop.
             users = await client.get_users()
             result["dispatcharr_users"] = users or []
+        # lc6zu — the settings/agents producer set consumed by the Phase-2
+        # settings_agents importer. User agents and DVR rules are benign entity
+        # lists; the deep redactor still runs over them as defense in depth.
+        if "user_agents" in needed:
+            agents = await client.get_user_agents()
+            result["user_agents"] = agents or []
+        if "dvr_rules" in needed:
+            rules = await client.get_dvr_rules()
+            result["dvr_rules"] = rules or []
+        if "core_settings" in needed or "comskip" in needed:
+            # ONE fetch backs both sections (no comskip endpoint exists — see
+            # _COMSKIP_KEY_PREFIX). Dangerous-marked setting VALUES are redacted
+            # here at the gather chokepoint so every downstream serialization
+            # (artifact category YAML, explicit ?sections= export) is covered.
+            raw_settings = await client.get_core_settings()
+            core_blob, comskip_blob = _split_comskip_settings(
+                _normalize_core_settings(raw_settings)
+            )
+            if "core_settings" in needed:
+                result["core_settings"] = _redact_marked_setting_values(core_blob)
+            if "comskip" in needed:
+                result["comskip"] = _redact_marked_setting_values(comskip_blob)
 
         return result
     except Exception as e:
@@ -2078,6 +2174,22 @@ RESTORABLE_SECTIONS = {
     "channels": {"label": "Channels", "dispatcharr": True, "artifact_only": True},
     "dispatcharr_users": {
         "label": "Dispatcharr Users", "dispatcharr": True, "artifact_only": True,
+    },
+    # lc6zu — the settings/agents producer set completing the 13-category
+    # round-trip. Same ``artifact_only`` rationale as channels /
+    # dispatcharr_users: produced into the DBAS artifact and consumed by the
+    # Phase-2 settings_agents importer; the legacy per-section YAML path has no
+    # restorer for them. ``core_settings`` + ``comskip`` are gathered from ONE
+    # endpoint (GET /api/core/settings/ — Dispatcharr has no separate comskip
+    # endpoint; the importer applies both via per-key PATCH on that same
+    # namespace) and split by the ``comskip`` key prefix.
+    "user_agents": {"label": "User Agents", "dispatcharr": True, "artifact_only": True},
+    "dvr_rules": {"label": "DVR Rules", "dispatcharr": True, "artifact_only": True},
+    "core_settings": {
+        "label": "Core Settings", "dispatcharr": True, "artifact_only": True,
+    },
+    "comskip": {
+        "label": "Comskip Settings", "dispatcharr": True, "artifact_only": True,
     },
 }
 

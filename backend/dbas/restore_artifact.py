@@ -83,7 +83,21 @@ _SECTION_TO_ENTITY: dict[str, EntityType] = {
     # decoded to nothing and restore was a silent no-op.
     "channels": EntityType.CHANNEL,
     "dispatcharr_users": EntityType.USER,
+    # lc6zu — the settings/agents entity categories (importers:
+    # dbas/importers/settings_agents.py). The core_settings/comskip SETTINGS
+    # blobs are NOT listed here: they are key/value mappings, not entity lists,
+    # and decode through their own seam (_decode_settings_category).
+    "user_agents": EntityType.USER_AGENT,
+    "dvr_rules": EntityType.DVR_RULE,
 }
+
+# The SETTINGS-blob artifact sections (key/value mappings, not entity lists).
+# Both decode into the SINGLE ``EntityType.SETTINGS`` plan category as
+# self-describing records ``{"section": <name>, "values": {...}}`` — the
+# contract the orchestrator's settings step consumes
+# (restore_orchestrator._settings -> settings_agents.import_core_settings /
+# import_comskip). Order here is the fixed apply order.
+_SETTINGS_BLOB_SECTIONS: tuple[str, ...] = ("core_settings", "comskip")
 
 # Where in the parsed category YAML each section's entity list lives. The
 # Dispatcharr-managed sections sit under ``dispatcharr``; ECM DB sections under
@@ -158,6 +172,53 @@ def _decode_categories(zf: zipfile.ZipFile) -> list[PlanCategory]:
             entities = _extract_section_entities(parsed, section_key)
         categories.append(PlanCategory(entity_type=entity_type, entities=entities))
     return categories
+
+
+def _extract_section_blob(parsed: object, section_key: str) -> dict:
+    """Pull a SETTINGS-blob mapping for ``section_key`` from a parsed category YAML.
+
+    Mirrors :func:`_extract_section_entities` but for the key/value blob shape
+    (core_settings / comskip). Returns ``{}`` when the section is absent or not
+    a mapping — a malformed blob decodes to nothing, never a crash.
+    """
+    if not isinstance(parsed, dict):
+        return {}
+    for container in _YAML_CONTAINERS:
+        block = parsed.get(container)
+        if isinstance(block, dict) and section_key in block:
+            blob = block[section_key]
+            if isinstance(blob, dict):
+                return blob
+    return {}
+
+
+def _decode_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
+    """Decode the core_settings/comskip blobs into the SETTINGS plan category.
+
+    Each present, non-empty blob becomes one self-describing record
+    ``{"section": <name>, "values": {...}}`` (see
+    :data:`_SETTINGS_BLOB_SECTIONS`). The category is always returned — empty
+    when neither section carries values — so the operator sees "0" rather than
+    a gap, consistent with :func:`_decode_categories`.
+    """
+    entities: list[dict] = []
+    names = set(zf.namelist())
+    for section_key in _SETTINGS_BLOB_SECTIONS:
+        member = "%s/%s.yaml" % (_CATEGORY_DIR, section_key)
+        if member not in names or not _is_safe_member(member):
+            continue
+        try:
+            parsed = yaml.safe_load(zf.read(member).decode("utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError) as exc:
+            logger.warning(
+                "[DBAS-RESTORE] Settings section %s YAML unreadable; treating as empty: %s",
+                section_key, exc,
+            )
+            continue
+        blob = _extract_section_blob(parsed, section_key)
+        if blob:
+            entities.append({"section": section_key, "values": blob})
+    return PlanCategory(entity_type=EntityType.SETTINGS, entities=entities)
 
 
 def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
@@ -255,6 +316,12 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
 
     manifest = _parse_manifest(zf)
     categories = _decode_categories(zf)
+
+    # lc6zu — the SETTINGS category (core_settings + comskip blobs) decodes
+    # through its own seam: the sections are key/value mappings, not entity
+    # lists, and both land in ONE EntityType.SETTINGS category as
+    # {"section", "values"} records (the orchestrator settings-step contract).
+    categories.append(_decode_settings_category(zf))
 
     logo_records = _decode_logo_records(zf)
     categories.append(

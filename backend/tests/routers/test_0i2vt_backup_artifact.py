@@ -42,6 +42,21 @@ SECRET_SMTP_PASSWORD = "SMTP_SECRET_pw_ZZZ222"
 SECRET_CLOUD_TOKEN = "CLOUD_SECRET_tok_ZZZ333"
 SECRET_DISPATCHARR_KEY = "DISPATCHARR_SECRET_key_ZZZ444"
 SECRET_TELEGRAM_TOKEN = "TELEGRAM_SECRET_tok_ZZZ555"
+# A Dispatcharr CORE SETTING whose key matches the importer-side dangerous-key
+# markers (``api_key``). The core_settings producer (lc6zu) must redact its
+# VALUE before any byte enters the archive.
+SECRET_CORE_SETTING = "CORESETTING_SECRET_val_ZZZ777"
+
+# All secret sentinels a produced artifact must never carry, in one tuple so the
+# redaction byte-scans cannot silently miss a newly seeded secret.
+ALL_SECRET_SENTINELS = (
+    SECRET_M3U_PASSWORD,
+    SECRET_SMTP_PASSWORD,
+    SECRET_CLOUD_TOKEN,
+    SECRET_DISPATCHARR_KEY,
+    SECRET_TELEGRAM_TOKEN,
+    SECRET_CORE_SETTING,
+)
 
 
 def _mock_settings_with_secrets():
@@ -116,6 +131,24 @@ def _patched_build(tmp_path, *, with_logos=False, dest_dir=None):
     mock_client.get_channel_groups = AsyncMock(return_value=[])
     mock_client.get_channel_profiles = AsyncMock(return_value=[])
     mock_client.get_stream_profiles = AsyncMock(return_value=[])
+    # lc6zu — the settings/agents producer set. Core settings come back in the
+    # list-of-{key,value} shape (the client returns the raw payload; the
+    # producer normalizes). One key is dangerous-marked (``api_key``) and its
+    # value must be redacted; one is a comskip key the producer must split into
+    # the comskip section.
+    mock_client.get_user_agents = AsyncMock(
+        return_value=[{"id": 31, "name": "ECM UA", "user_agent": "ECM/1.0"}]
+    )
+    mock_client.get_dvr_rules = AsyncMock(
+        return_value=[{"id": 41, "name": "Record CNN", "channel": 5}]
+    )
+    mock_client.get_core_settings = AsyncMock(
+        return_value=[
+            {"id": 1, "key": "default_user_agent", "value": "ECM/1.0"},
+            {"id": 2, "key": "provider_api_key", "value": SECRET_CORE_SETTING},
+            {"id": 3, "key": "comskip_ini", "value": "[main]"},
+        ]
+    )
 
     session = MagicMock()
     session.query.return_value.all.return_value = []
@@ -202,13 +235,7 @@ class TestRedaction:
     def test_no_secret_appears_in_any_byte(self, tmp_path):
         art = _patched_build(tmp_path, with_logos=True)
         raw = art.zip_path.read_bytes()
-        for secret in (
-            SECRET_M3U_PASSWORD,
-            SECRET_SMTP_PASSWORD,
-            SECRET_CLOUD_TOKEN,
-            SECRET_DISPATCHARR_KEY,
-            SECRET_TELEGRAM_TOKEN,
-        ):
+        for secret in ALL_SECRET_SENTINELS:
             assert secret.encode("utf-8") not in raw, (
                 "secret %s leaked into raw ZIP bytes" % secret
             )
@@ -220,13 +247,7 @@ class TestRedaction:
         with zipfile.ZipFile(art.zip_path) as zf:
             for name in zf.namelist():
                 member = zf.read(name)
-                for secret in (
-                    SECRET_M3U_PASSWORD,
-                    SECRET_SMTP_PASSWORD,
-                    SECRET_CLOUD_TOKEN,
-                    SECRET_DISPATCHARR_KEY,
-                    SECRET_TELEGRAM_TOKEN,
-                ):
+                for secret in ALL_SECRET_SENTINELS:
                     assert secret.encode("utf-8") not in member, (
                         "secret %s leaked into member %s" % (secret, name)
                     )
@@ -479,6 +500,59 @@ class TestChannelsUsersProducers:
             assert "url" not in s
             assert "custom_url" not in s
             assert "stream_hash" not in s
+
+
+class TestSettingsAgentsProducers:
+    """lc6zu — the builder must emit the user_agents / dvr_rules / core_settings
+    / comskip categories the settings/agents restore importer consumes (were
+    absent before this bead: the wired importers received empty plan slices)."""
+
+    def test_restorable_sections_include_settings_agents_categories(self):
+        for key in ("user_agents", "dvr_rules", "core_settings", "comskip"):
+            assert key in backup_mod.RESTORABLE_SECTIONS, "missing section %s" % key
+            info = backup_mod.RESTORABLE_SECTIONS[key]
+            assert info["dispatcharr"] is True, "%s must be Dispatcharr-sourced" % key
+            # Legacy per-section YAML restore has no restorer for these — they
+            # are artifact-path-only, exactly like channels/dispatcharr_users.
+            assert info["artifact_only"] is True, "%s must be artifact_only" % key
+
+    def test_user_agents_category_emitted(self, tmp_path):
+        art = _patched_build(tmp_path)
+        with zipfile.ZipFile(art.zip_path) as zf:
+            parsed = yaml.safe_load(zf.read("categories/user_agents.yaml"))
+        rows = parsed["dispatcharr"]["user_agents"]
+        assert [r["name"] for r in rows] == ["ECM UA"]
+        assert rows[0]["user_agent"] == "ECM/1.0"
+
+    def test_dvr_rules_category_emitted(self, tmp_path):
+        art = _patched_build(tmp_path)
+        with zipfile.ZipFile(art.zip_path) as zf:
+            parsed = yaml.safe_load(zf.read("categories/dvr_rules.yaml"))
+        rows = parsed["dispatcharr"]["dvr_rules"]
+        assert [r["name"] for r in rows] == ["Record CNN"]
+        assert rows[0]["channel"] == 5
+
+    def test_core_settings_normalized_split_and_redacted(self, tmp_path):
+        """The list-of-{key,value} upstream shape is normalized to a mapping,
+        comskip-prefixed keys are split OUT, and a dangerous-marked key's value
+        carries the redaction sentinel (never the real value)."""
+        art = _patched_build(tmp_path)
+        with zipfile.ZipFile(art.zip_path) as zf:
+            parsed = yaml.safe_load(zf.read("categories/core_settings.yaml"))
+        blob = parsed["dispatcharr"]["core_settings"]
+        assert blob["default_user_agent"] == "ECM/1.0"
+        # ``provider_api_key`` matches the importer's dangerous-key markers —
+        # its value is redacted at the producer (the importer would never apply
+        # it anyway; carrying the real value is pure leak risk).
+        assert blob["provider_api_key"] == backup_mod.REDACTED
+        assert "comskip_ini" not in blob
+
+    def test_comskip_section_carries_the_comskip_keys(self, tmp_path):
+        art = _patched_build(tmp_path)
+        with zipfile.ZipFile(art.zip_path) as zf:
+            parsed = yaml.safe_load(zf.read("categories/comskip.yaml"))
+        blob = parsed["dispatcharr"]["comskip"]
+        assert blob == {"comskip_ini": "[main]"}
 
 
 class TestCanonicalArtifactName:

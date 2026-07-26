@@ -91,6 +91,24 @@ async def _build_real_artifact(tmp_path):
     client.get_users = AsyncMock(
         return_value=[{"id": 7, "username": "alice", "is_superuser": False}]
     )
+    # lc6zu — the settings/agents producer set. Core settings come back in the
+    # raw list-of-{key,value} shape; the producer normalizes, splits comskip*
+    # keys into the comskip section, and redacts the dangerous-marked
+    # ``provider_api_key`` value. The DVR rule's ``channel`` FK references the
+    # archived channel (source id 5) so apply must remap it.
+    client.get_user_agents = AsyncMock(
+        return_value=[{"id": 31, "name": "ECM UA", "user_agent": "ECM/1.0"}]
+    )
+    client.get_dvr_rules = AsyncMock(
+        return_value=[{"id": 41, "name": "Record CNN", "channel": 5}]
+    )
+    client.get_core_settings = AsyncMock(
+        return_value=[
+            {"id": 1, "key": "default_user_agent", "value": "ECM/1.0"},
+            {"id": 2, "key": "provider_api_key", "value": "sekrit-core-value"},
+            {"id": 3, "key": "comskip_ini", "value": "[main]"},
+        ]
+    )
 
     session = MagicMock()
     session.query.return_value.all.return_value = []
@@ -153,6 +171,21 @@ async def test_build_then_decode_then_dry_run(tmp_path):
     user_cat = plan.category(EntityType.USER)
     assert user_cat is not None and len(user_cat.entities) == 1
     assert user_cat.entities[0]["username"] == "alice"
+    # ...and (lc6zu) the settings/agents categories the producers now emit.
+    ua_cat = plan.category(EntityType.USER_AGENT)
+    assert ua_cat is not None and [e["name"] for e in ua_cat.entities] == ["ECM UA"]
+    dvr_cat = plan.category(EntityType.DVR_RULE)
+    assert dvr_cat is not None and dvr_cat.entities[0]["channel"] == 5
+    settings_cat = plan.category(EntityType.SETTINGS)
+    assert settings_cat is not None
+    assert [r["section"] for r in settings_cat.entities] == ["core_settings", "comskip"]
+    core_values = settings_cat.entities[0]["values"]
+    assert core_values["default_user_agent"] == "ECM/1.0"
+    # The dangerous-marked key survives by NAME (the importer skips it by name)
+    # but its VALUE was redacted at the producer.
+    assert core_values["provider_api_key"] == backup_mod.REDACTED
+    assert "sekrit-core-value" not in str(core_values)
+    assert settings_cat.entities[1]["values"] == {"comskip_ini": "[main]"}
 
     report = await run_dry_run(plan=plan, client=_restore_client())
 
@@ -166,6 +199,15 @@ async def test_build_then_decode_then_dry_run(tmp_path):
     # the dry-run report (they would be created against the empty destination).
     assert report.category(EntityType.CHANNEL).would_create == 1
     assert report.category(EntityType.USER).would_create == 1
+    # lc6zu round-trip: the settings/agents categories flow from the produced
+    # artifact all the way into the dry-run counts. The DVR rule's channel FK
+    # resolves through the dry-run CHANNEL remap; the dangerous core-settings
+    # key is skipped by name, the two safe keys would be applied.
+    assert report.category(EntityType.USER_AGENT).would_create == 1
+    assert report.category(EntityType.DVR_RULE).would_create == 1
+    settings_report = report.category(EntityType.SETTINGS)
+    assert settings_report.would_update == 2
+    assert settings_report.would_skip == 1
 
 
 def test_producer_importer_category_parity():
@@ -191,16 +233,27 @@ def test_producer_importer_category_parity():
         "decoder maps sections with no producer: %s" % sorted(missing_producer)
     )
 
-    # channels + dispatcharr_users are the 7i8rf round-trip categories — assert
-    # both ends explicitly so a future edit that drops either is caught.
+    # channels + dispatcharr_users (7i8rf) and user_agents + dvr_rules (lc6zu)
+    # are the round-trip categories — assert both ends explicitly so a future
+    # edit that drops any of them is caught.
     for section, entity in (
         ("channels", EntityType.CHANNEL),
         ("dispatcharr_users", EntityType.USER),
+        ("user_agents", EntityType.USER_AGENT),
+        ("dvr_rules", EntityType.DVR_RULE),
     ):
         assert section in produced_dispatcharr, "producer dropped %s" % section
         assert _SECTION_TO_ENTITY.get(section) is entity, (
             "decoder mapping for %s changed" % section
         )
+
+    # The SETTINGS-blob sections (lc6zu) decode through their own seam (they are
+    # mappings, not entity lists) — assert producer + decoder both know them.
+    from dbas.restore_artifact import _SETTINGS_BLOB_SECTIONS
+
+    for section in _SETTINGS_BLOB_SECTIONS:
+        assert section in produced_dispatcharr, "producer dropped %s" % section
+    assert set(_SETTINGS_BLOB_SECTIONS) == {"core_settings", "comskip"}
 
 
 # ---------------------------------------------------------------------------
@@ -228,13 +281,12 @@ _ALL_REGISTRY_CATEGORIES = (
 def _augment_plan_all_categories(plan):
     """Extend the artifact-decoded plan so EVERY registry category has work.
 
-    The artifact producer emits M3U/EPG/groups/profiles/channels/users/logos;
-    the user-agent / DVR-rule / settings sections have no producer yet (their
-    importers are wired through the plan seam — bead kxcjf), so this test feeds
-    them plan slices directly, plus one row for each empty artifact category.
+    The artifact producer emits M3U/EPG/groups/profiles/channels/users/logos
+    (7i8rf) AND user_agents/dvr_rules/core_settings/comskip (lc6zu) — those
+    flow from the GENUINELY PRODUCED artifact and are NOT fed here. The mock
+    Dispatcharr returns empty EPG/groups/profiles lists, so this only appends
+    one row to each of those otherwise-empty categories.
     """
-    from dbas.preflight import PlanCategory
-
     plan.category(EntityType.EPG_SOURCE).entities.append(
         {"id": 51, "name": "EPG Main", "source_type": "xmltv",
          "url": "http://epg.example/guide.xml"}
@@ -242,33 +294,6 @@ def _augment_plan_all_categories(plan):
     plan.category(EntityType.CHANNEL_GROUP).entities.append({"id": 61, "name": "News"})
     plan.category(EntityType.CHANNEL_PROFILE).entities.append({"id": 62, "name": "Main"})
     plan.category(EntityType.STREAM_PROFILE).entities.append({"id": 63, "name": "Direct"})
-    plan.categories.append(
-        PlanCategory(
-            entity_type=EntityType.USER_AGENT,
-            entities=[{"id": 31, "name": "ECM UA", "user_agent": "ECM/1.0"}],
-        )
-    )
-    plan.categories.append(
-        PlanCategory(
-            entity_type=EntityType.DVR_RULE,
-            # ``channel`` FK points at the archived channel (source id 5); it must
-            # remap through the CHANNEL namespace on BOTH dry-run and apply.
-            entities=[{"id": 41, "name": "Record CNN", "channel": 5}],
-        )
-    )
-    plan.categories.append(
-        PlanCategory(
-            entity_type=EntityType.SETTINGS,
-            entities=[
-                # default_user_agent is safe -> applied; the api_key-marked key is
-                # denylisted -> skipped (by name only).
-                {"section": "core_settings",
-                 "values": {"default_user_agent": "ECM/1.0",
-                            "provider_api_key": "sekrit"}},
-                {"section": "comskip", "values": {"comskip_ini": "[main]"}},
-            ],
-        )
-    )
     return plan
 
 
