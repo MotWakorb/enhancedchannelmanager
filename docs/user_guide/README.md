@@ -149,12 +149,34 @@ docs/user_guide/
 ├── channel-pipeline/             ← rule authoring, conditions/actions, bulk ops
 ├── normalization/                ← naming patterns, apply-to-channels flow
 ├── epg/                          ← EPG sources, dummy EPG templates
-├── stats/                        ← Stats tab (placeholder; bd-skqln.9)
-├── backup-restore/               ← Backup & Restore (placeholder; bd-0i2vt epic)
+├── notifications/                ← SMTP/Discord/Telegram scheduled-task alerts
+├── stats/                        ← Stats tab (Stats v2, v0.17.0)
+├── integrations/                 ← Emby/Plex/Jellyfin + MCP connection reference
+├── backup-restore/               ← Backup & Restore (bd-0i2vt epic)
 └── troubleshooting/              ← common issues, log inspection, support
 ```
 
-Each subdirectory has its own `index.md` (section landing) and will accumulate per-article files as downstream beads ship.
+This tree reflects the actual current filesystem under `docs/user_guide/` —
+every directory listed above exists and has its own `index.md` (section
+landing); each accumulates per-article files as downstream beads ship.
+
+### Planned sections (bd-gsnw0)
+
+The `gsnw0` per-tab-tutorial epic scopes six additional tab tutorials that
+have not been scaffolded yet — no directory exists for them today. Listed
+here rather than in the tree above so the tree stays an accurate map of what
+currently exists on disk. Naming and status match `index.md`'s
+["By tab"](index.md#by-tab) table:
+
+- `m3u-manager/` — M3U Manager tab tutorials — **Planned**
+- `guide/` — Guide tab tutorials — **Planned**
+- `logo-manager/` — Logo Manager tab tutorials — **Planned**
+- `m3u-changes/` — M3U Changes tab tutorials — **Planned**
+- `journal/` — Journal tab tutorials — **Planned**
+- `settings/` — Settings tab tutorials — **Planned**
+
+Once a bead scaffolds one of these, move it from this list into the tree
+above.
 
 ### Why this order
 
