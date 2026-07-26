@@ -809,3 +809,134 @@ async def test_one_bad_logo_does_not_block_the_rest():
     assert cat.failed == 1
     assert cat.created == 1
     client.upload_logo_file.assert_awaited_once()
+
+
+# ===========================================================================
+# A. FUNCTIONAL — affected-channel context on misses (bead cm9bi)
+# ===========================================================================
+#
+# A logo miss is only actionable if the operator knows WHICH channels were
+# restored without their logo. The archive's channel records carry the
+# ``logo_id`` FK; the channels importer runs BEFORE the logos importer, so on
+# apply the CHANNEL remap namespace already maps source channel ids to live
+# destination ids. Each miss detail therefore carries the affected channels
+# (destination id where known + operator-facing name).
+
+
+def _channel(*, src_id, name, logo_id):
+    """Build one archive channel record (only the keys the logos importer reads)."""
+    return {"id": src_id, "name": name, "logo_id": logo_id}
+
+
+@pytest.mark.asyncio
+async def test_miss_detail_carries_affected_channel_with_dest_id():
+    """cm9bi: a miss detail lists the affected channel with its DESTINATION
+    Dispatcharr id (resolved through the CHANNEL remap namespace) + name."""
+    report, ledger, remap = _ctx()
+    remap.add(EntityType.CHANNEL, 5, 505)
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=42, name="ESPN HD")],
+        archive_channels=[_channel(src_id=5, name="ESPN", logo_id=42)],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    assert report.logo_misses == 1
+    detail = report.logo_miss_details[0]
+    assert len(detail.channels) == 1
+    assert detail.channels[0].channel_id == 505
+    assert detail.channels[0].name == "ESPN"
+
+
+@pytest.mark.asyncio
+async def test_one_miss_lists_every_affected_channel():
+    """cm9bi: ONE missed logo referenced by several channels stays ONE detail row
+    (the aggregate still counts logos, not channels) but lists EVERY channel."""
+    report, ledger, remap = _ctx()
+    remap.add(EntityType.CHANNEL, 5, 505)
+    remap.add(EntityType.CHANNEL, 6, 606)
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=42, name="League Logo")],
+        archive_channels=[
+            _channel(src_id=5, name="ESPN", logo_id=42),
+            _channel(src_id=6, name="ESPN 2", logo_id=42),
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    assert report.logo_misses == 1
+    assert len(report.logo_miss_details) == 1
+    channels = report.logo_miss_details[0].channels
+    assert [(c.channel_id, c.name) for c in channels] == [(505, "ESPN"), (606, "ESPN 2")]
+
+
+@pytest.mark.asyncio
+async def test_miss_detail_channel_without_remap_resolution_has_none_id():
+    """cm9bi: an affected channel whose destination id is unknown (not in the
+    remap — e.g. its create failed) still lists NAME, with channel_id None."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=42, name="ESPN HD")],
+        archive_channels=[_channel(src_id=5, name="ESPN", logo_id=42)],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    detail = report.logo_miss_details[0]
+    assert len(detail.channels) == 1
+    assert detail.channels[0].channel_id is None
+    assert detail.channels[0].name == "ESPN"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_miss_detail_never_emits_provisional_channel_ids():
+    """cm9bi: on dry-run the CHANNEL remap holds PROVISIONAL ids (src used as
+    dest for would-creates) that must never render as real Dispatcharr links —
+    the channel is listed by name with channel_id None."""
+    report = RestoreReport(is_dry_run=True)
+    ledger, remap = RollbackLedger(restore_id="t"), IdRemapTable()
+    remap.add(EntityType.CHANNEL, 5, 5)  # provisional dry-run mapping
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=42, name="ESPN HD")],
+        archive_channels=[_channel(src_id=5, name="ESPN", logo_id=42)],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        is_dry_run=True,
+    )
+    detail = report.logo_miss_details[0]
+    assert len(detail.channels) == 1
+    assert detail.channels[0].channel_id is None
+    assert detail.channels[0].name == "ESPN"
+
+
+@pytest.mark.asyncio
+async def test_miss_detail_channels_empty_without_archive_channels():
+    """cm9bi back-compat: callers that pass no archive channels still get a
+    detail row — with an empty channels list, never a crash."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=42, name="ESPN HD")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    assert report.logo_misses == 1
+    assert report.logo_miss_details[0].channels == []
+
+
+@pytest.mark.asyncio
+async def test_miss_detail_ignores_channels_referencing_other_logos():
+    """cm9bi: only channels whose ``logo_id`` references the MISSED logo are
+    listed — unrelated channels (other logos, no logo) never appear."""
+    report, ledger, remap = _ctx()
+    remap.add(EntityType.CHANNEL, 5, 505)
+    remap.add(EntityType.CHANNEL, 6, 606)
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=42, name="ESPN HD")],
+        archive_channels=[
+            _channel(src_id=5, name="ESPN", logo_id=42),
+            _channel(src_id=6, name="CNN", logo_id=99),
+            {"id": 7, "name": "NoLogo"},
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    channels = report.logo_miss_details[0].channels
+    assert [(c.channel_id, c.name) for c in channels] == [(505, "ESPN")]

@@ -162,6 +162,144 @@ describe('LogoMissBanner — per-logo detail drill-down (bead qhui4)', () => {
   });
 });
 
+describe('LogoMissBanner — affected-channel rows with Dispatcharr links (bead cm9bi)', () => {
+  // Dispatcharr's SPA router has NO per-channel route (verified against the
+  // live bundle: only top-level paths like /channels). Per-channel links
+  // therefore FALL BACK to the /channels list page; the row still names the
+  // channel + its destination id so the operator can find it there.
+  it('lists each affected channel (name + destination id) under its logo row', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'ESPN HD',
+              channels: [{ channel_id: 505, name: 'ESPN' }],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const row = screen.getByTestId('logo-miss-detail-row');
+    const channelRows = within(row).getAllByTestId('logo-miss-channel-row');
+    expect(channelRows).toHaveLength(1);
+    expect(within(channelRows[0]).getByText('ESPN')).toBeInTheDocument();
+    expect(within(channelRows[0]).getByText(/channel 505/i)).toBeInTheDocument();
+  });
+
+  it('renders a per-channel Dispatcharr link (fallback: the /channels list page), hardened and named after the channel', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'ESPN HD',
+              channels: [{ channel_id: 505, name: 'ESPN' }],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const link = screen.getByTestId('logo-miss-channel-link');
+    expect(link).toHaveAttribute('href', `${DISPATCHARR_URL}/channels`);
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    expect(link).toHaveAccessibleName(/open espn in dispatcharr/i);
+  });
+
+  it('lists EVERY affected channel when one missed logo is shared by several channels', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'League Logo',
+              channels: [
+                { channel_id: 505, name: 'ESPN' },
+                { channel_id: 606, name: 'ESPN 2' },
+              ],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    // Still ONE logo row (aggregate counts logos), TWO channel rows under it.
+    expect(screen.getAllByTestId('logo-miss-detail-row')).toHaveLength(1);
+    const channelRows = screen.getAllByTestId('logo-miss-channel-row');
+    expect(channelRows).toHaveLength(2);
+    expect(within(channelRows[0]).getByText('ESPN')).toBeInTheDocument();
+    expect(within(channelRows[1]).getByText('ESPN 2')).toBeInTheDocument();
+  });
+
+  it('falls back to the logo-name-only row when a miss carries no channel context', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [{ source_export_id: 42, label: 'ESPN HD', channels: [] }],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    expect(screen.getByText('ESPN HD')).toBeInTheDocument();
+    expect(screen.queryByTestId('logo-miss-channel-list')).not.toBeInTheDocument();
+    // The aggregate /channels fix link still offers the way in.
+    expect(screen.getByTestId('logo-miss-detail-link')).toHaveAttribute(
+      'href',
+      `${DISPATCHARR_URL}/channels`,
+    );
+  });
+
+  it('renders a channel with no destination id by name alone (no "(channel …)" suffix)', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'ESPN HD',
+              channels: [{ channel_id: null, name: 'ESPN' }],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const channelRow = screen.getByTestId('logo-miss-channel-row');
+    expect(within(channelRow).getByText('ESPN')).toBeInTheDocument();
+    expect(within(channelRow).queryByText(/channel\s/i)).not.toBeInTheDocument();
+  });
+
+  it('renders channel rows without links when no Dispatcharr base url is known', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'ESPN HD',
+              channels: [{ channel_id: 505, name: 'ESPN' }],
+            },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByTestId('logo-miss-channel-row')).toBeInTheDocument();
+    expect(screen.queryByTestId('logo-miss-channel-link')).not.toBeInTheDocument();
+  });
+});
+
 describe('LogoMissBanner — integration through RestoreCompleteSummary bannerSlot', () => {
   it('appears above the outcome banner when passed through the summary bannerSlot', () => {
     const r = report({ logo_misses: 9 });

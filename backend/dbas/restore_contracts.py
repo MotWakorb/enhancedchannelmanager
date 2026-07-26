@@ -193,6 +193,27 @@ class FailureDetail(BaseModel):
     source_export_id: int | None = Field(default=None)
 
 
+class LogoMissChannel(BaseModel):
+    """One channel affected by a logo miss (bead ``…-cm9bi``).
+
+    ``channel_id`` is the DESTINATION Dispatcharr channel id, resolved through
+    the ``EntityType.CHANNEL`` remap namespace on apply (the channels importer
+    runs before the logos importer). It is ``None`` when the id is unknown —
+    the channel's create failed/was skipped without a remap entry, or the run
+    is a dry-run (whose CHANNEL remap holds PROVISIONAL ids that must never be
+    rendered as real Dispatcharr links).
+
+    ``name`` is the operator-facing channel name — never a secret (same hygiene
+    as :class:`SkipDetail` / :class:`FailureDetail`).
+    """
+
+    channel_id: int | None = Field(
+        default=None,
+        description="Destination Dispatcharr channel id, when known. Never a provisional dry-run id.",
+    )
+    name: str = Field(description="Operator-facing channel name — never a secret.")
+
+
 class LogoMissDetail(BaseModel):
     """One logo that could not be matched/applied on restore (bead ``…-qhui4``).
 
@@ -203,6 +224,14 @@ class LogoMissDetail(BaseModel):
 
     ``label`` is the operator-facing logo display name — never a path, byte
     payload, or secret (same hygiene as :class:`SkipDetail` / :class:`FailureDetail`).
+
+    ``channels`` (bead ``…-cm9bi``) lists the AFFECTED CHANNELS — the archive
+    channels whose ``logo_id`` referenced this missed logo. ONE miss stays ONE
+    detail row (``len(logo_miss_details)`` keeps tracking the aggregate
+    :attr:`RestoreReport.logo_misses`, which counts logos, not channels); a logo
+    referenced by several channels lists them all here. Empty when no channel
+    referenced the logo or no channel context was supplied. Additive optional —
+    no ``CONTRACT_VERSION`` bump.
     """
 
     source_export_id: int | None = Field(
@@ -210,6 +239,10 @@ class LogoMissDetail(BaseModel):
         description="The logo's id in the export archive, when known.",
     )
     label: str = Field(description="Operator-facing logo name — never a path or secret.")
+    channels: list[LogoMissChannel] = Field(
+        default_factory=list,
+        description="The channels restored without this logo (destination id where known + name).",
+    )
 
 
 class EntityCategoryReport(BaseModel):

@@ -62,7 +62,22 @@ Key fields:
 - `outcome: RestoreOutcome | None` — the **tri-state** result. `None` on a
   dry-run (a plan has no realized outcome).
 - `logo_misses: int` — aggregate count of unresolved logo references. The logo
-  beads `.15` / `.19` consume this; per-logo detail lives in their own surface.
+  beads `.15` / `.19` consume this (the D9 red banner).
+- `logo_miss_details: list[LogoMissDetail]` — the per-logo drill-down behind
+  the aggregate (bead `…-qhui4`): each row carries the missed logo's
+  `source_export_id` + operator-facing `label`, plus (bead `…-cm9bi`) its
+  AFFECTED CHANNELS as `channels: list[LogoMissChannel]` (`channel_id` +
+  `name`). One miss stays one detail row — `len(logo_miss_details)` tracks
+  `logo_misses`, which counts logos, not channels; a logo shared by several
+  channels lists them all in `channels`. `channel_id` is the **destination**
+  Dispatcharr channel id, resolved through the `EntityType.CHANNEL` remap
+  namespace (the channels importer runs before the logos importer); it is
+  `None` when unknown — the channel's create failed/was skipped, or the run is
+  a dry-run (whose CHANNEL remap holds provisional ids that must never render
+  as real Dispatcharr links). Only the logos importer records misses — the
+  channels importer drops `logo_id` from create payloads and has no
+  logo-attach path. Both fields are additive optional — no `CONTRACT_VERSION`
+  bump.
 
 ### Tri-state outcome — never "success" on mixed state
 
