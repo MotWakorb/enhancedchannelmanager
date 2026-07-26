@@ -374,3 +374,149 @@ def _skip(
     cat.skip_details.append(
         SkipDetail(reason=reason, label=label, source_export_id=source_export_id)
     )
+
+
+# ---------------------------------------------------------------------------
+# EPG-download wait (bead kxcjf — the unmet 0i2vt.11 acceptance item)
+# ---------------------------------------------------------------------------
+
+# Dispatcharr EPGSource.status values that mean the fetch/parse cycle is over.
+# ``error`` is terminal too: waiting longer will not produce data, and the
+# bounded wait must never hang on a broken source.
+_EPG_TERMINAL_STATUSES = frozenset({"success", "error"})
+
+
+def _epg_download_done(source: object) -> bool:
+    """True when an EPG source row shows its data download has finished.
+
+    Terminal when the source's ``status`` is a known terminal value
+    (success/error) OR its ``epg_count`` is already positive (data landed even
+    if the status vocabulary drifts in a future Dispatcharr). An unreadable /
+    non-dict row is NOT terminal — the bounded poll (not this predicate) ends
+    the wait.
+    """
+    if not isinstance(source, dict):
+        return False
+    status = source.get("status")
+    if isinstance(status, str) and status.lower() in _EPG_TERMINAL_STATUSES:
+        return True
+    epg_count = source.get("epg_count")
+    return isinstance(epg_count, int) and epg_count > 0
+
+
+async def wait_for_epg_downloads(
+    *,
+    source_ids: list[int],
+    client: DispatcharrClient,
+    get_source_fn=None,
+    refresh_fn=None,
+    sleep_fn=None,
+    poll_interval_seconds: float = 5.0,
+    max_polls: int = 60,
+) -> list[dict]:
+    """Bounded 2-stage wait for Dispatcharr's EPG data download (restore apply).
+
+    Bead ``kxcjf`` folds in the unmet ``0i2vt.11`` acceptance item: after the
+    restore creates EPG sources, Dispatcharr downloads their EPG data
+    asynchronously — the Channels importer must not run before that download so
+    Dispatcharr's channel↔EPG matching has rows to match against. Mirrors the
+    bounded 2-stage poll in ``m3u_accounts.apply_deferred_auto_sync``:
+
+    1. **Trigger** — best-effort ``refresh_epg_source`` per created source (the
+       create usually kicks a fetch itself; the explicit trigger makes the wait
+       deterministic). A trigger failure is logged and never fatal.
+    2. **Bounded poll** — re-read each source row until it is terminal
+       (:func:`_epg_download_done`) or ``max_polls`` is exhausted. The row is
+       checked BEFORE the first sleep, so an already-downloaded source costs
+       zero waiting.
+
+    Non-silent on timeout: a source that never reached a terminal state is
+    returned with ``completed=False`` (the orchestrator reflects it into the
+    :class:`RestoreReport` notes) and logged as a WARNING. Never raises, never
+    hangs, never fails the restore — channels still restore without EPG data,
+    just without upstream EPG matching.
+
+    Args:
+        source_ids: DESTINATION ids of the EPG sources created this run.
+        client: The Dispatcharr API client.
+        get_source_fn: ``async (source_id) -> dict`` row probe seam
+            (defaults to ``client.get_epg_source``).
+        refresh_fn: ``async (source_id) -> dict`` trigger seam
+            (defaults to ``client.refresh_epg_source``).
+        sleep_fn: ``async (seconds) -> None`` sleep seam (``asyncio.sleep``).
+        poll_interval_seconds: Seconds between polls.
+        max_polls: Hard upper bound on polls per source (never an infinite loop).
+
+    Returns:
+        Per-source summaries: ``{"epg_source_id", "completed", "status",
+        "polls"}`` — safe fields only, never a url/credential.
+    """
+    if sleep_fn is None:
+        import asyncio
+
+        sleep_fn = asyncio.sleep
+    if get_source_fn is None:
+        get_source_fn = client.get_epg_source
+    if refresh_fn is None:
+        refresh_fn = client.refresh_epg_source
+
+    summaries: list[dict] = []
+    for source_id in source_ids:
+        # Stage 1 — best-effort download trigger (never fatal).
+        try:
+            await refresh_fn(source_id)
+        except Exception as exc:  # noqa: BLE001 - trigger is best-effort
+            logger.warning(
+                "[DBAS-EPG] EPG download trigger failed for source id=%s: %s",
+                source_id,
+                exc,
+            )
+
+        # Stage 2 — bounded poll; check first, sleep between polls.
+        completed = False
+        status: str | None = None
+        polls = 0
+        while polls < max_polls:
+            polls += 1
+            try:
+                source = await get_source_fn(source_id)
+            except Exception as exc:  # noqa: BLE001 - a probe error is a non-terminal poll
+                logger.warning(
+                    "[DBAS-EPG] EPG source probe failed for id=%s: %s", source_id, exc
+                )
+                source = None
+            if isinstance(source, dict):
+                raw_status = source.get("status")
+                status = raw_status if isinstance(raw_status, str) else status
+            if _epg_download_done(source):
+                completed = True
+                break
+            if polls < max_polls:
+                await sleep_fn(poll_interval_seconds)
+
+        if completed:
+            logger.info(
+                "[DBAS-EPG] EPG data download finished for source id=%s "
+                "(status=%s, polls=%d).",
+                source_id,
+                status,
+                polls,
+            )
+        else:
+            logger.warning(
+                "[DBAS-EPG] EPG data download for source id=%s did NOT finish within "
+                "the bounded wait (status=%s, polls=%d); continuing — channel EPG "
+                "matching may be incomplete.",
+                source_id,
+                status,
+                polls,
+            )
+        summaries.append(
+            {
+                "epg_source_id": source_id,
+                "completed": completed,
+                "status": status,
+                "polls": polls,
+            }
+        )
+    return summaries

@@ -201,3 +201,204 @@ def test_producer_importer_category_parity():
         assert _SECTION_TO_ENTITY.get(section) is entity, (
             "decoder mapping for %s changed" % section
         )
+
+
+# ---------------------------------------------------------------------------
+# kxcjf — REAL-APPLY round trip: confirm_apply=True through the FULL apply
+# registry. Proves (a) every category actually MUTATES the (mock) destination,
+# (b) per-entity counts land in the RestoreReport, and (c) the key parity bar:
+# dry-run counts == subsequent apply counts across ALL registry categories.
+# ---------------------------------------------------------------------------
+
+_ALL_REGISTRY_CATEGORIES = (
+    EntityType.M3U_ACCOUNT,
+    EntityType.EPG_SOURCE,
+    EntityType.CHANNEL_GROUP,
+    EntityType.CHANNEL_PROFILE,
+    EntityType.STREAM_PROFILE,
+    EntityType.USER_AGENT,
+    EntityType.SETTINGS,
+    EntityType.USER,
+    EntityType.CHANNEL,
+    EntityType.DVR_RULE,
+    EntityType.LOGO,
+)
+
+
+def _augment_plan_all_categories(plan):
+    """Extend the artifact-decoded plan so EVERY registry category has work.
+
+    The artifact producer emits M3U/EPG/groups/profiles/channels/users/logos;
+    the user-agent / DVR-rule / settings sections have no producer yet (their
+    importers are wired through the plan seam — bead kxcjf), so this test feeds
+    them plan slices directly, plus one row for each empty artifact category.
+    """
+    from dbas.preflight import PlanCategory
+
+    plan.category(EntityType.EPG_SOURCE).entities.append(
+        {"id": 51, "name": "EPG Main", "source_type": "xmltv",
+         "url": "http://epg.example/guide.xml"}
+    )
+    plan.category(EntityType.CHANNEL_GROUP).entities.append({"id": 61, "name": "News"})
+    plan.category(EntityType.CHANNEL_PROFILE).entities.append({"id": 62, "name": "Main"})
+    plan.category(EntityType.STREAM_PROFILE).entities.append({"id": 63, "name": "Direct"})
+    plan.categories.append(
+        PlanCategory(
+            entity_type=EntityType.USER_AGENT,
+            entities=[{"id": 31, "name": "ECM UA", "user_agent": "ECM/1.0"}],
+        )
+    )
+    plan.categories.append(
+        PlanCategory(
+            entity_type=EntityType.DVR_RULE,
+            # ``channel`` FK points at the archived channel (source id 5); it must
+            # remap through the CHANNEL namespace on BOTH dry-run and apply.
+            entities=[{"id": 41, "name": "Record CNN", "channel": 5}],
+        )
+    )
+    plan.categories.append(
+        PlanCategory(
+            entity_type=EntityType.SETTINGS,
+            entities=[
+                # default_user_agent is safe -> applied; the api_key-marked key is
+                # denylisted -> skipped (by name only).
+                {"section": "core_settings",
+                 "values": {"default_user_agent": "ECM/1.0",
+                            "provider_api_key": "sekrit"}},
+                {"section": "comskip", "values": {"comskip_ini": "[main]"}},
+            ],
+        )
+    )
+    return plan
+
+
+def _apply_client():
+    """An empty-destination mock whose creates return destination ids."""
+    client = _restore_client()
+    client.create_m3u_account = AsyncMock(side_effect=[{"id": 901}, {"id": 902}])
+    client.create_epg_source = AsyncMock(return_value={"id": 751})
+    # EPG-download wait probes (terminal on first check — zero sleeping).
+    client.refresh_epg_source = AsyncMock(return_value={})
+    client.get_epg_source = AsyncMock(
+        return_value={"id": 751, "status": "success", "epg_count": 10}
+    )
+    client.create_channel_group = AsyncMock(return_value={"id": 761})
+    client.create_channel_profile = AsyncMock(return_value={"id": 762})
+    client.create_stream_profile = AsyncMock(return_value={"id": 763})
+    client.get_user_agents = AsyncMock(return_value=[])
+    client.create_user_agent = AsyncMock(return_value={"id": 771})
+    client.get_dvr_rules = AsyncMock(return_value=[])
+    client.create_dvr_rule = AsyncMock(return_value={"id": 781})
+    client.update_core_setting = AsyncMock(return_value={})
+    client.create_user = AsyncMock(return_value={"id": 791})
+    client.create_channel = AsyncMock(return_value={"id": 505})
+    # One destination stream whose name Tier-3 matches the archived embedded
+    # stream, so the attach path exercises update_channel (no fallback synth).
+    client.get_streams = AsyncMock(
+        return_value={"results": [{"id": 990, "name": "CNN HD"}], "count": 1}
+    )
+    client.update_channel = AsyncMock(return_value={})
+    client.update_profile_channel = AsyncMock(return_value={})
+    client.upload_logo_file = AsyncMock(return_value={"id": 995})
+    return client
+
+
+@pytest.mark.asyncio
+async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(tmp_path):
+    from dbas.restore_contracts import (
+        IdRemapTable,
+        RestoreOutcome,
+        RestoreReport,
+        RollbackLedger,
+    )
+    from dbas.restore_orchestrator import (
+        default_importer_steps,
+        new_restore_id,
+        run_dry_run,
+        run_restore,
+    )
+
+    art = await _build_real_artifact(tmp_path)
+    with zipfile.ZipFile(art.zip_path, "r") as zf:
+        validate_artifact_manifest(zf)
+        plan = decode_artifact_to_plan(zf)
+    plan = _augment_plan_all_categories(plan)
+
+    # --- 1. Dry-run first (the default-ON preview the operator sees). --------
+    dry_report = await run_dry_run(plan=plan, client=_restore_client())
+    assert dry_report.is_dry_run is True
+
+    # Every registry category has non-zero planned work — nothing previews empty.
+    for entity_type in _ALL_REGISTRY_CATEGORIES:
+        dry_cat = dry_report.category(entity_type)
+        planned = dry_cat.would_create + dry_cat.would_update + dry_cat.would_skip
+        assert planned > 0, "dry-run planned nothing for %s" % entity_type.value
+
+    # --- 2. Real apply (confirm_apply=True) through the FULL apply registry. --
+    client = _apply_client()
+    apply_report = await run_restore(
+        plan=plan,
+        client=client,
+        steps=default_importer_steps(),
+        report=RestoreReport(is_dry_run=False),
+        ledger=RollbackLedger(restore_id=new_restore_id()),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert apply_report.is_dry_run is False
+    assert apply_report.outcome == RestoreOutcome.SUCCESS
+
+    # --- 3. THE parity bar: dry-run counts == apply counts, ALL categories. ---
+    for entity_type in _ALL_REGISTRY_CATEGORIES:
+        dry_cat = dry_report.category(entity_type)
+        apply_cat = apply_report.category(entity_type)
+        assert (
+            apply_cat.created,
+            apply_cat.updated,
+            apply_cat.skipped,
+            apply_cat.failed,
+        ) == (
+            dry_cat.would_create,
+            dry_cat.would_update,
+            dry_cat.would_skip,
+            0,
+        ), "dry-run/apply divergence for %s" % entity_type.value
+
+    # --- 4. Every category actually MUTATED the destination (the silent-skip
+    # defect this bead closes: pre-kxcjf only M3U/users/channels mutated). -----
+    assert client.create_m3u_account.await_count == 2
+    client.create_epg_source.assert_awaited_once()
+    client.create_channel_group.assert_awaited_once()
+    client.create_channel_profile.assert_awaited_once()
+    client.create_stream_profile.assert_awaited_once()
+    client.create_user_agent.assert_awaited_once()
+    client.create_dvr_rule.assert_awaited_once()
+    assert client.update_core_setting.await_count == 2  # safe keys only
+    client.create_user.assert_awaited_once()
+    client.create_channel.assert_awaited_once()
+    client.upload_logo_file.assert_awaited_once()
+    # The stream layer attached the Tier-3-matched destination stream.
+    client.update_channel.assert_awaited_once_with(505, {"streams": [990]})
+
+    # The denylisted settings key was skipped by NAME and its value never sent.
+    sent_keys = [c.args[0] for c in client.update_core_setting.await_args_list]
+    assert "provider_api_key" not in sent_keys
+    assert set(sent_keys) == {"default_user_agent", "comskip_ini"}
+
+    # --- 5. EPG-download wait ran for the CREATED source, before channels. ----
+    client.refresh_epg_source.assert_awaited_once_with(751)
+    client.get_epg_source.assert_awaited_once_with(751)
+    # Terminal on first probe -> no incomplete-download note.
+    assert not any("did not finish" in n for n in apply_report.notes)
+
+    # --- 6. The DVR rule's channel FK was remapped source(5) -> dest(505). ----
+    dvr_payload = client.create_dvr_rule.await_args.args[0]
+    assert dvr_payload["channel"] == 505
+
+    # --- 7. Per-entity counts landed in the report (spot totals). -------------
+    assert apply_report.category(EntityType.M3U_ACCOUNT).created == 2
+    assert apply_report.category(EntityType.EPG_SOURCE).created == 1
+    assert apply_report.category(EntityType.SETTINGS).updated == 2
+    assert apply_report.category(EntityType.SETTINGS).skipped == 1
+    assert apply_report.category(EntityType.LOGO).created == 1

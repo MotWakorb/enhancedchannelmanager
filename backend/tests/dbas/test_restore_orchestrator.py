@@ -677,20 +677,295 @@ async def test_seam_step_is_noop(tmp_path):
 
 
 def test_default_importer_steps_order_and_wiring():
+    """kxcjf — the apply registry wires EVERY category; no seam rows remain.
+
+    Before kxcjf only M3U/users/channels were wired: a confirmed apply silently
+    no-opped EPG sources, groups/profiles, user agents, DVR rules, settings, and
+    logos while the dry-run preview promised their counts. This pins the full
+    wiring and the dependency order.
+    """
     from dbas.restore_orchestrator import default_importer_steps
 
     steps = default_importer_steps()
     order = [s.entity_type for s in steps]
-    # Hard ordering: M3U first, channels last; channel groups/profiles before
-    # channels; users before channels.
+    # Hard dependency ordering.
     assert order[0] == EntityType.M3U_ACCOUNT
-    assert order[-1] == EntityType.CHANNEL
+    assert order.index(EntityType.EPG_SOURCE) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.CHANNEL_GROUP) < order.index(EntityType.CHANNEL)
+    assert order.index(EntityType.CHANNEL_PROFILE) < order.index(EntityType.CHANNEL)
+    assert order.index(EntityType.STREAM_PROFILE) < order.index(EntityType.CHANNEL)
+    assert order.index(EntityType.USER_AGENT) < order.index(EntityType.CHANNEL)
+    assert order.index(EntityType.SETTINGS) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.USER) < order.index(EntityType.CHANNEL)
-    # M3U is wired and defers; groups/profiles/user-agents are seams.
-    wired = {s.entity_type for s in steps if s.importer is not None}
-    seams = {s.entity_type for s in steps if s.importer is None}
-    assert {EntityType.M3U_ACCOUNT, EntityType.USER, EntityType.CHANNEL} <= wired
-    assert {EntityType.CHANNEL_GROUP, EntityType.CHANNEL_PROFILE, EntityType.STREAM_PROFILE, EntityType.USER_AGENT} <= seams
+    # A DVR rule's ``channel`` FK remaps through the CHANNEL namespace, so DVR
+    # rules run AFTER channels; logos attach last.
+    assert order.index(EntityType.DVR_RULE) > order.index(EntityType.CHANNEL)
+    assert order[-1] == EntityType.LOGO
+    # EVERY step is wired — no importer=None seam remains in the apply registry.
+    seams = [s.entity_type for s in steps if s.importer is None]
+    assert seams == [], "apply registry still carries seam rows: %s" % seams
     m3u_step = next(s for s in steps if s.entity_type == EntityType.M3U_ACCOUNT)
     assert m3u_step.defers is True
+    # Plugins stay excluded (ADR-012 D10) — no plugins category exists at all.
+    assert not any("plugin" in s.entity_type.value for s in steps)
+
+
+def test_dry_run_and_apply_registries_cover_the_same_categories():
+    """kxcjf parity bar: both registries cover the SAME category set, same order."""
+    from dbas.restore_orchestrator import default_importer_steps, dry_run_importer_steps
+
+    apply_order = [s.entity_type for s in default_importer_steps()]
+    dry_order = [s.entity_type for s in dry_run_importer_steps()]
+    assert apply_order == dry_order
+    # And the dry-run registry is fully wired too (no seam rows).
+    assert all(s.importer is not None for s in dry_run_importer_steps())
+
+
+def test_delete_dispatch_registers_all_ledgerable_types():
+    """kxcjf — every ledgerable created-entity type has a rollback compensator.
+
+    SETTINGS is deliberately absent (config, never ledgered, not compensatable —
+    surfaced via a report note instead; see
+    test_rollback_notes_settings_not_rolled_back).
+    """
+    from dbas.restore_orchestrator import _delete_dispatch
+
+    dispatch = _delete_dispatch(_client())
+    for entity_type in (
+        EntityType.M3U_ACCOUNT,
+        EntityType.EPG_SOURCE,
+        EntityType.CHANNEL_GROUP,
+        EntityType.CHANNEL_PROFILE,
+        EntityType.STREAM_PROFILE,
+        EntityType.CHANNEL,
+        EntityType.STREAM,
+        EntityType.USER,
+        EntityType.USER_AGENT,
+        EntityType.DVR_RULE,
+        EntityType.LOGO,
+    ):
+        assert entity_type in dispatch, "no compensator for %s" % entity_type.value
+    assert EntityType.SETTINGS not in dispatch
+
+
+@pytest.mark.asyncio
+async def test_late_failure_rolls_back_user_agent_dvr_rule_and_logo(tmp_path):
+    # kxcjf — the three newly-compensable types are cleanly rolled back on a
+    # late-step failure (COMPLETE rollback, not residue).
+    client = _client()
+    for name in ("delete_user_agent", "delete_dvr_rule", "delete_logo"):
+        setattr(client, name, AsyncMock(return_value=None))
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    report = _report()
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.USER_AGENT, 601),
+        _creating_step(EntityType.DVR_RULE, 602),
+        _creating_step(EntityType.LOGO, 603),
+        _raising_step(EntityType.CHANNEL),
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=report,
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    client.delete_user_agent.assert_awaited_once_with(601)
+    client.delete_dvr_rule.assert_awaited_once_with(602)
+    client.delete_logo.assert_awaited_once_with(603)
+    assert all(e.compensated for e in ledger.entries)
+
+
+@pytest.mark.asyncio
+async def test_rollback_notes_settings_not_rolled_back(tmp_path):
+    # kxcjf — settings are applied config, never ledgered, NOT compensatable.
+    # When a rollback runs after settings were applied, the report must SAY the
+    # settings remain applied rather than let "rollback completed" read as a
+    # full undo.
+    client = _client()
+
+    async def _settings_step(ctx: ApplyContext):
+        ctx.report.category(EntityType.SETTINGS).updated += 3
+        return None
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    report = _report()
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[
+            ImporterStep(EntityType.SETTINGS, _settings_step),
+            _creating_step(EntityType.M3U_ACCOUNT, 901),
+            _raising_step(EntityType.CHANNEL),
+        ],
+        report=report,
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    assert any(
+        "NOT rolled back" in note and "3 applied setting(s)" in note
+        for note in out.notes
+    )
+
+
+@pytest.mark.asyncio
+async def test_rollback_without_applied_settings_has_no_settings_note(tmp_path):
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[
+            _creating_step(EntityType.M3U_ACCOUNT, 901),
+            _raising_step(EntityType.CHANNEL),
+        ],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    assert not any("setting" in note.lower() for note in out.notes)
+
+
+# ---------------------------------------------------------------------------
+# 10. EPG-download wait wiring (kxcjf — the 0i2vt.11 acceptance item)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_epg_apply_step_waits_for_created_sources(tmp_path):
+    # The apply registry's EPG step polls the created sources' rows after the
+    # import; a terminal row (status=success) means zero sleeping.
+    from dbas.restore_orchestrator import _epg_step_with_download_wait
+
+    async def _epg_import(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.EPG_SOURCE)
+        cat.created += 1
+        ctx.ledger.record_created(EntityType.EPG_SOURCE, 701, "epg-1")
+        return None
+
+    client = _client()
+    client.refresh_epg_source = AsyncMock(return_value={})
+    client.get_epg_source = AsyncMock(
+        return_value={"id": 701, "status": "success", "epg_count": 42}
+    )
+    report = _report()
+    out = await run_restore(
+        plan=_plan(_cat(EntityType.EPG_SOURCE, [{"id": 1, "name": "EPG"}])),
+        client=client,
+        steps=[ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(_epg_import))],
+        report=report,
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.SUCCESS
+    client.refresh_epg_source.assert_awaited_once_with(701)
+    client.get_epg_source.assert_awaited_once_with(701)
+    # Download completed — no incomplete-wait note.
+    assert not any("did not finish" in n for n in out.notes)
+
+
+@pytest.mark.asyncio
+async def test_epg_apply_step_timeout_is_nonfatal_and_noted(tmp_path):
+    # A source that never reaches a terminal state must NOT hang or fail the
+    # restore — bounded polls, WARN note in the report, restore continues.
+    from dbas.restore_orchestrator import _epg_step_with_download_wait
+    from dbas.importers import epg_sources as epg_mod
+
+    async def _epg_import(ctx: ApplyContext):
+        ctx.report.category(EntityType.EPG_SOURCE).created += 1
+        ctx.ledger.record_created(EntityType.EPG_SOURCE, 702, "epg-2")
+        return None
+
+    client = _client()
+    client.refresh_epg_source = AsyncMock(return_value={})
+    client.get_epg_source = AsyncMock(
+        return_value={"id": 702, "status": "fetching", "epg_count": 0}
+    )
+
+    # Patch the wait's defaults down so the bounded timeout is instant in-test.
+    orig_wait = epg_mod.wait_for_epg_downloads
+
+    async def _fast_wait(**kwargs):
+        async def _no_sleep(_seconds):
+            return None
+
+        kwargs.setdefault("sleep_fn", _no_sleep)
+        kwargs.setdefault("max_polls", 3)
+        return await orig_wait(**kwargs)
+
+    from unittest.mock import patch
+
+    with patch.object(epg_mod, "wait_for_epg_downloads", _fast_wait):
+        out = await run_restore(
+            plan=_plan(_cat(EntityType.EPG_SOURCE, [{"id": 1, "name": "EPG"}])),
+            client=client,
+            steps=[ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(_epg_import))],
+            report=_report(),
+            ledger=_ledger(),
+            remap=IdRemapTable(),
+            confirm_apply=True,
+            ledger_dir=tmp_path,
+        )
+    assert out.outcome == RestoreOutcome.SUCCESS  # non-fatal
+    assert any("did not finish" in n and "702" in n for n in out.notes)
+
+
+@pytest.mark.asyncio
+async def test_epg_wait_skipped_on_dry_run_and_when_nothing_created(tmp_path):
+    # Dry-run: the wrapper is a pass-through — no trigger, no poll, no wait.
+    from dbas.restore_orchestrator import _epg_step_with_download_wait
+
+    async def _epg_import(ctx: ApplyContext):
+        ctx.report.category(EntityType.EPG_SOURCE).would_create += 1
+        return None
+
+    client = _client()
+    client.refresh_epg_source = AsyncMock(return_value={})
+    client.get_epg_source = AsyncMock(return_value={})
+    report = RestoreReport(is_dry_run=True)
+    await run_restore(
+        plan=_plan(_cat(EntityType.EPG_SOURCE, [{"id": 1, "name": "EPG"}])),
+        client=client,
+        steps=[ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(_epg_import))],
+        report=report,
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=False,
+        ledger_dir=tmp_path,
+    )
+    client.refresh_epg_source.assert_not_awaited()
+    client.get_epg_source.assert_not_awaited()
+
+    # Apply with zero CREATED sources (e.g. all already existed): no wait either.
+    async def _epg_import_skip(ctx: ApplyContext):
+        ctx.report.category(EntityType.EPG_SOURCE).skipped += 1
+        return None
+
+    client2 = _client()
+    client2.refresh_epg_source = AsyncMock(return_value={})
+    client2.get_epg_source = AsyncMock(return_value={})
+    await run_restore(
+        plan=_plan(_cat(EntityType.EPG_SOURCE, [{"id": 1, "name": "EPG"}])),
+        client=client2,
+        steps=[ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(_epg_import_skip))],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    client2.refresh_epg_source.assert_not_awaited()
+    client2.get_epg_source.assert_not_awaited()
