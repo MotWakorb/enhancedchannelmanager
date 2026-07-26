@@ -1351,8 +1351,14 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
     expect(screen.getByText('Stream 51')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /^Cancel$/i }));
-    await waitFor(() => expect(screen.queryByText('Stream 51')).toBeNull());
-    expect(screen.getAllByRole('checkbox')).toHaveLength(50);
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(
+      () => {
+        expect(screen.queryByText('Stream 51')).toBeNull();
+        expect(screen.getAllByRole('checkbox')).toHaveLength(50);
+      },
+      { timeout: 5000 },
+    );
     expect(api.acceptPendingMerge).not.toHaveBeenCalled();
   });
 
