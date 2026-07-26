@@ -58,7 +58,7 @@ def _validate_onedrive_credentials(provider_type: Optional[str], creds: Optional
 
 class CloudTargetCreateRequest(BaseModel):
     name: str
-    provider_type: Literal["s3", "gdrive", "onedrive", "dropbox"]
+    provider_type: Literal["s3", "gdrive", "webdav", "onedrive", "dropbox"]
     credentials: dict
     upload_path: str = "/"
     enabled: bool = True
@@ -71,7 +71,7 @@ class CloudTargetCreateRequest(BaseModel):
 
 class CloudTargetUpdateRequest(BaseModel):
     name: Optional[str] = None
-    provider_type: Optional[Literal["s3", "gdrive", "onedrive", "dropbox"]] = None
+    provider_type: Optional[Literal["s3", "gdrive", "webdav", "onedrive", "dropbox"]] = None
     credentials: Optional[dict] = None
     upload_path: Optional[str] = None
     enabled: Optional[bool] = None
@@ -83,7 +83,7 @@ class CloudTargetUpdateRequest(BaseModel):
 
 
 class CloudTargetTestRequest(BaseModel):
-    provider_type: Literal["s3", "gdrive", "onedrive", "dropbox"]
+    provider_type: Literal["s3", "gdrive", "webdav", "onedrive", "dropbox"]
     credentials: dict
 
     @field_validator("credentials")

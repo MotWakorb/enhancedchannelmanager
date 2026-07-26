@@ -22,7 +22,7 @@ class CloudStorageTarget(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, unique=True)
-    # Provider: "s3", "gdrive", "onedrive", "dropbox"
+    # Provider: "s3", "gdrive", "webdav", "onedrive", "dropbox"
     provider_type = Column(String(20), nullable=False)
     # Encrypted JSON with provider-specific credentials
     credentials = Column(Text, nullable=False, default="{}")

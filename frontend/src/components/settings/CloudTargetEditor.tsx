@@ -12,11 +12,17 @@ interface CloudTargetEditorProps {
   onSaved: () => void;
 }
 
+// OneDrive and Dropbox are deferred this release (no SSRF hardening yet —
+// PO decision 2026-07-25): they stay visible but disabled so operators are
+// not invited to configure targets that only fail at Test Connection.
+// Existing onedrive/dropbox rows still render and edit — the provider select
+// is disabled while editing, so the disabled options never block an edit.
 const PROVIDER_OPTIONS = [
   { value: 's3', label: 'Amazon S3 / S3-Compatible' },
   { value: 'gdrive', label: 'Google Drive' },
-  { value: 'onedrive', label: 'OneDrive' },
-  { value: 'dropbox', label: 'Dropbox' },
+  { value: 'webdav', label: 'WebDAV (Nextcloud, ownCloud, NAS)' },
+  { value: 'onedrive', label: 'OneDrive (not yet supported)', disabled: true },
+  { value: 'dropbox', label: 'Dropbox (not yet supported)', disabled: true },
 ];
 
 interface CredentialField {
@@ -38,6 +44,11 @@ const PROVIDER_FIELDS: Record<string, CredentialField[]> = {
   gdrive: [
     { key: 'service_account_json', label: 'Service Account JSON', type: 'textarea', required: true },
     { key: 'folder_id', label: 'Folder ID', type: 'text', placeholder: 'Google Drive folder ID' },
+  ],
+  webdav: [
+    { key: 'base_url', label: 'WebDAV URL', type: 'text', placeholder: 'https://nas.example.com/remote.php/dav/files/admin', required: true },
+    { key: 'username', label: 'Username', type: 'text', placeholder: '(optional for anonymous endpoints)' },
+    { key: 'password', label: 'Password', type: 'password' },
   ],
   onedrive: [
     { key: 'client_id', label: 'Client ID', type: 'password', required: true },

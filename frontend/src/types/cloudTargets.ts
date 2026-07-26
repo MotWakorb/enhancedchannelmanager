@@ -6,7 +6,7 @@
  * the `/api/cloud-targets` router.
  */
 
-export type ProviderType = 's3' | 'gdrive' | 'onedrive' | 'dropbox';
+export type ProviderType = 's3' | 'gdrive' | 'webdav' | 'onedrive' | 'dropbox';
 
 export interface CloudTarget {
   id: number;

@@ -64,9 +64,11 @@ def register(mcp: FastMCP):
 
         Args:
             name: Target name (must be unique).
-            provider_type: One of "s3", "gdrive", "onedrive", "dropbox".
+            provider_type: One of "s3", "gdrive", "webdav". ("onedrive" and
+                "dropbox" are accepted by the API but DEFERRED this release —
+                their test/upload paths refuse with "not supported".)
             credentials: Provider-specific credential dict (e.g. access_key/
-                secret_key for s3).
+                secret_key for s3; base_url/username/password for webdav).
             upload_path: Path/prefix within the target to upload backups to.
             enabled: Whether this target is available for use.
         """
@@ -106,7 +108,8 @@ def register(mcp: FastMCP):
         Args:
             target_id: The cloud target ID to update.
             name: New name.
-            provider_type: New provider type.
+            provider_type: New provider type — "s3", "gdrive", or "webdav"
+                ("onedrive"/"dropbox" are deferred this release).
             credentials: New credential dict (replaces the stored one).
             upload_path: New upload path/prefix.
             enabled: Whether this target is available for use.
@@ -189,7 +192,8 @@ def register(mcp: FastMCP):
         Args:
             target_id: ID of a saved cloud target to test.
             provider_type: Provider type for an inline test (required if
-                target_id is omitted).
+                target_id is omitted) — "s3", "gdrive", or "webdav"
+                ("onedrive"/"dropbox" tests refuse as deferred this release).
             credentials: Credential dict for an inline test (required if
                 target_id is omitted).
         """
