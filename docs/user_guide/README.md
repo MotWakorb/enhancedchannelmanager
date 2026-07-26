@@ -151,7 +151,13 @@ docs/user_guide/
 ├── epg/                          ← EPG sources, dummy EPG templates
 ├── stats/                        ← Stats tab (placeholder; bd-skqln.9)
 ├── backup-restore/               ← Backup & Restore (placeholder; bd-0i2vt epic)
-└── troubleshooting/              ← common issues, log inspection, support
+├── troubleshooting/              ← common issues, log inspection, support
+├── m3u-manager/                  ← M3U Manager tab tutorials — Planned (bd-gsnw0)
+├── guide/                        ← Guide tab tutorials — Planned (bd-gsnw0)
+├── logo-manager/                 ← Logo Manager tab tutorials — Planned (bd-gsnw0)
+├── m3u-changes/                  ← M3U Changes tab tutorials — Planned (bd-gsnw0)
+├── journal/                      ← Journal tab tutorials — Planned (bd-gsnw0)
+└── settings/                     ← Settings tab tutorials — Planned (bd-gsnw0)
 ```
 
 Each subdirectory has its own `index.md` (section landing) and will accumulate per-article files as downstream beads ship.

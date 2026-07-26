@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.6-0170",
+    version="0.17.6-0172",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -523,6 +523,11 @@ from auth.dependencies import get_token_from_request, decode_token_safe
 
 
 @app.middleware("http")
+# NOTE: this body runs OUTSIDE BaseExceptionContainmentMiddleware's task
+# boundary (that guard is innermost, registered at line 205) — a
+# BaseException raised in here escapes containment. Known, accepted
+# structural ceiling; see docs/auth_middleware.md "Known limitation" and
+# bead enhancedchannelmanager-17v07.
 async def auth_middleware(request: Request, call_next):
     """Reject unauthenticated requests to /api/* unless path is exempt."""
     path = request.url.path
