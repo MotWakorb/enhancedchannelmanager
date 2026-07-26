@@ -484,7 +484,14 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         </div>
 
         <div className="restore-file-input">
+          {/* Visible label programmatically associated with the file chooser
+              so AT announces the control's purpose and accepted .zip format
+              (bead enhancedchannelmanager-db8ae). */}
+          <label className="restore-file-label" htmlFor="restoreFullBackupFile">
+            Choose ECM full-backup ZIP (.zip)
+          </label>
           <input
+            id="restoreFullBackupFile"
             ref={fileInputRef}
             type="file"
             accept=".zip"
