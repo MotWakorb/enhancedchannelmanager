@@ -83,6 +83,7 @@ describe('CloudTargetEditor — provider affordances (0i2vt.8)', () => {
       credentials: {},
       upload_path: '/legacy',
       enabled: true,
+      insecure: false,
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     };
@@ -94,5 +95,84 @@ describe('CloudTargetEditor — provider affordances (0i2vt.8)', () => {
     // Provider cannot be changed while editing (pre-existing behavior).
     const trigger = screen.getByRole('button', { name: /OneDrive/ });
     expect(trigger).toBeDisabled();
+  });
+});
+
+describe('CloudTargetEditor — WebDAV TLS verification opt-out (PR #743 item 2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function selectWebdav() {
+    openProviderDropdown();
+    fireEvent.click(screen.getByRole('option', { name: /WebDAV/ }));
+  }
+
+  it('shows the advanced insecure checkbox with a warning for WebDAV only', () => {
+    renderEditor();
+    // Default provider is S3 — no TLS opt-out affordance.
+    expect(screen.queryByTestId('cloud-target-insecure')).not.toBeInTheDocument();
+
+    selectWebdav();
+    const checkbox = screen.getByTestId('cloud-target-insecure');
+    expect(checkbox).not.toBeChecked();
+    // A warning names the risk in plain language — the opt-out is never silent.
+    expect(screen.getByTestId('cloud-target-insecure-warning')).toHaveTextContent(
+      /intercept/i,
+    );
+  });
+
+  it('sends the top-level insecure flag on create (never inside credentials)', async () => {
+    const cloudApi = await import('../../services/cloudTargetsApi');
+    renderEditor();
+    selectWebdav();
+
+    fireEvent.change(screen.getByPlaceholderText('My S3 Bucket'), { target: { value: 'NAS' } });
+    const urlGroup = screen.getByText('WebDAV URL').closest('.modal-form-group');
+    fireEvent.change(urlGroup!.querySelector('input')!, {
+      target: { value: 'https://nas.local/dav' },
+    });
+    fireEvent.click(screen.getByTestId('cloud-target-insecure'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Target' }));
+
+    await vi.waitFor(() => expect(cloudApi.createCloudTarget).toHaveBeenCalled());
+    const payload = vi.mocked(cloudApi.createCloudTarget).mock.calls[0][0];
+    expect(payload.insecure).toBe(true);
+    expect((payload.credentials as Record<string, unknown>).insecure).toBeUndefined();
+  });
+
+  it('threads the flag into the inline connection test (test == upload policy)', async () => {
+    const cloudApi = await import('../../services/cloudTargetsApi');
+    renderEditor();
+    selectWebdav();
+
+    const urlGroup = screen.getByText('WebDAV URL').closest('.modal-form-group');
+    fireEvent.change(urlGroup!.querySelector('input')!, {
+      target: { value: 'https://nas.local/dav' },
+    });
+    fireEvent.click(screen.getByTestId('cloud-target-insecure'));
+    fireEvent.click(screen.getByRole('button', { name: /Test Connection/ }));
+
+    await vi.waitFor(() =>
+      expect(cloudApi.testCloudConnectionInline).toHaveBeenCalled(),
+    );
+    const payload = vi.mocked(cloudApi.testCloudConnectionInline).mock.calls[0][0];
+    expect(payload.insecure).toBe(true);
+  });
+
+  it('pre-checks the checkbox when editing a target saved with insecure=true', () => {
+    const target: CloudTarget = {
+      id: 9,
+      name: 'Self-signed NAS',
+      provider_type: 'webdav',
+      credentials: {},
+      upload_path: '/backups',
+      enabled: true,
+      insecure: true,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    renderEditor(target);
+    expect(screen.getByTestId('cloud-target-insecure')).toBeChecked();
   });
 });

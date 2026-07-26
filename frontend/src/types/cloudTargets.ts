@@ -15,6 +15,12 @@ export interface CloudTarget {
   credentials: Record<string, string>;
   upload_path: string;
   enabled: boolean;
+  /**
+   * Skip TLS certificate verification for this target (self-signed endpoints).
+   * Top-level flag ONLY — `credentials.insecure` is reserved and rejected by
+   * the API; every verification skip is audit-logged (PR #743 item 2).
+   */
+  insecure: boolean;
   created_at: string;
   updated_at: string;
 }

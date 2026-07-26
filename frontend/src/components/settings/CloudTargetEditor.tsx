@@ -74,6 +74,10 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
   const [credentials, setCredentials] = useState<Record<string, string>>({});
   const [uploadPath, setUploadPath] = useState(target?.upload_path || '/');
   const [enabled, setEnabled] = useState(target?.enabled ?? true);
+  // Top-level TLS opt-out (PR #743 item 2) — never a credentials key. Only
+  // surfaced for WebDAV (the self-signed-NAS case); the API rejects
+  // credentials.insecure so this flag is the single policy source.
+  const [insecure, setInsecure] = useState(target?.insecure ?? false);
 
   const isEditing = !!target;
   const fields = PROVIDER_FIELDS[providerType] || [];
@@ -115,6 +119,7 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
         result = await cloudApi.testCloudConnectionInline({
           provider_type: providerType,
           credentials: creds,
+          insecure,
         });
       }
       if (result.success) {
@@ -151,6 +156,7 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
         provider_type: providerType,
         upload_path: uploadPath,
         enabled,
+        insecure,
       };
       if (Object.keys(creds).length > 0) {
         data.credentials = creds;
@@ -231,6 +237,25 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
                 </div>
               ))}
             </div>
+
+            {providerType === 'webdav' && (
+              <div className="modal-form-group">
+                <label className="modal-checkbox-label">
+                  <input
+                    type="checkbox"
+                    data-testid="cloud-target-insecure"
+                    checked={insecure}
+                    onChange={e => setInsecure(e.target.checked)}
+                  />
+                  Skip TLS certificate verification (insecure)
+                </label>
+                <p className="form-hint" data-testid="cloud-target-insecure-warning">
+                  Advanced: only for self-signed endpoints you control. Without
+                  verification, connections can be intercepted — every upload and
+                  connection test that skips verification is audit-logged.
+                </p>
+              </div>
+            )}
 
             <div className="modal-form-group">
               <button className="modal-btn modal-btn-secondary" onClick={handleTest} disabled={testing}>

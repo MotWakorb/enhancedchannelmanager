@@ -81,6 +81,235 @@ class TestCloudTargetIntegration:
         assert resp.json()["success"] is True
 
 
+class TestWebDAVTlsPolicy:
+    """PR #743 review item 2 (0i2vt.8): ONE TLS policy, derived from the
+    top-level ``insecure`` flag only.
+
+    Before this fix the policy was split-brain: the documented first-class
+    ``target.insecure`` column was absent from create/update/UI, while an
+    arbitrary ``credentials.insecure`` key could silently disable verification
+    for saved/inline tests — and scheduled uploads overrode it from
+    ``target.insecure``, so test behavior could differ from upload behavior.
+    """
+
+    @pytest.mark.asyncio
+    @patch("routers.cloud_targets.journal")
+    @patch("routers.cloud_targets.encrypt_credentials", return_value="enc")
+    @patch("routers.cloud_targets.decrypt_credentials", return_value={"base_url": "https://dav.example.com/x"})
+    async def test_create_persists_top_level_insecure_flag(
+        self, mock_decrypt, mock_encrypt, mock_journal, async_client, test_session
+    ):
+        from export_models import CloudStorageTarget
+
+        resp = await async_client.post("/api/cloud-targets", json={
+            "name": "Self-signed NAS",
+            "provider_type": "webdav",
+            "credentials": {"base_url": "https://dav.example.com/x"},
+            "insecure": True,
+        })
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["insecure"] is True
+        row = test_session.query(CloudStorageTarget).filter(
+            CloudStorageTarget.id == resp.json()["id"]
+        ).first()
+        assert row.insecure is True
+
+        # List echoes the flag (persistence round-trip through the API).
+        listed = (await async_client.get("/api/cloud-targets")).json()
+        assert listed[0]["insecure"] is True
+
+    @pytest.mark.asyncio
+    @patch("routers.cloud_targets.journal")
+    @patch("routers.cloud_targets.encrypt_credentials", return_value="enc")
+    async def test_create_defaults_to_verified_tls(
+        self, mock_encrypt, mock_journal, async_client, test_session
+    ):
+        from export_models import CloudStorageTarget
+
+        resp = await async_client.post("/api/cloud-targets", json={
+            "name": "Default TLS",
+            "provider_type": "webdav",
+            "credentials": {"base_url": "https://dav.example.com/x"},
+        })
+        assert resp.status_code == 201
+        row = test_session.query(CloudStorageTarget).filter(
+            CloudStorageTarget.id == resp.json()["id"]
+        ).first()
+        assert row.insecure is False
+
+    @pytest.mark.asyncio
+    @patch("routers.cloud_targets.journal")
+    @patch("routers.cloud_targets.encrypt_credentials", return_value="enc")
+    @patch("routers.cloud_targets.decrypt_credentials", return_value={"base_url": "https://dav.example.com/x"})
+    async def test_update_top_level_insecure_flag(
+        self, mock_decrypt, mock_encrypt, mock_journal, async_client, test_session
+    ):
+        from export_models import CloudStorageTarget
+
+        create = await async_client.post("/api/cloud-targets", json={
+            "name": "To Harden",
+            "provider_type": "webdav",
+            "credentials": {"base_url": "https://dav.example.com/x"},
+            "insecure": True,
+        })
+        target_id = create.json()["id"]
+
+        resp = await async_client.patch(
+            f"/api/cloud-targets/{target_id}", json={"insecure": False}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["insecure"] is False
+        test_session.expire_all()
+        row = test_session.query(CloudStorageTarget).filter(
+            CloudStorageTarget.id == target_id
+        ).first()
+        assert row.insecure is False
+
+    @pytest.mark.asyncio
+    async def test_credentials_insecure_is_rejected_at_every_request_surface(self, async_client):
+        """`insecure` inside the credentials dict is RESERVED — a request smuggling
+        it is refused (422) so an accidental credential key can never weaken TLS."""
+        creds = {"base_url": "https://dav.example.com/x", "insecure": True}
+        create = await async_client.post("/api/cloud-targets", json={
+            "name": "Smuggler", "provider_type": "webdav", "credentials": creds,
+        })
+        assert create.status_code == 422
+        assert "insecure" in create.text
+
+        inline = await async_client.post("/api/cloud-targets/test", json={
+            "provider_type": "webdav", "credentials": creds,
+        })
+        assert inline.status_code == 422
+
+        with patch("routers.cloud_targets.journal"), \
+             patch("routers.cloud_targets.encrypt_credentials", return_value="enc"):
+            ok = await async_client.post("/api/cloud-targets", json={
+                "name": "Legit", "provider_type": "webdav",
+                "credentials": {"base_url": "https://dav.example.com/x"},
+            })
+        update = await async_client.patch(
+            f"/api/cloud-targets/{ok.json()['id']}", json={"credentials": creds}
+        )
+        assert update.status_code == 422
+
+    @pytest.mark.asyncio
+    @patch("routers.cloud_targets.get_adapter")
+    @patch("routers.cloud_targets.journal")
+    @patch("routers.cloud_targets.encrypt_credentials", return_value="enc")
+    async def test_saved_test_derives_tls_from_target_flag_not_stored_credentials(
+        self, mock_encrypt, mock_journal, mock_get_adapter, async_client
+    ):
+        """Saved-test parity with scheduled uploads: the adapter's TLS policy
+        comes from ``target.insecure`` — a stale ``insecure`` key inside the
+        STORED credentials (legacy row) is stripped and overridden."""
+        from cloud_storage import ConnectionTestResult
+
+        mock_adapter = AsyncMock()
+        mock_adapter.test_connection.return_value = ConnectionTestResult(
+            success=True, message="ok", provider_info={}
+        )
+        mock_get_adapter.return_value = mock_adapter
+
+        create = await async_client.post("/api/cloud-targets", json={
+            "name": "Legacy Row", "provider_type": "webdav",
+            "credentials": {"base_url": "https://dav.example.com/x"},
+            "insecure": False,
+        })
+        target_id = create.json()["id"]
+
+        # The stored row decrypts to credentials that SMUGGLE insecure=True —
+        # exactly the legacy shape the review flagged. target.insecure=False
+        # must win (same override the scheduled upload path applies).
+        with patch(
+            "routers.cloud_targets.decrypt_credentials",
+            return_value={"base_url": "https://dav.example.com/x", "insecure": True},
+        ):
+            resp = await async_client.post(f"/api/cloud-targets/{target_id}/test")
+        assert resp.status_code == 200
+        adapter_creds = mock_get_adapter.call_args.args[1]
+        assert adapter_creds["insecure"] is False
+        # Verified TLS -> no insecure audit row.
+        audit_types = [
+            c.kwargs.get("action_type") for c in mock_journal.log_entry.call_args_list
+        ]
+        assert "cloud_test_insecure_tls" not in audit_types
+
+    @pytest.mark.asyncio
+    @patch("routers.cloud_targets.get_adapter")
+    @patch("routers.cloud_targets.journal")
+    @patch("routers.cloud_targets.encrypt_credentials", return_value="enc")
+    @patch("routers.cloud_targets.decrypt_credentials", return_value={"base_url": "https://dav.example.com/x"})
+    async def test_saved_test_with_insecure_target_wires_flag_and_audits(
+        self, mock_decrypt, mock_encrypt, mock_journal, mock_get_adapter, async_client
+    ):
+        from cloud_storage import ConnectionTestResult
+
+        mock_adapter = AsyncMock()
+        mock_adapter.test_connection.return_value = ConnectionTestResult(
+            success=True, message="ok", provider_info={}
+        )
+        mock_get_adapter.return_value = mock_adapter
+
+        create = await async_client.post("/api/cloud-targets", json={
+            "name": "Self-signed", "provider_type": "webdav",
+            "credentials": {"base_url": "https://dav.example.com/x"},
+            "insecure": True,
+        })
+        target_id = create.json()["id"]
+
+        resp = await async_client.post(f"/api/cloud-targets/{target_id}/test")
+        assert resp.status_code == 200
+        adapter_creds = mock_get_adapter.call_args.args[1]
+        assert adapter_creds["insecure"] is True
+        # The insecure-TLS audit row fires on the test path the same as uploads.
+        audit_calls = [
+            c for c in mock_journal.log_entry.call_args_list
+            if c.kwargs.get("action_type") == "cloud_test_insecure_tls"
+        ]
+        assert len(audit_calls) == 1
+        assert audit_calls[0].kwargs.get("entity_id") == target_id
+
+    @pytest.mark.asyncio
+    @patch("routers.cloud_targets.get_adapter")
+    @patch("routers.cloud_targets.journal")
+    async def test_inline_test_top_level_insecure_opt_in_and_audit(
+        self, mock_journal, mock_get_adapter, async_client
+    ):
+        from cloud_storage import ConnectionTestResult
+
+        mock_adapter = AsyncMock()
+        mock_adapter.test_connection.return_value = ConnectionTestResult(
+            success=True, message="ok", provider_info={}
+        )
+        mock_get_adapter.return_value = mock_adapter
+
+        # Default: verification ON, no audit row.
+        resp = await async_client.post("/api/cloud-targets/test", json={
+            "provider_type": "webdav",
+            "credentials": {"base_url": "https://dav.example.com/x"},
+        })
+        assert resp.status_code == 200
+        assert mock_get_adapter.call_args.args[1]["insecure"] is False
+        assert not [
+            c for c in mock_journal.log_entry.call_args_list
+            if c.kwargs.get("action_type") == "cloud_test_insecure_tls"
+        ]
+
+        # Explicit opt-in: flag reaches the adapter AND the audit row fires.
+        resp = await async_client.post("/api/cloud-targets/test", json={
+            "provider_type": "webdav",
+            "credentials": {"base_url": "https://dav.example.com/x"},
+            "insecure": True,
+        })
+        assert resp.status_code == 200
+        assert mock_get_adapter.call_args.args[1]["insecure"] is True
+        audit_calls = [
+            c for c in mock_journal.log_entry.call_args_list
+            if c.kwargs.get("action_type") == "cloud_test_insecure_tls"
+        ]
+        assert len(audit_calls) == 1
+
+
 class _FakeWebDAVClient:
     """Async-context fake for ``pinned_async_client`` — records requests.
 
