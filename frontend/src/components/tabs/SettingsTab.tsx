@@ -494,6 +494,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // M3U Digest settings
   const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
   const [digestLoading, setDigestLoading] = useState(false);
+  // Latches after a failed load so the activation effect below stops
+  // re-issuing request batches; cleared only by an explicit Retry
+  // (bead enhancedchannelmanager-fi3dq).
+  const [digestError, setDigestError] = useState<string | null>(null);
   const [digestSaving, setDigestSaving] = useState(false);
   // M3U accounts for the digest notification account-filter picker (GH #496)
   const [digestM3uAccounts, setDigestM3uAccounts] = useState<{ id: number; name: string }[]>([]);
@@ -687,15 +691,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     loadM3UAccountsMaxStreams();
   }, []);
 
-  // Load M3U digest settings when that page is activated
+  // Load M3U digest settings when that page is activated. The !digestError
+  // guard is load-bearing: without it, a failed load (digestSettings still
+  // null, digestLoading back to false) re-armed this effect into a tight
+  // retry loop that spammed one error toast per attempt (bead fi3dq).
   useEffect(() => {
-    if (activePage === 'm3u-digest' && !digestSettings && !digestLoading) {
+    if (activePage === 'm3u-digest' && !digestSettings && !digestLoading && !digestError) {
       loadDigestSettings();
     }
-    // loadDigestSettings is a local function reference that never changes
-    // identity in a harmful way (no closed-over state that would stale).
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- safe local function reference
-  }, [activePage, digestSettings, digestLoading]);
+  }, [activePage, digestSettings, digestLoading, digestError]);
 
   // Load available stream groups when channel pipeline page is activated
   useEffect(() => {
@@ -1462,6 +1466,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // M3U Digest Settings Management
   const loadDigestSettings = async () => {
     setDigestLoading(true);
+    setDigestError(null);
     try {
       const [settings, accounts] = await Promise.all([
         api.getM3UDigestSettings(),
@@ -1470,7 +1475,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setDigestSettings(settings);
       setDigestM3uAccounts(accounts.map(a => ({ id: a.id, name: a.name })));
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to load digest settings', 'Digest Settings');
+      // Inline recoverable error state instead of a toast: the activation
+      // effect stops retrying while digestError is set, so one failed
+      // activation costs exactly one request batch and zero toast noise
+      // (bead enhancedchannelmanager-fi3dq).
+      setDigestError(err instanceof Error ? err.message : 'Failed to load digest settings');
     } finally {
       setDigestLoading(false);
     }
@@ -4153,6 +4162,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="loading-state">
           <span className="material-icons spinning">sync</span>
           <span>Loading digest settings...</span>
+        </div>
+      )}
+
+      {digestError && !digestLoading && (
+        <div className="loading-state" role="alert" data-testid="digest-load-error">
+          <span className="material-icons">error</span>
+          <p>Failed to load digest settings: {digestError}</p>
+          <p>Check that the ECM backend is reachable, then retry.</p>
+          <button
+            className="btn-primary"
+            onClick={loadDigestSettings}
+            aria-label="Retry loading digest settings"
+          >
+            <span className="material-icons">refresh</span>
+            Retry
+          </button>
         </div>
       )}
 
