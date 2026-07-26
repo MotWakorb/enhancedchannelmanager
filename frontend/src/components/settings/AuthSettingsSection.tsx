@@ -154,12 +154,14 @@ export function AuthSettingsSection({ isAdmin }: Props) {
         </div>
         {localEnabled && (
           <div className="form-group-vertical">
-            <label>Minimum Password Length</label>
-            <span className="form-description">Minimum number of characters required for user passwords (6-32).</span>
+            <label htmlFor="localMinPasswordLength">Minimum Password Length</label>
+            <span className="form-description" id="localMinPasswordLengthHint">Minimum number of characters required for user passwords (6-32).</span>
             <input
+              id="localMinPasswordLength"
               type="number"
               min={6}
               max={32}
+              aria-describedby="localMinPasswordLengthHint"
               value={localMinPasswordLength}
               onChange={(e) => setLocalMinPasswordLength(Number(e.target.value))}
             />

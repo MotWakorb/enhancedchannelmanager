@@ -194,6 +194,23 @@ describe('BackupRestoreSection', () => {
       });
     });
 
+    it('exposes a unique accessible name on the full-backup ZIP chooser announcing the .zip format (bead db8ae)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      // getByLabelText must locate the control uniquely -- the visible label
+      // text is programmatically associated via htmlFor/id (WCAG 1.3.1,
+      // 3.3.2, 4.1.2), and the accepted .zip format is part of the name.
+      const fileInput = screen.getByLabelText(/choose ecm full-backup zip/i);
+      expect(fileInput).toHaveAttribute('type', 'file');
+      expect(fileInput).toHaveAttribute('accept', '.zip');
+      expect(fileInput).toHaveAccessibleName(/\.zip/i);
+
+      // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
     it('shows warning about full restore replacing data', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText(/replace all current settings/i)).toBeInTheDocument();
