@@ -5,6 +5,11 @@ set -e
 ECM_PORT=${ECM_PORT:-6100}
 ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
 
+# Durable-data location. Mirrors backend/config.py's CONFIG_DIR resolution
+# (same env var, same /config default) so the persistence warning below talks
+# about the directory the application actually writes to.
+CONFIG_DIR=${CONFIG_DIR:-/config}
+
 # PUID/PGID defaults (match typical first non-root user)
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
@@ -153,6 +158,58 @@ check_python() {
     return 0
 }
 
+# --- Config persistence (bead enhancedchannelmanager-ebl4n) ----------------
+# Is CONFIG_DIR backed by a bind mount or a named volume, rather than by the
+# container's own writable layer? /proc/self/mountinfo is the one place both
+# kinds show up from inside the container (field 5 is the mount point), and
+# it is readable without privileges. A mount on an ANCESTOR of CONFIG_DIR
+# counts too — the data is durable either way, and a false "your data is
+# ephemeral" would be worse than saying nothing.
+#
+# Mount points containing whitespace are octal-escaped by the kernel, so the
+# field-5 comparison below is exact rather than a substring match: a sibling
+# mount (/config-backup) must not satisfy the check for /config.
+ECM_MOUNTINFO=${ECM_MOUNTINFO:-/proc/self/mountinfo}
+
+config_dir_is_persistent() {
+    _dir=$1
+
+    # Unreadable mountinfo => we cannot tell. Stay quiet rather than cry wolf.
+    [ -r "$ECM_MOUNTINFO" ] || return 0
+
+    awk -v dir="$_dir" '
+        { mp = $5 }
+        mp == "/"  { next }
+        mp == dir  { found = 1 }
+        substr(dir, 1, length(mp) + 1) == mp "/" { found = 1 }
+        END { exit !found }
+    ' "$ECM_MOUNTINFO"
+}
+
+# Advisory, never fatal: a first-run or throwaway container legitimately has
+# no mount. But the operator has to be told, because every recreate — including
+# the Portainer/Unraid/Watchtower "update" flow — silently destroys the lot.
+check_config_persistence() {
+    if config_dir_is_persistent "$CONFIG_DIR"; then
+        print_success "Config directory ${CONFIG_DIR} is on a mounted volume (data persists across recreates)"
+        return 0
+    fi
+
+    print_warning "DATA IS NOT PERSISTENT: ${CONFIG_DIR} is not a mounted volume."
+    print_warning "  Everything ECM stores — settings.json, channel data, journal.db,"
+    print_warning "  uploaded logos, TLS certificates — lives in this container's"
+    print_warning "  writable layer and is DESTROYED whenever the container is removed"
+    print_warning "  or recreated. That includes an 'update' in Portainer, Unraid or"
+    print_warning "  Watchtower, and any 'docker compose up --force-recreate'."
+    print_warning "  Fix: add a mount for ${CONFIG_DIR} and recreate the container —"
+    print_warning "  'volumes: [\"ecm-config:${CONFIG_DIR}\"]' in compose, or"
+    print_warning "  '-v ecm-config:${CONFIG_DIR}' on docker run."
+    print_warning "  Back up first (Settings -> Backup & Restore) if this container"
+    print_warning "  already holds data you care about — recreating without a mount"
+    print_warning "  in place will lose it."
+    return 0
+}
+
 check_filesystem() {
     print_info "Checking filesystem..."
 
@@ -287,6 +344,9 @@ run_preflight_checks() {
     setup_user || FAILED=1
     check_python || FAILED=1
     check_filesystem || FAILED=1
+    # Advisory only (bead enhancedchannelmanager-ebl4n) — deliberately not
+    # chained into FAILED: an unmounted CONFIG_DIR must warn, not block.
+    check_config_persistence
     check_network || FAILED=1
     check_application || FAILED=1
 
