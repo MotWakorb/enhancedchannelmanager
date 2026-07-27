@@ -88,6 +88,33 @@ class TestEvaluateAdvance:
         r = mod.evaluate_advance("0.18.0-0100", "0.17.6-0085")
         assert r.exit_code == 0
 
+    def test_prefix_advance_with_counter_reset_passes(self, mod):
+        # The documented post-release reset (shipping.md §Cut Mechanics step 8,
+        # docs/versioning.md): after a release cut, dev reopens at the next
+        # target's -0000. The build number legitimately resets because the
+        # MAJOR.MINOR.PATCH prefix advanced (beads 92fhj + w9irb — this exact
+        # case blocked the v0.18.0 back-sync PR).
+        r = mod.evaluate_advance("0.18.1-0000", "0.17.6-0174")
+        assert r.status == "advanced_prefix"
+        assert r.exit_code == 0
+
+    def test_prefix_advance_with_lower_build_passes(self, mod):
+        r = mod.evaluate_advance("0.18.0-0001", "0.17.6-0085")
+        assert r.exit_code == 0
+
+    def test_prefix_regression_fails_even_with_higher_build(self, mod):
+        # Closing the converse hole: a LOWER prefix must fail even when its
+        # build number happens to exceed the baseline's.
+        r = mod.evaluate_advance("0.16.0-0200", "0.17.6-0085")
+        assert r.status == "prefix_regression"
+        assert r.exit_code == 1
+
+    def test_same_prefix_build_regression_still_fails(self, mod):
+        # The prefix-aware fix must not weaken the original same-prefix rule.
+        r = mod.evaluate_advance("0.17.6-0084", "0.17.6-0085")
+        assert r.status == "not_advanced"
+        assert r.exit_code == 1
+
     def test_no_suffix_current_is_exempt(self, mod):
         # Release-cut PR: current version drops the -BUILD suffix.
         r = mod.evaluate_advance("0.17.6", "0.17.6-0085")

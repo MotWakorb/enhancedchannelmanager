@@ -404,7 +404,11 @@ describe('ActionEditor', () => {
       );
 
       expect(screen.getByLabelText(/custom url/i)).toBeChecked();
-      expect(screen.getByPlaceholderText(/example\.com/)).toHaveValue('https://example.com/logo.png');
+      // Exact literal match (CodeQL #1769 js/regex/missing-regexp-anchor: an
+      // unanchored /example\.com/ regex is a flagged pattern even in a test).
+      expect(
+        screen.getByPlaceholderText('https://example.com/logo.png or {template}')
+      ).toHaveValue('https://example.com/logo.png');
     });
 
     it('shows template variables hint for custom URL', () => {

@@ -50,5 +50,23 @@ def test_param_keys_returns_only_key_names_never_values():
     assert "hunter2-secret" not in out
 
 
-def test_param_keys_passthrough_for_non_dict():
+def test_param_keys_none_stays_none():
+    # None is falsy — the engine log sites guard with `if parameters:` so None
+    # never reaches a log line; preserving it keeps the logged shape honest.
     assert _param_keys(None) is None
+
+
+def test_param_keys_non_dict_never_returns_raw_value():
+    # CodeQL alerts #1770/#1771 (py/clear-text-logging-sensitive-data): the old
+    # fallback `return parameters` passed a non-dict object through RAW, keeping
+    # the clear-text-logging taint path alive. A non-dict value could itself be
+    # (or contain) a secret — it must never come back verbatim.
+    secret = "hunter2-secret"
+    out = _param_keys(secret)
+    assert secret not in str(out)
+    assert out == "<non-dict:str>"
+
+
+def test_param_keys_non_dict_placeholder_names_the_type_only():
+    assert _param_keys(["a-secret-in-a-list"]) == "<non-dict:list>"
+    assert _param_keys(42) == "<non-dict:int>"

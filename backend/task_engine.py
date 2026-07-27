@@ -106,8 +106,17 @@ def _param_keys(parameters):
     ``clear-text-logging-sensitive-data`` taint sink regardless of which task is
     run or which params it carries.
     """
+    if parameters is None:
+        # Falsy — never reaches a log site (all callers guard `if parameters:`),
+        # and preserving None keeps the logged shape honest where it could.
+        return None
     if not isinstance(parameters, dict):
-        return parameters
+        # NEVER return the raw object: a non-dict value could itself be (or
+        # contain) a secret, and passing it through verbatim keeps the
+        # clear-text-logging taint path alive (CodeQL alerts #1770/#1771).
+        # A type-name placeholder tells the operator what shape arrived
+        # without ever putting the value in a log line.
+        return f"<non-dict:{type(parameters).__name__}>"
     return sorted(parameters.keys())
 
 # Configuration
