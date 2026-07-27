@@ -758,7 +758,7 @@
 }
 
 .channel-group.empty-group {
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .channel-group.empty-group .group-header {
@@ -997,9 +997,9 @@
 
 .group-range {
   font-size: 0.75rem;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-weight: 500;
-  opacity: 0.8;
+  opacity: 1;
   margin-left: 0.5rem;
 }
 

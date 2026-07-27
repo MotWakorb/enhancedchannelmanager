@@ -34,6 +34,9 @@ exclusions. Fixes made during validation:
   label association for **Channel**.
 - Keyboard activation, visible focus, current-page state, and valid
   presentation semantics for all Settings section choices.
+- Theme-safe Channel Manager group treatment: empty groups no longer reduce
+  all descendant text through ancestor opacity, and channel ranges no longer
+  reduce otherwise-valid text contrast through local opacity.
 
 ## Reproduction
 
@@ -46,6 +49,10 @@ npm run test:e2e:operator-workspace-release
 E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test \
   e2e/operator-shell.spec.ts --project=chromium \
   --grep "all primary routes have no serious automated accessibility" \
+  --workers=1 --retries=0
+E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test \
+  e2e/operator-shell.spec.ts --project=chromium \
+  --grep "Channel Manager group text meets AA contrast" \
   --workers=1 --retries=0
 E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test \
   e2e/operator-shell.spec.ts --project=chromium --workers=1 --retries=0
@@ -110,6 +117,14 @@ Automated scans include `#root` after each route reaches its deterministic
 settled control. All WCAG A/AA rules, including color contrast, remain enabled.
 The final artifacts report no serious or critical violations.
 
+Channel Manager additionally runs a group-scoped axe and computed-style
+contrast matrix over populated and empty group states in dark, light, and
+high-contrast themes at both target viewports. The matrix requires the
+applicable `.group-toggle`, `.group-subtext`, and `.group-empty-badge`
+fixtures to exist and calculates WCAG relative luminance from the composited
+foreground/background colors. Every asserted ratio is at least 4.5:1; no axe
+rules are excluded.
+
 Manual and assertion-backed checks:
 
 - One `main` landmark and one exact route `h1`; named primary, section, pane,
@@ -157,6 +172,21 @@ identical GET may occur at most twice. Total route budgets are:
 | Journal | 8 |
 | Settings | 40 |
 
+After each route settles, deterministic browser time advances through two
+31-second observation windows. Request evidence is sampled at 0, 31, and 62
+seconds. The storm detector groups requests by HTTP method, pathname, and
+sorted query-key shape, while retaining exact full URLs and their original
+budgets. This catches delayed loops whose query values change on each request.
+A synthetic regression proves that changing `cursor` values cannot evade the
+detector.
+
+The only continuing requests allowed are bounded, documented product polls:
+global notifications and Channel Manager pending-merge freshness (30 seconds),
+the four visible Stats overview metrics (configured refresh interval), and
+Settings detection of externally scheduled stream probes (5 seconds). Finite
+dependent loads are included in the initial exact-URL route budgets and may not
+continue growing across both quiet windows.
+
 ## Artifacts
 
 Generated evidence is under:
@@ -164,7 +194,8 @@ Generated evidence is under:
 - `test-results/operator-workspace-release/`: 26 unique PNG screenshots and
   paired Material Icons readiness metadata.
 - `test-results/operator-workspace-final-validation/`: per-route, per-viewport
-  axe JSON and request-budget JSON (44 files).
+  axe JSON and request-budget/time-series JSON, plus per-viewport,
+  per-theme, per-state Channel Manager contrast evidence (56 files).
 - `playwright-report/`: interactive test report when enabled by the local
   reporter.
 

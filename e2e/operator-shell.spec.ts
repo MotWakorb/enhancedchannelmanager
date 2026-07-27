@@ -298,6 +298,105 @@ const primaryRouteRequestBudgets: Readonly<Record<string, number>> = {
   Settings: 40,
 }
 
+type RequestSnapshot = {
+  elapsedMs: number
+  exact: Readonly<Record<string, number>>
+  normalized: Readonly<Record<string, number>>
+}
+
+const intendedPeriodicRequests: Readonly<Record<string, number>> = {
+  // Global notification freshness and the Channel Manager pending-merge badge
+  // are deliberate 30-second background polls. The value is the maximum
+  // normalized requests permitted in each 31-second observation window.
+  'GET /api/notifications?page_size': 2,
+  'GET /api/channel-merges?page&page_size&status': 2,
+  // The visible Stats overview intentionally refreshes its four primary
+  // metrics once per configured interval. The deterministic settings fixture
+  // yields one refresh per observation window.
+  'GET /api/stats/activity?limit': 1,
+  'GET /api/stats/bandwidth': 1,
+  'GET /api/stats/channels': 1,
+  'GET /api/stats/top-watched?limit&sort_by': 1,
+  // Settings detects a scheduled stream probe every five seconds so an
+  // externally-started operation becomes visible without user action.
+  'GET /api/stream-stats/probe/progress': 7,
+}
+
+function normalizedRequestKey(method: string, rawUrl: string) {
+  const url = new URL(rawUrl)
+  const canonicalKeys = [...new Set(url.searchParams.keys())].sort().join('&')
+  return `${method.toUpperCase()} ${url.pathname}${canonicalKeys ? `?${canonicalKeys}` : ''}`
+}
+
+function countRequestKeys(requests: readonly string[]) {
+  return Object.fromEntries(
+    [...new Set(requests)].sort().map((key) => [
+      key,
+      requests.filter((candidate) => candidate === key).length,
+    ]),
+  )
+}
+
+function requestWindowGrowth(
+  snapshots: readonly RequestSnapshot[],
+  periodicAllowances: Readonly<Record<string, number>>,
+) {
+  const keys = [...new Set(snapshots.flatMap((snapshot) => Object.keys(snapshot.normalized)))].sort()
+  return keys.flatMap((key) => {
+    const deltas = snapshots.slice(1).map((snapshot, index) =>
+      (snapshot.normalized[key] ?? 0) - (snapshots[index].normalized[key] ?? 0))
+    const allowance = periodicAllowances[key] ?? 0
+    return deltas.length >= 2 && deltas.every((delta) => delta > allowance)
+      ? [{ key, deltas, allowance }]
+      : []
+  })
+}
+
+async function computedTextContrast(page: Page, selector: string) {
+  return page.locator(selector).first().evaluate((element, evaluatedSelector) => {
+    type Rgba = { r: number; g: number; b: number; a: number }
+    const parse = (value: string): Rgba => {
+      const channels = value.match(/[\d.]+/g)?.map(Number) ?? []
+      if (channels.length < 3) throw new Error(`Unsupported computed color: ${value}`)
+      return { r: channels[0], g: channels[1], b: channels[2], a: channels[3] ?? 1 }
+    }
+    const blend = (foreground: Rgba, background: Rgba): Rgba => {
+      const alpha = foreground.a + background.a * (1 - foreground.a)
+      if (alpha === 0) return { r: 0, g: 0, b: 0, a: 0 }
+      return {
+        r: (foreground.r * foreground.a + background.r * background.a * (1 - foreground.a)) / alpha,
+        g: (foreground.g * foreground.a + background.g * background.a * (1 - foreground.a)) / alpha,
+        b: (foreground.b * foreground.a + background.b * background.a * (1 - foreground.a)) / alpha,
+        a: alpha,
+      }
+    }
+    const layers: Rgba[] = []
+    for (let current: Element | null = element; current; current = current.parentElement) {
+      layers.push(parse(getComputedStyle(current).backgroundColor))
+    }
+    let background: Rgba = { r: 255, g: 255, b: 255, a: 1 }
+    for (const layer of layers.reverse()) background = blend(layer, background)
+    const foreground = blend(parse(getComputedStyle(element).color), background)
+    const luminance = (color: Rgba) => {
+      const linear = [color.r, color.g, color.b].map((channel) => {
+        const value = channel / 255
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+      })
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+    const foregroundLuminance = luminance(foreground)
+    const backgroundLuminance = luminance(background)
+    return {
+      selector: evaluatedSelector,
+      foreground: getComputedStyle(element).color,
+      background: `rgb(${background.r} ${background.g} ${background.b})`,
+      ratio: (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+        / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05),
+      text: element.textContent?.trim() ?? '',
+    }
+  }, selector)
+}
+
 async function expectSettledRoute(page: Page, consumer: RouteConsumer) {
   const heading = page.locator('#main-content h1')
   await expect(heading).toHaveText(consumer.heading)
@@ -615,6 +714,30 @@ async function seedChannelWorkspace(page: Page, populated: boolean, channelCount
   }))
 }
 
+test('request storm detector catches delayed query-changing growth after an initially quiet route', () => {
+  const snapshots: RequestSnapshot[] = [
+    { elapsedMs: 0, exact: {}, normalized: {} },
+    {
+      elapsedMs: 31_000,
+      exact: { '/api/search?cursor=first': 1 },
+      normalized: { 'GET /api/search?cursor': 1 },
+    },
+    {
+      elapsedMs: 62_000,
+      exact: { '/api/search?cursor=first': 1, '/api/search?cursor=second': 1 },
+      normalized: { 'GET /api/search?cursor': 2 },
+    },
+  ]
+
+  expect(requestWindowGrowth(snapshots, {})).toEqual([{
+    key: 'GET /api/search?cursor',
+    deltas: [1, 1],
+    allowance: 0,
+  }])
+  expect(normalizedRequestKey('get', 'https://ecm.test/api/search?z=1&cursor=two&z=2'))
+    .toBe('GET /api/search?cursor&z')
+})
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
   test.describe(`operator shell geometry at ${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport, serviceWorkers: 'block' })
@@ -668,14 +791,21 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
     })
 
     test('all primary routes have no serious automated accessibility violations or clipped required controls', async ({ page }) => {
+      // Advance deterministic browser time below so two complete 30-second
+      // background-poll windows are observed without adding 22 real minutes
+      // to the two-viewport matrix.
+      await page.clock.install()
       await seedPrimaryRouteBudgetData(page)
       await openShellWithPipelineFixture(page)
       await dismissFirstRunPromptIfPresent(page)
-      const apiRequests: string[] = []
+      const apiRequests: Array<{ exact: string; normalized: string }> = []
       page.on('request', (request) => {
         const url = new URL(request.url())
         if (request.method() === 'GET' && url.pathname.startsWith('/api/')) {
-          apiRequests.push(`${url.pathname}${url.search}`)
+          apiRequests.push({
+            exact: `${url.pathname}${url.search}`,
+            normalized: normalizedRequestKey(request.method(), request.url()),
+          })
         }
       })
 
@@ -742,20 +872,38 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         expect(geometry.documentFits, `${consumer.name} document horizontal overflow`).toBe(true)
         expect(geometry.clipped, `${consumer.name} clipped required controls`).toEqual([])
 
-        const routeRequests = apiRequests.slice(requestStart)
-        const counts = Object.fromEntries(
-          [...new Set(routeRequests)].sort().map((url) => [
-            url,
-            routeRequests.filter((candidate) => candidate === url).length,
-          ]),
-        )
+        const initialRouteRequests = apiRequests.slice(requestStart)
+        const counts = countRequestKeys(initialRouteRequests.map((request) => request.exact))
         expect(
-          routeRequests.length,
+          initialRouteRequests.length,
           `${consumer.name} exceeded its exact GET request budget: ${JSON.stringify(counts)}`,
         ).toBeLessThanOrEqual(primaryRouteRequestBudgets[consumer.name])
         expect(
           Object.entries(counts).filter(([, count]) => count > 2),
           `${consumer.name} repeated an identical GET more than twice`,
+        ).toEqual([])
+
+        const snapshots: RequestSnapshot[] = [{
+          elapsedMs: 0,
+          exact: counts,
+          normalized: countRequestKeys(initialRouteRequests.map((request) => request.normalized)),
+        }]
+        for (const elapsedMs of [31_000, 62_000]) {
+          await page.clock.fastForward(31_000)
+          // A rendered assertion gives timer-triggered request promises and
+          // React effects a deterministic microtask checkpoint.
+          await expect(page.locator(consumer.settled).first()).toBeVisible()
+          const observed = apiRequests.slice(requestStart)
+          snapshots.push({
+            elapsedMs,
+            exact: countRequestKeys(observed.map((request) => request.exact)),
+            normalized: countRequestKeys(observed.map((request) => request.normalized)),
+          })
+        }
+        const continuedGrowth = requestWindowGrowth(snapshots, intendedPeriodicRequests)
+        expect(
+          continuedGrowth,
+          `${consumer.name} has delayed/query-changing request growth in consecutive quiet windows`,
         ).toEqual([])
         await writeFile(
           resolve(
@@ -767,10 +915,99 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
             viewport,
             route: consumer.name,
             budget: primaryRouteRequestBudgets[consumer.name],
-            total: routeRequests.length,
+            initialTotal: initialRouteRequests.length,
             counts,
+            normalizedInitialCounts: snapshots[0].normalized,
+            quietWindowMs: 31_000,
+            observedWindows: 2,
+            intendedPeriodicRequests,
+            timeSeries: snapshots,
+            continuedGrowth,
           }, null, 2)}\n`,
         )
+      }
+    })
+
+    test('Channel Manager group text meets AA contrast in populated and empty states across every theme', async ({ page }) => {
+      await seedChannelWorkspace(page, true, 2)
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+      await page.getByRole('link', { name: 'Channel Manager' }).click()
+      await expectSettledRoute(page, routeConsumers[1])
+
+      const states = [
+        {
+          name: 'populated',
+          root: '.channel-group:not(.empty-group)',
+          selectors: ['.group-toggle'],
+        },
+        {
+          name: 'empty',
+          root: '.channel-group.empty-group',
+          selectors: ['.group-toggle', '.group-subtext', '.group-empty-badge'],
+        },
+      ] as const
+
+      for (const theme of ['dark', 'light', 'high-contrast'] as const) {
+        await page.evaluate((selectedTheme) => {
+          document.documentElement.setAttribute('data-theme', selectedTheme)
+        }, theme)
+        await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+
+        for (const state of states) {
+          const stateRoot = page.locator(state.root).first()
+          await expect(stateRoot, `${state.name} Channel Manager group fixture`).toBeVisible()
+          await stateRoot.evaluate((element, stateName) => {
+            element.setAttribute('data-contrast-state', stateName)
+          }, state.name)
+          const contrast = []
+          for (const childSelector of state.selectors) {
+            const selector = `${state.root} ${childSelector}`
+            await expect(page.locator(selector).first(), `${selector} must exist`).toBeVisible()
+            const evidence = await computedTextContrast(page, selector)
+            expect(
+              evidence.ratio,
+              `${theme}/${state.name} ${childSelector}: ${JSON.stringify(evidence)}`,
+            ).toBeGreaterThanOrEqual(4.5)
+            contrast.push(evidence)
+          }
+
+          const accessibility = await new AxeBuilder({ page })
+            .include('.channels-pane .channel-group')
+            .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+            .analyze()
+          const blocking = accessibility.violations.filter(
+            (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+          )
+          expect(blocking, `${theme}/${state.name} serious/critical axe violations`).toEqual([])
+
+          const artifact = {
+            viewport,
+            route: 'Channel Manager',
+            state: state.name,
+            theme,
+            minimumRatio: 4.5,
+            contrast,
+            axe: accessibility.violations.map((violation) => ({
+              id: violation.id,
+              impact: violation.impact,
+              help: violation.help,
+              nodes: violation.nodes.map((node) => node.target),
+            })),
+          }
+          const artifactDirectory = resolve(
+            process.cwd(),
+            'test-results/operator-workspace-final-validation',
+          )
+          await mkdir(artifactDirectory, { recursive: true })
+          await writeFile(
+            resolve(
+              artifactDirectory,
+              `channel-manager-contrast--${viewport.width}x${viewport.height}--${theme}--${state.name}.json`,
+            ),
+            `${JSON.stringify(artifact, null, 2)}\n`,
+          )
+        }
       }
     })
 
