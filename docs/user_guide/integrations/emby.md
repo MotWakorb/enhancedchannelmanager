@@ -1,7 +1,7 @@
 # Emby Integration
 
 > **Audience:** Operator who runs an Emby server alongside ECM and wants the
-> Stats tab to show real Emby usernames (e.g., "Alice via Emby") instead of
+> Stats page to show real Emby usernames (e.g., "Alice via Emby") instead of
 > raw IP addresses.
 >
 > This is the Emby-specific deep dive. For the at-a-glance comparison of all
@@ -12,7 +12,7 @@ ECM polls your Emby server's live-session feed (`GET /Sessions`) and
 cross-references it against ECM's own bandwidth telemetry. When a viewer is
 watching an ECM-managed channel *through* Emby, ECM otherwise sees only the
 Emby server's IP — every Emby viewer collapses into one "Emby server"
-identity. This integration recovers the real Emby username so the Stats tab
+identity. This integration recovers the real Emby username so the Stats page
 attributes each session to the person actually watching.
 
 ## Prerequisites

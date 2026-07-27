@@ -6,7 +6,7 @@
 
 ## Section purpose
 
-Cover the EPG Manager tab and EPG-related settings: adding EPG sources, how ECM matches channels to EPG entries, refresh schedules, and the dummy EPG template engine for channels without upstream EPG data.
+Cover the EPG Manager page and EPG-related settings: adding EPG sources, how ECM matches channels to EPG entries, refresh schedules, and the dummy EPG template engine for channels without upstream EPG data.
 
 ## Intended audience
 
@@ -38,7 +38,7 @@ EPG.
 
 **Add an SD source**
 
-1. EPG Manager tab → **Add Standard EPG**.
+1. EPG Manager page → **Add Standard EPG**.
 2. Set **Source Type** → *Schedules Direct*.
 3. Enter your SD **Username** and **Password**, then save.
    - On later edits, leave the password field blank to keep the stored one — it

@@ -8,6 +8,11 @@ This guide is being filled in section by section. Pages marked **Stub** describe
 
 If a topic you need is missing, check the cross-references at the bottom — much of ECM is documented in the developer-facing tree (`docs/*.md`) too. The user guide will eventually summarise and link those for an operator audience.
 
+New to the current layout? Start with **[Find Your Way Around the Operator
+Workspace](operator-workspace.md)** for the grouped sidebar, Dashboard
+drill-down, Settings safeguards, Channel Manager mental model, keyboard
+instructions, screenshots, and legacy URL behavior.
+
 ## Sections
 
 ### 1. [Getting Started](getting-started/index.md) — In progress
@@ -38,7 +43,7 @@ Configure SMTP, Discord webhooks, and Telegram bots so scheduled-task alerts (M3
 
 ### 7. [Stats](stats/index.md) — Stats v2 (v0.17.0)
 
-The Stats tab, including the Stats v2 features shipped in v0.17.0.
+The Stats page, including the Stats v2 features shipped in v0.17.0.
 
 - **[Users panel](stats/users-panel.md)** — per-user watch-time totals, per-user channel breakdowns, date-range selector. Admin-only.
 - **[Metric glossary](stats/metric-glossary.md)** — definitions for every Stats v2 number: watch time, session count, last watched, buffer events, provider attribution, bytes delta, and bitrate.
@@ -46,7 +51,7 @@ The Stats tab, including the Stats v2 features shipped in v0.17.0.
 
 ### 8. [Integrations](integrations/index.md) — Media Server Integrations & MCP (v0.17.1)
 
-Connect ECM to Emby, Plex, and/or Jellyfin so the Stats tab shows viewer
+Connect ECM to Emby, Plex, and/or Jellyfin so the Stats page shows viewer
 usernames instead of raw IP addresses. Also covers the full MCP / Claude AI
 connection reference — the mcp-remote bridge (Claude Desktop) and the Claude
 Code `.mcp.json` path, both using the static `?api_key=` authentication method.
@@ -69,26 +74,27 @@ Earlier DBAS articles (backup, restore, migration) are planned for a follow-on r
 
 Common problems, how to read ECM's logs, and what to gather before asking for help.
 
-## By tab
+## By workspace destination
 
-Looking for the tutorial for a specific ECM tab? This table lists every tab
-in the order it appears in ECM's navigation and links straight to the
+Looking for the tutorial for a specific ECM destination? This table follows
+the grouped sidebar order and links straight to the
 section that owns (or will own) its "Common tasks" tutorials.
 
-| Tab | Tutorials live in |
-|-|-|
-| M3U Manager | `m3u-manager/` — **Planned** |
-| EPG Manager | [EPG](epg/index.md) |
-| Channel Manager | [Channels & Streams](channels-streams/index.md) |
-| Guide | `guide/` — **Planned** |
-| Logo Manager | `logo-manager/` — **Planned** |
-| M3U Changes | `m3u-changes/` — **Planned** |
-| Channel Pipeline | [Channel Pipeline](channel-pipeline/index.md) |
-| Journal | `journal/` — **Planned** |
-| Stats | [Stats](stats/index.md) |
-| Settings | `settings/` — **Planned** |
+| Group | Destination | Tutorials live in |
+|-|-|-|
+| Overview | Dashboard | [Operator Workspace](operator-workspace.md) |
+| Operations | Channel Manager | [Channels & Streams](channels-streams/index.md) |
+| Operations | Guide | `guide/` — **Planned** |
+| Operations | M3U Manager | `m3u-manager/` — **Planned** |
+| Operations | EPG Manager | [EPG](epg/index.md) |
+| Operations | Logo Manager | `logo-manager/` — **Planned** |
+| Automation | Channel Pipeline | [Channel Pipeline](channel-pipeline/index.md) |
+| Automation | M3U Changes | `m3u-changes/` — **Planned** |
+| Insights | Stats | [Stats](stats/index.md) |
+| Insights | Journal | `journal/` — **Planned** |
+| System | Settings | `settings/` — **Planned** |
 
-Settings is one tab but many pages: some of its subsections already have a
+Settings is one primary destination with many pages. Some subsections already have a
 home in an existing section — Normalization ([`normalization/`](normalization/index.md)),
 Backup & Restore ([`backup-restore/`](backup-restore/index.md)), and MCP
 Integration ([`integrations/mcp.md`](integrations/mcp.md)) — and are
@@ -97,7 +103,7 @@ duplicated there.
 
 ## Conventions
 
-- **In-UI labels are authoritative.** When this guide refers to a tab, button, or setting, it uses the exact label you'll see in ECM's UI.
+- **In-UI labels are authoritative.** When this guide refers to a destination, button, or setting, it uses the exact label you'll see in ECM's UI.
 - **"Operator" vs. "end user."** Operators run ECM. End users watch the streams ECM produces and rarely open the UI. Almost all of this guide is operator-focused.
 - **Going deeper.** Most sections end with a *Going deeper* block linking to developer documentation for operators who want to understand the underlying behaviour.
 

@@ -11,6 +11,9 @@ This is the **user guide** — task-oriented documentation for people who *use* 
 - :material-rocket-launch: **[Getting Started](user_guide/getting-started/index.md)**
   Add your first M3U account and EPG source, then create your first channels.
 
+- :material-view-dashboard-outline: **[Operator Workspace](user_guide/operator-workspace.md)**
+  Learn the grouped sidebar, Dashboard drill-down, Settings safeguards, and Channel Manager layout.
+
 - :material-transit-connection-variant: **[Channels & Streams](user_guide/channels-streams/index.md)**
   Work with channels, attach streams, and deduplicate.
 

@@ -4,6 +4,7 @@
   "version": "0.8.3-0001",
   "description": "Enhanced Channel Manager - Root workspace for E2E tests",
   "scripts": {
+    "docs:check": "node --test scripts/check-operator-docs.test.mjs && node scripts/check-operator-docs.mjs",
     "test:e2e": "playwright test",
     "test:playwright-config": "node --test playwright-base-url.test.mjs",
     "test:e2e:operator-shell": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/operator-shell.spec.ts --project=chromium",

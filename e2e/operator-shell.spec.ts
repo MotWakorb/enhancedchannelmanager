@@ -417,6 +417,17 @@ async function openShellWithPipelineFixture(
 }
 
 async function seedChannelWorkspace(page: Page, populated: boolean, channelCount = 1, healthMatrix = false) {
+  await page.route(/\/api\/health(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      status: 'healthy',
+      service: 'enhanced-channel-manager',
+      version: '0.18.1-0000',
+      release_channel: 'test',
+      git_commit: 'operator-workspace-release',
+    }),
+  }))
   const channel = {
     id: 41,
     name: 'A deliberately long channel identity that must remain inside the Channels pane',

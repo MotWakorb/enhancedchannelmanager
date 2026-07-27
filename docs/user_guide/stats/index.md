@@ -4,7 +4,7 @@
 
 ## Stats v2 (v0.17.0)
 
-ECM v0.17.0 introduced the Stats v2 feature set: a new data pipeline (`session_telemetry`) that powers the Users panel and Providers panel on the Stats tab.
+ECM v0.17.0 introduced the Stats v2 feature set: a new data pipeline (`session_telemetry`) that powers the Users panel and Providers panel on the Stats page.
 
 ### Users panel
 
@@ -22,11 +22,11 @@ ECM v0.17.0 introduced the Stats v2 feature set: a new data pipeline (`session_t
 
 ## Section purpose
 
-This section documents the Stats tab for operators:
+This section documents the Stats page for operators:
 
-- What every metric on the Stats tab means in operator language.
+- What every metric on the Stats page means in operator language.
 - The difference between metrics that count things (channels, streams) and metrics that measure rates (task completions per minute, errors per hour).
-- How to read the Stats tab during normal operation vs. during an incident.
+- How to read the Stats page during normal operation vs. during an incident.
 - Cross-links to the SLO framing for operators curious about how reliability targets are set.
 
 ## Intended audience
@@ -40,7 +40,7 @@ End users do not read this section.
 
 | Article | Status | Purpose |
 |-|-|-|
-| `stats-tab-overview.md` | Planned | Tour of the Stats tab as it ships in v0.17.0. |
+| `stats-tab-overview.md` | Planned | Tour of the Stats page as it ships in v0.17.0. |
 | `metric-glossary.md` | **Done** | One entry per metric: name, definition, units, what causes it to move. |
 | `users-panel.md` | **Done** | Operator guide to the Users panel (admin-only). |
 | `interpretation-guide.md` | Planned | "What does it mean when X is Y?" — common patterns and what they indicate. |

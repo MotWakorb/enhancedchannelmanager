@@ -2,7 +2,8 @@
 
 > **Audience:** Operator doing day-to-day work in ECM. You have a working Dispatcharr connection and want to manage what's in your lineup.
 >
-> **Status:** Stub — articles below are placeholders.
+> **Status:** Stub — articles below are placeholders. For the current layout,
+> start with [Find Your Way Around the Operator Workspace](../operator-workspace.md).
 
 ## Section purpose
 
@@ -19,12 +20,12 @@ End users do not read this section.
 
 | Article | Purpose |
 |-|-|
-| `channels-overview.md` | The Channel Manager tab — columns, filters, what an "edit mode" session is, how undo/redo works. |
+| `channels-overview.md` | The Channel Manager page — columns, filters, what an Edit Mode session is, and how Undo/Redo works. |
 | `streams-overview.md` | The Streams pane — what a stream is, where it came from (M3U source), and how it relates to a channel. |
 | `assign-streams-to-channels.md` | The matching workflow: manual assignment, the impact of normalization on auto-matching, what happens when a stream's source moves. |
 | `channel-groups-and-tags.md` | When to use channel groups vs. tags, how Dispatcharr consumes them, ordering semantics. |
 | `bulk-edit.md` | Selecting many channels at once, the bulk-edit pane, the latency-amplification gotchas (see engineering-discipline note on "bulk operations multiply latent severity"). |
-| `the-journal.md` | The Journal tab — what changes ECM records, how to filter by entity, how to find the change that broke something. |
+| `the-journal.md` | The Journal page — what changes ECM records, how to filter by entity, how to find the change that broke something. |
 | `logos.md` | The Logo Manager — uploading logos, where they're stored, how Dispatcharr picks them up. |
 
 ## Going deeper (for now)

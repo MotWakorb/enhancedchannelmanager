@@ -145,7 +145,7 @@ writing anything.
 
 ### Step 5 — enable and monitor
 
-Enable the rule and watch the journal (`GET /api/journal` or the Journal tab).
+Enable the rule and watch the journal (`GET /api/journal` or the Journal page).
 Each scored-fuzzy merge writes a journal entry with the score, `callsign_verdict`,
 signal, and the callsigns that were parsed — so you can audit exactly why each
 merge fired.

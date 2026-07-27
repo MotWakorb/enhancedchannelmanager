@@ -1,15 +1,15 @@
 # Media Server Integrations
 
-> **Audience:** Operator who wants to see viewer usernames (e.g., "Alice via Emby") instead of raw IP addresses in the Stats tab.
+> **Audience:** Operator who wants to see viewer usernames (e.g., "Alice via Emby") instead of raw IP addresses in the Stats page.
 
 ECM cross-references its bandwidth telemetry against your media server's
-live-session API to surface WHO is watching WHAT in the Stats tab. You can
+live-session API to surface WHO is watching WHAT in the Stats page. You can
 enable one or more of Emby, Plex, and Jellyfin. Each integration is
 independent — enabling one does not require the others.
 
 ## Why enable an integration?
 
-Without an integration, the Stats tab Connected Clients list shows your
+Without an integration, the Stats page Connected Clients list shows your
 viewers by IP address only (e.g., `192.168.1.42`). With an integration
 enabled, it shows usernames (e.g., `Alice via Emby`).
 
@@ -80,7 +80,7 @@ Docker bridge; it does not depend on the connection's source IP matching
 the media server's IP.
 
 **Two viewers behind the same NAT IP collapse in stored history.** The
-live Stats tab can distinguish two viewers even when they share one network
+live Stats page can distinguish two viewers even when they share one network
 address (e.g., two devices behind the same router/VPN exit), because it
 uses each connection's stable client id. The persisted watch-history /
 watch-time tables, however, key on `(channel, IP)`, so two same-channel

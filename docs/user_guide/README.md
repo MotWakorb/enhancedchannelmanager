@@ -40,28 +40,28 @@ The rule of thumb: if the audience is "someone trying to **use** ECM to manage t
 
 - **Task-oriented titles.** "Connect ECM to Dispatcharr" beats "Dispatcharr Connection Settings." Verb-first. The reader is trying to do something.
 - **Open with the audience and the outcome.** First sentence: who this article is for and what they will be able to do when they finish it.
-- **Use the in-UI label, exactly.** If the tab is "Channel Pipeline" in the navigation, write *Channel Pipeline*, not *auto-creation* or *Auto-Create*. Terminology drift between docs and UI is a usability bug — the Tech Writer and UX Designer own consistency jointly. The DBAS feature is labelled **Backup & Restore** in the UI, per UX grooming, and should be called Backup & Restore in user-facing docs (the acronym DBAS only appears in dev docs and the threat model).
+- **Use the in-UI label, exactly.** If the destination is **Channel Pipeline** in the navigation, write *Channel Pipeline*, not *auto-creation* or *Auto-Create*. Terminology drift between docs and UI is a usability bug — the Tech Writer and UX Designer own consistency jointly. The DBAS feature is labelled **Backup & Restore** in the UI, per UX grooming, and should be called Backup & Restore in user-facing docs (the acronym DBAS only appears in dev docs and the threat model).
 - **Cross-link, don't duplicate.** If the developer reference for a feature already exists (e.g., `docs/normalization.md#developer-reference`, `docs/template_engine.md`), link to it from a "Going deeper" section rather than copying material.
 - **Screenshots live in `docs/images/user_guide/<section>/`.** See [Screenshot conventions](#screenshot-conventions) below for the full spec (viewport, theme, filenames, placement).
 - **Show the result.** Where a workflow has a verifiable end state (a new channel exists, a backup file appears, a setting takes effect), say what the user will see. "It works" is not a verification step — see `docs/_shared/engineering-discipline.md` style "Verification of Completion."
 - **Stub before article.** Every section in this scaffold ships as a stub (purpose, audience, placeholder TOC). The actual articles are filed as separate beads and written in their own PRs. This keeps user-facing content reviewable in small chunks and lets each article be evaluated by both UX (for the user model) and Tech Writer (for clarity).
 
-## Per-tab tutorial template
+## Per-destination tutorial template
 
-Every ECM UI tab gets a "Common tasks" tutorial article that follows the
+Every ECM primary destination gets a "Common tasks" tutorial article that follows the
 authoring conventions above, formalized into one literal, copyable skeleton.
 It distills the pattern already in production in
 [`backup-restore/index.md`](backup-restore/index.md) (the "Start here"
 task-router) and [`integrations/index.md`](integrations/index.md) /
 [`integrations/emby.md`](integrations/emby.md) (goal-first setup steps with
-an explicit end state) — read those two before writing a new tab tutorial.
+an explicit end state) — read those two before writing a new destination tutorial.
 
 ```markdown
-# <Tab Name>
+# <Destination Name>
 
 > **Audience:** <one sentence — who reads this and what they walk away able to do>
 
-<Tab Name> is for <2 sentences max — what this tab is for, no more>.
+<Destination Name> is for <2 sentences max — what this page is for, no more>.
 
 ## Common tasks
 
@@ -87,9 +87,9 @@ an explicit end state) — read those two before writing a new tab tutorial.
 
 Notes on filling in the skeleton:
 
-- **Title** — the exact in-UI tab label (see [Authoring conventions](#authoring-conventions) — "Use the in-UI label, exactly").
-- **Audience blockquote** — one sentence, same voice as `backup-restore/index.md`'s `> **Audience:**` line. Don't restate the tab name; say who the reader is and what they need.
-- **"What this tab is for"** — two sentences maximum, no more. This is orientation, not documentation — the `## Common tasks` walkthroughs carry the actual content.
+- **Title** — the exact in-UI destination label (see [Authoring conventions](#authoring-conventions) — "Use the in-UI label, exactly").
+- **Audience blockquote** — one sentence, same voice as `backup-restore/index.md`'s `> **Audience:**` line. Don't restate the destination name; say who the reader is and what they need.
+- **"What this page is for"** — two sentences maximum, no more. This is orientation, not documentation — the `## Common tasks` walkthroughs carry the actual content.
 - **`## Common tasks`** — one `###` subsection per goal. Head each subsection with the goal phrased as the operator's action ("Find and merge duplicate channels"), never as a UI-element name ("The Find Duplicates Button"). Steps are numbered. Every walkthrough ends with a **Result:** line — this is the "Show the result" rule made literal and mandatory for tutorial articles specifically (existing non-tutorial articles, like the DBAS reference pages, apply "Show the result" more loosely).
 - **`## Going deeper`** — cross-links only, per "Cross-link, don't duplicate." Link to the developer reference, the API doc section, or a sibling article — never re-explain what's already written elsewhere.
 
@@ -150,7 +150,7 @@ docs/user_guide/
 ├── normalization/                ← naming patterns, apply-to-channels flow
 ├── epg/                          ← EPG sources, dummy EPG templates
 ├── notifications/                ← SMTP/Discord/Telegram scheduled-task alerts
-├── stats/                        ← Stats tab (Stats v2, v0.17.0)
+├── stats/                        ← Stats page (Stats v2, v0.17.0)
 ├── integrations/                 ← Emby/Plex/Jellyfin + MCP connection reference
 ├── backup-restore/               ← Backup & Restore (bd-0i2vt epic)
 └── troubleshooting/              ← common issues, log inspection, support
@@ -162,18 +162,18 @@ landing); each accumulates per-article files as downstream beads ship.
 
 ### Planned sections (bd-gsnw0)
 
-The `gsnw0` per-tab-tutorial epic scopes six additional tab tutorials that
+The `gsnw0` per-destination tutorial epic scopes six additional tutorials that
 have not been scaffolded yet — no directory exists for them today. Listed
 here rather than in the tree above so the tree stays an accurate map of what
 currently exists on disk. Naming and status match `index.md`'s
-["By tab"](index.md#by-tab) table:
+["By workspace destination"](index.md#by-workspace-destination) table:
 
-- `m3u-manager/` — M3U Manager tab tutorials — **Planned**
-- `guide/` — Guide tab tutorials — **Planned**
-- `logo-manager/` — Logo Manager tab tutorials — **Planned**
-- `m3u-changes/` — M3U Changes tab tutorials — **Planned**
-- `journal/` — Journal tab tutorials — **Planned**
-- `settings/` — Settings tab tutorials — **Planned**
+- `m3u-manager/` — M3U Manager tutorials — **Planned**
+- `guide/` — Guide tutorials — **Planned**
+- `logo-manager/` — Logo Manager tutorials — **Planned**
+- `m3u-changes/` — M3U Changes tutorials — **Planned**
+- `journal/` — Journal tutorials — **Planned**
+- `settings/` — Settings tutorials — **Planned**
 
 Once a bead scaffolds one of these, move it from this list into the tree
 above.
