@@ -31,8 +31,9 @@ import { BackupDestinationPromptProvider } from './contexts/BackupDestinationPro
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SkipToMainContent } from './components/AppLandmarks';
 import { ROUTE_TITLES } from './components/routeTitles';
-import { ROUTE_HIERARCHY } from './components/routeHierarchy';
+import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './components/routeHierarchy';
 import type { SettingsPage } from './hooks/useHashRoute';
+import { RouteHeaderActionTargetProvider } from './components/RouteHeaderSlots';
 import {
   setTelemetryRuntimeEnabled,
   withImportTelemetry,
@@ -282,7 +283,8 @@ function App() {
 
   // Tab navigation state (hash-based routing)
   const { activeTab, settingsPage, setHash, setSettingsPage } = useHashRoute();
-  const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
+  const [pendingRouteChange, setPendingRouteChange] = useState<{ tab: TabId; settingsPage?: SettingsPage } | null>(null);
+  const [routeActionTarget, setRouteActionTarget] = useState<HTMLDivElement | null>(null);
   const routeHeadingRef = useRef<HTMLHeadingElement>(null);
   const focusHeadingOnRouteChangeRef = useRef(false);
 
@@ -500,11 +502,11 @@ function App() {
     // Clear checkpoints when exiting edit mode
     clearHistory();
     // Switch to pending tab if there was one
-    if (pendingTabChange) {
-      setHash(pendingTabChange);
-      setPendingTabChange(null);
+    if (pendingRouteChange) {
+      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
+      setPendingRouteChange(null);
     }
-  }, [commit, clearHistory, pendingTabChange, setHash]);
+  }, [commit, clearHistory, pendingRouteChange, setHash]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
@@ -513,41 +515,46 @@ function App() {
     // Clear checkpoints when exiting edit mode
     clearHistory();
     // Switch to pending tab if there was one
-    if (pendingTabChange) {
-      setHash(pendingTabChange);
-      setPendingTabChange(null);
+    if (pendingRouteChange) {
+      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
+      setPendingRouteChange(null);
     }
-  }, [discard, clearHistory, pendingTabChange, setHash]);
+  }, [discard, clearHistory, pendingRouteChange, setHash]);
 
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
-    setPendingTabChange(null);
+    setPendingRouteChange(null);
     focusHeadingOnRouteChangeRef.current = false;
   }, []);
 
   // Handle tab change - check for edit mode with pending changes
-  const handleTabChange = useCallback((newTab: TabId) => {
-    if (newTab === activeTab) {
+  const handleRouteChange = useCallback((newTab: TabId, settingsPage?: SettingsPage) => {
+    if (newTab === activeTab && !settingsPage) {
       routeHeadingRef.current?.focus();
       return;
     }
     focusHeadingOnRouteChangeRef.current = true;
 
-    if (isEditMode && stagedOperationCount > 0 && newTab !== 'channel-manager') {
+    const decision = getGuardedRouteDecision(isEditMode, stagedOperationCount, newTab);
+    if (decision === 'confirm') {
       // Show confirmation dialog and store pending tab change
       setShowExitDialog(true);
-      setPendingTabChange(newTab);
+      setPendingRouteChange({ tab: newTab, settingsPage });
       return;
     }
 
-    if (isEditMode && newTab !== 'channel-manager') {
+    if (decision === 'exit-and-navigate') {
       // Exit edit mode when leaving Channel Manager
       rawExitEditMode();
       setSelectedChannelIds(new Set());
     }
 
-    setHash(newTab);
+    setHash(newTab, settingsPage);
   }, [activeTab, isEditMode, stagedOperationCount, rawExitEditMode, setHash]);
+
+  const handleTabChange = useCallback((newTab: TabId) => {
+    handleRouteChange(newTab);
+  }, [handleRouteChange]);
 
   // Listen for task editor navigation events from NotificationCenter
   useEffect(() => {
@@ -2360,6 +2367,7 @@ function App() {
       />
 
       <main id="main-content" className="main" tabIndex={-1}>
+        <RouteHeaderActionTargetProvider target={routeActionTarget}>
         <PageHeader
           className="route-page-header"
           headingLevel={1}
@@ -2367,13 +2375,18 @@ function App() {
           group={ROUTE_HIERARCHY[activeTab].group}
           title={ROUTE_TITLES[activeTab].toUpperCase()}
           description={ROUTE_HIERARCHY[activeTab].purpose}
-          actions={channelManagerPageAction}
+          actions={(
+            <>
+              {channelManagerPageAction}
+              <div className="route-page-action-outlet" ref={setRouteActionTarget} />
+            </>
+          )}
           relatedLinks={ROUTE_HIERARCHY[activeTab].settingsLinks?.map((link) => ({
             ...link,
             onClick: (event) => {
-              if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+              if (!isPlainPrimaryActivation(event.nativeEvent)) return;
               event.preventDefault();
-              setHash('settings', link.href.slice('#settings/'.length) as SettingsPage);
+              handleRouteChange('settings', link.href.slice('#settings/'.length) as SettingsPage);
             },
           }))}
         />
@@ -2613,6 +2626,7 @@ function App() {
             </ErrorBoundary>
           )}
         </Suspense>
+        </RouteHeaderActionTargetProvider>
       </main>
 
       <footer className="footer">

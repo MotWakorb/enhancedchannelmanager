@@ -1,10 +1,13 @@
 import type { MouseEventHandler, ReactNode, Ref } from 'react';
+import { RouteHeaderActions, useRouteHeaderActionTarget } from './RouteHeaderSlots';
 import './PageHeader.css';
 
 interface PageHeaderProps {
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
+  status?: ReactNode;
+  controls?: ReactNode;
   group?: string;
   headingLevel?: 1 | 2;
   headingRef?: Ref<HTMLHeadingElement>;
@@ -13,6 +16,7 @@ interface PageHeaderProps {
     label: string;
     onClick?: MouseEventHandler<HTMLAnchorElement>;
   }>;
+  routeConsumer?: boolean;
   /**
    * Extra class name(s) applied to the outer row, for tabs whose own CSS
    * still targets a legacy wrapper class (e.g. `.logo-header` in a
@@ -42,12 +46,19 @@ export function PageHeader({
   title,
   description,
   actions,
+  status,
+  controls,
   className,
   group,
   headingLevel = 2,
   headingRef,
   relatedLinks,
+  routeConsumer = false,
 }: PageHeaderProps) {
+  const routeActionTarget = useRouteHeaderActionTarget();
+  if (routeConsumer && routeActionTarget) {
+    return actions ? <RouteHeaderActions>{actions}</RouteHeaderActions> : null;
+  }
   const heading = group ? `${group} / ${title}` : title;
   return (
     <div className={`page-header${className ? ` ${className}` : ''}`}>
@@ -56,15 +67,17 @@ export function PageHeader({
           ? <h1 ref={headingRef} tabIndex={-1}>{heading}</h1>
           : <h2 ref={headingRef}>{heading}</h2>}
         {description && <p className="header-description">{description}</p>}
-        {relatedLinks && relatedLinks.length > 0 && (
-          <nav className="page-header-related-links" aria-label="Related settings">
-            {relatedLinks.map((link) => (
-              <a key={link.href} href={link.href} onClick={link.onClick}>{link.label}</a>
-            ))}
-          </nav>
-        )}
       </div>
       {actions && <div className="header-actions">{actions}</div>}
+      {status && <div className="page-header-status" aria-live="polite">{status}</div>}
+      {controls && <div className="page-header-controls">{controls}</div>}
+      {relatedLinks && relatedLinks.length > 0 && (
+        <nav className="page-header-related-links" aria-label="Related settings">
+          {relatedLinks.map((link) => (
+            <a key={link.href} href={link.href} onClick={link.onClick}>{link.label}</a>
+          ))}
+        </nav>
+      )}
     </div>
   );
 }

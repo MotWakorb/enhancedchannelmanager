@@ -178,11 +178,16 @@ export function LogoManagerTab() {
     <div className="logo-manager-tab">
       {/* Header */}
       <PageHeader
+        routeConsumer
         className="logo-header"
         title="Logos"
         description={`Manage logos for your channels (${totalCount}${filtersActive ? ' matching' : ' total'})`}
         actions={(
           <>
+            <button className="btn-primary" onClick={handleAddLogo}>
+              <span className="material-icons">add</span>
+              Add Logo
+            </button>
             {/* Search */}
             <div className="search-box">
               <span className="material-icons">search</span>
@@ -240,11 +245,6 @@ export function LogoManagerTab() {
               </button>
             </div>
 
-            {/* Add Logo Button */}
-            <button className="btn-primary" onClick={handleAddLogo}>
-              <span className="material-icons">add</span>
-              Add Logo
-            </button>
           </>
         )}
       />

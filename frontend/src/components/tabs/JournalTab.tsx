@@ -6,6 +6,7 @@ import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
+import { RouteHeaderActions } from '../RouteHeaderSlots';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {
@@ -228,7 +229,7 @@ export function JournalTab() {
       {/* Header with inline stats */}
       <div className="journal-header">
         <div className="header-left">
-          <h2>Journal</h2>
+          <span className="visually-hidden">Journal</span>
           {stats && (
             <div className="header-stats">
               <span className="header-stat" title="Channel entries">
@@ -263,7 +264,7 @@ export function JournalTab() {
             </div>
           )}
         </div>
-        <div className="header-actions">
+        <RouteHeaderActions><div className="header-actions">
           <div className="journal-purge-control">
             <input
               type="number"
@@ -291,7 +292,7 @@ export function JournalTab() {
             <span className="material-icons">refresh</span>
             Refresh
           </button>
-        </div>
+        </div></RouteHeaderActions>
       </div>
 
       {/* Filters */}

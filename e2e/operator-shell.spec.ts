@@ -87,6 +87,48 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         await expectContentWithinMain(appPage, route as 'channel-manager' | 'guide')
       })
     }
+
+    test('all primary route consumers preserve hierarchy and required controls or source-backed recovery', async ({ appPage }) => {
+      await dismissFirstRunPromptIfPresent(appPage)
+      const consumers = [
+        { name: 'Dashboard', heading: 'OVERVIEW / DASHBOARD', required: '.dashboard-route' },
+        { name: 'Channel Manager', heading: 'OPERATIONS / CHANNEL MANAGER', required: '.enter-edit-mode-btn' },
+        { name: 'Guide', heading: 'OPERATIONS / GUIDE', required: 'button[title="Refresh program data"]' },
+        { name: 'M3U Manager', heading: 'OPERATIONS / M3U MANAGER', required: 'button:has-text("Add M3U Account")' },
+        { name: 'EPG Manager', heading: 'OPERATIONS / EPG MANAGER', required: 'button:has-text("Add Standard EPG")' },
+        { name: 'Logo Manager', heading: 'OPERATIONS / LOGO MANAGER', required: 'button:has-text("Add Logo")' },
+        { name: 'Channel Pipeline', heading: 'AUTOMATION / CHANNEL PIPELINE', required: 'button[aria-label="Create rule"], button[aria-label="Retry"]' },
+        { name: 'M3U Changes', heading: 'AUTOMATION / M3U CHANGES', required: 'button:has-text("Refresh")' },
+        { name: 'Stats', heading: 'INSIGHTS / STATS', required: 'button:has-text("Refresh")' },
+        { name: 'Journal', heading: 'INSIGHTS / JOURNAL', required: 'button:has-text("Refresh")' },
+        { name: 'Settings', heading: 'SYSTEM / SETTINGS', required: 'button:has-text("Save Settings")' },
+      ]
+
+      for (const consumer of consumers) {
+        await appPage.getByRole('link', { name: consumer.name }).click()
+        const heading = appPage.locator('#main-content h1')
+        await expect(heading).toHaveText(consumer.heading)
+        await expect(heading).toHaveCount(1)
+        await expect(appPage.locator('#main-content h2').filter({ hasText: new RegExp(`^${consumer.name}$`, 'i') })).toHaveCount(0)
+
+        const requiredOrRecoverySelector =
+          `${consumer.required}, #main-content .tab-loading, #main-content .error-boundary, #main-content [role="alert"]`
+        await expect(async () => {
+          const requiredOrRecovery = appPage.locator(requiredOrRecoverySelector).first()
+          await expect(requiredOrRecovery).toBeVisible()
+          await requiredOrRecovery.scrollIntoViewIfNeeded()
+          const geometry = await requiredOrRecovery.evaluate((element) => {
+            const rect = element.getBoundingClientRect()
+            const main = document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect()
+            return {
+              withinMain: rect.left >= main.left - 1 && rect.right <= main.right + 1,
+              noDocumentOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+            }
+          })
+          expect(geometry).toEqual({ withinMain: true, noDocumentOverflow: true })
+        }).toPass()
+      }
+    })
   })
 }
 
@@ -132,6 +174,18 @@ test.describe('operator shell navigation behavior', () => {
     await link.click()
     await expect(appPage).toHaveURL(/#settings\/channel-defaults$/)
     await expect(appPage.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+  })
+
+  test('contextual settings navigation cleanly exits an edit session with no staged changes', async ({ appPage }) => {
+    await dismissFirstRunPromptIfPresent(appPage)
+    await appPage.getByRole('button', { name: 'Edit Mode' }).click()
+    await expect(appPage.getByRole('button', { name: 'Done' })).toBeVisible()
+    await appPage.getByRole('link', { name: 'Channel default settings' }).click()
+    await expect(appPage).toHaveURL(/#settings\/channel-defaults$/)
+    await expect(appPage.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await expect(appPage.getByRole('button', { name: 'Done' })).toHaveCount(0)
+    await appPage.getByRole('link', { name: 'Channel Manager' }).click()
+    await expect(appPage.getByRole('button', { name: 'Edit Mode' })).toBeVisible()
   })
 
   test('the Channel Manager primary action belongs to its page header', async ({ appPage }) => {

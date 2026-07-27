@@ -33,6 +33,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { getDateLocale } from '../../utils/formatting';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
+import { RouteHeaderActions } from '../RouteHeaderSlots';
 import '../ModalBase.css';
 import './ChannelPipelineTab.css';
 
@@ -894,8 +895,8 @@ export function ChannelPipelineTab() {
     <div className={`channel-pipeline-tab ${isMobile ? 'mobile' : ''}`} data-testid="channel-pipeline-tab">
       {/* Header */}
       <header className="tab-header">
-        <h2>Channel Pipeline</h2>
-        <div className="header-actions">
+        <span className="visually-hidden">Channel Pipeline</span>
+        <RouteHeaderActions><div className="header-actions">
           <button
             className="btn-primary"
             onClick={handleCreateRule}
@@ -957,7 +958,7 @@ export function ChannelPipelineTab() {
             <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
             {debugBundleLoading ? 'Generating...' : 'Pipeline Debug Bundle'}
           </button>
-        </div>
+        </div></RouteHeaderActions>
       </header>
 
       {/* Circuit-breaker banner — shown when run-on-refresh auto-fire is suppressed */}

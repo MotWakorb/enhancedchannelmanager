@@ -819,13 +819,18 @@ export function M3UManagerTab({
   return (
     <div className="m3u-manager-tab">
       <PageHeader
+        routeConsumer
         className="m3u-header"
         title="M3U Accounts"
         description="Manage your M3U playlist sources and XtreamCodes accounts."
         actions={(
           <>
+            <button className="btn-primary" onClick={handleAddAccount}>
+              <span className="material-icons">add</span>
+              Add M3U Account
+            </button>
             <button
-              className="btn-primary save-priorities-btn"
+              className="btn-secondary save-priorities-btn"
               onClick={handleSavePriorities}
               disabled={savingPriorities || !hasPriorityChanges}
               title={hasPriorityChanges ? "Save priority changes" : "No priority changes to save"}
@@ -852,10 +857,6 @@ export function M3UManagerTab({
             <button className="btn-secondary" onClick={handleRefreshAll} disabled={anyRefreshing}>
               <span className={`material-icons ${anyRefreshing ? 'spinning' : ''}`}>sync</span>
               {anyRefreshing ? 'Refreshing...' : 'Refresh All'}
-            </button>
-            <button className="btn-primary" onClick={handleAddAccount}>
-              <span className="material-icons">add</span>
-              Add M3U Account
             </button>
             {/* Setup/admin actions collapse into a kebab so the 7-button
                 toolbar no longer squeezes the title column at 1280 (bead

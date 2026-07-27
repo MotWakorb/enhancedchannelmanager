@@ -239,6 +239,10 @@
   outline-offset: 3px;
 }
 
+.route-page-action-outlet {
+  display: contents;
+}
+
 .pane h2 {
   font-size: 1.1rem;
   margin-bottom: 1rem;

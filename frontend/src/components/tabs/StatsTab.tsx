@@ -29,6 +29,7 @@ import { AttributionBadge } from '../AttributionBadge';
 import { ChannelStatsDetailModal } from '../ChannelStatsDetailModal';
 import type { Viewer } from '../../types';
 import './StatsTab.css';
+import { RouteHeaderActions } from '../RouteHeaderSlots';
 
 // Historical data point for charts
 interface HistoricalDataPoint {
@@ -913,7 +914,6 @@ export function StatsTab() {
       {/* Header */}
       <div className="stats-header">
         <div className="header-left">
-          <h2>Live Stats</h2>
           <div className="header-summary">
             <div className="summary-stat">
               <span className="material-icons">live_tv</span>
@@ -996,7 +996,7 @@ export function StatsTab() {
           )}
         </div>
 
-        <div className="header-actions">
+        <RouteHeaderActions><div className="header-actions">
           <div className={`refresh-indicator ${refreshInterval > 0 ? 'active' : ''}`}>
             <span className={`material-icons ${refreshing ? 'spinning' : ''}`}>
               {refreshing ? 'sync' : 'schedule'}
@@ -1024,7 +1024,7 @@ export function StatsTab() {
           </button>
 
           <OverflowMenu items={statsSectionNavItems} label="Jump to section" icon="list" />
-        </div>
+        </div></RouteHeaderActions>
       </div>
 
       {/* Error state */}

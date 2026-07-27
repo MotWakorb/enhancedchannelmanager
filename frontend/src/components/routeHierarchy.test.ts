@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ROUTE_HIERARCHY } from './routeHierarchy';
+import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './routeHierarchy';
 import { ROUTE_TITLES } from './routeTitles';
 
 describe('primary route hierarchy', () => {
@@ -21,4 +21,27 @@ describe('primary route hierarchy', () => {
       '#settings/m3u-digest',
     ]);
   });
+
+  it.each([
+    [{ button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, true],
+    [{ button: 0, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, false],
+    [{ button: 0, ctrlKey: false, metaKey: true, shiftKey: false, altKey: false }, false],
+    [{ button: 0, ctrlKey: false, metaKey: false, shiftKey: true, altKey: false }, false],
+    [{ button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: true }, false],
+    [{ button: 1, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, false],
+  ])('guards only plain primary link activation (%o)', (activation, expected) => {
+    expect(isPlainPrimaryActivation(activation)).toBe(expected);
+  });
+
+  it.each([
+    [true, 2, 'settings', 'confirm'],
+    [true, 0, 'settings', 'exit-and-navigate'],
+    [false, 0, 'settings', 'navigate'],
+    [true, 2, 'channel-manager', 'navigate'],
+  ] as const)(
+    'uses the existing edit-mode exit policy (edit=%s, staged=%s, target=%s)',
+    (isEditMode, stagedCount, target, expected) => {
+      expect(getGuardedRouteDecision(isEditMode, stagedCount, target)).toBe(expected);
+    },
+  );
 });

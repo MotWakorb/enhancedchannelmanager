@@ -1077,11 +1077,16 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   return (
     <div className="epg-manager-tab">
       <PageHeader
+        routeConsumer
         className="epg-header"
         title="EPG Sources"
         description="Manage your Electronic Program Guide sources. Click Reorder to change priority."
         actions={(
           <>
+            <button className="btn-primary" onClick={handleAddSource}>
+              <span className="material-icons">add</span>
+              Add Standard EPG
+            </button>
             {sources.length > 1 && (
               <button
                 className="btn-secondary"
@@ -1104,10 +1109,6 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                 Migrate Guides
               </button>
             )}
-            <button className="btn-primary" onClick={handleAddSource}>
-              <span className="material-icons">add</span>
-              Add Standard EPG
-            </button>
           </>
         )}
       />

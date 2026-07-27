@@ -6,6 +6,7 @@ import { CustomSelect } from '../CustomSelect';
 import './M3UChangesTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
+import { RouteHeaderActions } from '../RouteHeaderSlots';
 
 // Get icon for change type
 function getChangeTypeIcon(changeType: M3UChangeType): string {
@@ -215,7 +216,7 @@ export function M3UChangesTab() {
     <div className="m3u-changes-tab">
       <div className="changes-header">
         <div className="header-left">
-          <h2>M3U Changes</h2>
+          <span className="visually-hidden">M3U Changes</span>
           {summary && (
             <div className="header-stats">
               {/* bd-fzny4: this count is `total_changes` from the /changes/summary
@@ -235,7 +236,7 @@ export function M3UChangesTab() {
             </div>
           )}
         </div>
-        <div className="header-actions">
+        <RouteHeaderActions><div className="header-actions">
           <button
             className="btn-secondary"
             onClick={fetchChanges}
@@ -244,7 +245,7 @@ export function M3UChangesTab() {
             <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
             Refresh
           </button>
-        </div>
+        </div></RouteHeaderActions>
       </div>
 
       {/* Filters and Summary Row */}

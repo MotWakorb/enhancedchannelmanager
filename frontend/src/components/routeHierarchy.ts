@@ -1,4 +1,23 @@
 import type { TabId } from './TabNavigation';
+
+type LinkActivation = Pick<MouseEvent, 'button' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>;
+
+export function isPlainPrimaryActivation(event: LinkActivation): boolean {
+  return event.button === 0
+    && !event.ctrlKey
+    && !event.metaKey
+    && !event.shiftKey
+    && !event.altKey;
+}
+
+export function getGuardedRouteDecision(
+  isEditMode: boolean,
+  stagedOperationCount: number,
+  target: TabId,
+): 'confirm' | 'exit-and-navigate' | 'navigate' {
+  if (!isEditMode || target === 'channel-manager') return 'navigate';
+  return stagedOperationCount > 0 ? 'confirm' : 'exit-and-navigate';
+}
 import { ROUTE_TITLES } from './routeTitles';
 
 export interface RouteSettingsLink {
