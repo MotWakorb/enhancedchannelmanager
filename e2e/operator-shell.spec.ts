@@ -989,11 +989,21 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByText(/showing previously loaded entries/i)).toHaveCount(0)
       await expect(page.getByText('Retained journal row')).toBeVisible()
 
-      let changesCall = 0
+      let initialChangesReleased = false
+      let failNextChangesRequest = false
       let mixedPermission = false
-      await page.route(/\/api\/m3u\/changes(?:\?|$)/, (route) => {
-        changesCall += 1
-        if (mixedPermission || changesCall === 2) {
+      let resolveInitialChanges!: () => void
+      const initialChangesRelease = new Promise<void>((resolve) => {
+        resolveInitialChanges = resolve
+      })
+      const releaseInitialChanges = () => {
+        initialChangesReleased = true
+        resolveInitialChanges()
+      }
+      await page.route(/\/api\/m3u\/changes(?:\?|$)/, async (route) => {
+        if (!initialChangesReleased) await initialChangesRelease
+        if (mixedPermission || failNextChangesRequest) {
+          failNextChangesRequest = false
           return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ detail: 'Changes failed' }) })
         }
         return route.fulfill({
@@ -1009,7 +1019,9 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           }),
         })
       })
-      await page.route(/\/api\/m3u\/changes\/summary(?:\?|$)/, (route) => route.fulfill({
+      await page.route(/\/api\/m3u\/changes\/summary(?:\?|$)/, async (route) => {
+        if (!initialChangesReleased) await initialChangesRelease
+        await route.fulfill({
         status: mixedPermission ? 403 : 200,
         contentType: 'application/json',
         body: mixedPermission
@@ -1018,10 +1030,13 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
               total_changes: 1, groups_added: 1, groups_removed: 0, streams_added: 0,
               streams_removed: 0, accounts_affected: [3], since: '2026-07-27T00:00:00Z',
             }),
-      }))
+        })
+      })
 
       await page.getByRole('link', { name: 'M3U Changes', exact: true }).click()
+      releaseInitialChanges()
       await expect(page.getByText('Retained changes row')).toBeVisible()
+      failNextChangesRequest = true
       await page.getByRole('button', { name: /refresh/i }).click()
       await expect(page.getByText(/showing previously loaded changes/i)).toBeVisible()
       await expect(page.getByText('Retained changes row')).toBeVisible()

@@ -1,5 +1,5 @@
 import { logger } from '../../utils/logger';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { M3UChangeLog, M3UChangeSummary, M3UChangeType, M3UAccount } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
@@ -70,6 +70,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [requestState, setRequestState] = useState<'loading' | 'success' | 'error' | 'permission'>('loading');
+  const changesRequestGenerationRef = useRef(0);
   const notifications = useNotifications();
 
   // Pagination state
@@ -101,6 +102,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
 
   // Fetch changes
   const fetchChanges = useCallback(async () => {
+    const requestGeneration = ++changesRequestGenerationRef.current;
     setLoading(true);
     setRequestState('loading');
     const [changesResult, summaryResult] = await Promise.allSettled([
@@ -118,6 +120,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
           m3uAccountId: accountFilter || undefined,
         }),
       ]);
+    if (requestGeneration !== changesRequestGenerationRef.current) return;
     try {
       if (changesResult.status === 'rejected' || summaryResult.status === 'rejected') {
         const errors = [changesResult, summaryResult]
@@ -135,6 +138,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       setSummary(summaryResult.value);
       setRequestState('success');
     } catch (err) {
+      if (requestGeneration !== changesRequestGenerationRef.current) return;
       const permission = err instanceof HttpError && (err.status === 401 || err.status === 403);
       if (permission) {
         setChanges([]);
@@ -145,12 +149,15 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       setRequestState(permission ? 'permission' : 'error');
       notifications.error(err instanceof Error ? err.message : 'Failed to fetch changes', 'Changes');
     } finally {
-      setLoading(false);
+      if (requestGeneration === changesRequestGenerationRef.current) setLoading(false);
     }
   }, [page, pageSize, accountFilter, changeTypeFilter, enabledFilter, hoursFilter, sortBy, sortOrder, notifications]);
 
   useEffect(() => {
-    fetchChanges();
+    void fetchChanges();
+    return () => {
+      changesRequestGenerationRef.current += 1;
+    };
   }, [fetchChanges]);
 
   // Reset page when filters change

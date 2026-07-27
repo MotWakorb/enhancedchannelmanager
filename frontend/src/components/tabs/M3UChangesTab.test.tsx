@@ -290,6 +290,70 @@ describe('M3UChangesTab', () => {
       expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
     });
 
+    it('ignores an older refresh after a newer filter request commits', async () => {
+      let resolveRefreshChanges!: (value: typeof mockChangesResponse) => void;
+      let resolveRefreshSummary!: (value: M3UChangeSummary) => void;
+      const filteredResponse = {
+        ...mockChangesResponse,
+        results: [{ ...mockChanges[0], id: 41, group_name: 'Newest filtered row' }],
+        total: 1,
+      };
+      const lateResponse = {
+        ...mockChangesResponse,
+        results: [{ ...mockChanges[0], id: 42, group_name: 'Late stale row' }],
+        total: 1,
+      };
+      vi.mocked(api.getM3UChanges).mockReset()
+        .mockResolvedValueOnce(mockChangesResponse)
+        .mockReturnValueOnce(new Promise(resolve => { resolveRefreshChanges = resolve; }))
+        .mockResolvedValueOnce(filteredResponse);
+      vi.mocked(api.getM3UChangesSummary).mockReset()
+        .mockResolvedValueOnce(mockSummary)
+        .mockReturnValueOnce(new Promise(resolve => { resolveRefreshSummary = resolve; }))
+        .mockResolvedValueOnce({ ...mockSummary, total_changes: 1 });
+
+      renderWithProviders(<M3UChangesTab />);
+      expect(await screen.findByText('Sports')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+      fireEvent.click(screen.getByText('Last 7 days'));
+      fireEvent.click(await screen.findByRole('option', { name: 'Last 24 hours' }));
+
+      expect(await screen.findByText('Newest filtered row')).toBeInTheDocument();
+      resolveRefreshChanges(lateResponse);
+      resolveRefreshSummary({ ...mockSummary, total_changes: 99 });
+
+      await waitFor(() => expect(screen.queryByText('Late stale row')).not.toBeInTheDocument());
+      expect(screen.getByText('Newest filtered row')).toBeInTheDocument();
+      expect(screen.getByText('1 total changes')).toBeInTheDocument();
+    });
+
+    it('keeps current-generation permission precedence when an older refresh resolves late', async () => {
+      let resolveRefreshChanges!: (value: typeof mockChangesResponse) => void;
+      let resolveRefreshSummary!: (value: M3UChangeSummary) => void;
+      vi.mocked(api.getM3UChanges).mockReset()
+        .mockResolvedValueOnce(mockChangesResponse)
+        .mockReturnValueOnce(new Promise(resolve => { resolveRefreshChanges = resolve; }))
+        .mockRejectedValueOnce(new HttpError('Unavailable', 502));
+      vi.mocked(api.getM3UChangesSummary).mockReset()
+        .mockResolvedValueOnce(mockSummary)
+        .mockReturnValueOnce(new Promise(resolve => { resolveRefreshSummary = resolve; }))
+        .mockRejectedValueOnce(new HttpError('Forbidden', 403));
+
+      renderWithProviders(<M3UChangesTab />);
+      expect(await screen.findByText('Sports')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+      fireEvent.click(screen.getByText('Last 7 days'));
+      fireEvent.click(await screen.findByRole('option', { name: 'Last 24 hours' }));
+
+      expect(await screen.findByText(/don't have permission/i)).toBeInTheDocument();
+      resolveRefreshChanges(mockChangesResponse);
+      resolveRefreshSummary(mockSummary);
+
+      await waitFor(() => expect(screen.getByText(/don't have permission/i)).toBeInTheDocument());
+      expect(screen.queryByText('Sports')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    });
+
   });
 
   it('uses native sort buttons and exposes the active sort direction', async () => {
