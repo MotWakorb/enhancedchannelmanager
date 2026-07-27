@@ -5,25 +5,46 @@ async function dismissFirstRunPromptIfPresent(page: Page) {
   if (await close.isVisible().catch(() => false)) await close.click()
 }
 
-async function seedDeterministicNoAuthBoot(page: Page) {
-  await page.route(/\/api\/auth\/status(?:\?|$)/, (route) => route.fulfill({
-    status: 200,
+async function openDeterministicOperatorShell(page: Page) {
+  let resolveAuthStatus!: () => void
+  let resolveSetupStatus!: () => void
+  const authStatusFulfilled = new Promise<void>((resolve) => { resolveAuthStatus = resolve })
+  const setupStatusFulfilled = new Promise<void>((resolve) => { resolveSetupStatus = resolve })
+
+  await page.route(/\/api\/auth\/status(?:\/|\?|$)/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        require_auth: false,
+        setup_complete: true,
+        dispatcharr_enabled: false,
+      }),
+    })
+    resolveAuthStatus()
+  })
+  await page.route(/\/api\/auth\/setup-required(?:\/|\?|$)/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ required: false }),
+    })
+    resolveSetupStatus()
+  })
+  await page.route(/\/api\/auth\/me(?:\/|\?|$)/, (route) => route.fulfill({
+    status: 401,
     contentType: 'application/json',
-    body: JSON.stringify({
-      require_auth: false,
-      setup_complete: true,
-      dispatcharr_enabled: false,
-    }),
-  }))
-  await page.route(/\/api\/auth\/setup-required(?:\?|$)/, (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ required: false }),
+    body: JSON.stringify({ detail: 'Not authenticated in deterministic no-auth mode' }),
   }))
   await page.route(/\/api\/session-start(?:\?|$)/, (route) => route.fulfill({
     status: 204,
     body: '',
   }))
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await Promise.all([authStatusFulfilled, setupStatusFulfilled])
+  await expect(page.locator('.tab-navigation')).toBeVisible()
+  await expect(page.locator('#main-content h1')).toBeVisible()
 }
 
 async function shellMetrics(page: Page) {
@@ -239,9 +260,7 @@ async function openShellWithPipelineFixture(
       contentType: 'application/json',
       body: JSON.stringify({ disabled: false, reason: null }),
     }))
-  await seedDeterministicNoAuthBoot(page)
-  await page.goto('/', { waitUntil: 'domcontentloaded' })
-  await expect(page.locator('.tab-navigation')).toBeVisible()
+  await openDeterministicOperatorShell(page)
 }
 
 async function seedChannelWorkspace(page: Page, populated: boolean, channelCount = 1) {
@@ -1739,9 +1758,7 @@ test.describe('operator shell navigation behavior', () => {
     await page.route(/\/api\/providers(?:\/|\?|$)/, (route) => route.fulfill({
       status: 403, contentType: 'application/json', body: JSON.stringify({ detail: 'Administrator access required' }),
     }))
-    await seedDeterministicNoAuthBoot(page)
-    await page.goto('/', { waitUntil: 'domcontentloaded' })
-    await expect(page.locator('.tab-navigation')).toBeVisible()
+    await openDeterministicOperatorShell(page)
     await dismissFirstRunPromptIfPresent(page)
     await page.getByRole('link', { name: 'M3U Manager' }).click()
     await expect(page.locator('.route-page-header').getByText('Provider accounts require administrator access', { exact: true })).toBeVisible()
@@ -1774,9 +1791,7 @@ test.describe('operator shell navigation behavior', () => {
       body: providerMode === 'error' ? JSON.stringify({ detail: 'Temporarily unavailable' }) : '[]',
     }))
 
-    await seedDeterministicNoAuthBoot(page)
-    await page.goto('/', { waitUntil: 'domcontentloaded' })
-    await expect(page.locator('.tab-navigation')).toBeVisible()
+    await openDeterministicOperatorShell(page)
     await dismissFirstRunPromptIfPresent(page)
     await expect(page.locator('#main-content .tab-loading')).toHaveCount(0)
 
@@ -1828,9 +1843,7 @@ test.describe('operator shell navigation behavior', () => {
           }),
     }))
 
-    await seedDeterministicNoAuthBoot(page)
-    await page.goto('/', { waitUntil: 'domcontentloaded' })
-    await expect(page.locator('.tab-navigation')).toBeVisible()
+    await openDeterministicOperatorShell(page)
     await dismissFirstRunPromptIfPresent(page)
     await page.getByRole('link', { name: 'Logo Manager' }).click()
     await expect(page.getByText('Private Sports Logo', { exact: true })).toBeVisible()
@@ -1901,9 +1914,7 @@ test.describe('operator shell navigation behavior', () => {
         }),
       })
     })
-    await seedDeterministicNoAuthBoot(page)
-    await page.goto('/', { waitUntil: 'domcontentloaded' })
-    await expect(page.locator('.tab-navigation')).toBeVisible()
+    await openDeterministicOperatorShell(page)
     await dismissFirstRunPromptIfPresent(page)
     await page.getByText('Seeded Group', { exact: true }).click()
     await expect(page.locator('.channel-item', { hasText: 'Seeded News' })).toBeVisible()
