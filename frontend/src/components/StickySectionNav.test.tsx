@@ -44,7 +44,8 @@ describe('StickySectionNav', () => {
       <section className="target"><h2>Current activity</h2></section>
       <section className="target"><h2>Watch history</h2></section>
     </div>);
-    await screen.findByRole('button', { name: 'Watch history' });
+    const button = await screen.findByRole('button', { name: 'Watch history' });
+    expect(button).toHaveAttribute('aria-current', 'location');
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
   });
 

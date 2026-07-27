@@ -807,20 +807,37 @@ for (const viewport of [
       await input.fill('45')
       await input.focus()
       await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
-      await page.evaluate(() => new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
-      expect(await page.evaluate(() => {
-        const focused = document.activeElement!.getBoundingClientRect()
-        const nav = document.querySelector('.sticky-section-nav')!.getBoundingClientRect()
-        const pending = document.querySelector('.settings-pending-actions')!.getBoundingClientRect()
-        const content = document.querySelector<HTMLElement>('.settings-content')!
-        return {
-          document: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
-          content: content.scrollWidth <= content.clientWidth + 1,
-          top: focused.top >= nav.bottom,
-          bottom: focused.bottom <= pending.top,
-        }
-      })).toEqual({ document: true, content: true, top: true, bottom: true })
+      const expectFocusedControlClear = async () => {
+        await page.evaluate(() => new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+        expect(await page.evaluate(() => {
+          const focused = document.activeElement!.getBoundingClientRect()
+          const nav = document.querySelector('.sticky-section-nav')!.getBoundingClientRect()
+          const pending = document.querySelector('.settings-pending-actions')!.getBoundingClientRect()
+          const content = document.querySelector<HTMLElement>('.settings-content')!
+          return {
+            document: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+            content: content.scrollWidth <= content.clientWidth + 1,
+            top: focused.top >= nav.bottom + 7,
+            bottom: focused.bottom <= pending.top - 7,
+          }
+        })).toEqual({ document: true, content: true, top: true, bottom: true })
+      }
+      await expectFocusedControlClear()
+
+      const controls = page.locator('.settings-page input:visible, .settings-page select:visible, .settings-page textarea:visible, .settings-page button:visible')
+      await controls.first().focus()
+      await expectFocusedControlClear()
+      await page.keyboard.press('Tab')
+      await expectFocusedControlClear()
+      await page.keyboard.press('Shift+Tab')
+      await expectFocusedControlClear()
+      await controls.last().focus()
+      await expectFocusedControlClear()
+      await page.keyboard.press('Shift+Tab')
+      await expectFocusedControlClear()
+      await page.keyboard.press('Tab')
+      await expectFocusedControlClear()
     })
   })
 }
@@ -849,6 +866,15 @@ test.describe('operator shell at 200% equivalent', () => {
 
 test.describe('operator shell navigation behavior', () => {
   test.use({ serviceWorkers: 'block' })
+
+  test('shows section navigation only for inventoried long Settings pages', async ({ page }) => {
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByRole('link', { name: 'Settings', exact: true }).click()
+    await expect(page.getByRole('navigation', { name: 'On this page' })).toBeVisible()
+    await page.locator('.settings-nav-item').filter({ hasText: 'Normalization' }).click()
+    await expect(page.getByRole('navigation', { name: 'On this page' })).toHaveCount(0)
+  })
 
   test('audited long pages provide direct section entry and protect pending Settings edits', async ({ page }) => {
     let settingsReloadFails = false

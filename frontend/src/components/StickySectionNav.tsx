@@ -56,6 +56,7 @@ export function StickySectionNav({
     });
     const requested = new URLSearchParams(window.location.hash.split('?')[1] || '').get('section');
     if (requested && items.some((item) => item.id === requested)) {
+      setActiveId(requested);
       requestAnimationFrame(() => {
         const target = document.getElementById(requested);
         if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
@@ -63,6 +64,35 @@ export function StickySectionNav({
     }
     return () => observer.disconnect();
   }, [containerRef, items]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || items.length < 2) return;
+    let frame = 0;
+    const keepFocusedControlVisible = (event: FocusEvent) => {
+      const focused = event.target as HTMLElement | null;
+      if (!focused || !container.contains(focused)
+        || focused.closest('.sticky-section-nav, .settings-pending-actions')) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const nav = container.querySelector<HTMLElement>('.sticky-section-nav');
+        const pending = container.querySelector<HTMLElement>('.settings-pending-actions');
+        const focusedRect = focused.getBoundingClientRect();
+        const topBoundary = nav?.getBoundingClientRect().bottom ?? container.getBoundingClientRect().top;
+        const bottomBoundary = pending?.getBoundingClientRect().top ?? container.getBoundingClientRect().bottom;
+        if (focusedRect.top < topBoundary + 8) {
+          container.scrollTop -= topBoundary + 8 - focusedRect.top;
+        } else if (focusedRect.bottom > bottomBoundary - 8) {
+          container.scrollTop += focusedRect.bottom - bottomBoundary + 8;
+        }
+      });
+    };
+    container.addEventListener('focusin', keepFocusedControlVisible);
+    return () => {
+      cancelAnimationFrame(frame);
+      container.removeEventListener('focusin', keepFocusedControlVisible);
+    };
+  }, [containerRef, items.length]);
 
   if (items.length < 2) return null;
   const activate = (id: string) => {
