@@ -371,26 +371,45 @@ This exact-build Chromium serial/no-retry gate selects tests tagged
 `release:operator-workspace`. At exactly 1280×720 and 1920×1080 it covers
 populated normal and Edit Mode with both 244px expanded and 68px collapsed
 navigation, plus applicable empty and request-error states at both navigation
-widths. It also renders the complete non-color health indicator matrix, artwork
-and fallback behavior, assigned-stream timeout geometry, inventory DOM order,
-Edit Mode-only handles, focus-return menus, landmarks/headings, typography,
-icon density, and horizontal containment.
+widths. Empty data is also exercised in Edit Mode at both navigation widths.
+It renders the complete non-color health indicator matrix and artwork fallback
+with expanded and collapsed navigation, assigned-stream timeout geometry,
+inventory DOM order, Edit Mode-only handles, focus-return menus,
+landmarks/headings, typography, icon density, and horizontal containment.
+Real Tab and Shift+Tab traversal proves the DOM focus order across the route
+header, both pane toolbars, and channel/stream rows; each traversed target must
+have visible focus geometry and a non-color outline or box-shadow.
 
-Named full-page evidence is written beneath each Playwright test output
-directory as:
+Named full-page evidence is written to one deterministic directory:
 
 ```text
-test-results/<test-id>/operator-workspace--<width>x<height>--<state>.png
+test-results/operator-workspace-release/operator-workspace--<width>x<height>--<state>.png
 ```
 
-The PNGs are run artifacts, not source-controlled baselines. CI uploads the
-entire `test-results/` and `playwright-report/` trees as the
+The post-test manifest is part of the command and fails unless exactly 26
+unique, non-empty PNGs exist: every combination of 1280×720 and 1920×1080 with
+the following 13 state names:
+
+- `populated-normal-expanded`
+- `populated-normal-collapsed`
+- `populated-edit-expanded`
+- `populated-edit-collapsed`
+- `populated-edit-selection-menu`
+- `empty-expanded`
+- `empty-collapsed`
+- `empty-edit-expanded`
+- `empty-edit-collapsed`
+- `error-expanded`
+- `error-collapsed`
+- `health-and-artwork-matrix-expanded`
+- `health-and-artwork-matrix-collapsed`
+
+The selection-menu capture waits for Probe Started/Complete toasts to be
+dismissed. PNGs are run artifacts, not source-controlled baselines. The CI job
+explicitly enables GitHub and HTML Playwright reporters, then uploads the
+complete `test-results/` and `playwright-report/` trees as the
 `operator-workspace-release-matrix` artifact for 14 days, including successful
-runs. Expected state names include `populated-normal-expanded`,
-`populated-normal-collapsed`, `populated-edit-expanded`,
-`populated-edit-collapsed`, `populated-edit-selection-menu`, `empty-expanded`,
-`empty-collapsed`, `error-expanded`, `error-collapsed`, and
-`health-and-artwork-matrix-expanded`.
+runs.
 
 ## Testable hypotheses
 

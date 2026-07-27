@@ -11,7 +11,10 @@
   transition: width 150ms ease;
 }
 
-.primary-sidebar.is-collapsed { width: 68px; }
+.primary-sidebar.is-collapsed {
+  width: 68px;
+  contain: inline-size;
+}
 
 .sidebar-brand {
   display: flex;
@@ -143,6 +146,16 @@
   justify-content: center;
   gap: 0;
   padding-inline: 0;
+  overflow-x: clip;
+}
+
+.primary-sidebar.is-collapsed .primary-navigation,
+.primary-sidebar.is-collapsed .navigation-group,
+.primary-sidebar.is-collapsed .navigation-group ul,
+.primary-sidebar.is-collapsed .navigation-group li {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 .visually-hidden {

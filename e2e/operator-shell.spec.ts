@@ -1,5 +1,9 @@
 import { test, expect, type Page } from './fixtures/base'
 import type { TestInfo } from '@playwright/test'
+import { mkdir } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+const operatorReleaseArtifactDirectory = resolve(process.cwd(), 'test-results/operator-workspace-release')
 
 async function dismissFirstRunPromptIfPresent(page: Page) {
   const close = page.getByRole('button', { name: 'Close' })
@@ -13,9 +17,84 @@ async function captureOperatorReleaseArtifact(
   state: string,
 ) {
   const name = `operator-workspace--${viewport.width}x${viewport.height}--${state}.png`
-  const path = testInfo.outputPath(name)
+  await mkdir(operatorReleaseArtifactDirectory, { recursive: true })
+  const path = resolve(operatorReleaseArtifactDirectory, name)
   await page.screenshot({ path, fullPage: true, animations: 'disabled' })
   await testInfo.attach(name, { path, contentType: 'image/png' })
+}
+
+async function expectMainKeyboardTraversal(page: Page) {
+  const collapse = page.getByRole('button', { name: /^(Collapse|Expand) navigation$/ })
+  await collapse.focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: /Edit Mode|Done/ })).toBeFocused()
+
+  const traversed = await page.evaluate(() => {
+    const main = document.querySelector<HTMLElement>('#main-content')!
+    const focusables = [...main.querySelectorAll<HTMLElement>(
+      'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+    )].filter((element) => element.offsetParent !== null)
+    const active = document.activeElement as HTMLElement
+    return { activeIndex: focusables.indexOf(active), count: focusables.length }
+  })
+  expect(traversed.activeIndex).toBe(0)
+  expect(traversed.count).toBeGreaterThan(5)
+
+  const visited = new Set<string>()
+  for (let index = 0; index < traversed.count; index += 1) {
+    const focusEvidence = await page.evaluate(() => {
+      const active = document.activeElement as HTMLElement
+      const style = getComputedStyle(active)
+      const rect = active.getBoundingClientRect()
+      return {
+        identity: `${active.tagName}.${active.className}:${active.getAttribute('aria-label') ?? active.textContent}`,
+        area: active.closest('.route-page-header')
+          ? 'header'
+          : active.closest('.channels-pane .channel-item')
+            ? 'channel-row'
+            : active.closest('.channels-pane')
+              ? 'channels-pane'
+              : active.closest('.streams-pane .stream-item')
+                ? 'stream-row'
+                : active.closest('.streams-pane')
+                  ? 'streams-pane'
+                  : 'other',
+        visibleIndicator: (style.outlineStyle !== 'none' && Number.parseFloat(style.outlineWidth) > 0)
+          || (style.boxShadow !== 'none' && style.boxShadow.length > 0),
+        visibleGeometry: rect.width > 0 && rect.height > 0
+          && rect.right > 0 && rect.bottom > 0
+          && rect.left < window.innerWidth && rect.top < window.innerHeight,
+      }
+    })
+    visited.add(focusEvidence.area)
+    expect(focusEvidence.visibleIndicator, `${focusEvidence.identity} needs a visible focus indicator`).toBe(true)
+    expect(focusEvidence.visibleGeometry, `${focusEvidence.identity} needs visible viewport geometry`).toBe(true)
+    if (visited.has('header') && visited.has('channels-pane') && visited.has('channel-row')
+      && visited.has('streams-pane') && visited.has('stream-row')) break
+    await page.keyboard.press('Tab')
+  }
+  expect([...visited]).toEqual(expect.arrayContaining([
+    'header', 'channels-pane', 'channel-row', 'streams-pane', 'stream-row',
+  ]))
+
+  const activeIdentity = () => page.evaluate(() => {
+    const active = document.activeElement as HTMLElement
+    return `${active.tagName}.${active.className}:${active.getAttribute('aria-label') ?? active.textContent}`
+  })
+  const beforeReverse = await activeIdentity()
+  await page.keyboard.press('Shift+Tab')
+  const afterReverse = await activeIdentity()
+  expect(afterReverse).not.toBe(beforeReverse)
+  await page.keyboard.press('Tab')
+  expect(await activeIdentity()).toBe(beforeReverse)
+}
+
+async function dismissReleaseToasts(page: Page) {
+  const dismissButtons = page.locator('.toast .toast-dismiss')
+  for (let attempt = 0; attempt < 10 && await dismissButtons.count(); attempt += 1) {
+    await dismissButtons.first().evaluate((button) => button.click())
+  }
+  await expect(page.locator('.toast')).toHaveCount(0)
 }
 
 async function openDeterministicOperatorShell(page: Page) {
@@ -809,6 +888,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
     })
 
     test('[release:operator-workspace] Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
+      test.setTimeout(60_000)
       await seedChannelWorkspace(page, true, 2)
       await openShellWithPipelineFixture(
         page,
@@ -943,6 +1023,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       expect(Number.parseFloat(normalTypography.channel)).toBeGreaterThanOrEqual(12)
       expect(Number.parseFloat(normalTypography.inventory)).toBeGreaterThanOrEqual(12)
       expect(Number.parseFloat(normalTypography.actionIcon)).toBeGreaterThanOrEqual(16)
+      await expectMainKeyboardTraversal(page)
       await captureOperatorReleaseArtifact(page, testInfo, viewport, 'populated-normal-expanded')
       await page.getByRole('button', { name: 'Collapse navigation' }).click()
       await expect.poll(() => shellMetrics(page)).toMatchObject({
@@ -1014,6 +1095,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await captureOperatorReleaseArtifact(page, testInfo, viewport, 'populated-edit-expanded')
       await page.getByRole('button', { name: 'Collapse navigation' }).click()
       await expect(page.locator('.primary-sidebar')).toHaveCSS('width', '68px')
+      await expectMainKeyboardTraversal(page)
       await captureOperatorReleaseArtifact(page, testInfo, viewport, 'populated-edit-collapsed')
       await page.getByRole('button', { name: 'Expand navigation' }).click()
 
@@ -1082,6 +1164,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByRole('heading', { name: 'Bulk EPG Assignment' })).toBeVisible()
       await page.getByRole('button', { name: 'Cancel', exact: true }).click()
       await page.clock.resume()
+      await dismissReleaseToasts(page)
       const selectionMore = selectionBar.getByRole('button', { name: 'More selection actions' })
       await selectionMore.focus()
       await selectionMore.press('Enter')
@@ -1280,6 +1363,22 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await captureOperatorReleaseArtifact(page, testInfo, viewport, 'empty-collapsed')
 
       await page.getByRole('button', { name: 'Expand navigation' }).click()
+      await page.getByRole('button', { name: 'Edit Mode' }).click()
+      await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Create new channel', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Create new channel group' })).toBeVisible()
+      await expect(page.getByRole('status').filter({ hasText: 'No channels are configured.' })).toBeVisible()
+      await expect(page.locator('.channels-pane .channel-drag-handle')).toHaveCount(0)
+      await expect(page.locator('.channels-pane .group-drag-handle')).toHaveCount(0)
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'empty-edit-expanded')
+      await page.getByRole('button', { name: 'Collapse navigation' }).click()
+      await expectStateGeometry()
+      await expect(page.getByRole('button', { name: 'Create new channel', exact: true })).toBeVisible()
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'empty-edit-collapsed')
+      await page.getByRole('button', { name: 'Expand navigation' }).click()
+      await page.getByRole('button', { name: 'Done' }).click()
+      await expect(page.getByRole('button', { name: 'Edit Mode' })).toBeVisible()
+
       await page.route(/\/api\/channels(?:\?|$)/, (route) => route.fulfill({
         status: 503,
         contentType: 'application/json',
@@ -1330,6 +1429,18 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.locator('.channels-pane .meta-tag.resolution')).toHaveText('1080p')
       await expect(page.locator('.streams-pane .meta-tag.resolution, .streams-pane .probe-warning-summary')).toHaveCount(0)
       await captureOperatorReleaseArtifact(page, testInfo, viewport, 'health-and-artwork-matrix-expanded')
+      await page.getByRole('button', { name: 'Collapse navigation' }).click()
+      await expect.poll(() => shellMetrics(page)).toMatchObject({
+        width: 68,
+        noSidebarXOverflow: true,
+        mainClear: true,
+        noDocumentXOverflow: true,
+        labelsHidden: true,
+        iconsCentered: true,
+      })
+      for (const status of statuses) await expect(page.getByLabel(status.name)).toBeVisible()
+      await expect(noLogoRow.locator('.channel-logo-placeholder .material-icons')).toHaveText('image')
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'health-and-artwork-matrix-collapsed')
     })
   })
 }

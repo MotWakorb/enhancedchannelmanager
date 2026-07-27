@@ -7,7 +7,7 @@
     "test:e2e": "playwright test",
     "test:playwright-config": "node --test playwright-base-url.test.mjs",
     "test:e2e:operator-shell": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/operator-shell.spec.ts --project=chromium",
-    "test:e2e:operator-workspace-release": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/operator-shell.spec.ts --project=chromium --grep release:operator-workspace --workers=1 --retries=0",
+    "test:e2e:operator-workspace-release": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/operator-shell.spec.ts --project=chromium --grep release:operator-workspace --workers=1 --retries=0 && node scripts/verify-operator-workspace-release-artifacts.mjs",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug",
