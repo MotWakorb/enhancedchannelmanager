@@ -8,9 +8,11 @@
  *   - The enable/disable toggle (the KILL SWITCH) calls updateSyncTarget with
  *     the flipped `enabled` value.
  *   - Delete confirms first, then calls deleteSyncTarget.
- *   - "Sync now" runs a DRY-RUN preview — runTask('dbas_sync', undefined,
+ *   - "Sync now" runs a DRY-RUN preview — runTask(`dbas_sync_${id}`, undefined,
  *     { sync_target_id, confirm_apply: false }) — and only an explicit Apply
- *     runs with confirm_apply: true.
+ *     runs with confirm_apply: true. The task id is PER TARGET (7ipq2.3 /
+ *     ADR-013 S6): distinct targets sync concurrently; the backend refuses a
+ *     second run against the same target.
  *   - The load-bearing operator copy (one-way overwrite + credentials-not-synced)
  *     is present in the card (ADR-013).
  */
@@ -150,7 +152,7 @@ describe('SyncTargetsCard', () => {
     fireEvent.click(screen.getByTestId('sync-target-preview-7'));
 
     await waitFor(() => expect(api.runTask).toHaveBeenCalledTimes(1));
-    expect(api.runTask).toHaveBeenCalledWith('dbas_sync', undefined, {
+    expect(api.runTask).toHaveBeenCalledWith('dbas_sync_7', undefined, {
       sync_target_id: 7,
       confirm_apply: false,
     });
@@ -170,7 +172,7 @@ describe('SyncTargetsCard', () => {
 
     // Apply confirm dialog (source-wins overwrite) — confirm spy returns true.
     await waitFor(() => expect(api.runTask).toHaveBeenCalledTimes(2));
-    expect(api.runTask).toHaveBeenLastCalledWith('dbas_sync', undefined, {
+    expect(api.runTask).toHaveBeenLastCalledWith('dbas_sync_7', undefined, {
       sync_target_id: 7,
       confirm_apply: true,
     });
@@ -199,5 +201,84 @@ describe('SyncTargetsCard', () => {
       'aria-pressed',
       'false',
     );
+  });
+  // -------------------------------------------------------------------------
+  // Per-target in-flight state (PR #752 review, Warn).
+  //
+  // With per-target sync tasks, two targets can legitimately be syncing at
+  // once. A single scalar `busyId` cannot represent that: starting B
+  // overwrites A's in-flight marker, and B finishing CLEARS it entirely — so
+  // A's row re-enables while A's request is still outstanding, and the next
+  // click produces an avoidable ALREADY_RUNNING error from the backend.
+  // -------------------------------------------------------------------------
+
+  it('keeps target A busy while target B runs and finishes (two in flight)', async () => {
+    const TARGET_B: api.SyncTarget = { ...TARGET, id: 9, name: 'Bedroom B' };
+
+    // Deferred promises so both runs can be in flight simultaneously.
+    let resolveA!: (v: unknown) => void;
+    let resolveB!: (v: unknown) => void;
+    const runA = new Promise((res) => {
+      resolveA = res;
+    });
+    const runB = new Promise((res) => {
+      resolveB = res;
+    });
+    (api.runTask as Mock).mockImplementation((taskId: string) =>
+      taskId === 'dbas_sync_7' ? runA : runB,
+    );
+
+    await renderCard([TARGET, TARGET_B]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    // Start A, then B — both now in flight.
+    fireEvent.click(screen.getByTestId('sync-target-preview-7'));
+    await waitFor(() => expect(screen.getByTestId('sync-target-preview-7')).toBeDisabled());
+    fireEvent.click(screen.getByTestId('sync-target-preview-9'));
+    await waitFor(() => expect(screen.getByTestId('sync-target-preview-9')).toBeDisabled());
+
+    // Starting B must not have released A.
+    expect(screen.getByTestId('sync-target-preview-7')).toBeDisabled();
+
+    // Finish B only. A is STILL running, so A's row must stay disabled —
+    // this is the regression: a scalar busyId clears here and re-enables A.
+    resolveB({ success: true, message: 'preview ok' });
+    await waitFor(() => expect(screen.getByTestId('sync-target-preview-9')).toBeEnabled());
+    expect(screen.getByTestId('sync-target-preview-7')).toBeDisabled();
+
+    // Finishing A releases only A.
+    resolveA({ success: true, message: 'preview ok' });
+    await waitFor(() => expect(screen.getByTestId('sync-target-preview-7')).toBeEnabled());
+  });
+
+  it('a failed run on one target does not release another in-flight target', async () => {
+    const TARGET_B: api.SyncTarget = { ...TARGET, id: 9, name: 'Bedroom B' };
+
+    let resolveA!: (v: unknown) => void;
+    let rejectB!: (e: unknown) => void;
+    const runA = new Promise((res) => {
+      resolveA = res;
+    });
+    const runB = new Promise((_res, rej) => {
+      rejectB = rej;
+    });
+    (api.runTask as Mock).mockImplementation((taskId: string) =>
+      taskId === 'dbas_sync_7' ? runA : runB,
+    );
+
+    await renderCard([TARGET, TARGET_B]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-preview-7'));
+    await waitFor(() => expect(screen.getByTestId('sync-target-preview-7')).toBeDisabled());
+    fireEvent.click(screen.getByTestId('sync-target-preview-9'));
+    await waitFor(() => expect(screen.getByTestId('sync-target-preview-9')).toBeDisabled());
+
+    rejectB(new Error('B unreachable'));
+    await waitFor(() => expect(screen.getByTestId('sync-target-preview-9')).toBeEnabled());
+    expect(screen.getByTestId('sync-target-preview-7')).toBeDisabled();
+
+    resolveA({ success: true, message: 'preview ok' });
+    await waitFor(() => expect(screen.getByTestId('sync-target-preview-7')).toBeEnabled());
   });
 });

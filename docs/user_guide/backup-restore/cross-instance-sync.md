@@ -97,6 +97,8 @@ After a successful apply, the target row shows the last sync timestamp and the o
 
 ECM now runs sync automatically at the configured interval. You can still trigger a manual sync at any time with **Sync now**.
 
+If you have several sync targets, they sync independently and can run at the same time — a slow or unreachable target never delays the others. ECM never runs two syncs against the *same* target at once (a second attempt while one is in progress is refused and simply runs on its next interval), and it caps how many targets sync simultaneously (3 by default; the `ECM_SYNC_MAX_CONCURRENT` environment variable adjusts it — extra targets wait their turn rather than being skipped).
+
 ### The kill switch
 
 The **Enable** toggle on each target is the kill switch. Flipping it off immediately stops all scheduled runs for that target. The target definition (URL, credentials, interval) is preserved. Flip it back on to resume.

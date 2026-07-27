@@ -191,17 +191,31 @@ curl -s -X POST http://127.0.0.1:9292/api/accounts/token/ \
 #    (SSRF: a LAN/RFC1918 base_url needs ssrf_outbound_mode=lan_friendly, the
 #     default. Link-local/IMDS/CGNAT are refused unconditionally.)
 
-# 4. Drive cycles via the privileged task endpoint. dbas_sync uses ONE-SHOT
-#    arming: EVERY run must carry its full parameters (a bare re-run is
-#    deliberately disarmed and fails "No sync_target_id configured").
-#    POST /api/tasks/dbas_sync/run
-#    {"parameters":{"sync_target_id":<id>,"confirm_apply":false}}   # dry-run
-#    {"parameters":{"sync_target_id":<id>,"confirm_apply":true,
-#                   "cloud_credential_version":<current version>}}  # apply
+# 4. Drive cycles via the privileged task endpoint. Each SyncTarget has its
+#    OWN task id — dbas_sync_<id> (7ipq2.3 / ADR-013 S6). The task is BOUND
+#    to that target: sync_target_id is optional in the payload and, when
+#    present, MUST match the bound target — a foreign id hard-fails
+#    BOUND_TARGET_MISMATCH without running (it would otherwise run that
+#    target outside its own lock). ONE-SHOT arming still applies to the
+#    destructive knobs: confirm_apply / cloud_credential_version reset after
+#    every run, so an apply must re-send them (a bare re-run is a dry-run of
+#    the bound target, never a replayed apply).
+#    POST /api/tasks/dbas_sync_<id>/run
+#    {"parameters":{"confirm_apply":false}}                          # dry-run
+#    {"parameters":{"confirm_apply":true,
+#                   "cloud_credential_version":<current version>}}   # apply
+#    Distinct targets can run CONCURRENTLY; a second run against the SAME
+#    target while one is in flight is refused ALREADY_RUNNING. The cap on
+#    simultaneous runs is ECM_SYNC_MAX_CONCURRENT (default 3).
 
 # 5. Verify from both sides: the sync report (task result JSON), the
-#    sync_outbound journal rows, /metrics (ecm_sync_runs_total{result},
-#    ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"}),
+#    sync_outbound journal rows, /metrics —
+#    ecm_sync_runs_total{result,sync_target_id} (filter by target),
+#    ecm_sync_last_full_success_timestamp{sync_target_id="<id>"} (the
+#    APPLY-ONLY freshness gauge the drift alert keys on — a dry-run preview
+#    deliberately does NOT advance it), and the generic task-health gauge
+#    ecm_task_schedule_last_success_timestamp{task_id="dbas_sync_<id>"}
+#    (advanced by any successful run, previews included) —
 #    GET /api/sync-targets/<id> (last_outcome / last_full_sync_at), and B's
 #    own API (channels/groups/streams/logos counts).
 
