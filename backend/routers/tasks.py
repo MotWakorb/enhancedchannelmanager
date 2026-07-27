@@ -28,7 +28,27 @@ router = APIRouter(tags=["Tasks"])
 # remote Dispatcharr-B on apply) — equally privileged to backup/restore (bead
 # 5gzg5). Keep this set in sync with any new privileged task registered in
 # backend/tasks/.
+#
+# 7ipq2.3: cross-instance sync tasks are registered PER TARGET as
+# ``dbas_sync_<sync_target_id>`` (ADR-013 S6 — dynamic ids, one per SyncTarget
+# row), so exact-set membership cannot cover them; use
+# :func:`is_privileged_task_id`, which also matches the per-target prefix.
+# The legacy ``dbas_sync`` id stays in the set as defence in depth (it is no
+# longer registered, so a run attempt 404s — but it must never be less gated).
 PRIVILEGED_TASK_IDS = frozenset({"dbas_restore", "dbas_backup", "dbas_sync"})
+
+# Prefixes of dynamically registered privileged task-id families (currently
+# only per-target cross-instance sync). Dynamic ids come from code-controlled
+# registration (SyncTarget rows), never raw user input — matching the prefix
+# conservatively over-gates at worst.
+PRIVILEGED_TASK_ID_PREFIXES = ("dbas_sync_",)
+
+
+def is_privileged_task_id(task_id: str) -> bool:
+    """Whether this task id requires an admin to run/cancel (O8TBV-1)."""
+    return task_id in PRIVILEGED_TASK_IDS or task_id.startswith(
+        PRIVILEGED_TASK_ID_PREFIXES
+    )
 
 
 # -------------------------------------------------------------------------
@@ -588,7 +608,7 @@ async def run_task(
     admin-gated restore path) are refused for authenticated non-admins (O8TBV-1).
     """
     logger.debug("[TASKS] POST /api/tasks/%s/run", task_id)
-    if task_id in PRIVILEGED_TASK_IDS and not is_admin:
+    if is_privileged_task_id(task_id) and not is_admin:
         logger.warning(
             "[TASKS] Refusing privileged task run for non-admin: task=%s", task_id
         )
@@ -620,7 +640,7 @@ async def cancel_task(task_id: str, is_admin: bool = ResolveIsAdminIfEnabled):
     interfere with a privileged task.
     """
     logger.debug("[TASKS] POST /api/tasks/%s/cancel", task_id)
-    if task_id in PRIVILEGED_TASK_IDS and not is_admin:
+    if is_privileged_task_id(task_id) and not is_admin:
         logger.warning(
             "[TASKS] Refusing privileged task cancel for non-admin: task=%s", task_id
         )
