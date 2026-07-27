@@ -77,8 +77,24 @@ if (requireIconMetadata) {
     if (!Array.isArray(metadata.invalidIcons) || metadata.invalidIcons.length) {
       metadataProblems.push(`${name}: invalid or raw-ligature icons were reported`)
     }
-    if (metadata.sidebarWidthSettled !== true) {
-      metadataProblems.push(`${name}: collapsed sidebar width was not settled after font loading`)
+    const expectedCollapsed = name.includes('-collapsed.icons.json')
+    const expectedBoundingWidth = expectedCollapsed ? 68 : 244
+    const expectedClientWidth = expectedBoundingWidth - 1
+    const sidebarDiagnostic = `border-box=${metadata.sidebarBoundingWidth}, client=${metadata.sidebarClientWidth}, scroll=${metadata.sidebarScrollWidth}`
+    if (metadata.sidebarCollapsed !== expectedCollapsed) {
+      metadataProblems.push(`${name}: expected ${expectedCollapsed ? 'collapsed' : 'expanded'} sidebar class; ${sidebarDiagnostic}`)
+    }
+    if (typeof metadata.sidebarBoundingWidth !== 'number'
+      || Math.abs(metadata.sidebarBoundingWidth - expectedBoundingWidth) > 0.5) {
+      metadataProblems.push(`${name}: expected ${expectedBoundingWidth}px sidebar border-box; ${sidebarDiagnostic}`)
+    }
+    if (typeof metadata.sidebarClientWidth !== 'number'
+      || Math.abs(metadata.sidebarClientWidth - expectedClientWidth) > 0.5) {
+      metadataProblems.push(`${name}: expected approximately ${expectedClientWidth}px sidebar client width; ${sidebarDiagnostic}`)
+    }
+    if (metadata.sidebarWidthSettled !== true
+      || metadata.sidebarClientWidth !== metadata.sidebarScrollWidth) {
+      metadataProblems.push(`${name}: sidebar client/scroll width was not settled after font loading; ${sidebarDiagnostic}`)
     }
   }
   if (metadataProblems.length) {

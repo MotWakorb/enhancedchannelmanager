@@ -408,10 +408,13 @@ Material Icons is self-hosted through `@fontsource/material-icons`; canonical
 captures do not depend on Google Fonts or another network request. Before each
 PNG, the gate waits for `document.fonts.ready`, loads and checks the exact
 `Material Icons` face, audits every visible icon for icon-sized geometry and
-raw ligature overflow, and rechecks collapsed-sidebar client/scroll width.
+raw ligature overflow, then polls the navigation transition until its rendered
+border box is 68px collapsed or 244px expanded and client/scroll widths match
+(67px and 243px respectively with the one-pixel border).
 Each PNG has a matching `.icons.json` record. The manifest command requires
 all 26 metadata records and rejects an unavailable font, invalid icon,
-raw-ligature rendering, or unsettled collapsed rail.
+raw-ligature rendering, wrong sidebar class/border-box/client width, or
+unsettled rail overflow.
 
 The selection-menu capture waits for Probe Started/Complete toasts to be
 dismissed. PNGs are run artifacts, not source-controlled baselines. The CI job
