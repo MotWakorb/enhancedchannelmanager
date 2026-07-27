@@ -100,10 +100,11 @@ The M3U Manager displays:
 
 ### Adding an M3U Account
 
-**Step 1: Click Add Account**
+**Step 1: Add the account**
 
 
-1. Click the **Add Account** button in the top toolbar
+1. Under **Operations**, open **M3U Manager**.
+2. Select **Add M3U Account**.
 
 **Step 2: Choose Account Type**
 
@@ -119,20 +120,19 @@ Choose from three account types:
 **Step 3: Configure Standard M3U Account**
 
 
-1. Enter a **Name** for the account
+1. Enter an **Account Name**
 2. Paste the **M3U URL** from your provider
 3. Set **Max Streams** (concurrent connection limit)
-4. Set **Refresh Interval** (how often to update, default 24 hours; set to 0 for manual refresh only)
-5. Click **Save**
+4. Select **Create Account**
 
 **Step 3 (Alternative): Configure XtreamCodes Account**
 
 
-1. Enter a **Name** for the account
+1. Enter an **Account Name**
 2. Enter the **Server URL** (base URL without /get.php)
 3. Enter your **Username** and **Password**
 4. Set **Max Streams**
-5. Click **Save**
+5. Select **Create Account**
 
 > **Tip:** When editing an existing XtreamCodes account, you can change non-credential settings (name, max streams, etc.) without re-entering the password. Leave the password field empty to keep the existing credentials.
 
@@ -177,7 +177,8 @@ For automatic channel creation from a group:
    - **Channel Group Override**: Place channels in different group
    - **Name Regex Pattern**: Transform channel names
    - **Channel Profile**: Assign default profile
-3. Click **Save**
+3. Select **Save Settings**, close the auto-sync dialog, then select **Save &
+   Refresh** in **Manage Groups**.
 
 ### Refreshing M3U Data
 
@@ -253,32 +254,31 @@ The screen is split into two panes:
 
 ### Creating Channels - Method 1: Drag and Drop
 
-**Step 1: Find a Stream**
+1. Select **Edit Mode**.
+2. In **Streams**, use **All Providers**, **All Groups**, or **Search streams**
+   to find the source.
+3. Drag the source's **Drag inventory stream … to assign it to a channel**
+   handle to a channel. To create instead, use the stream-group handle and
+   choose a destination from **Create channels in group**.
+4. Select **Done**, review **Exit Edit Mode**, then choose **Apply All**.
 
-
-1. Use the **M3U Account** dropdown to filter by M3U account
-2. Use **Search** to find specific streams
-
-**Step 2: Drag to Create Channel**
-
-
-1. Click and drag a stream from the right pane
-2. Drop it on a **group header** in the left pane
-3. A new channel is created with the stream's name and logo
+Keyboard users can focus either drag handle, press `Enter`, choose the
+announced channel or group destination, and press `Enter` again. Press
+`Escape` to cancel the drag.
 
 ### Creating Channels - Method 2: Bulk Creation
 
 **Step 1: Select Stream Groups**
 
+1. Select **Edit Mode**.
+2. Expand each source group you want to use.
+3. Activate its **Select all streams in group** checkbox. Repeat for each
+   group; no modifier key is required.
 
-1. Click a stream group header to select it
-2. **Ctrl+Click** to select additional groups
+**Step 2: Open Bulk Creation**
 
-**Step 2: Drag to Left Pane**
-
-
-1. Drag the selected groups to the left pane
-2. The bulk creation modal appears
+Use **Create** for the selected groups, or **Create in…** to choose an
+existing group or **Create in new group…**. The bulk creation dialog opens.
 
 **Step 3: Configure Bulk Creation**
 
@@ -296,7 +296,7 @@ The screen is split into two panes:
 
 1. Review the channel list
 2. Note the **stream count** per channel (merged duplicates)
-3. Click **Create Channels**
+3. Select **Create _N_ Channels**, where _N_ is the reviewed channel count.
 
 ### Smart Stream Merging
 
@@ -311,8 +311,8 @@ ECM automatically:
 **Step 1: Enter Edit Mode**
 
 
-1. Click **Edit Mode** to enable staged editing
-2. All changes are now local until you commit
+1. Select **Edit Mode** to enable staged editing.
+2. Changes remain staged until you review and apply them.
 
 **Step 2: Make Changes**
 
@@ -327,31 +327,29 @@ In edit mode you can:
 **Step 3: Use Undo/Redo**
 
 
-- Press **Ctrl+Z** to undo
-- Press **Ctrl+Shift+Z** to redo
+- Use **Undo** and **Redo** in the Channels pane history controls.
 
-**Step 4: Exit and Commit**
+**Step 4: Review, apply, or cancel**
 
-
-1. Click **Exit Edit Mode**
-2. Review the summary of all changes
-3. Click **Commit** to save or **Discard** to cancel
+1. Select **Done** to open **Exit Edit Mode**.
+2. Review the summary, then choose **Keep Editing**, **Discard**, or **Apply
+   All**.
+3. The header's **Cancel** action abandons the Edit Mode session; when staged
+   changes exist, ECM asks for confirmation before discarding them.
 
 ### Multi-Select Operations
 
 **Step 1: Select Multiple Channels**
 
+1. In **Edit Mode**, use each channel's checkbox.
+2. To select a whole group, use **Select all channels in group**. Repeat for
+   other groups without holding a modifier key.
 
-- **Ctrl+Click**: Toggle individual selection
-- **Shift+Click**: Select range
-- **Ctrl+A**: Select all visible
+**Step 2: Use Selection actions**
 
-**Step 2: Right-Click for Options**
-
-
-1. Right-click on selected channels
-2. Choose **Move to Group** and select destination
-3. Or choose **Create New Group & Move**
+The bottom **Selection actions** bar appears. Choose a visible action, or
+open **More selection actions** and choose **Move to group**. The former
+right-click menu is no longer part of this workflow.
 
 ### Managing Streams Within Channels
 
@@ -364,14 +362,15 @@ In edit mode you can:
 
 Sort and renumber channels within a group:
 
-1. Right-click a group header (or use the group menu)
+1. Open the group's actions menu.
 2. Choose **Sort & Renumber**
 3. Options:
    - **Alphabetical Sort** - Sort channels A-Z
    - **Smart Name Sorting** - Ignores channel number prefixes when sorting (e.g., "101 | Sports" sorts as "Sports")
    - **Sequential Renumber** - Assign sequential numbers starting from any value
 4. Preview the result before applying
-5. The entire operation undoes as one action with Ctrl+Z
+5. The entire operation can be reversed with the Channels pane **Undo**
+   control while the Edit Mode session remains active.
 
 ### Copy Channel & Stream URLs
 
@@ -418,10 +417,10 @@ The EPG Manager configures your Electronic Program Guide data sources.
 
 ### Adding an EPG Source
 
-**Step 1: Click Add Source**
+**Step 1: Add the source**
 
-
-1. Click **Add Source** in the toolbar
+1. Under **Operations**, open **EPG Manager**.
+2. Select **Add Standard EPG**.
 
 **Step 2: Configure XMLTV Source**
 
@@ -444,37 +443,34 @@ The source automatically fetches and parses EPG data.
 
 ### Creating Dummy EPG
 
-
-For channels without guide data:
-
-1. Add a **Dummy EPG** source
-2. Configure:
-   - **Name Source**: Channel or stream name
-   - **Title Template**: Use `{name}` placeholder
-   - **Duration**: Program length in minutes
-   - **Timezone**: Event timezone
-3. Click **Save**
+For channels without upstream guide data, use **Dummy EPG Profiles** at the
+bottom of **EPG Manager**. Create a profile, configure its templates, and use
+**Add to Dispatcharr** or copy its XMLTV URL. The older workflow that created
+a dummy source directly is deprecated; existing legacy sources remain
+editable. See [EPG — Dummy EPG: profiles, not legacy
+sources](epg/index.md#dummy-epg).
 
 ### Bulk EPG Assignment
 
 **Step 1: Select Channels**
 
 
-1. In Channel Manager, select channels needing EPG
-2. Click **Assign EPG** in the toolbar
+1. In **Edit Mode**, select the channels with their checkboxes.
+2. In the bottom **Selection actions** bar, choose **Assign EPG**.
 
 **Step 2: Review Matches**
 
 
-1. Auto-matched channels show in green
-2. Conflicts show multiple options to choose from
-3. Unmatched channels need manual assignment
+1. Choose the EPG sources, then select **Match _N_ Channels**.
+2. Review **Auto-Matched**, **Needs Review**, and unmatched results.
+3. For conflicts, choose **Review Changes** or **Accept Best Guesses**.
 
 **Step 3: Resolve Conflicts**
 
 
-1. For each conflict, select the correct EPG entry
-2. Click **Apply** when done
+1. For each conflict, select the correct EPG entry or **Skip this channel**.
+2. Select **Assign _N_ Channels** when the reviewed assignment count is
+   correct.
 
 ---
 
@@ -494,9 +490,10 @@ Features:
 ### Navigation
 
 
-- **Date Picker**: Browse different days
-- **Hour Buttons**: Jump to specific times
-- **Profile Filter**: Show specific channel profiles
+- **Date**: Browse different days
+- **Start**: Jump to a starting hour
+- **Profile**: Show a specific channel profile
+- **Group**: Filter to a group or switch to jump mode
 
 ### Viewing Program Details
 
@@ -528,9 +525,10 @@ Features:
 
 ### Adding Logos
 
-
-- **From URL**: Enter image URL
-- **Upload**: Upload image files directly to Dispatcharr
+1. Under **Operations**, open **Logo Manager** and select **Add Logo**.
+2. Enter the logo name and either provide its URL or upload an image.
+3. Select **Add Logo**. Use **Search logos**, **Unused only**, **List view**,
+   and **Grid view** to find it later.
 
 ---
 
@@ -577,7 +575,7 @@ The Channel Pipeline page lets you automate channel creation with a rules-based 
 
 ### Creating a Rule
 
-1. Click **Add Rule** in the Channel Pipeline page
+1. Under **Automation**, open **Channel Pipeline** and select **Create Rule**
 2. Enter a **Rule Name** and optional **Description**
 3. Configure **Conditions** to match streams
 4. Configure **Actions** to define what happens
@@ -1021,22 +1019,11 @@ Each method supports:
 
 ### Settings Navigation
 
-
-The Settings sidebar contains the following sections:
-- **General** - Dispatcharr connection
-- **Tag-Based Normalization** - Tag stripping for stream name cleanup
-- **Normalization Engine** - Rule-based name transformations
-- **Stream Probing** - Automated stream health checks
-- **Stream Sort Priority** - Configure stream ordering criteria
-- **Stream Preview** - Preview mode configuration
-- **Channel Defaults** - Default options for bulk channel creation
-- **Appearance** - Theme, visibility toggles, log level
-- **VLC Integration** - VLC protocol handler setup
-- **Scheduled Tasks** - Automated background tasks
-- **Alert Methods** - External notification configuration
-- **Maintenance** - Stream strikeout management and bulk operations
-- **Authentication** - Login requirements and providers
-- **Users** - User account management (admin only)
+Open **System** → **Settings**, then use **Settings sections**. Contextual
+links elsewhere in ECM can open the correct section directly. For the audited
+page list, **On this page** behavior, and exact **Save changes** /
+**Cancel changes** safeguards, see [Settings and contextual
+links](operator-workspace.md#settings-and-contextual-links).
 
 ### Tag-Based Normalization
 
@@ -1066,12 +1053,14 @@ These settings are pre-loaded as defaults in the bulk create modal, adjustable p
 
 Configure automated stream health checking:
 
-1. **Enable** stream probing
-2. Set **Start Time** (e.g., 03:00 for off-peak)
-3. Set **Interval** (hours between probes)
-4. Configure **Batch Size** and **Timeout**
-5. Select **Channel Groups** to probe
-6. Configure **Retry Settings** - Set how many times to retry failed probes before marking a stream as failed
+1. Under **System** → **Settings** → **Maintenance**, configure **Probe
+   timeout (seconds)**, **Bitrate measurement duration**, and **Stream fetch
+   page limit**.
+2. If appropriate for provider limits, enable **Enable parallel probing** and
+   set **Max concurrent probes**.
+3. Configure when probing runs under **Settings** → **Scheduled Tasks** by
+   editing the Stream Probe task. Scheduling is not an implicit save on the
+   Maintenance page.
 
 #### Per-Account Ramp-Up
 
@@ -1106,14 +1095,21 @@ This setting only affects probing — it does not change how Dispatcharr routes 
 
 ### Black Screen Detection
 
-When enabled in Settings → Maintenance, ECM runs an ffmpeg signalstats check after each successful probe to detect streams showing dark or blank content. Black screen streams show a purple `videocam_off` icon in the channel and stream lists and are deprioritized in Smart Sort.
+When enabled in **System** → **Settings** → **Maintenance**, ECM runs an
+ffmpeg signalstats check after a successful probe to detect dark or blank
+content. Channel rows summarize the highest-priority state of their assigned
+streams. Detailed black-screen state belongs to an assigned stream row. The
+unassigned **Streams** inventory intentionally shows neither probe health nor
+strike details.
 
 - **Enable/Disable** — Checkbox in the Stream Probing section
 - **Sample Duration** — How long to sample each stream (3-30 seconds, default 5). Longer samples are more accurate but slower.
 
 ### Low FPS Detection
 
-ECM automatically flags streams with a framerate below a configurable threshold. Low FPS streams show an amber `slow_motion_video` icon and are deprioritized in Smart Sort. This requires no extra processing — the FPS is already collected during the standard ffprobe.
+ECM flags assigned streams whose framerate falls below the configured
+threshold. Channel rows summarize that state; the assigned stream row carries
+the probe detail. The **Streams** inventory does not show a low-FPS badge.
 
 - **Threshold** — Configurable in Settings → Maintenance via a dropdown (5, 10, 15, or 20 FPS, default 20)
 - **Always On** — No enable/disable toggle since it has zero overhead
@@ -1127,9 +1123,13 @@ The strikeout system helps you identify and clean up streams that consistently f
 **How It Works:**
 1. Each stream tracks its **consecutive probe failures** — the counter resets when a probe succeeds
 2. When a stream exceeds the configurable **strike threshold** (set in Settings → Maintenance), it is flagged as "struck out"
-3. **Strike badges** appear on struck-out streams in the Channel Manager, showing the failure count
-4. Review all struck-out streams in **Settings → Maintenance** with details about each stream and its failure history
-5. Use **Bulk Remove** to remove all struck-out streams from every channel they're assigned to in one click
+3. **Strike badges** appear on assigned stream rows in Channel Manager,
+   showing the failure count. They never appear in the **Streams** inventory.
+4. In **Settings** → **Maintenance**, choose **Scan for Struck Out Streams**
+   and select the rows you intend to change.
+5. Choose **Remove _N_ Stream(s) from All Channels**. This removes only the
+   selected assigned streams; it does not delete them from the source
+   inventory.
 
 This is useful for cleaning up dead or unreliable streams that accumulate over time, especially after provider changes or M3U updates.
 
@@ -1333,15 +1333,16 @@ Interactive mode displays a table of all users showing username, email, admin st
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Z` / `Cmd+Z` | Undo |
-| `Ctrl+Shift+Z` / `Cmd+Shift+Z` | Redo |
-| `Ctrl+A` / `Cmd+A` | Select all visible items |
-| `Shift+Click` | Select range |
-| `Ctrl+Click` / `Cmd+Click` | Toggle selection |
-| `Escape` | Clear selection / Close menu |
-| `Enter` | Save inline edit |
+ECM does not document a global select-all or modifier-click selection
+contract. Use the visible channel, stream, and group checkboxes; their
+accessible names announce what will be selected or cleared. Use the Channels
+pane **Undo** and **Redo** controls for staged history.
+
+For keyboard navigation, press `Tab` or `Shift+Tab` to reach a control and
+`Enter` or `Space` to activate it. Menus describe their supported arrow keys;
+`Escape` closes the active menu or cancels a keyboard drag. For the two-pane
+separator's exact keys, see [Channel Manager mental
+model](operator-workspace.md#channel-manager-mental-model).
 
 ---
 

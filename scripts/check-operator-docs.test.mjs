@@ -45,6 +45,22 @@ test('rejects stale navigation language', () => {
   assert.match(checkOperatorDocs(root).join('\n'), /stale navigation term/)
 })
 
+test('rejects retired operator controls and selection workflows', () => {
+  const staleExamples = [
+    'Click **Exit Edit Mode**, then click **Commit**.',
+    'Right-click on selected channels.',
+    'Use **Ctrl+Click** or **Ctrl+A**.',
+    'In Channel Pipeline, click **Add Rule**.',
+    'Click **Add Source**.',
+    'Use **Bulk Remove**.',
+  ]
+  for (const example of staleExamples) {
+    const root = fixture()
+    fs.writeFileSync(path.join(root, 'docs/user_guide/index.md'), `${example}\n`)
+    assert.match(checkOperatorDocs(root).join('\n'), /stale navigation term/)
+  }
+})
+
 test('rejects missing links and incorrect screenshot dimensions', () => {
   const root = fixture()
   fs.writeFileSync(path.join(root, 'docs/user_guide/index.md'), '[Missing](missing.md)\n')

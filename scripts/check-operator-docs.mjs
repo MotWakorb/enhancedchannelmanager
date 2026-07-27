@@ -10,6 +10,17 @@ const STALE_NAVIGATION = [
   /\b(?:Channel Manager|M3U Manager|EPG Manager|Logo Manager|M3U Changes|Channel Pipeline|Guide|Journal|Stats|Settings|Auto-Creation) tab\b/i,
 ]
 
+const STALE_WORKFLOWS = [
+  /\bclick commit\b/i,
+  /\bclick exit edit mode\b/i,
+  /\bclick add source\b/i,
+  /\bchannel pipeline.{0,80}\badd rule\b/i,
+  /\bright-click on selected channels\b/i,
+  /\bctrl\+click\b/i,
+  /\bctrl\+a\b/i,
+  /\b(?:click|use)\s+bulk remove\b/i,
+]
+
 const REQUIRED_WORKSPACE_IMAGES = new Map([
   ['docs/images/user_guide/operator-workspace/1-channel-manager-1280-collapsed.png', [1280, 720]],
   ['docs/images/user_guide/operator-workspace/2-channel-manager-1920-health-expanded.png', [1920, 1080]],
@@ -85,7 +96,7 @@ export function checkOperatorDocs(root = process.cwd()) {
       if (/[ \t]+$/.test(line)) errors.push(`${relative}:${index + 1}: trailing whitespace`)
     })
     const normalized = normalizedMarkdown(content)
-    for (const pattern of STALE_NAVIGATION) {
+    for (const pattern of [...STALE_NAVIGATION, ...STALE_WORKFLOWS]) {
       if (pattern.test(normalized)) errors.push(`${relative}: stale navigation term matching ${pattern}`)
     }
 
