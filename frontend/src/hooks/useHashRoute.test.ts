@@ -3,6 +3,12 @@ import { renderHook, act } from '@testing-library/react';
 import { useHashRoute, _parseHash, _buildHash } from './useHashRoute';
 
 describe('parseHash', () => {
+  it('preserves the supported M3U changes time window', () => {
+    expect(_parseHash('#m3u-changes?hours=24')).toEqual({
+      tab: 'm3u-changes', settingsPage: null, m3uChangesHours: 24,
+    });
+    expect(_buildHash('m3u-changes', null, 24)).toBe('#m3u-changes?hours=24');
+  });
   it('returns default tab for empty hash', () => {
     expect(_parseHash('')).toEqual({ tab: 'channel-manager', settingsPage: null });
   });

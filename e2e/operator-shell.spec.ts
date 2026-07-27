@@ -341,7 +341,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(dashboard.getByRole('link', { name: /Open Scheduled work/ }))
         .toHaveAttribute('href', '#settings/scheduled-tasks')
       await expect(dashboard.getByRole('link', { name: /Open Recent M3U changes/ }))
-        .toHaveAttribute('href', '#m3u-changes')
+        .toHaveAttribute('href', '#m3u-changes?hours=24')
       expect(await dashboard.evaluate((element) => {
         const rect = element.getBoundingClientRect()
         const cards = [...element.querySelectorAll<HTMLElement>('article')]

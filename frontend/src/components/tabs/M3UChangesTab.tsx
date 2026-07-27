@@ -61,7 +61,7 @@ function formatChangeType(changeType: M3UChangeType): string {
 // absolute); it now uses the same shared helper so both tables apply one
 // consistent rule instead of two independently-maintained ones.
 
-export function M3UChangesTab() {
+export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number }) {
   // Data state
   const [changes, setChanges] = useState<M3UChangeLog[]>([]);
   const [summary, setSummary] = useState<M3UChangeSummary | null>(null);
@@ -79,7 +79,7 @@ export function M3UChangesTab() {
   const [accountFilter, setAccountFilter] = useState<number | ''>('');
   const [changeTypeFilter, setChangeTypeFilter] = useState<M3UChangeType | ''>('');
   const [enabledFilter, setEnabledFilter] = useState<boolean | ''>('');
-  const [hoursFilter, setHoursFilter] = useState<number>(168); // Default 7 days
+  const [hoursFilter, setHoursFilter] = useState<number>(initialHours); // Default 7 days
 
   // Sort state
   const [sortBy, setSortBy] = useState<string>('change_time');
@@ -255,7 +255,11 @@ export function M3UChangesTab() {
           <div className="filter-select">
             <CustomSelect
               value={String(hoursFilter)}
-              onChange={(val) => setHoursFilter(parseInt(val as string))}
+              onChange={(val) => {
+                const hours = parseInt(val as string);
+                setHoursFilter(hours);
+                window.history.replaceState(null, '', `#m3u-changes?hours=${hours}`);
+              }}
               options={hoursOptions}
               placeholder="Time Range"
             />

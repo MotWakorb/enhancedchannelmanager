@@ -120,9 +120,12 @@ function EditModeTimer({ enteredAt }: { enteredAt: number }) {
   );
 }
 
+type OperationLoadState = { state: SourceLoadState; hasSnapshot: boolean };
+
 function App() {
   // Health check and version info
   const [health, setHealth] = useState<api.HealthResponse | null>(null);
+  const [healthSourceState, setHealthSourceState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
   const [error, setError] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<api.UpdateInfo | null>(null);
 
@@ -147,6 +150,7 @@ function App() {
   // so a later group failure could miss rows loaded by an earlier group.
   const streamsSnapshotRef = useRef<Stream[]>([]);
   const [providers, setProviders] = useState<M3UAccount[]>([]);
+  const [providerSourceState, setProviderSourceState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
   const [streamGroups, setStreamGroups] = useState<StreamGroupInfo[]>([]);
 
   // Accumulates every stream ever returned by a search so ChannelsPane can
@@ -195,7 +199,6 @@ function App() {
     streams: true,
     epgData: false,
   });
-  type OperationLoadState = { state: SourceLoadState; hasSnapshot: boolean };
   const [channelSourceStates, setChannelSourceStates] = useState<Record<'groups' | 'channels', OperationLoadState>>({
     groups: { state: 'loading', hasSnapshot: false },
     channels: { state: 'loading', hasSnapshot: false },
@@ -299,7 +302,7 @@ function App() {
   const [commitProgress, setCommitProgress] = useState<CommitProgress | null>(null);
 
   // Tab navigation state (hash-based routing)
-  const { activeTab, settingsPage, setHash, setSettingsPage } = useHashRoute();
+  const { activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage } = useHashRoute();
   const [pendingRouteChange, setPendingRouteChange] = useState<{ tab: TabId; settingsPage?: SettingsPage } | null>(null);
   const [routeHeaderTargets, setRouteHeaderTargets] = useState({
     'primary-action': null as HTMLDivElement | null,
@@ -697,6 +700,7 @@ function App() {
         api.getHealth()
           .then(healthData => {
             setHealth(healthData);
+            setHealthSourceState({ state: 'success', hasSnapshot: true });
             logger.info('Health check passed', healthData);
             // Check for updates after health check succeeds
             if (healthData.version && healthData.release_channel) {
@@ -711,6 +715,7 @@ function App() {
             }
           })
           .catch((err) => {
+            setHealthSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
             setError(err.message);
             logger.error('Health check failed', err);
           });
@@ -894,8 +899,14 @@ function App() {
     }
     // Reload all data after settings change
     api.getHealth()
-      .then(setHealth)
-      .catch((err) => setError(err.message));
+      .then((healthData) => {
+        setHealth(healthData);
+        setHealthSourceState({ state: 'success', hasSnapshot: true });
+      })
+      .catch((err) => {
+        setHealthSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
+        setError(err.message);
+      });
     loadChannelGroups();
     loadChannels();
     loadProviders();
@@ -1064,11 +1075,14 @@ function App() {
   }, [channelGroups]);
 
   const loadProviders = async () => {
+    setProviderSourceState((current) => ({ ...current, state: 'loading' }));
     try {
       const accounts = await api.getM3UAccounts();
       setProviders(accounts);
+      setProviderSourceState({ state: 'success', hasSnapshot: true });
     } catch (err) {
       logger.error('Failed to load providers:', err);
+      setProviderSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
     }
   };
 
@@ -2569,7 +2583,28 @@ function App() {
         />
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
           {activeTab === 'dashboard' && (
-            <OperatorDashboard initialHealth={health} />
+            <OperatorDashboard
+              health={{
+                value: health,
+                ...healthSourceState,
+                retry: () => {
+                  setHealthSourceState((current) => ({ ...current, state: 'loading' }));
+                  void api.getHealth().then((healthData) => {
+                    setHealth(healthData);
+                    setHealthSourceState({ state: 'success', hasSnapshot: true });
+                  }).catch((err) => {
+                    setHealthSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
+                  });
+                },
+              }}
+              channels={{ value: channels.length, ...channelSourceStates.channels, retry: () => { void loadChannels(); } }}
+              streams={{
+                value: streamGroups.reduce((total, group) => total + group.count, 0),
+                ...streamSourceStates.metadata,
+                retry: () => { void loadStreamGroups(null); },
+              }}
+              providers={{ value: providers.length, ...providerSourceState, retry: () => { void loadProviders(); } }}
+            />
           )}
           {activeTab === 'channel-manager' && (
             <ErrorBoundary key="tab-channel-manager" scopeLabel="Channel Manager tab" reloadMode="reset">
@@ -2780,7 +2815,7 @@ function App() {
           )}
           {activeTab === 'm3u-changes' && (
             <ErrorBoundary key="tab-m3u-changes" scopeLabel="M3U Changes tab" reloadMode="reset">
-              <M3UChangesTab />
+              <M3UChangesTab initialHours={m3uChangesHours ?? undefined} />
             </ErrorBoundary>
           )}
           {activeTab === 'channel-pipeline' && (

@@ -40,16 +40,21 @@ const DEFAULT_TAB: TabId = 'channel-manager';
 interface HashRoute {
   tab: TabId;
   settingsPage: SettingsPage | null;
+  m3uChangesHours?: number;
 }
 
 function parseHash(hash: string): HashRoute {
   // Strip leading '#'
   const raw = hash.replace(/^#/, '');
   if (!raw) return { tab: DEFAULT_TAB, settingsPage: null };
+  const [path, query = ''] = raw.split('?', 2);
+  const hoursParam = new URLSearchParams(query).get('hours');
+  const m3uChangesHours = hoursParam && ['24', '72', '168', '720', '2160'].includes(hoursParam)
+    ? Number(hoursParam) : null;
 
   // Check for settings/sub-page format
-  if (raw.startsWith('settings/')) {
-    const subPage = raw.slice('settings/'.length);
+  if (path.startsWith('settings/')) {
+    const subPage = path.slice('settings/'.length);
     if (subPage in LEGACY_SETTINGS_PAGE_ALIASES) {
       return { tab: 'settings', settingsPage: LEGACY_SETTINGS_PAGE_ALIASES[subPage] };
     }
@@ -60,32 +65,35 @@ function parseHash(hash: string): HashRoute {
     return { tab: 'settings', settingsPage: null };
   }
 
-  if (raw === 'settings') {
+  if (path === 'settings') {
     return { tab: 'settings', settingsPage: null };
   }
 
-  if (raw in LEGACY_TAB_ALIASES) {
-    return { tab: LEGACY_TAB_ALIASES[raw], settingsPage: null };
+  if (path in LEGACY_TAB_ALIASES) {
+    return { tab: LEGACY_TAB_ALIASES[path], settingsPage: null };
   }
 
-  if (VALID_TABS.has(raw)) {
-    return { tab: raw as TabId, settingsPage: null };
+  if (VALID_TABS.has(path)) {
+    return path === 'm3u-changes' && m3uChangesHours
+      ? { tab: path, settingsPage: null, m3uChangesHours }
+      : { tab: path as TabId, settingsPage: null };
   }
 
   // Invalid hash → default
   return { tab: DEFAULT_TAB, settingsPage: null };
 }
 
-function buildHash(tab: TabId, settingsPage?: SettingsPage | null): string {
+function buildHash(tab: TabId, settingsPage?: SettingsPage | null, m3uChangesHours?: number | null): string {
   if (tab === 'settings' && settingsPage && settingsPage !== 'general') {
     return `#settings/${settingsPage}`;
   }
-  return `#${tab}`;
+  return tab === 'm3u-changes' && m3uChangesHours ? `#${tab}?hours=${m3uChangesHours}` : `#${tab}`;
 }
 
 export interface UseHashRouteReturn {
   activeTab: TabId;
   settingsPage: SettingsPage | null;
+  m3uChangesHours: number | null;
   setHash: (tab: TabId, settingsPage?: SettingsPage | null) => void;
   setSettingsPage: (page: SettingsPage) => void;
 }
@@ -115,7 +123,7 @@ export function useHashRoute(): UseHashRouteReturn {
   useEffect(() => {
     const canonicalizeCurrentHash = () => {
       const parsed = parseHash(window.location.hash);
-      const canonicalHash = buildHash(parsed.tab, parsed.settingsPage);
+      const canonicalHash = buildHash(parsed.tab, parsed.settingsPage, parsed.m3uChangesHours);
       if (window.location.hash !== canonicalHash) {
         window.history.replaceState(null, '', canonicalHash);
       }
@@ -135,7 +143,7 @@ export function useHashRoute(): UseHashRouteReturn {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  return { activeTab: route.tab, settingsPage: route.settingsPage, setHash, setSettingsPage };
+  return { activeTab: route.tab, settingsPage: route.settingsPage, m3uChangesHours: route.m3uChangesHours ?? null, setHash, setSettingsPage };
 }
 
 // Export for testing
