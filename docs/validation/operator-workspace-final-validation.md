@@ -211,13 +211,15 @@ Generated evidence is under:
 The release artifact verifier rejects missing, empty, duplicate, or
 icon-unready screenshots.
 
-## Known issue
+## Layout-settling regression
 
-`enhancedchannelmanager-a0ekz` remains open at P1. It tracks an order-dependent
-640×360 (200% equivalent) sticky-control/content-width assertion that passes
-repeatedly in isolation but can fail in the full exact serial suite. It is
-outside the two target viewports, is not waived, and remains a global clean-gate
-blocker until its ordered-prefix acceptance criteria pass.
+`enhancedchannelmanager-a0ekz` traced the order-dependent 640×360 sticky-control
+and 1920×1080 M3U Manager width failures to geometry being sampled before the
+rendered task, web fonts, and CSS transitions had settled. The regression now
+waits for deterministic task visibility, loaded fonts, stable geometry across
+animation frames, and completed subtree animations before retaining the same
+focus-clearance and horizontal-overflow assertions. The affected ordered prefix
+passes five consecutive exact-build, single-worker, no-retry runs.
 
 ## Sign-off
 

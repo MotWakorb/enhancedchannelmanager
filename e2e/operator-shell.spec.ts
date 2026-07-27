@@ -260,6 +260,51 @@ async function expectContentWithinMain(page: Page, route: 'channel-manager' | 'g
   }
 }
 
+async function expectLayoutSettled(page: Page, selectors: readonly string[]) {
+  await expect.poll(async () => page.evaluate(async (observedSelectors) => {
+    await document.fonts.ready
+    const sample = () => observedSelectors.map((selector) => {
+      const element = document.querySelector<HTMLElement>(selector)
+      if (!element) return null
+      const rect = element.getBoundingClientRect()
+      return {
+        selector,
+        connected: element.isConnected,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        rect: {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+        },
+      }
+    })
+    const first = sample()
+    await new Promise<void>((resolve) => requestAnimationFrame(() =>
+      requestAnimationFrame(() => resolve())))
+    const second = sample()
+    const activeAnimations = observedSelectors.flatMap((selector) => {
+      const element = document.querySelector<HTMLElement>(selector)
+      return element?.getAnimations({ subtree: true })
+        .filter((animation) => animation.playState === 'running').length ?? 0
+    })
+    return {
+      fontsLoaded: document.fonts.status === 'loaded',
+      allPresent: second.every((measurement) => measurement?.connected),
+      noActiveAnimations: activeAnimations.every((count) => count === 0),
+      stable: JSON.stringify(first) === JSON.stringify(second),
+    }
+  }, selectors)).toEqual({
+    fontsLoaded: true,
+    allPresent: true,
+    noActiveAnimations: true,
+    stable: true,
+  })
+}
+
 interface RouteConsumer {
   name: string
   heading: string
@@ -1073,6 +1118,11 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           document.documentElement.setAttribute('data-theme', selectedTheme)
         }, theme)
         await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+        await expectLayoutSettled(page, [
+          '#main-content',
+          '.channel-group:not(.empty-group) .group-toggle',
+          '.channel-group.empty-group .group-toggle',
+        ])
 
         for (const state of states) {
           const stateRoot = page.locator(state.root).first()
@@ -1161,6 +1211,9 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         if (consumer.name === 'Channel Manager') {
           await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
         }
+        const task = page.locator(consumer.task).first()
+        await expect(task, `${consumer.name} must render deterministic task content`).toBeVisible()
+        await expectLayoutSettled(page, ['#main-content', '.route-page-header', consumer.task])
         const budget = await page.evaluate(() => {
           const main = document.querySelector<HTMLElement>('#main-content')!
           const header = main.querySelector<HTMLElement>('.route-page-header')!
@@ -1182,8 +1235,6 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         expect(budget.noDocumentXOverflow).toBe(true)
         expect(budget.noMainXOverflow).toBe(true)
 
-        const task = page.locator(consumer.task).first()
-        await expect(task, `${consumer.name} must render deterministic task content`).toBeVisible()
         expect(await task.evaluate((element) => {
           const rect = element.getBoundingClientRect()
           const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0))
@@ -2045,8 +2096,12 @@ for (const viewport of [
       await input.focus()
       await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
       const expectFocusedControlClear = async () => {
-        await page.evaluate(() => new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+        await expectLayoutSettled(page, [
+          '#main-content',
+          '.settings-content',
+          '.sticky-section-nav',
+          '.settings-pending-actions',
+        ])
         expect(await page.evaluate(() => {
           const focused = document.activeElement!.getBoundingClientRect()
           const nav = document.querySelector('.sticky-section-nav')!.getBoundingClientRect()
