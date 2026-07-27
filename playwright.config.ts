@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { resolveE2EBaseURL } from './playwright-base-url.mjs'
 
 /**
  * Playwright E2E test configuration.
@@ -18,7 +19,7 @@ import { defineConfig, devices } from '@playwright/test'
  */
 
 const exactBuild = process.env.E2E_EXACT_BUILD === 'true'
-const baseURL = process.env.E2E_BASE_URL || (exactBuild ? 'http://127.0.0.1:4173' : 'http://localhost:6100')
+const baseURL = resolveE2EBaseURL(exactBuild, process.env.E2E_BASE_URL)
 const startServer = process.env.E2E_START_SERVER === 'true'
 
 export default defineConfig({
