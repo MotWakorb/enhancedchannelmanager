@@ -82,6 +82,12 @@ ENV ECM_HTTPS_PORT=6143
 EXPOSE 6100 6143
 
 # Add healthcheck (respects runtime ECM_PORT).
+# The interpreter is the absolute venv path, not a bare `python` resolved
+# through PATH (bead enhancedchannelmanager-0oi96): a runtime PATH override
+# would otherwise silently move the healthcheck onto the system interpreter.
+# urllib is stdlib, so this happens to survive that today — pinning it keeps
+# the healthcheck honest if it ever grows a dependency, and keeps every
+# interpreter invocation in the image consistent.
 # Long-running installs may hit slow first-run migrations against bloated
 # SQLite WAL files. WAL checkpoint at startup (bd-ej995) addresses the
 # common case; this start-period absorbs the edge case where a particularly
@@ -89,7 +95,7 @@ EXPOSE 6100 6143
 # with consistent fast startups can lower this; the default favors safety
 # over startup time.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-  CMD python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
+  CMD /opt/venv/bin/python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
 
 # Entrypoint sets UID/GID from PUID/PGID, fixes permissions, then drops to non-root via gosu
 ENTRYPOINT ["/app/entrypoint.sh"]

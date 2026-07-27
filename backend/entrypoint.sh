@@ -46,6 +46,56 @@ print_info() {
     echo "${BLUE}${ARROW}${NC} $1"
 }
 
+# --- Interpreter resolution (bead enhancedchannelmanager-0oi96) ------------
+# ECM's dependencies live in the image virtualenv at /opt/venv, which the
+# Dockerfile puts on PATH. Resolving `python3`/`uvicorn` through PATH made
+# every check below silently follow an operator-side PATH override (or a
+# bind mount shadowing /opt/venv) down to the Debian system interpreter —
+# which reports a reassuring "Python 3.12.13" while having none of ECM's
+# packages. Field symptom on 0.18.0: "✗ Required Python packages missing"
+# followed by ModuleNotFoundError: No module named 'fastapi'.
+#
+# So resolve both binaries ONCE, here, pinned to absolute venv paths, and
+# use those everywhere. Both stay overridable (custom images may put the
+# venv elsewhere) and both fall back to a PATH lookup if the pinned path is
+# not executable, so an image without /opt/venv behaves as it did before.
+VENV_BIN=/opt/venv/bin
+
+ECM_PYTHON="${ECM_PYTHON:-${VENV_BIN}/python}"
+if [ ! -x "$ECM_PYTHON" ]; then
+    ECM_PYTHON=$(command -v python3 2>/dev/null || echo "$ECM_PYTHON")
+fi
+
+ECM_UVICORN="${ECM_UVICORN:-${VENV_BIN}/uvicorn}"
+if [ ! -x "$ECM_UVICORN" ]; then
+    ECM_UVICORN=$(command -v uvicorn 2>/dev/null || echo "$ECM_UVICORN")
+fi
+
+# Emitted on any interpreter-related preflight failure. The whole point is
+# that the first log paste an operator sends is enough to diagnose the
+# case — which interpreter we actually ran, what environment it came from,
+# and whether the image virtualenv is still where we expect it.
+print_python_diagnostics() {
+    print_info "Interpreter diagnostics:"
+    print_info "  resolved python : ${ECM_PYTHON}"
+    if [ -x "$ECM_UVICORN" ]; then
+        print_info "  resolved uvicorn: ${ECM_UVICORN}"
+    else
+        print_info "  resolved uvicorn: ${ECM_UVICORN} (NOT EXECUTABLE — the app launch would fail here too)"
+    fi
+    print_info "  sys.prefix      : $("$ECM_PYTHON" -c 'import sys; print(sys.prefix)' 2>/dev/null || echo '<interpreter did not run>')"
+    print_info "  PATH            : ${PATH}"
+    if [ -x "${VENV_BIN}/python" ]; then
+        print_info "  ${VENV_BIN}/python: present"
+    else
+        print_info "  ${VENV_BIN}/python: MISSING — the image virtualenv is not where ECM expects it"
+    fi
+    print_info "ECM installs its Python packages into the image virtualenv at"
+    print_info "/opt/venv. If you override PATH or bind-mount over /opt/venv,"
+    print_info "that virtualenv is bypassed. Remove the override, or point"
+    print_info "ECM_PYTHON/ECM_UVICORN at the interpreter that has ECM's deps."
+}
+
 setup_user() {
     print_info "Setting up user/group identity..."
     print_info "PUID=${PUID} PGID=${PGID}"
@@ -79,19 +129,24 @@ setup_user() {
 check_python() {
     print_info "Checking Python environment..."
 
-    if command -v python3 >/dev/null 2>&1; then
-        PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
-        print_success "Python ${PYTHON_VERSION} found"
+    # No pipe in the condition: piping to `cut` would mask the interpreter's
+    # own exit status (the pipeline reports cut's), so a missing interpreter
+    # would read as success.
+    if PYTHON_VERSION_RAW=$("$ECM_PYTHON" --version 2>&1); then
+        PYTHON_VERSION=$(echo "$PYTHON_VERSION_RAW" | cut -d' ' -f2)
+        print_success "Python ${PYTHON_VERSION} found at ${ECM_PYTHON}"
     else
-        print_error "Python 3 not found"
+        print_error "Python 3 not found (tried: ${ECM_PYTHON})"
+        print_python_diagnostics
         return 1
     fi
 
     # Check if we can import main modules
-    if python3 -c "import fastapi, uvicorn" 2>/dev/null; then
+    if "$ECM_PYTHON" -c "import fastapi, uvicorn" 2>/dev/null; then
         print_success "FastAPI and Uvicorn available"
     else
-        print_error "Required Python packages missing"
+        print_error "Required Python packages missing from ${ECM_PYTHON}"
+        print_python_diagnostics
         return 1
     fi
 
@@ -172,14 +227,15 @@ check_application() {
 
     # Try to import the app module
     cd /app
-    if python3 -c "import main" 2>/dev/null; then
+    if "$ECM_PYTHON" -c "import main" 2>/dev/null; then
         print_success "Application module loads successfully"
     else
         print_error "Application module failed to load"
         echo ""
         echo "${RED}Full traceback:${NC}"
-        python3 -c "import main" 2>&1
+        "$ECM_PYTHON" -c "import main" 2>&1
         echo ""
+        print_python_diagnostics
         return 1
     fi
 
@@ -193,8 +249,8 @@ check_tls_config() {
     TLS_KEY="/config/tls/key.pem"
 
     if [ -f "$TLS_CONFIG" ]; then
-        TLS_ENABLED=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('enabled', False))" 2>/dev/null || echo "False")
-        HTTPS_PORT=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', $ECM_HTTPS_PORT))" 2>/dev/null || echo "$ECM_HTTPS_PORT")
+        TLS_ENABLED=$("$ECM_PYTHON" -c "import json; print(json.load(open('$TLS_CONFIG')).get('enabled', False))" 2>/dev/null || echo "False")
+        HTTPS_PORT=$("$ECM_PYTHON" -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', $ECM_HTTPS_PORT))" 2>/dev/null || echo "$ECM_HTTPS_PORT")
 
         if [ "$TLS_ENABLED" = "True" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
             print_success "TLS enabled with valid certificates"
@@ -314,7 +370,11 @@ case "${ECM_UVICORN_LOOP:-}" in
         ECM_UVICORN_LOOP=asyncio
         ;;
 esac
-exec gosu appuser uvicorn main:app \
+# Launch via the interpreter resolved at the top of this script, not via a
+# PATH lookup (bead enhancedchannelmanager-0oi96): uvicorn exists ONLY in
+# /opt/venv/bin, so a PATH override that hides the venv would fail here even
+# with every preflight check passing.
+exec gosu appuser "$ECM_UVICORN" main:app \
     --host 0.0.0.0 \
     --port "${ECM_PORT}" \
     --loop "${ECM_UVICORN_LOOP}" \
