@@ -93,6 +93,7 @@ from dbas.restore_contracts import (
     FailureDetail,
     FailureReason,
     IdRemapTable,
+    RestoreOutcome,
     RestoreReport,
     RollbackLedger,
 )
@@ -953,8 +954,45 @@ async def run_sync(
     # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---
     _apply_name_conflict_details(result, excluded_name_conflicts)
 
+    # The conflict details above land AFTER run_restore computed the tri-state
+    # outcome, so without this re-check an APPLY with source-side name
+    # conflicts would report outcome=SUCCESS alongside failed>0 — violating
+    # the ratified "NEVER SUCCESS on mixed state" invariant (ADR-013 S8) that
+    # the task wrapper's failed-count contract depends on (live-validation
+    # finding, bead 7ipq2.2). Mirror compute_outcome's no-rollback branch: a
+    # per-item conflict with no rollback is FAILED_ROLLBACK_INCOMPLETE, exactly
+    # what the channels importer's in-run CONFLICT path already yields. Only a
+    # clean SUCCESS is ever downgraded — a rolled-back outcome stays as
+    # computed (the rollback verdict is already correct for it).
+    if (
+        excluded_name_conflicts
+        and not result.is_dry_run
+        and result.outcome == RestoreOutcome.SUCCESS
+    ):
+        result.outcome = RestoreOutcome.FAILED_ROLLBACK_INCOMPLETE
+
     # --- 5. Audit the run (D9). ---
     _journal_sync_run(sync_target, result, confirm_apply=confirm_apply)
+
+    # --- 5b. Stamp the persisted per-target sync state (DBA ruling, spike
+    # xp6mp / migration 0024): last_outcome on every REALIZED apply, and
+    # last_full_sync_at only on a FULL success — the staleness/status surface
+    # must never read a mixed apply (or a dry-run preview) as "B was current
+    # as of this time". Live-validation finding (bead 7ipq2.2): these columns
+    # existed but nothing ever wrote them. Best-effort: a stamp failure must
+    # not fail an otherwise-completed sync. last_source_fingerprint stays
+    # unwritten (semantics unratified — follow-up bead). ---
+    if session is not None and not result.is_dry_run and result.outcome is not None:
+        try:
+            from datetime import datetime, timezone
+
+            sync_target.last_outcome = result.outcome.value
+            if result.outcome == RestoreOutcome.SUCCESS:
+                sync_target.last_full_sync_at = datetime.now(timezone.utc)
+            session.commit()
+        except Exception as exc:  # noqa: BLE001 - stamping is best-effort
+            logger.warning("[SYNC] Failed to stamp persisted sync state: %s", exc)
+
     logger.info(
         "[SYNC] Sync cycle for %s complete (mode=%s, outcome=%s).",
         target_label,

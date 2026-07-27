@@ -818,3 +818,109 @@ async def test_freshness_abort_bumps_failed_metric(_wire_db, _reset_metrics):
     assert _sync_counter_value("failed") == 1.0
     assert _sync_counter_value("success") == 0.0
     assert _sync_counter_value("partial") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# One-shot arming (bead 7ipq2.2 — live-validation finding): ad-hoc /run
+# parameters are merged into the SINGLETON task instance by the task engine
+# and never restored, so a prior run's armed state (confirm_apply=True, a
+# captured credential_version, the target id) leaked into later runs that
+# omitted those keys — observed live: a follow-up run with no
+# cloud_credential_version aborted on the PREVIOUS run's stale captured
+# version. Worst case: a retained confirm_apply=True silently turns a later
+# intended dry-run into a source-wins APPLY. execute() therefore DISARMS the
+# per-invocation state after every run — each run must bring its own full
+# parameters (schedules always do).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_disarms_per_invocation_state_after_run(_wire_db):
+    """After a run completes, sync_target_id / confirm_apply /
+    cloud_credential_version reset to their disarmed defaults."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, **_kw):
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config(
+            {
+                "sync_target_id": target_id,
+                "confirm_apply": True,
+                "cloud_credential_version": 1,
+            }
+        )
+        result = await task.execute()
+
+    assert result.success is True
+    assert task.sync_target_id is None
+    assert task.confirm_apply is False
+    assert task.cloud_credential_version is None
+
+
+@pytest.mark.asyncio
+async def test_second_bare_run_cannot_reuse_previous_armed_state(_wire_db):
+    """A second execute() with NO fresh parameters must NOT replay the previous
+    run's armed state: it hard-fails 'no sync_target_id' without ever calling
+    run_sync (fail-safe direction — disarmed)."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, **_kw):
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync) as mock_run:
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        first = await task.execute()
+        # Engine behaviour for a bare re-run: parameters absent/empty means
+        # update_config is NOT called again — the instance runs as-is.
+        second = await task.execute()
+
+    assert first.success is True
+    assert mock_run.await_count == 1  # the second run never reached run_sync
+    assert second.success is False
+    assert "No sync_target_id" in (second.message or "")
+
+
+@pytest.mark.asyncio
+async def test_disarm_also_runs_on_freshness_abort(_wire_db):
+    """The freshness-gate abort path disarms too — an aborted run must not
+    leave the previous arming in place either."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    task = DbasSyncTask()
+    task.update_config(
+        {
+            "sync_target_id": target_id,
+            "confirm_apply": True,
+            # Stale captured version — the gate must abort.
+            "cloud_credential_version": 999,
+        }
+    )
+    result = await task.execute()
+
+    assert result.success is False
+    assert result.error == "CREDENTIAL_FRESHNESS_ABORT"
+    assert task.sync_target_id is None
+    assert task.confirm_apply is False
+    assert task.cloud_credential_version is None

@@ -184,6 +184,25 @@ class DbasSyncTask(TaskScheduler):
             self.cloud_credential_version = int(val) if val is not None else None
 
     async def execute(self) -> TaskResult:
+        try:
+            return await self._execute_once()
+        finally:
+            # ONE-SHOT ARMING (live-validation finding, bead 7ipq2.2): the task
+            # engine merges ad-hoc /run parameters into this SINGLETON instance
+            # (update_config) and never restores them — and a bare re-run
+            # (parameters absent/empty) skips update_config entirely, running
+            # the instance as-is. Without this disarm, a prior run's state
+            # leaked forward: a stale captured cloud_credential_version aborted
+            # an unrelated later run (observed live), and a retained
+            # confirm_apply=True would silently turn a later intended dry-run
+            # into a source-wins APPLY. Every run must bring its own full
+            # parameters (schedules always do); the fail-safe resting state is
+            # disarmed — mirrors the persist_config=False rationale (gjb01).
+            self.sync_target_id = None
+            self.confirm_apply = False
+            self.cloud_credential_version = None
+
+    async def _execute_once(self) -> TaskResult:
         started_at = datetime.now(timezone.utc)
         self._set_progress(
             total=1, current=0, status="starting",

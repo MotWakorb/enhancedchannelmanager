@@ -117,6 +117,7 @@ it has **two tiers** (see `docs/testing/dbas-test-env.md` →
 |------|------|-------|--------|
 | **Fast (per-PR)** | STATEFUL two-instance MOCK harness — convergence / idempotency / partial-failure / never-users / redaction | `backend/tests/fixtures/sync_harness.py` + `backend/tests/tasks/test_sync_roundtrip.py` | **BUILT** (bead `46pkq`) — runs in the normal pytest suite |
 | **Live (nightly)** | Two REAL non-colliding Dispatcharr instances; validates the mock's write-contract fidelity (409 / async write completion) against reality | `docker-compose.dbas-sync-test.yml` (this dir) | **DEFERRED** — scaffold only; **not run in CI** until a reachable Dispatcharr-B image is wired |
+| **Live B-only (manual)** | A running ECM-A syncing against ONE real, disposable Dispatcharr-B — the full engine path (SSRF transport, freshness gate, importers, rollback, metrics) against a real write API | Recipe below | **VALIDATED 2026-07-27** (bead `enhancedchannelmanager-7ipq2.2`, Dispatcharr 0.28.2) — surfaced + fixed 4 real payload/contract bugs the mock tier could not see |
 
 ### Bring up the live two-stack (DEFERRED tier — not yet validated)
 
@@ -135,6 +136,88 @@ docker compose -p dbas-sync-testenv -f docker-compose.dbas-sync-test.yml ps
 # Tear down (throwaway):
 docker compose -p dbas-sync-testenv -f docker-compose.dbas-sync-test.yml down -v
 ```
+
+### Live B-only validation recipe (VALIDATED 2026-07-27, bead `7ipq2.2`)
+
+The cheapest REAL end-to-end validation: keep your running ECM (and its real
+Dispatcharr-A source) as-is, and stand up ONE disposable Dispatcharr-B as the
+sync destination. This is what the first live validation ran; it exercised the
+whole engine path — pinned SSRF transport, credential-freshness gate, all
+importers, custom-stream fallback, logo streaming upload, compensating
+rollback, tri-state metrics — against a real Dispatcharr write API, and caught
+four live-shape bugs the mock harness structurally could not (the mock encodes
+our own payload assumptions; see the bead for the fix list).
+
+**Never point a sync target at a real/production Dispatcharr. B is always the
+throwaway.**
+
+```bash
+# 1. Bring up a disposable AIO Dispatcharr-B (same image the operator's live
+#    instance runs). Fresh named volume; any free host port (9292 here).
+docker run -d --name dispatcharr-b-7ipq2 \
+  -p 9292:9191 \
+  -v dispatcharr-b-7ipq2-data:/data \
+  -e DISPATCHARR_ENV=aio \
+  -e REDIS_HOST=localhost \
+  -e CELERY_BROKER_URL=redis://localhost:6379/0 \
+  ghcr.io/dispatcharr/dispatcharr:latest
+
+# Wait until healthy:
+until curl -fsS http://127.0.0.1:9292/api/core/version/; do sleep 5; done
+
+# 2. Create the superuser. GOTCHA (validated on 0.28.2): the AIO image does
+#    NOT honor DISPATCHARR_SUPERUSER_* env at first boot, and a bare
+#    `manage.py` invocation fails with "SECRET_KEY must not be empty" — the
+#    entrypoint derives DJANGO_SECRET_KEY from /data/jwt, so export it first:
+docker exec dispatcharr-b-7ipq2 sh -c '
+  cd /app && export DJANGO_SECRET_KEY="$(tr -d "\r\n" < /data/jwt)" && \
+  DJANGO_SUPERUSER_USERNAME=ecmtest-b \
+  DJANGO_SUPERUSER_PASSWORD=<throwaway-password> \
+  DJANGO_SUPERUSER_EMAIL=ecmtest-b@example.invalid \
+  python manage.py createsuperuser --noinput'
+
+# Sanity: JWT login works (NOTE: /api/accounts/token/ is throttled — cache the
+# access token rather than re-authenticating per request):
+curl -s -X POST http://127.0.0.1:9292/api/accounts/token/ \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"ecmtest-b","password":"<throwaway-password>"}'
+
+# 3. Point ECM at B — create the SyncTarget via the ECM API (admin-gated):
+#    POST /api/sync-targets
+#    {"name":"dispatcharr-b-test","base_url":"http://<host-lan-ip>:9292",
+#     "credentials":{"auth_method":"password","username":"ecmtest-b",
+#                    "password":"<throwaway-password>"},
+#     "enabled":true,"sync_logos":false}
+#    (SSRF: a LAN/RFC1918 base_url needs ssrf_outbound_mode=lan_friendly, the
+#     default. Link-local/IMDS/CGNAT are refused unconditionally.)
+
+# 4. Drive cycles via the privileged task endpoint. dbas_sync uses ONE-SHOT
+#    arming: EVERY run must carry its full parameters (a bare re-run is
+#    deliberately disarmed and fails "No sync_target_id configured").
+#    POST /api/tasks/dbas_sync/run
+#    {"parameters":{"sync_target_id":<id>,"confirm_apply":false}}   # dry-run
+#    {"parameters":{"sync_target_id":<id>,"confirm_apply":true,
+#                   "cloud_credential_version":<current version>}}  # apply
+
+# 5. Verify from both sides: the sync report (task result JSON), the
+#    sync_outbound journal rows, /metrics (ecm_sync_runs_total{result},
+#    ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"}),
+#    GET /api/sync-targets/<id> (last_outcome / last_full_sync_at), and B's
+#    own API (channels/groups/streams/logos counts).
+
+# 6. TEAR DOWN completely (container + volume) and remove the SyncTarget:
+docker rm -f dispatcharr-b-7ipq2
+docker volume rm dispatcharr-b-7ipq2-data
+# DELETE /api/sync-targets/<id> on ECM.
+```
+
+Failure-mode drills validated with this setup (matrix in bead `7ipq2.2`):
+credential rotation → fire-time abort (`CREDENTIAL_FRESHNESS_ABORT`, journal +
+notification, no request to B); kill switch (`enabled=false`) → non-silent
+skip; denylisted `base_url` (e.g. `http://169.254.169.254:9191`) → SSRF
+refusal before any socket; `docker stop` B → run degrades per-item (surfaces
+as `partial`, NOT `failed` — see the runbook), last-success gauge stalls;
+`docker start` B → next cycle converges and the gauge advances.
 
 ### Isolation contract for the sync stack
 

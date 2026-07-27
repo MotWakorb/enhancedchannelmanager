@@ -624,8 +624,17 @@ async def run_restore(
     if not failure_occurred and not report.is_dry_run and ctx.deferred:
         apply_fn = deferred_apply_fn or _default_deferred_apply_fn()
         try:
-            await apply_fn(deferred=ctx.deferred, client=client)
-            report.notes.append(f"deferred auto-sync applied for {len(ctx.deferred)} account(s).")
+            applied = await apply_fn(deferred=ctx.deferred, client=client)
+            # Count what the apply fn ACTUALLY applied (its per-account
+            # summaries), not what was queued: the sync path's injected
+            # suppressor (ADR-013 S9) returns [] and the report must not claim
+            # an apply that never happened (bead 7ipq2.2 live-validation
+            # finding). The default fn returns one summary per account, so the
+            # restore-path note is unchanged.
+            if applied:
+                report.notes.append(
+                    f"deferred auto-sync applied for {len(applied)} account(s)."
+                )
         except Exception:  # noqa: BLE001 - deferred apply is best-effort, post-create
             logger.warning(
                 "[DBAS-RESTORE] Deferred auto-sync phase hit an error; created entities are intact."

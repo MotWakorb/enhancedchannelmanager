@@ -49,10 +49,14 @@ The #1 operator risk for cross-instance sync is **silent drift discovered at fai
    sum(increase(ecm_sync_runs_total{result="failed"}[1h]))
    sum(increase(ecm_sync_runs_total{result="partial"}[1h]))
    ```
-   - `failed` climbing → the run is aborting (B unreachable, credentials rotated/revoked, or no target configured). Go to **Branch A**.
-   - `partial` climbing → applies are landing but keep half-failing on at least one category. Go to **Branch B**.
+   - `failed` climbing → the run is aborting BEFORE touching B (credential-freshness abort — target disabled/revoked/rotated — no target configured, or an SSRF refusal of the `base_url`). Go to **Branch A**.
+   - `partial` climbing → the run reached the apply phase but did not finish clean. **Live-validated 2026-07-27 (bead `7ipq2.2`): a fully UNREACHABLE B lands HERE, not in `failed`** — the importers degrade per-item (fail-soft), every category fails, and the compensating rollback yields a `partial_failed_rolled_back` outcome. So check B reachability on this branch too, before assuming a single-category loop. Go to **Branch B**.
 
-3. **Is B reachable?** TODO: command to check connectivity to the configured `SyncTarget.base_url` from the ECM container.
+3. **Is B reachable?** Live-validated check — hit B's public version endpoint (no auth needed) with the configured `SyncTarget.base_url`:
+   ```bash
+   curl -fsS <base_url>/api/core/version/
+   ```
+   Also check `GET /api/sync-targets/<id>` — `last_outcome` / `last_full_sync_at` are stamped per realized apply (only a FULL success advances `last_full_sync_at`).
 
 ## Diagnosis
 
@@ -76,8 +80,9 @@ The most common subcase is a **credential-freshness abort** — the bound `SyncT
 
 The apply runs but a category mixes/rolls-back every cycle, so the run never reports a clean success and the last-success gauge never advances.
 
-- TODO: command to pull the most recent `dbas_sync` task-execution `details.sync_report` to see which category is failing.
-- TODO: cross-reference whether the failing category is a known-fragile importer (channels/streams 4-tier matcher, per ADR-013 S9).
+- **First rule out an unreachable B** (live-validated: total B outage surfaces as `partial`, not `failed` — every category fails per-item and the run rolls back): `curl -fsS <base_url>/api/core/version/`.
+- Pull the most recent run's per-category report: the task result's `details.sync_report` (Task History UI, or `POST /api/tasks/dbas_sync/run` response for a manual re-run) — each category carries `created/updated/skipped/failed` plus per-item `failure_details` with sanitized upstream messages (live example: `400 {"auto_created_by": ["Invalid pk ..."]}` pinpointed a payload bug in minutes).
+- Cross-reference whether the failing category is a known-fragile importer (channels/streams 4-tier matcher, per ADR-013 S9).
 
 ## Resolution
 

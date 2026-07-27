@@ -1180,3 +1180,47 @@ async def test_provider_dry_run_validates_but_never_uploads():
     cat = report.category(EntityType.LOGO)
     assert cat.would_create == 1
     assert report.logo_misses == 1
+
+
+# ===========================================================================
+# Content-type derivation from validated magic bytes (bead 7ipq2.2 —
+# live-validation finding): sync-gathered logo records are METADATA-ONLY and
+# carry no declared content_type, so the upload fell back to
+# application/octet-stream — which a real Dispatcharr 0.28.2 upload endpoint
+# REJECTS ("Unsupported file type") even though the bytes were a valid PNG.
+# The importer already magic-validates the bytes; the upload content-type is
+# derived from that same validated magic when no usable declared type exists.
+# ===========================================================================
+
+async def test_missing_declared_content_type_derives_from_magic_bytes():
+    """A record with NO content_type key (the sync live-gather shape) uploads
+    with the magic-derived image type, never application/octet-stream."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    logo = _logo(src_id=7, name="SyncLogo")
+    del logo["content_type"]
+
+    await import_logos(
+        archive_logos=[logo], client=client, selected=True,
+        report=report, ledger=ledger, remap=remap,
+    )
+
+    client.upload_logo_file.assert_awaited_once()
+    sent_content_type = client.upload_logo_file.await_args.args[3]
+    assert sent_content_type == "image/png"
+
+
+async def test_declared_image_content_type_still_wins_over_magic():
+    """A usable declared image/* content-type is passed through unchanged
+    (advisory declared type honored; magic only fills the gap)."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    logo = _logo(src_id=8, name="DeclaredLogo", content_type="image/x-png")
+
+    await import_logos(
+        archive_logos=[logo], client=client, selected=True,
+        report=report, ledger=ledger, remap=remap,
+    )
+
+    sent_content_type = client.upload_logo_file.await_args.args[3]
+    assert sent_content_type == "image/x-png"

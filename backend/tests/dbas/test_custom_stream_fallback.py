@@ -346,3 +346,120 @@ async def test_failed_orphan_create_is_reported_not_ledgered(caplog):
     assert cat.created == 1
     assert cat.failed == 1
     assert cat.failure_details[0].source_export_id == 61
+
+
+# ---------------------------------------------------------------------------
+# Live-gather shape: FK remap + derived-echo stripping (bead 7ipq2.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_payload_remaps_fks_and_strips_derived_keys():
+    """LIVE-GATHER shape (bead 7ipq2.2, live two-instance validation): an
+    embedded stream record read from Dispatcharr's live channel-streams GET
+    carries A-local FK pks and derived read-only echoes the archive shape never
+    had. Forwarding ``channel_group`` (an A-local group pk) made EVERY orphan
+    create fail 400 on a real Dispatcharr-B
+    (``{"channel_group": ["Invalid pk \"82\" - object does not exist."]}``).
+
+    Contract: ``channel_group`` / ``stream_profile_id`` are resolved through the
+    shared IdRemapTable (the groups/profiles importers register every source id,
+    created AND existing-identical). An unresolvable FK is DROPPED — a custom
+    stream without a group still lands under the synthesized account — never
+    forwarded stale. Derived/read-only echoes (viewer counts, staleness, stats,
+    the server-computed hash, ``is_custom``) are stripped.
+
+    Fixture below is a REAL embedded-stream record captured from a live
+    Dispatcharr 0.28.2 instance on 2026-07-27 (url/hash representative,
+    structure verbatim).
+    """
+    client = _client()
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+    remap.add(EntityType.CHANNEL_GROUP, 82, 9082)
+    remap.add(EntityType.STREAM_PROFILE, 3, 9003)
+
+    live_stream = {
+        "id": 39491,
+        "name": "FloRacing 24/7 (FloRacing 247)",
+        "url": "https://provider.example/live/abc/123.ts",
+        "m3u_account": 17,
+        "logo_url": "https://cdn.example/logos/FloRacing.png",
+        "tvg_id": "",
+        "local_file": None,
+        "current_viewers": 0,
+        "updated_at": "2026-07-26T02:24:45.255091Z",
+        "last_seen": "2026-07-27T02:24:45.207538Z",
+        "is_stale": False,
+        "is_adult": False,
+        "stream_profile_id": 3,
+        "is_custom": False,
+        "channel_group": 82,
+        "stream_hash": "738798687777481940ceaeaa649992a0deadbeef",
+        "stream_stats": None,
+        "stream_stats_updated_at": None,
+        "stream_id": 931832,
+        "stream_chno": 20174.0,
+        "is_catchup": False,
+        "catchup_days": 0,
+    }
+
+    await synthesize_custom_streams(
+        orphans=[live_stream],
+        client=client,
+        remap=remap,
+        ledger=ledger,
+        report=report,
+    )
+
+    payload = client.create_stream.await_args.args[0]
+    # FK pks are REMAPPED to destination ids, never forwarded stale.
+    assert payload["channel_group"] == 9082
+    assert payload["stream_profile_id"] == 9003
+    # Derived / read-only echoes are stripped.
+    for key in (
+        "current_viewers",
+        "updated_at",
+        "last_seen",
+        "is_stale",
+        "stream_hash",
+        "stream_stats",
+        "stream_stats_updated_at",
+        "is_custom",
+    ):
+        assert key not in payload, key
+    # Portable fields survive; attribution still forced to the synthesized account.
+    assert payload["name"] == "FloRacing 24/7 (FloRacing 247)"
+    assert payload["url"] == "https://provider.example/live/abc/123.ts"
+    assert payload["m3u_account"] == 900
+    assert report.category(EntityType.STREAM).created == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_payload_drops_unresolvable_fks_never_forwards_stale():
+    """An orphan whose ``channel_group`` / ``stream_profile_id`` cannot be
+    resolved through the remap has those fields DROPPED from the create payload
+    (soft degradation: the stream still lands under the synthesized account),
+    never forwarded as a stale A-local pk."""
+    client = _client()
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()  # deliberately empty — nothing resolvable
+
+    orphan = dict(
+        _orphan(70), channel_group=82, stream_profile_id=3
+    )
+
+    await synthesize_custom_streams(
+        orphans=[orphan],
+        client=client,
+        remap=remap,
+        ledger=ledger,
+        report=report,
+    )
+
+    payload = client.create_stream.await_args.args[0]
+    assert "channel_group" not in payload
+    assert "stream_profile_id" not in payload
+    assert report.category(EntityType.STREAM).created == 1
