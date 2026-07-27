@@ -934,30 +934,20 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await openShellWithPipelineFixture(page)
       await dismissFirstRunPromptIfPresent(page)
 
-      let journalCall = 0
-      let releaseInitialJournal!: () => void
+      let initialJournalReleased = false
+      let failNextJournalRequest = false
+      let resolveInitialJournal!: () => void
+      const initialJournalRelease = new Promise<void>((resolve) => {
+        resolveInitialJournal = resolve
+      })
+      const releaseInitialJournal = () => {
+        initialJournalReleased = true
+        resolveInitialJournal()
+      }
       await page.route(/\/api\/journal(?:\?|$)/, async (route) => {
-        journalCall += 1
-        if (journalCall === 1) {
-          await new Promise<void>((resolve) => {
-            releaseInitialJournal = () => {
-              void route.fulfill({
-                status: 200,
-                contentType: 'application/json',
-                body: JSON.stringify({
-                  count: 1, page: 1, page_size: 50, total_pages: 1,
-                  results: [{
-                    id: 91, timestamp: '2026-07-27T12:00:00Z', category: 'channel',
-                    action_type: 'create', entity_id: 41, entity_name: 'Retained journal row',
-                    description: 'Fixture entry', before_value: null, after_value: null,
-                    user_initiated: true, mutation_source: 'ui', batch_id: null,
-                  }],
-                }),
-              })
-              resolve()
-            }
-          })
-        } else if (journalCall === 2) {
+        if (!initialJournalReleased) await initialJournalRelease
+        if (failNextJournalRequest) {
+          failNextJournalRequest = false
           await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ detail: 'Refresh failed' }) })
         } else {
           await route.fulfill({
@@ -991,6 +981,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(journalToolbar.getByRole('button', { name: /purge old entries/i })).toBeDisabled()
       releaseInitialJournal()
       await expect(page.getByText('Retained journal row')).toBeVisible()
+      failNextJournalRequest = true
       await page.getByRole('button', { name: /refresh/i }).click()
       await expect(page.getByText(/showing previously loaded entries/i)).toBeVisible()
       await expect(page.getByText('Retained journal row')).toBeVisible()

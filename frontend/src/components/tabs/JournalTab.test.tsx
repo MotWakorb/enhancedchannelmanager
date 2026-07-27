@@ -417,6 +417,29 @@ describe('JournalTab', () => {
       expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /purge old entries/i })).not.toBeInTheDocument();
     });
+
+    it('ignores an older refresh response after a newer filter request completes', async () => {
+      let resolveRefresh!: (value: JournalResponse) => void;
+      let resolveFilter!: (value: JournalResponse) => void;
+      vi.mocked(api.getJournalEntries).mockReset()
+        .mockResolvedValueOnce(mockResponse([makeEntry({ entity_name: 'Initial row' })]))
+        .mockReturnValueOnce(new Promise(resolve => { resolveRefresh = resolve; }))
+        .mockReturnValueOnce(new Promise(resolve => { resolveFilter = resolve; }));
+
+      renderWithProviders(<JournalTab />);
+      expect(await screen.findByText('Initial row')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+      fireEvent.click(screen.getByText('All Categories'));
+      fireEvent.click(await screen.findByRole('option', { name: 'Channel' }));
+
+      resolveFilter(mockResponse([makeEntry({ id: 3, entity_name: 'Newest filtered row' })]));
+      expect(await screen.findByText('Newest filtered row')).toBeInTheDocument();
+
+      resolveRefresh(mockResponse([makeEntry({ id: 2, entity_name: 'Late stale row' })]));
+      await waitFor(() => expect(screen.queryByText('Late stale row')).not.toBeInTheDocument());
+      expect(screen.getByText('Newest filtered row')).toBeInTheDocument();
+    });
   });
 
   describe('journal purge (bead hq3de.a)', () => {

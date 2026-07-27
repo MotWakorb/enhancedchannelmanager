@@ -104,6 +104,7 @@ export function JournalTab() {
   const [loading, setLoading] = useState(true);
   const [requestState, setRequestState] = useState<'loading' | 'success' | 'error' | 'permission'>('loading');
   const entriesRequestFailedRef = useRef(false);
+  const entriesRequestGenerationRef = useRef(0);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -128,6 +129,7 @@ export function JournalTab() {
 
   // Load entries
   const loadEntries = useCallback(async () => {
+    const requestGeneration = ++entriesRequestGenerationRef.current;
     setLoading(true);
     setRequestState('loading');
     entriesRequestFailedRef.current = false;
@@ -142,11 +144,13 @@ export function JournalTab() {
       if (search) params.search = search;
 
       const result = await api.getJournalEntries(params);
+      if (requestGeneration !== entriesRequestGenerationRef.current) return;
       setEntries(result.results);
       setTotalPages(result.total_pages);
       setTotalCount(result.count);
       setRequestState('success');
     } catch (err) {
+      if (requestGeneration !== entriesRequestGenerationRef.current) return;
       entriesRequestFailedRef.current = true;
       const permission = err instanceof HttpError && (err.status === 401 || err.status === 403);
       if (permission) {
@@ -158,7 +162,7 @@ export function JournalTab() {
       setRequestState(permission ? 'permission' : 'error');
       notifications.error(err instanceof Error ? err.message : 'Failed to load journal entries', 'Journal');
     } finally {
-      setLoading(false);
+      if (requestGeneration === entriesRequestGenerationRef.current) setLoading(false);
     }
   }, [page, pageSize, category, actionType, mutationSource, search, notifications]);
 
@@ -174,7 +178,10 @@ export function JournalTab() {
   }, []);
 
   useEffect(() => {
-    loadEntries();
+    void loadEntries();
+    return () => {
+      entriesRequestGenerationRef.current += 1;
+    };
   }, [loadEntries]);
 
   useEffect(() => {
