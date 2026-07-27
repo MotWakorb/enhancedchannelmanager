@@ -1045,7 +1045,19 @@ export function StatsTab() {
       <div className="stats-content" ref={statsContentRef}>
         <StickySectionNav
           containerRef={statsContentRef}
-          selector=".active-channels, .events-section, .top-watched-section, .bandwidth-section, [id^='stats-section-']"
+          selector={[
+            '#stats-section-active-channels',
+            '#stats-section-recent-events',
+            '#stats-section-top-watched',
+            '#stats-section-bandwidth-usage',
+            '#stats-section-enhanced',
+            '#stats-section-popularity',
+            '#stats-section-watch-history',
+            '#stats-section-bandwidth-panel',
+            '#stats-section-user-watch-time',
+            '#stats-section-providers',
+            '#stats-section-provider-stream-usage',
+          ].join(', ')}
           routeKey="stats"
         />
         {/* No streams */}

@@ -106,6 +106,16 @@ export interface UseHashRouteReturn {
 export function useHashRoute(): UseHashRouteReturn {
   const [route, setRoute] = useState<HashRoute>(() => parseHash(window.location.hash));
   const routeRef = useRef(route);
+  const acceptedHashRef = useRef(window.location.hash);
+  const acceptedHistoryIndexRef = useRef<number>(
+    typeof window.history.state?.ecmRouteIndex === 'number' ? window.history.state.ecmRouteIndex : 0,
+  );
+  const restoringRejectedHistoryRef = useRef(false);
+
+  const canNavigate = useCallback((nextHash: string) => window.dispatchEvent(new CustomEvent('ecm:before-route-change', {
+    cancelable: true,
+    detail: { from: acceptedHashRef.current, to: nextHash },
+  })), []);
 
   // Bail out when the route is unchanged so a caller that loops can't churn pushState + a fresh-object re-render. Uses pushState (not assign) to avoid a hashchange/popstate echo.
   const setHash = useCallback((tab: TabId, settingsPage?: SettingsPage | null) => {
@@ -113,11 +123,16 @@ export function useHashRoute(): UseHashRouteReturn {
     if (routeRef.current.tab === tab && routeRef.current.settingsPage === nextSettingsPage) {
       return;
     }
-    window.history.pushState(null, '', buildHash(tab, settingsPage));
+    const nextHash = buildHash(tab, settingsPage);
+    if (!canNavigate(nextHash)) return;
+    const nextHistoryIndex = acceptedHistoryIndexRef.current + 1;
+    window.history.pushState({ ...window.history.state, ecmRouteIndex: nextHistoryIndex }, '', nextHash);
+    acceptedHistoryIndexRef.current = nextHistoryIndex;
+    acceptedHashRef.current = nextHash;
     const nextRoute = { tab, settingsPage: nextSettingsPage };
     routeRef.current = nextRoute;
     setRoute(nextRoute);
-  }, []);
+  }, [canNavigate]);
 
   // Update just the settings sub-page
   const setSettingsPage = useCallback((page: SettingsPage) => {
@@ -130,23 +145,53 @@ export function useHashRoute(): UseHashRouteReturn {
       const parsed = parseHash(window.location.hash);
       const canonicalHash = buildHash(parsed.tab, parsed.settingsPage, parsed.m3uChangesHours, parsed.section);
       if (window.location.hash !== canonicalHash) {
-        window.history.replaceState(null, '', canonicalHash);
+        window.history.replaceState(window.history.state, '', canonicalHash);
       }
       return parsed;
     };
 
     const handlePopState = () => {
+      if (restoringRejectedHistoryRef.current) {
+        restoringRejectedHistoryRef.current = false;
+        return;
+      }
+      const requestedHash = window.location.hash;
+      if (!canNavigate(requestedHash)) {
+        const requestedIndex = window.history.state?.ecmRouteIndex;
+        if (typeof requestedIndex === 'number') {
+          restoringRejectedHistoryRef.current = true;
+          window.history.go(acceptedHistoryIndexRef.current - requestedIndex);
+        } else {
+          window.history.replaceState(window.history.state, '', acceptedHashRef.current);
+        }
+        return;
+      }
       const nextRoute = canonicalizeCurrentHash();
+      acceptedHashRef.current = window.location.hash;
+      if (typeof window.history.state?.ecmRouteIndex === 'number') {
+        acceptedHistoryIndexRef.current = window.history.state.ecmRouteIndex;
+      }
       routeRef.current = nextRoute;
       setRoute(nextRoute);
     };
 
     const initialRoute = canonicalizeCurrentHash();
+    if (typeof window.history.state?.ecmRouteIndex !== 'number') {
+      window.history.replaceState({ ...window.history.state, ecmRouteIndex: 0 }, '', window.location.hash);
+    }
+    acceptedHashRef.current = window.location.hash;
     routeRef.current = initialRoute;
     setRoute(initialRoute);
     window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+    const handleRouteReplaced = () => {
+      acceptedHashRef.current = window.location.hash;
+    };
+    window.addEventListener('ecm:route-replaced', handleRouteReplaced);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('ecm:route-replaced', handleRouteReplaced);
+    };
+  }, [canNavigate]);
 
   return { activeTab: route.tab, settingsPage: route.settingsPage, m3uChangesHours: route.m3uChangesHours ?? null, setHash, setSettingsPage };
 }

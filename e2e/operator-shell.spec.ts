@@ -792,6 +792,39 @@ test.describe('Channel Manager dnd-kit keyboard path', () => {
   })
 })
 
+for (const viewport of [
+  { width: 1280, height: 720 },
+  { width: 1920, height: 1080 },
+  { width: 640, height: 360 },
+]) {
+  test.describe(`audited sticky controls at ${viewport.width}x${viewport.height}`, () => {
+    test.use({ viewport, serviceWorkers: 'block' })
+    test('do not cover focused Settings controls or introduce overflow traps', async ({ page }) => {
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+      await page.getByRole('link', { name: 'Settings', exact: true }).click()
+      const input = page.getByLabel('Poll interval (seconds)')
+      await input.fill('45')
+      await input.focus()
+      await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
+      await page.evaluate(() => new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      expect(await page.evaluate(() => {
+        const focused = document.activeElement!.getBoundingClientRect()
+        const nav = document.querySelector('.sticky-section-nav')!.getBoundingClientRect()
+        const pending = document.querySelector('.settings-pending-actions')!.getBoundingClientRect()
+        const content = document.querySelector<HTMLElement>('.settings-content')!
+        return {
+          document: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+          content: content.scrollWidth <= content.clientWidth + 1,
+          top: focused.top >= nav.bottom,
+          bottom: focused.bottom <= pending.top,
+        }
+      })).toEqual({ document: true, content: true, top: true, bottom: true })
+    })
+  })
+}
+
 test.describe('operator shell at 200% equivalent', () => {
   test.use({ viewport: { width: 640, height: 360 }, serviceWorkers: 'block' })
 
@@ -818,17 +851,21 @@ test.describe('operator shell navigation behavior', () => {
   test.use({ serviceWorkers: 'block' })
 
   test('audited long pages provide direct section entry and protect pending Settings edits', async ({ page }) => {
+    let settingsReloadFails = false
     await seedChannelWorkspace(page, false)
     await openShellWithPipelineFixture(page)
     await dismissFirstRunPromptIfPresent(page)
     await page.route(/\/api\/settings(?:\?|$)/, (route) => route.fulfill({
-      status: 200,
+      status: settingsReloadFails ? 503 : 200,
       contentType: 'application/json',
-      body: JSON.stringify({
+      body: settingsReloadFails ? JSON.stringify({ detail: 'Reload unavailable' }) : JSON.stringify({
         configured: true,
         url: 'http://dispatcharr.test',
         auth_method: 'password',
         username: 'operator',
+        include_channel_number_in_name: true,
+        channel_number_separator: '-',
+        auto_creation_excluded_terms: ['sports'],
         default_channel_profile_ids: [],
         stream_sort_priority: [],
         stream_sort_enabled: {},
@@ -838,6 +875,11 @@ test.describe('operator shell navigation behavior', () => {
       }),
     }))
     await page.getByRole('link', { name: 'Settings', exact: true }).click()
+    await page.locator('.settings-nav-item').filter({ hasText: 'Channel Pipeline' }).click()
+    await page.getByRole('button', { name: 'Remove term' }).click()
+    await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel changes' }).click()
+    await page.locator('.settings-nav-item').filter({ hasText: 'General' }).click()
     const sectionNav = page.getByRole('navigation', { name: 'On this page' })
     await expect(sectionNav).toBeVisible()
     await sectionNav.getByRole('button', { name: 'Stats Polling' }).click()
@@ -845,12 +887,31 @@ test.describe('operator shell navigation behavior', () => {
     await page.getByLabel('Poll interval (seconds)').fill('45')
     await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
     page.once('dialog', (dialog) => dialog.dismiss())
-    await page.getByRole('link', { name: 'Dashboard' }).click()
+    await page.goBack()
     await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await expect(page).toHaveURL(/#settings\?section=settings-general-section-stats-polling$/)
+    page.once('dialog', (dialog) => dialog.accept())
+    await page.goBack()
+    await expect(page).not.toHaveURL(/settings-general-section-stats-polling/)
+
+    await page.locator('.settings-nav-item').filter({ hasText: 'General' }).click()
+    await page.getByLabel('Poll interval (seconds)').fill('45')
+    settingsReloadFails = true
+    await page.getByRole('button', { name: 'Cancel changes' }).click()
+    await expect(page.getByText(/Could not reload saved settings/)).toBeAttached()
+    await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
+    settingsReloadFails = false
     await page.getByRole('button', { name: 'Cancel changes' }).click()
     await expect(page.getByRole('status', { name: 'Unsaved settings' })).toHaveCount(0)
 
-    await page.goto('/#stats?section=stats-section-enhanced')
+    await page.locator('.timezone-select .custom-select-trigger').click()
+    await page.getByRole('option', { name: 'US: Central Time (CT)' }).click()
+    await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel changes' }).click()
+
+    await page.getByRole('link', { name: 'Stats', exact: true }).click()
+    await page.getByRole('navigation', { name: 'On this page' })
+      .getByRole('button', { name: 'Enhanced Statistics' }).click()
     await expect(page.locator('#stats-section-enhanced')).toBeVisible()
     await expect(page.getByRole('navigation', { name: 'On this page' })
       .getByRole('button', { name: 'Enhanced Statistics' })).toHaveAttribute('aria-current', 'location')

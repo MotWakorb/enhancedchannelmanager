@@ -302,8 +302,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [activePage, setActivePageInternal] = useState<SettingsPage>(initialSettingsPage || 'general');
   const settingsContentRef = useRef<HTMLDivElement>(null);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
-  const [saveFeedback, setSaveFeedback] = useState<'idle' | 'success' | 'error'>('idle');
-  const supportsPageSave = ['general', 'channel-defaults', 'appearance', 'email', 'integrations', 'channel-pipeline', 'maintenance'].includes(activePage);
+  const [saveFeedback, setSaveFeedback] = useState<'idle' | 'success' | 'error' | 'revert-error'>('idle');
+  const [settingsBaselineVersion, setSettingsBaselineVersion] = useState(0);
+  const baselineSignatureRef = useRef<string | null>(null);
+  const adoptNextSignatureRef = useRef(false);
+  const auditedLongSettingsPages: ReadonlySet<SettingsPage> = new Set([
+    'general', 'channel-defaults', 'appearance', 'email',
+    'integrations', 'channel-pipeline', 'maintenance',
+  ]);
+  const supportsPageSave = auditedLongSettingsPages.has(activePage);
   // Reset scroll position when navigating between Settings sub-pages — the
   // content pane otherwise preserves scrollTop from the previously viewed
   // sub-page, landing mid-page and burying top-of-page warnings (bead 09x38.11).
@@ -311,18 +318,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // Wrap setActivePage to also notify parent for hash routing
   const setActivePage = (page: SettingsPage) => {
-    if (page !== activePage && hasPendingChanges && !window.confirm('Discard unsaved settings and open another settings page?')) {
-      return;
+    if (onSettingsPageChange) {
+      onSettingsPageChange(page);
+    } else {
+      setActivePageInternal(page);
     }
-    setHasPendingChanges(false);
-    setActivePageInternal(page);
-    onSettingsPageChange?.(page);
   };
 
   // Sync with external initialSettingsPage changes (e.g., browser back/forward)
   useEffect(() => {
-    if (initialSettingsPage && initialSettingsPage !== activePage) {
-      setActivePageInternal(initialSettingsPage);
+    const nextPage = initialSettingsPage || 'general';
+    if (nextPage !== activePage) {
+      setActivePageInternal(nextPage);
     }
     // Only re-run when initialSettingsPage changes, not activePage
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -337,20 +344,37 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       event.preventDefault();
       event.returnValue = '';
     };
-    const protectHashNavigation = (event: MouseEvent) => {
+    const protectRouteNavigation = (event: Event) => {
       if (!hasPendingChanges) return;
-      const link = (event.target as Element | null)?.closest<HTMLAnchorElement>('a[href^="#"]');
-      if (link && !window.confirm('Discard unsaved settings and leave this page?')) {
+      if (!window.confirm('Discard unsaved settings and leave this page?')) {
         event.preventDefault();
-        event.stopPropagation();
+      } else {
+        setHasPendingChanges(false);
+        void loadSettings().catch(() => {
+          // Navigation proceeds after explicit confirmation. A destination
+          // that keeps Settings mounted will retain its current values if the
+          // refresh fails and become dirty again on the next mutation.
+        });
       }
     };
     window.addEventListener('beforeunload', beforeUnload);
-    document.addEventListener('click', protectHashNavigation, true);
+    window.addEventListener('ecm:before-route-change', protectRouteNavigation);
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
-      document.removeEventListener('click', protectHashNavigation, true);
+      window.removeEventListener('ecm:before-route-change', protectRouteNavigation);
     };
+  }, [hasPendingChanges]);
+
+  useEffect(() => {
+    if (!hasPendingChanges) return;
+    requestAnimationFrame(() => {
+      const container = settingsContentRef.current;
+      const focused = document.activeElement as HTMLElement | null;
+      const pending = container?.querySelector<HTMLElement>('.settings-pending-actions');
+      if (!container || !focused || !container.contains(focused) || !pending) return;
+      const overlap = focused.getBoundingClientRect().bottom - pending.getBoundingClientRect().top;
+      if (overlap >= 0) container.scrollTop += overlap + 12;
+    });
   }, [hasPendingChanges]);
 
   // Listen for restart events from NotificationCenter to dismiss the restart toast
@@ -684,6 +708,57 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [, setRestarting] = useState(false);
 
   // DnD sensors for sort priority
+  // This inventory mirrors every value sent by handleSave. Comparing it to
+  // the last successful load/save makes dirty state independent of DOM event
+  // type (native inputs, portalled listboxes, buttons, and drag controls).
+  const savePayloadSignature = JSON.stringify([
+    url, authMethod, username, password, autoRenameChannelNumber,
+    includeChannelNumberInName, channelNumberSeparator, removeCountryPrefix,
+    includeCountryInName, countrySeparator, timezonePreference, showStreamUrls,
+    hideAutoSyncGroups, allowMultiProviderAutoSync, hideUngroupedStreams,
+    hideEpgUrls, hideM3uUrls, gracenoteConflictMode, theme, dateFormat,
+    defaultChannelProfileIds, epgAutoMatchThreshold, customNetworkPrefixes,
+    customNetworkSuffixes, normalizeOnChannelCreate, dedupThreshold,
+    dedupM3uToastSuppressed, embyEnabled, embyBaseUrl, embyApiKey, plexEnabled,
+    plexBaseUrl, plexToken, jellyfinEnabled, jellyfinBaseUrl, jellyfinApiKey,
+    trustedMediaNetworks, statsPollInterval, userTimezone, backendLogLevel,
+    frontendLogLevel, vlcOpenBehavior, streamPreviewMode, channelPipelineExcludedTerms,
+    channelPipelineExcludedGroups, channelPipelineExcludeAutoSyncGroups,
+    maxAutoCreatedChannelsPerRun, maxChannelPipelineLogEntries, linkedM3UAccounts,
+    streamProbeTimeout, bitrateSampleDuration, parallelProbingEnabled,
+    maxConcurrentProbes, profileDistributionStrategy, skipRecentlyProbedHours,
+    refreshM3usBeforeProbe, autoReorderAfterProbe, pushStreamStatsToDispatcharr,
+    probeRetryCount, probeRetryDelay, blackScreenDetectionEnabled,
+    blackScreenSampleDuration, lowFpsThreshold, streamFetchPageLimit,
+    streamSortPriority, streamSortEnabled, m3uAccountPriorities,
+    deprioritizeFailedStreams, deprioritizeBlackScreen, deprioritizeLowFps,
+    failedStreamSortOrder, strikeThreshold, smtpHost, smtpPort, smtpUser,
+    smtpPassword, smtpFromEmail, smtpFromName, smtpUseTls, smtpUseSsl,
+    discordWebhookUrl, telegramBotToken, telegramChatId,
+  ]);
+
+  useEffect(() => {
+    if (settingsBaselineVersion > 0) {
+      baselineSignatureRef.current = savePayloadSignature;
+      setHasPendingChanges(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsBaselineVersion]);
+
+  useEffect(() => {
+    if (adoptNextSignatureRef.current) {
+      adoptNextSignatureRef.current = false;
+      baselineSignatureRef.current = savePayloadSignature;
+      setHasPendingChanges(false);
+      return;
+    }
+    if (supportsPageSave && baselineSignatureRef.current !== null) {
+      const changed = savePayloadSignature !== baselineSignatureRef.current;
+      setHasPendingChanges(changed);
+      if (changed) setSaveFeedback('idle');
+    }
+  }, [savePayloadSignature, supportsPageSave]);
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -714,7 +789,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   useEffect(() => {
-    loadSettings();
+    void loadSettings().catch(() => {
+      // Revert callers surface failures inline; initial load retains the
+      // existing page-level error behavior.
+    });
     loadStreamCount();
     loadProbeHistory();
     checkForOngoingProbe();
@@ -1032,8 +1110,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       } finally {
         setSmtpAlertRecipientsLoading(false);
       }
+      setSettingsBaselineVersion((version) => version + 1);
     } catch (err) {
       logger.error('Failed to load settings:', err);
+      throw err;
     }
   };
 
@@ -1484,6 +1564,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.success('Settings saved successfully');
       }
       onSaved();
+      baselineSignatureRef.current = savePayloadSignature;
+      adoptNextSignatureRef.current = Boolean(password || smtpPassword);
       setHasPendingChanges(false);
       setSaveFeedback('success');
     } catch (err) {
@@ -5927,16 +6009,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       <div
         className="settings-content"
         ref={settingsContentRef}
-        onChangeCapture={() => {
-          if (supportsPageSave) {
-            setHasPendingChanges(true);
-            setSaveFeedback('idle');
-          }
-        }}
       >
         <StickySectionNav
           containerRef={settingsContentRef}
-          selector=".settings-page > .settings-section"
+          selector={auditedLongSettingsPages.has(activePage)
+            ? '.settings-page > .settings-section'
+            : '[data-not-an-audited-long-settings-section]'}
           routeKey={`settings-${activePage}`}
         />
         {activePage === 'general' && renderGeneralPage()}
@@ -5960,17 +6038,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {supportsPageSave && hasPendingChanges && <div className="settings-pending-actions" role="status" aria-label="Unsaved settings">
           <span><span className="material-icons" aria-hidden="true">edit</span>Unsaved changes</span>
           <button type="button" className="btn-secondary" disabled={loading} onClick={() => {
-            void loadSettings().then(() => {
-              setHasPendingChanges(false);
-              setSaveFeedback('idle');
-            });
+            void loadSettings()
+              .then(() => {
+                setHasPendingChanges(false);
+                setSaveFeedback('idle');
+              })
+              .catch(() => setSaveFeedback('revert-error'));
           }}>Cancel changes</button>
           <button type="button" className="btn-primary" disabled={loading} onClick={() => void handleSave()}>
             {loading ? 'Saving…' : 'Save changes'}
           </button>
         </div>}
         <div className="sr-only" role="status" aria-live="polite">
-          {saveFeedback === 'success' ? 'Settings saved successfully' : saveFeedback === 'error' ? 'Settings could not be saved. Your changes are still available.' : ''}
+          {saveFeedback === 'success'
+            ? 'Settings saved successfully'
+            : saveFeedback === 'error'
+              ? 'Settings could not be saved. Your changes are still available.'
+              : saveFeedback === 'revert-error'
+                ? 'Could not reload saved settings. Your changes are still available; retry Cancel or save them.'
+                : ''}
         </div>
       </div>
 

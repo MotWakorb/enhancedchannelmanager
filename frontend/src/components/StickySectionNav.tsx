@@ -4,6 +4,7 @@ import './StickySectionNav.css';
 type SectionItem = { id: string; label: string };
 
 const slug = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+const preferredScrollBehavior = (): ScrollBehavior => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 
 export function StickySectionNav({
   containerRef,
@@ -24,7 +25,9 @@ export function StickySectionNav({
       const heading = section.querySelector<HTMLElement>('h2, h3');
       const label = section.dataset.sectionLabel || heading?.textContent?.trim();
       if (!label) return [];
-      const id = section.id || `${routeKey}-section-${slug(label) || index + 1}`;
+      const generatedId = `${routeKey}-section-${slug(label) || index + 1}`;
+      const id = section.dataset.sectionId
+        || (section.id && !section.id.startsWith('settings-') ? section.id : generatedId);
       section.id = id;
       section.classList.add('sticky-section-target');
       return [{ id, label }];
@@ -55,7 +58,7 @@ export function StickySectionNav({
     if (requested && items.some((item) => item.id === requested)) {
       requestAnimationFrame(() => {
         const target = document.getElementById(requested);
-        if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
+        if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
       });
     }
     return () => observer.disconnect();
@@ -66,8 +69,9 @@ export function StickySectionNav({
     setActiveId(id);
     const base = window.location.hash.split('?')[0];
     window.history.replaceState(null, '', `${base}?section=${encodeURIComponent(id)}`);
+    window.dispatchEvent(new CustomEvent('ecm:route-replaced', { detail: { hash: window.location.hash } }));
     const target = document.getElementById(id);
-    if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
   };
   return <nav className="sticky-section-nav" aria-label="On this page">
     <span>On this page</span>

@@ -96,9 +96,9 @@ describe('useHashRoute', () => {
   let replaceStateSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    window.location.hash = '';
-    pushStateSpy = vi.spyOn(window.history, 'pushState').mockImplementation(() => {});
-    replaceStateSpy = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {});
+    window.history.replaceState(null, '', '#');
+    pushStateSpy = vi.spyOn(window.history, 'pushState');
+    replaceStateSpy = vi.spyOn(window.history, 'replaceState');
   });
 
   afterEach(() => {
@@ -133,7 +133,7 @@ describe('useHashRoute', () => {
     });
 
     expect(result.current.activeTab).toBe('epg-manager');
-    expect(pushStateSpy).toHaveBeenCalledWith(null, '', '#epg-manager');
+    expect(pushStateSpy).toHaveBeenCalledWith(expect.objectContaining({ ecmRouteIndex: 1 }), '', '#epg-manager');
   });
 
   it('keeps setHash stable while observing the latest route', () => {
@@ -154,7 +154,7 @@ describe('useHashRoute', () => {
 
     expect(result.current.activeTab).toBe('settings');
     expect(result.current.settingsPage).toBe('normalization');
-    expect(pushStateSpy).toHaveBeenCalledWith(null, '', '#settings/normalization');
+    expect(pushStateSpy).toHaveBeenCalledWith(expect.objectContaining({ ecmRouteIndex: 1 }), '', '#settings/normalization');
   });
 
   it('setSettingsPage updates settings sub-page', () => {
@@ -167,7 +167,7 @@ describe('useHashRoute', () => {
 
     expect(result.current.activeTab).toBe('settings');
     expect(result.current.settingsPage).toBe('email');
-    expect(pushStateSpy).toHaveBeenCalledWith(null, '', '#settings/email');
+    expect(pushStateSpy).toHaveBeenCalledWith(expect.objectContaining({ ecmRouteIndex: 1 }), '', '#settings/email');
   });
 
   it('responds to popstate events', () => {
@@ -182,30 +182,47 @@ describe('useHashRoute', () => {
     expect(result.current.activeTab).toBe('stats');
   });
 
+  it('keeps route state and URL aligned when a history transition is rejected', () => {
+    window.location.hash = '#settings';
+    const reject = (event: Event) => event.preventDefault();
+    window.addEventListener('ecm:before-route-change', reject);
+    const { result } = renderHook(() => useHashRoute());
+
+    act(() => {
+      window.location.hash = '#stats';
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(result.current.activeTab).toBe('settings');
+    expect(window.location.hash).toBe('#settings');
+    window.removeEventListener('ecm:before-route-change', reject);
+  });
+
   it('sets initial hash via replaceState if none present', () => {
     window.location.hash = '';
     renderHook(() => useHashRoute());
-    expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '#channel-manager');
+    expect(replaceStateSpy).toHaveBeenCalledWith(expect.anything(), '', '#channel-manager');
   });
 
-  it('does not set initial hash if one is already present', () => {
+  it('adds route history metadata without changing an existing valid hash', () => {
     window.location.hash = '#guide';
     renderHook(() => useHashRoute());
-    expect(replaceStateSpy).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe('#guide');
+    expect(window.history.state).toEqual(expect.objectContaining({ ecmRouteIndex: 0 }));
   });
 
   it('canonicalizes the legacy top-level alias with replaceState', () => {
     window.location.hash = '#auto-creation';
     const { result } = renderHook(() => useHashRoute());
     expect(result.current.activeTab).toBe('channel-pipeline');
-    expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '#channel-pipeline');
+    expect(replaceStateSpy).toHaveBeenCalledWith(expect.anything(), '', '#channel-pipeline');
     expect(pushStateSpy).not.toHaveBeenCalled();
   });
 
   it('canonicalizes settings aliases and invalid routes without adding history', () => {
     window.location.hash = '#settings/auto-creation';
     renderHook(() => useHashRoute());
-    expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '#settings/channel-pipeline');
+    expect(replaceStateSpy).toHaveBeenCalledWith(expect.anything(), '', '#settings/channel-pipeline');
     expect(pushStateSpy).not.toHaveBeenCalled();
   });
 });
