@@ -456,7 +456,9 @@ button.group-selection-checkbox {
 }
 
 .stream-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 0.75rem;
   align-items: center;
   padding: 0.5rem;
   content-visibility: auto;
@@ -465,6 +467,15 @@ button.group-selection-checkbox {
   border-radius: var(--radius-md);
   cursor: default;
   transition: background-color 0.15s, transform 0.15s;
+}
+
+.stream-item.edit-mode {
+  grid-template-columns: auto auto 32px minmax(0, 1fr) auto;
+}
+
+.stream-artwork-slot {
+  width: 32px;
+  height: 32px;
 }
 
 .stream-item:hover {
@@ -575,9 +586,16 @@ button.group-selection-checkbox {
   width: 32px;
   height: 32px;
   object-fit: contain;
-  margin-right: 0.75rem;
   border-radius: var(--radius-md);
   background-color: var(--bg-tertiary);
+}
+
+.stream-actions,
+.inline-stream-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .stream-info {

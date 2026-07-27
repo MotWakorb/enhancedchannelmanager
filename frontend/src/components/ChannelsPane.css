@@ -1837,6 +1837,14 @@
   gap: 0.125rem;
 }
 
+.inline-stream-details {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .inline-stream-name {
   white-space: nowrap;
   overflow: hidden;
@@ -1859,6 +1867,20 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.inline-stream-actions {
+  margin-left: auto;
+}
+
+.probe-warning-summary {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remove-stream-btn .material-icons {
+  font-size: 1rem;
 }
 
 .remove-stream-btn {

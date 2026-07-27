@@ -176,6 +176,38 @@ describe('StreamsPane category headers', () => {
   });
 });
 
+describe('StreamsPane source inventory row contract (enhancedchannelmanager-2896r.12)', () => {
+  it('keeps stable artwork, flexible identity, then fixed actions and renders no health noise', async () => {
+    const user = userEvent.setup();
+    renderPane({
+      streams: [
+        makeStream({
+          id: 40,
+          name: 'A deliberately long inventory identity that must ellipsize before its actions',
+          channel_group_name: 'US | News',
+          logo_url: null,
+          is_stale: true,
+          is_catchup: true,
+          catchup_days: 7,
+        }),
+      ],
+      streamGroups: [{ name: 'US | News', count: 1 }],
+    });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    const row = screen.getByText(/A deliberately long inventory identity/).closest('.stream-item')!;
+    const children = [...row.children];
+    expect(children.map((child) => child.className)).toEqual([
+      'stream-artwork-slot', 'stream-info', 'stream-actions',
+    ]);
+    expect(row.querySelector('.stream-logo')).not.toBeInTheDocument();
+    expect(row.querySelector('.stream-artwork-slot .material-icons')).not.toBeInTheDocument();
+    expect(row.querySelector('.meta-tag')).not.toBeInTheDocument();
+    expect(row).not.toHaveClass('is-stale');
+    expect(within(row as HTMLElement).getAllByRole('button').map((button) => button.getAttribute('aria-label')))
+      .toEqual(['Preview stream in browser', 'Open in VLC', 'Copy stream URL']);
+  });
+});
+
 describe('StreamsPane inventory count semantics', () => {
   it('labels the provider-wide total when no result search or group filter is active', () => {
     renderPane({
@@ -284,7 +316,7 @@ describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696
     expect(pill).toHaveTextContent('1');
   });
 
-  it('renders a STALE badge on a stale stream row but not on a fresh row', async () => {
+  it('does not render per-row STALE badges in source inventory', async () => {
     const user = userEvent.setup();
     renderStalePane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
@@ -293,28 +325,28 @@ describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696
     const freshRow = screen.getByText('Fresh Stream').closest('.stream-item');
     expect(staleRow).not.toBeNull();
     expect(freshRow).not.toBeNull();
-    expect(within(staleRow as HTMLElement).getByText('STALE')).toBeInTheDocument();
+    expect(within(staleRow as HTMLElement).queryByText('STALE')).not.toBeInTheDocument();
     expect(within(freshRow as HTMLElement).queryByText('STALE')).not.toBeInTheDocument();
   });
 
-  it('applies the is-stale row class only to the stale stream row', async () => {
+  it('does not apply assigned-health styling to source inventory rows', async () => {
     const user = userEvent.setup();
     renderStalePane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
 
     const staleRow = screen.getByText('Stale Stream').closest('.stream-item');
     const freshRow = screen.getByText('Fresh Stream').closest('.stream-item');
-    expect(staleRow).toHaveClass('is-stale');
+    expect(staleRow).not.toHaveClass('is-stale');
     expect(freshRow).not.toHaveClass('is-stale');
   });
 
-  it('includes the last-seen timestamp in the stale badge tooltip when available', async () => {
+  it('keeps last-seen warning detail out of source inventory rows', async () => {
     const user = userEvent.setup();
     renderStalePane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
 
-    const badge = screen.getByText('STALE');
-    expect(badge.closest('.meta-tag')).toHaveAttribute('title', expect.stringContaining('2026-07-01T00:00:00Z'));
+    expect(screen.queryByText('STALE')).not.toBeInTheDocument();
+    expect(screen.queryByTitle(expect.stringContaining('2026-07-01T00:00:00Z'))).not.toBeInTheDocument();
   });
 });
 
@@ -585,7 +617,7 @@ describe('StreamsPane catch-up badge (bead enhancedchannelmanager-sy1sz)', () =>
     });
   }
 
-  it('renders the catch-up badge on a supported stream row but not on an unsupported one', async () => {
+  it('keeps catch-up status badges out of source inventory rows', async () => {
     const user = userEvent.setup();
     renderCatchupPane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
@@ -596,8 +628,7 @@ describe('StreamsPane catch-up badge (bead enhancedchannelmanager-sy1sz)', () =>
     expect(plainRow).not.toBeNull();
 
     const badge = (catchupRow as HTMLElement).querySelector('.catchup-badge');
-    expect(badge).toBeInTheDocument();
-    expect(badge).toHaveAttribute('title', 'Catch-up: 7 days');
+    expect(badge).not.toBeInTheDocument();
     // Flag is authoritative — is_catchup:false wins even with catchup_days:5.
     expect((plainRow as HTMLElement).querySelector('.catchup-badge')).not.toBeInTheDocument();
   });

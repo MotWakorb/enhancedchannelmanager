@@ -14,7 +14,6 @@ import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
 import { ShowMoreRows } from './ShowMoreRows';
 import { StreamDedupModal } from './StreamDedupModal';
-import { CatchupBadge } from './CatchupBadge';
 import { logger } from '../utils/logger';
 import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import './StreamsPane.css';
@@ -2033,7 +2032,7 @@ export function StreamsPane({
                         <div
                           key={stream.id}
                           data-stream-id={stream.id}
-                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''} ${stream.is_stale ? 'is-stale' : ''}`}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''}`}
                           onClick={(e) => {
                             // In edit mode, clicking the row does nothing (use checkbox to select)
                             // Outside edit mode, clicking the row does nothing either
@@ -2080,31 +2079,20 @@ export function StreamsPane({
                               </span>
                             </button>
                           )}
-                          {stream.logo_url && (
-                            <img
-                              src={stream.logo_url}
-                              alt=""
-                              className="stream-logo"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                              }}
-                            />
-                          )}
+                          <div className="stream-artwork-slot" aria-hidden="true">
+                            {stream.logo_url && (
+                              <img
+                                src={stream.logo_url}
+                                alt=""
+                                className="stream-logo"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            )}
+                          </div>
                           <div className="stream-info">
                             <span className="stream-name">{stream.name}</span>
-                            {stream.is_stale && (
-                              <span
-                                className="meta-tag stream-stale"
-                                title={stream.last_seen ? `No longer listed by provider — last seen ${stream.last_seen}` : 'No longer listed by provider (stale)'}
-                              >
-                                <span className="material-icons">history</span>
-                                STALE
-                              </span>
-                            )}
-                            {/* Catch-up (timeshift) support — bead
-                                enhancedchannelmanager-sy1sz. Renders only when
-                                Dispatcharr flags the stream is_catchup. */}
-                            <CatchupBadge isCatchup={stream.is_catchup} catchupDays={stream.catchup_days} />
                             {showStreamUrls && stream.url && (
                               <span className="stream-url" title={stream.url}>
                                 {stream.url}
@@ -2116,6 +2104,7 @@ export function StreamsPane({
                               </span>
                             )}
                           </div>
+                          <div className="stream-actions">
                           {stream.url && (
                             <>
                               <button
@@ -2153,6 +2142,7 @@ export function StreamsPane({
                               </button>
                             </>
                           )}
+                          </div>
                         </div>
                       ))}
                       {/* Incremental rendering sentinel (bd-bed9r) */}

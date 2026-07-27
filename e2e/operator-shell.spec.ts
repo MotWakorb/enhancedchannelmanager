@@ -356,29 +356,56 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       expect(await inventoryIdentity.evaluate((identity) => {
         const info = identity.closest<HTMLElement>('.stream-info')!
         const row = identity.closest<HTMLElement>('.stream-item')!
-        const actions = [...row.querySelectorAll<HTMLElement>('button')]
+        const actionsGroup = row.querySelector<HTMLElement>('.stream-actions')!
+        const actions = [...actionsGroup.querySelectorAll<HTMLElement>('button')]
         const infoRect = info.getBoundingClientRect()
+        const direct = [...row.children]
         const identityStyle = getComputedStyle(identity)
         return {
+          strictDomOrder: direct.indexOf(row.querySelector('.stream-artwork-slot')!) <
+              direct.indexOf(info)
+            && direct.indexOf(info) < direct.indexOf(actionsGroup)
+            && direct[direct.length - 1] === actionsGroup,
+          stableBlankArtwork: row.querySelector('.stream-artwork-slot')?.children.length === 0,
+          usableIdentityWidth: infoRect.width >= 80,
           ellipsisContract: identityStyle.overflow === 'hidden'
             && identityStyle.textOverflow === 'ellipsis'
             && identityStyle.whiteSpace === 'nowrap',
           actionsVisible: actions.every((action) => action.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1),
           noOverlap: actions.every((action) => action.getBoundingClientRect().left >= infoRect.right - 1),
         }
-      })).toEqual({ ellipsisContract: true, actionsVisible: true, noOverlap: true })
+      })).toEqual({
+        strictDomOrder: true,
+        stableBlankArtwork: true,
+        usableIdentityWidth: true,
+        ellipsisContract: true,
+        actionsVisible: true,
+        noOverlap: true,
+      })
       expect(await page.evaluate(() => {
         const pane = document.querySelector<HTMLElement>('.streams-pane')!.getBoundingClientRect()
         const streamUrl = document.querySelector<HTMLElement>('.streams-pane .stream-url')!.getBoundingClientRect()
         const channel = document.querySelector<HTMLElement>('.channels-pane .channel-name')!.getBoundingClientRect()
         const channelPane = document.querySelector<HTMLElement>('.channels-pane')!.getBoundingClientRect()
         const inlineName = document.querySelector<HTMLElement>('.inline-stream-name')!.getBoundingClientRect()
+        const inlineRow = document.querySelector<HTMLElement>('.inline-stream-item')!
+        const inlineInfo = inlineRow.querySelector<HTMLElement>('.inline-stream-info')!.getBoundingClientRect()
+        const inlineActions = inlineRow.querySelector<HTMLElement>('.inline-stream-actions')!.getBoundingClientRect()
         return {
           urlContained: streamUrl.left >= pane.left && streamUrl.right <= pane.right + 1,
           channelContained: channel.left >= channelPane.left && channel.right <= channelPane.right + 1,
           inlineContained: inlineName.left >= channelPane.left && inlineName.right <= channelPane.right + 1,
+          inlineIdentityUsable: inlineInfo.width >= 80,
+          inlineActionsFixed: inlineActions.left >= inlineInfo.right - 1
+            && inlineActions.right <= inlineRow.getBoundingClientRect().right + 1,
         }
-      })).toEqual({ urlContained: true, channelContained: true, inlineContained: true })
+      })).toEqual({
+        urlContained: true,
+        channelContained: true,
+        inlineContained: true,
+        inlineIdentityUsable: true,
+        inlineActionsFixed: true,
+      })
 
       for (const collapsed of [false, true]) {
         if (collapsed) await page.getByRole('button', { name: 'Collapse navigation' }).click()
