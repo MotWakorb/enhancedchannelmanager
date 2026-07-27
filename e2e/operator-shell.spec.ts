@@ -1,8 +1,21 @@
 import { test, expect, type Page } from './fixtures/base'
+import type { TestInfo } from '@playwright/test'
 
 async function dismissFirstRunPromptIfPresent(page: Page) {
   const close = page.getByRole('button', { name: 'Close' })
   if (await close.isVisible().catch(() => false)) await close.click()
+}
+
+async function captureOperatorReleaseArtifact(
+  page: Page,
+  testInfo: TestInfo,
+  viewport: { width: number; height: number },
+  state: string,
+) {
+  const name = `operator-workspace--${viewport.width}x${viewport.height}--${state}.png`
+  const path = testInfo.outputPath(name)
+  await page.screenshot({ path, fullPage: true, animations: 'disabled' })
+  await testInfo.attach(name, { path, contentType: 'image/png' })
 }
 
 async function openDeterministicOperatorShell(page: Page) {
@@ -263,7 +276,7 @@ async function openShellWithPipelineFixture(
   await openDeterministicOperatorShell(page)
 }
 
-async function seedChannelWorkspace(page: Page, populated: boolean, channelCount = 1) {
+async function seedChannelWorkspace(page: Page, populated: boolean, channelCount = 1, healthMatrix = false) {
   const channel = {
     id: 41,
     name: 'A deliberately long channel identity that must remain inside the Channels pane',
@@ -275,7 +288,15 @@ async function seedChannelWorkspace(page: Page, populated: boolean, channelCount
     tvg_id: 'espn.us',
     epg_data_id: 88,
   }
-  const channels = channelCount >= 2
+  const healthChannels = [
+    { ...channel, id: 41, name: 'No streams status', channel_number: 101, streams: [], logo_id: null },
+    { ...channel, id: 42, name: 'Failed probe status', channel_number: 102, streams: [501] },
+    { ...channel, id: 43, name: 'Stale status', channel_number: 103, streams: [502], logo_id: null },
+    { ...channel, id: 44, name: 'Black screen status', channel_number: 104, streams: [503], logo_id: null },
+    { ...channel, id: 45, name: 'Low FPS status', channel_number: 105, streams: [504], logo_id: null },
+    { ...channel, id: 46, name: 'Healthy status', channel_number: 106, streams: [505], logo_id: null },
+  ]
+  const channels = healthMatrix ? healthChannels : channelCount >= 2
     ? [
         channel,
         {
@@ -299,6 +320,31 @@ async function seedChannelWorkspace(page: Page, populated: boolean, channelCount
     m3u_account: 3,
     logo_url: null,
   }
+  const healthStreams = [
+    stream,
+    { ...stream, id: 502, name: 'Stale source', is_stale: true },
+    { ...stream, id: 503, name: 'Black screen source' },
+    { ...stream, id: 504, name: 'Low FPS source' },
+    { ...stream, id: 505, name: 'Healthy source' },
+  ]
+  const baseHealthyStats = {
+    resolution: '1920x1080', fps: 30, video_codec: 'h264', audio_codec: 'aac',
+    audio_channels: 2, stream_type: 'hls', bitrate: 4_000_000, video_bitrate: 3_500_000,
+    probe_status: 'success', error_message: null, last_probed: '2026-07-27T12:00:00Z',
+    created_at: '2026-07-27T00:00:00Z', consecutive_failures: 0,
+    is_black_screen: false, is_low_fps: false,
+  }
+  const healthStats = {
+    501: {
+      ...baseHealthyStats, stream_id: 501, stream_name: stream.name, probe_status: 'timeout',
+      error_message: 'Probe exceeded the configured 30 second deadline while waiting for the upstream provider response',
+      consecutive_failures: 3,
+    },
+    502: { ...baseHealthyStats, stream_id: 502, stream_name: 'Stale source' },
+    503: { ...baseHealthyStats, stream_id: 503, stream_name: 'Black screen source', is_black_screen: true },
+    504: { ...baseHealthyStats, stream_id: 504, stream_name: 'Low FPS source', fps: 2, is_low_fps: true },
+    505: { ...baseHealthyStats, stream_id: 505, stream_name: 'Healthy source' },
+  }
   await page.route(/\/api\/channel-groups(?:\?|$)/, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -317,22 +363,34 @@ async function seedChannelWorkspace(page: Page, populated: boolean, channelCount
   await page.route(/\/api\/stream-groups(?:\?|$)/, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify(populated ? [{ name: 'Provider Sports', count: 1 }] : []),
+    body: JSON.stringify(populated ? [{ name: 'Provider Sports', count: healthMatrix ? 5 : 1 }] : []),
   }))
   await page.route(/\/api\/streams(?:\?|$)/, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      count: populated ? 1 : 0,
+      count: populated ? (healthMatrix ? healthStreams.length : 1) : 0,
       next: null,
       previous: null,
-      results: populated ? [stream] : [],
+      results: populated ? (healthMatrix ? healthStreams : [stream]) : [],
     }),
   }))
+  await page.route(/\/api\/channels\/\d+\/streams(?:\?|$)/, (route) => {
+    const channelId = Number(new URL(route.request().url()).pathname.split('/').at(-2))
+    const assignedId = healthMatrix ? healthChannels.find((item) => item.id === channelId)?.streams[0] : 501
+    const assigned = healthMatrix
+      ? healthStreams.find((item) => item.id === assignedId)
+      : stream
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(assigned ? [assigned] : []),
+    })
+  })
   await page.route(/\/api\/stream-stats\/by-ids(?:\?|$)/, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify(populated ? {
+    body: JSON.stringify(populated ? (healthMatrix ? healthStats : {
       501: {
         stream_id: 501,
         stream_name: stream.name,
@@ -352,7 +410,12 @@ async function seedChannelWorkspace(page: Page, populated: boolean, channelCount
         is_black_screen: false,
         is_low_fps: false,
       },
-    } : {}),
+    }) : {}),
+  }))
+  await page.route(/\/api\/streams\/stale-ids(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ stale_stream_ids: healthMatrix ? [502] : [] }),
   }))
   await page.route(/\/api\/stream-stats\/probe\/bulk(?:\?|$)/, async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -745,7 +808,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(dashboard.getByText('9 streams', { exact: true })).toBeVisible()
     })
 
-    test('Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
+    test('[release:operator-workspace] Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
       await seedChannelWorkspace(page, true, 2)
       await openShellWithPipelineFixture(
         page,
@@ -765,6 +828,25 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByLabel('1 total stream')).toBeVisible()
       const separator = page.getByRole('separator', { name: 'Resize Channels and Streams panes' })
       await expect(separator).toBeVisible()
+      await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible()
+      await expect(page.getByRole('main')).toHaveAttribute('id', 'main-content')
+      await expect(page.getByRole('contentinfo')).toBeVisible()
+      await expect(page.locator('#main-content h1')).toHaveCount(1)
+      const expandedShell = await shellMetrics(page)
+      expect(expandedShell).toMatchObject({
+        width: 244,
+        noSidebarXOverflow: true,
+        mainClear: true,
+        noDocumentXOverflow: true,
+        targetsPractical: true,
+        labelsHidden: false,
+      })
+      for (const group of ['Overview', 'Operations', 'Automation', 'Insights', 'System']) {
+        await expect(page.locator('.navigation-group h2', { hasText: group })).toBeVisible()
+      }
+      expect(await page.locator('.navigation-destination').evaluateAll((links) =>
+        links.every((link) => Boolean(link.getAttribute('aria-label')) && link.getAttribute('title') === link.getAttribute('aria-label')),
+      )).toBe(true)
 
       const separatorBox = await separator.boundingBox()
       if (!separatorBox) throw new Error('splitter has no geometry')
@@ -851,6 +933,37 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByLabel('1 stream; failed probe')).toBeVisible()
       const channelArtwork = page.locator('.channel-logo').first()
       await expect(channelArtwork).toHaveAttribute('src', '/persisted-channel-artwork.png')
+      const normalTypography = await page.evaluate(() => ({
+        root: getComputedStyle(document.documentElement).fontSize,
+        channel: getComputedStyle(document.querySelector<HTMLElement>('.channel-name')!).fontSize,
+        inventory: getComputedStyle(document.querySelector<HTMLElement>('.streams-pane .stream-name')!).fontSize,
+        actionIcon: getComputedStyle(document.querySelector<HTMLElement>('.channels-pane .channel-menu-btn .material-icons')!).fontSize,
+      }))
+      expect(Number.parseFloat(normalTypography.root)).toBeGreaterThanOrEqual(16)
+      expect(Number.parseFloat(normalTypography.channel)).toBeGreaterThanOrEqual(12)
+      expect(Number.parseFloat(normalTypography.inventory)).toBeGreaterThanOrEqual(12)
+      expect(Number.parseFloat(normalTypography.actionIcon)).toBeGreaterThanOrEqual(16)
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'populated-normal-expanded')
+      await page.getByRole('button', { name: 'Collapse navigation' }).click()
+      await expect.poll(() => shellMetrics(page)).toMatchObject({
+        width: 68,
+        noSidebarXOverflow: true,
+        mainClear: true,
+        noDocumentXOverflow: true,
+        targetsPractical: true,
+        labelsHidden: true,
+        iconsCentered: true,
+      })
+      await expect(page.locator('.navigation-group h2')).toHaveCount(5)
+      expect(await page.locator('.navigation-group h2').evaluateAll((headings) =>
+        headings.every((heading) => {
+          const style = getComputedStyle(heading)
+          const rect = heading.getBoundingClientRect()
+          return style.display === 'none' && rect.width === 0 && rect.height === 0
+        }),
+      )).toBe(true)
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'populated-normal-collapsed')
+      await page.getByRole('button', { name: 'Expand navigation' }).click()
       const expectChannelColumnsAligned = async () => {
         expect(await page.evaluate(() => {
           const center = (selector: string) => {
@@ -898,6 +1011,11 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByLabel(/^Drag channel A deliberately long channel identity .* to reorder$/)).toBeVisible()
       await expect(page.getByLabel('Drag stream group Provider Sports to Channels pane to create channels')).toBeVisible()
       await expect(page.getByLabel(/Drag inventory stream .* to assign it to a channel/)).toBeVisible()
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'populated-edit-expanded')
+      await page.getByRole('button', { name: 'Collapse navigation' }).click()
+      await expect(page.locator('.primary-sidebar')).toHaveCSS('width', '68px')
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'populated-edit-collapsed')
+      await page.getByRole('button', { name: 'Expand navigation' }).click()
 
       const inventoryDrag = page.getByLabel(/Drag inventory stream .* to assign it to a channel/)
       await inventoryDrag.focus()
@@ -970,6 +1088,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       const selectionMenu = page.getByRole('menu', { name: 'More selection actions' })
       await expect(selectionMenu).toBeVisible()
       await expect(selectionMenu.getByRole('menuitem', { name: /Move to group/ })).toBeFocused()
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'populated-edit-selection-menu')
       await page.keyboard.press('Escape')
       await expect(selectionMenu).toHaveCount(0)
       await expect(selectionMore).toBeFocused()
@@ -1126,6 +1245,91 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' },
         )
       }
+    })
+
+    test('[release:operator-workspace] Channel Manager empty and error states remain operable at both navigation widths', async ({ page }, testInfo) => {
+      await seedChannelWorkspace(page, false)
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+
+      const expectStateGeometry = async () => {
+        await expect.poll(() => page.evaluate(() => {
+          const sidebar = document.querySelector<HTMLElement>('.primary-sidebar')!.getBoundingClientRect()
+          const main = document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect()
+          return {
+            oneH1: document.querySelectorAll('#main-content h1').length,
+            mainClearsRail: main.left >= sidebar.right,
+            noDocumentOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+            sidebarNoOverflow: document.querySelector<HTMLElement>('.primary-sidebar')!.scrollWidth
+              === document.querySelector<HTMLElement>('.primary-sidebar')!.clientWidth,
+          }
+        })).toEqual({
+          oneH1: 1,
+          mainClearsRail: true,
+          noDocumentOverflow: true,
+          sidebarNoOverflow: true,
+        })
+      }
+
+      await expect(page.getByRole('status').filter({ hasText: 'No channels are configured.' })).toBeVisible()
+      await expectStateGeometry()
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'empty-expanded')
+      await page.getByRole('button', { name: 'Collapse navigation' }).click()
+      await expect(page.locator('.primary-sidebar')).toHaveCSS('width', '68px')
+      await expectStateGeometry()
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'empty-collapsed')
+
+      await page.getByRole('button', { name: 'Expand navigation' }).click()
+      await page.route(/\/api\/channels(?:\?|$)/, (route) => route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Deterministic release-matrix channel failure' }),
+      }))
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await expect(page.getByText('Channels unavailable')).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Retry loading channels' })).toBeVisible()
+      await expect(page.locator('.channels-pane')).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Edit Mode' })).toBeDisabled()
+      await expect(page.getByRole('button', { name: 'Edit Mode' }))
+        .toHaveAttribute('title', 'Edit Mode is unavailable until channel data loads')
+      await expectStateGeometry()
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'error-expanded')
+      await page.getByRole('button', { name: 'Collapse navigation' }).click()
+      await expectStateGeometry()
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'error-collapsed')
+    })
+
+    test('[release:operator-workspace] Channel Manager renders every non-color health state and artwork fallback', async ({ page }, testInfo) => {
+      await seedChannelWorkspace(page, true, 6, true)
+      await openShellWithPipelineFixture(
+        page,
+        200,
+        [{ id: 3, name: 'Fixture Provider' }],
+        [{ id: 5, name: 'Schedules Direct' }],
+      )
+      await dismissFirstRunPromptIfPresent(page)
+      await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
+
+      const statuses = [
+        { name: '0 streams; no streams assigned', icon: 'warning' },
+        { name: '1 stream; failed probe', icon: 'error' },
+        { name: '1 stream; stale', icon: 'history' },
+        { name: '1 stream; black screen', icon: 'videocam_off' },
+        { name: '1 stream; low FPS', icon: 'slow_motion_video' },
+        { name: '1 stream; healthy', icon: 'lan' },
+      ]
+      for (const status of statuses) {
+        const indicator = page.getByLabel(status.name)
+        await expect(indicator).toBeVisible()
+        await expect(indicator.locator('.material-icons')).toHaveText(status.icon)
+      }
+      const noLogoRow = page.locator('.channel-item', { hasText: 'No streams status' })
+      await expect(noLogoRow.locator('.channel-logo-placeholder .material-icons')).toHaveText('image')
+      await expect(noLogoRow.locator('.channel-logo')).toHaveCount(0)
+      await page.getByText('Healthy status', { exact: true }).click()
+      await expect(page.locator('.channels-pane .meta-tag.resolution')).toHaveText('1080p')
+      await expect(page.locator('.streams-pane .meta-tag.resolution, .streams-pane .probe-warning-summary')).toHaveCount(0)
+      await captureOperatorReleaseArtifact(page, testInfo, viewport, 'health-and-artwork-matrix-expanded')
     })
   })
 }
@@ -1984,16 +2188,18 @@ test.describe('operator shell navigation behavior', () => {
     await expect(appPage.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
   })
 
-  test('contextual settings navigation cleanly exits an edit session with no staged changes', async ({ appPage }) => {
-    await dismissFirstRunPromptIfPresent(appPage)
-    await appPage.getByRole('button', { name: 'Edit Mode' }).click()
-    await expect(appPage.getByRole('button', { name: 'Done' })).toBeVisible()
-    await appPage.getByRole('link', { name: 'Channel default settings' }).click()
-    await expect(appPage).toHaveURL(/#settings\/channel-defaults$/)
-    await expect(appPage.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
-    await expect(appPage.getByRole('button', { name: 'Done' })).toHaveCount(0)
-    await appPage.getByRole('link', { name: 'Channel Manager' }).click()
-    await expect(appPage.getByRole('button', { name: 'Edit Mode' })).toBeVisible()
+  test('contextual settings navigation cleanly exits an edit session with no staged changes', async ({ page }) => {
+    await seedChannelWorkspace(page, true)
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByRole('button', { name: 'Edit Mode' }).click()
+    await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
+    await page.getByRole('link', { name: 'Channel default settings' }).click()
+    await expect(page).toHaveURL(/#settings\/channel-defaults$/)
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await expect(page.getByRole('button', { name: 'Done' })).toHaveCount(0)
+    await page.getByRole('link', { name: 'Channel Manager' }).click()
+    await expect(page.getByRole('button', { name: 'Edit Mode' })).toBeVisible()
   })
 
   test('the Channel Manager primary action belongs to its page header', async ({ appPage }) => {

@@ -2452,8 +2452,11 @@ function App() {
     ...value,
     retry: streamRetryOperations.current[key] ?? (() => Promise.resolve()),
   }));
-  const workspacePermissionDenied = [...channelWorkspaceSources, ...streamWorkspaceSources]
+  const workspaceSources = [...channelWorkspaceSources, ...streamWorkspaceSources];
+  const workspacePermissionDenied = workspaceSources
     .some((source) => source.state === 'permission');
+  const workspaceEditUnavailable = channelWorkspaceSources.some((source) =>
+    source.state === 'loading' || (source.state === 'error' && !source.hasSnapshot));
 
   const channelManagerPageAction = activeTab === 'channel-manager'
     && !workspacePermissionDenied && (
@@ -2505,7 +2508,10 @@ function App() {
       <button
         className="enter-edit-mode-btn"
         onClick={enterEditMode}
-        title="Enter Edit Mode to make changes"
+        disabled={workspaceEditUnavailable}
+        title={workspaceEditUnavailable
+          ? 'Edit Mode is unavailable until channel data loads'
+          : 'Enter Edit Mode to make changes'}
       >
         <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
         Edit Mode

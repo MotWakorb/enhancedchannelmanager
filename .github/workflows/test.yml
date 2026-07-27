@@ -443,6 +443,45 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # ─── Operator workspace rendered release matrix (.14) ─────────────────
+  operator-workspace-release:
+    name: Operator Workspace Release Matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix frontend ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run exact rendered release matrix
+        run: npm run test:e2e:operator-workspace-release
+
+      - name: Upload named rendered evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-workspace-release-matrix
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: error
+          retention-days: 14
+
   # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
   # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
   # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call

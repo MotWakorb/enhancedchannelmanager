@@ -359,6 +359,39 @@ viewports. Permission, loading, and stale behavior is tested only on routes
 whose APIs define those states (Logo Manager and the retained history routes);
 it is not inferred for routes without that contract.
 
+### Rendered release matrix
+
+Bead `enhancedchannelmanager-2896r.14` is enforced by:
+
+```bash
+npm run test:e2e:operator-workspace-release
+```
+
+This exact-build Chromium serial/no-retry gate selects tests tagged
+`release:operator-workspace`. At exactly 1280×720 and 1920×1080 it covers
+populated normal and Edit Mode with both 244px expanded and 68px collapsed
+navigation, plus applicable empty and request-error states at both navigation
+widths. It also renders the complete non-color health indicator matrix, artwork
+and fallback behavior, assigned-stream timeout geometry, inventory DOM order,
+Edit Mode-only handles, focus-return menus, landmarks/headings, typography,
+icon density, and horizontal containment.
+
+Named full-page evidence is written beneath each Playwright test output
+directory as:
+
+```text
+test-results/<test-id>/operator-workspace--<width>x<height>--<state>.png
+```
+
+The PNGs are run artifacts, not source-controlled baselines. CI uploads the
+entire `test-results/` and `playwright-report/` trees as the
+`operator-workspace-release-matrix` artifact for 14 days, including successful
+runs. Expected state names include `populated-normal-expanded`,
+`populated-normal-collapsed`, `populated-edit-expanded`,
+`populated-edit-collapsed`, `populated-edit-selection-menu`, `empty-expanded`,
+`empty-collapsed`, `error-expanded`, `error-collapsed`, and
+`health-and-artwork-matrix-expanded`.
+
 ## Testable hypotheses
 
 These are hypotheses to measure in moderated task-path review or instrument only with explicit telemetry approval; they are not claims of observed improvement.
