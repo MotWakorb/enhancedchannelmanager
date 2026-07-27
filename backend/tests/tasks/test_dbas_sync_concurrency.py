@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -52,6 +53,7 @@ from dbas.restore_contracts import RestoreOutcome, RestoreReport
 from export_models import SyncTarget
 from models import ScheduledTask, TaskSchedule
 from task_registry import get_registry
+from tasks import dbas_sync
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +100,6 @@ def _clean_registry():
 @pytest.fixture
 def _fresh_semaphore():
     """Reset the module-level sync concurrency semaphore around the test."""
-    from tasks import dbas_sync
 
     dbas_sync.reset_sync_concurrency_for_tests()
     yield
@@ -140,18 +141,16 @@ def _sync_counter_value(result_label: str) -> float:
 
 
 def test_sync_task_id_scheme():
-    from tasks.dbas_sync import SYNC_TASK_ID_PREFIX, sync_task_id_for
 
-    assert SYNC_TASK_ID_PREFIX == "dbas_sync_"
-    assert sync_task_id_for(7) == "dbas_sync_7"
+    assert dbas_sync.SYNC_TASK_ID_PREFIX == "dbas_sync_"
+    assert dbas_sync.sync_task_id_for(7) == "dbas_sync_7"
 
 
 def test_make_sync_task_class_binds_target():
     from task_scheduler import ScheduleType
-    from tasks.dbas_sync import DbasSyncTask, make_sync_task_class
 
-    cls = make_sync_task_class(7, "replica-b")
-    assert issubclass(cls, DbasSyncTask)
+    cls = dbas_sync.make_sync_task_class(7, "replica-b")
+    assert issubclass(cls, dbas_sync.DbasSyncTask)
     assert cls.task_id == "dbas_sync_7"
     assert cls.bound_sync_target_id == 7
     assert "replica-b" in cls.task_name
@@ -183,19 +182,14 @@ def test_base_class_is_not_statically_registered():
 
 
 def test_ensure_and_remove_sync_target_task(_wire_db, _clean_registry):
-    from tasks.dbas_sync import (
-        ensure_sync_target_task,
-        remove_sync_target_task,
-        sync_task_id_for,
-    )
 
     session = _wire_db()
     target = _make_target(session, name="replica-b")
     target_id = target.id
     session.close()
 
-    task_id = sync_task_id_for(target_id)
-    ensure_sync_target_task(target_id, "replica-b")
+    task_id = dbas_sync.sync_task_id_for(target_id)
+    dbas_sync.ensure_sync_target_task(target_id, "replica-b")
 
     registry = get_registry()
     assert registry.is_registered(task_id)
@@ -206,7 +200,7 @@ def test_ensure_and_remove_sync_target_task(_wire_db, _clean_registry):
     session.close()
 
     # Rename flows through ensure (same id, refreshed display name).
-    ensure_sync_target_task(target_id, "replica-b-renamed")
+    dbas_sync.ensure_sync_target_task(target_id, "replica-b-renamed")
     session = _wire_db()
     row = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
     assert "replica-b-renamed" in row.task_name
@@ -221,7 +215,7 @@ def test_ensure_and_remove_sync_target_task(_wire_db, _clean_registry):
     session.commit()
     session.close()
 
-    remove_sync_target_task(target_id)
+    dbas_sync.remove_sync_target_task(target_id)
     assert not registry.is_registered(task_id)
     session = _wire_db()
     assert session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first() is None
@@ -235,7 +229,6 @@ def test_register_sync_target_tasks_migrates_legacy_rows(_wire_db, _clean_regist
     in its parameters; a legacy row pointing at a DELETED target is disabled
     (non-silently, never re-keyed to a dead id); the legacy parent row and
     stale per-target rows are pruned."""
-    from tasks.dbas_sync import register_sync_target_tasks, sync_task_id_for
 
     session = _wire_db()
     t1 = _make_target(session, name="replica-1")
@@ -256,23 +249,23 @@ def test_register_sync_target_tasks_migrates_legacy_rows(_wire_db, _clean_regist
         parameters=json.dumps({"sync_target_id": 999999}),
     ))
     # Stale per-target rows for a target deleted while the container was down.
-    session.add(ScheduledTask(task_id=sync_task_id_for(999999),
+    session.add(ScheduledTask(task_id=dbas_sync.sync_task_id_for(999999),
                               task_name="Cross-Instance Sync: ghost",
                               enabled=False, schedule_type="manual"))
     session.commit()
     session.close()
 
-    register_sync_target_tasks()
+    dbas_sync.register_sync_target_tasks()
 
     registry = get_registry()
-    assert registry.is_registered(sync_task_id_for(t1_id))
-    assert registry.is_registered(sync_task_id_for(t2_id))
+    assert registry.is_registered(dbas_sync.sync_task_id_for(t1_id))
+    assert registry.is_registered(dbas_sync.sync_task_id_for(t2_id))
     assert not registry.is_registered("dbas_sync")
 
     session = _wire_db()
     # Legacy schedule re-keyed to its per-target id, parameters intact.
     migrated = session.query(TaskSchedule).filter(
-        TaskSchedule.task_id == sync_task_id_for(t1_id)
+        TaskSchedule.task_id == dbas_sync.sync_task_id_for(t1_id)
     ).all()
     assert len(migrated) == 1
     assert migrated[0].enabled is True
@@ -288,7 +281,7 @@ def test_register_sync_target_tasks_migrates_legacy_rows(_wire_db, _clean_regist
         ScheduledTask.task_id == "dbas_sync"
     ).first() is None
     assert session.query(ScheduledTask).filter(
-        ScheduledTask.task_id == sync_task_id_for(999999)
+        ScheduledTask.task_id == dbas_sync.sync_task_id_for(999999)
     ).first() is None
     session.close()
 
@@ -299,11 +292,10 @@ def test_register_sync_target_tasks_migrates_legacy_rows(_wire_db, _clean_regist
 
 
 def _register_bound_task(target_id: int, name: str):
-    from tasks.dbas_sync import make_sync_task_class, sync_task_id_for
 
     registry = get_registry()
-    registry.register(make_sync_task_class(target_id, name))
-    return sync_task_id_for(target_id)
+    registry.register(dbas_sync.make_sync_task_class(target_id, name))
+    return dbas_sync.sync_task_id_for(target_id)
 
 
 @pytest.mark.asyncio
@@ -313,7 +305,6 @@ async def test_concurrent_runs_of_different_targets_proceed(
     """While target 1's run is mid-flight (blocked inside run_sync), target 2's
     run must start AND complete — the exact starvation v1 exhibited."""
     from task_engine import TaskEngine
-    from tasks import dbas_sync
 
     session = _wire_db()
     t1 = _make_target(session, name="replica-1")
@@ -361,7 +352,6 @@ async def test_same_target_second_run_refused_non_silently(
     ALREADY_RUNNING failure (non-silent), and the target stays runnable after
     the first run finishes."""
     from task_engine import TaskEngine
-    from tasks import dbas_sync
 
     session = _wire_db()
     t1 = _make_target(session, name="replica-1")
@@ -408,8 +398,6 @@ async def test_one_shot_isolation_across_concurrent_targets(
     """Two targets in flight simultaneously: each run reads ONLY its own bound
     target and its own confirm_apply, and both instances disarm back to their
     bound id afterwards — no parameter leakage across targets or runs."""
-    from tasks import dbas_sync
-    from tasks.dbas_sync import make_sync_task_class
 
     session = _wire_db()
     t1 = _make_target(session, name="replica-1")
@@ -417,8 +405,8 @@ async def test_one_shot_isolation_across_concurrent_targets(
     t1_id, t2_id = t1.id, t2.id
     session.close()
 
-    inst1 = make_sync_task_class(t1_id, "replica-1")()
-    inst2 = make_sync_task_class(t2_id, "replica-2")()
+    inst1 = dbas_sync.make_sync_task_class(t1_id, "replica-1")()
+    inst2 = dbas_sync.make_sync_task_class(t2_id, "replica-2")()
 
     both_in_flight = asyncio.Barrier(2)
     captured: dict[int, bool] = {}
@@ -456,8 +444,6 @@ async def test_foreign_sync_target_id_parameter_hard_fails(
     same B via two ids) and misattribute the run history."""
     from unittest.mock import AsyncMock
 
-    from tasks import dbas_sync
-    from tasks.dbas_sync import make_sync_task_class
 
     session = _wire_db()
     t1 = _make_target(session, name="replica-1")
@@ -465,7 +451,7 @@ async def test_foreign_sync_target_id_parameter_hard_fails(
     t1_id, t2_id = t1.id, t2.id
     session.close()
 
-    inst = make_sync_task_class(t1_id, "replica-1")()
+    inst = dbas_sync.make_sync_task_class(t1_id, "replica-1")()
 
     with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
         inst.update_config({"sync_target_id": t2_id, "confirm_apply": True})
@@ -487,15 +473,13 @@ async def test_matching_sync_target_id_parameter_is_accepted(
 ):
     """The frontend keeps sending sync_target_id (self-documenting payload);
     a value MATCHING the bound target must run normally."""
-    from tasks import dbas_sync
-    from tasks.dbas_sync import make_sync_task_class
 
     session = _wire_db()
     t1 = _make_target(session, name="replica-1")
     t1_id = t1.id
     session.close()
 
-    inst = make_sync_task_class(t1_id, "replica-1")()
+    inst = dbas_sync.make_sync_task_class(t1_id, "replica-1")()
     seen = {}
 
     async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
@@ -516,7 +500,6 @@ async def test_matching_sync_target_id_parameter_is_accepted(
 
 
 def test_sync_max_concurrent_default_and_env(monkeypatch):
-    from tasks import dbas_sync
 
     monkeypatch.delenv("ECM_SYNC_MAX_CONCURRENT", raising=False)
     assert dbas_sync._sync_max_concurrent() == 3
@@ -538,8 +521,6 @@ async def test_semaphore_queues_excess_runs_instead_of_dropping(
     """With the cap forced to 1, two different-target runs serialize: the
     second waits for the first slot and still completes — queued, not
     refused."""
-    from tasks import dbas_sync
-    from tasks.dbas_sync import make_sync_task_class
 
     monkeypatch.setenv("ECM_SYNC_MAX_CONCURRENT", "1")
     dbas_sync.reset_sync_concurrency_for_tests()
@@ -550,8 +531,8 @@ async def test_semaphore_queues_excess_runs_instead_of_dropping(
     t1_id, t2_id = t1.id, t2.id
     session.close()
 
-    inst1 = make_sync_task_class(t1_id, "replica-1")()
-    inst2 = make_sync_task_class(t2_id, "replica-2")()
+    inst1 = dbas_sync.make_sync_task_class(t1_id, "replica-1")()
+    inst2 = dbas_sync.make_sync_task_class(t2_id, "replica-2")()
 
     entered: list[int] = []
     t1_release = asyncio.Event()
@@ -590,8 +571,6 @@ async def test_concurrent_runs_attribute_metrics_per_result(
 ):
     """Concurrent success + failure runs each bump their OWN result label
     exactly once — attribution survives interleaving."""
-    from tasks import dbas_sync
-    from tasks.dbas_sync import make_sync_task_class
 
     session = _wire_db()
     t1 = _make_target(session, name="replica-1")
@@ -599,8 +578,8 @@ async def test_concurrent_runs_attribute_metrics_per_result(
     t1_id, t2_id = t1.id, t2.id
     session.close()
 
-    inst1 = make_sync_task_class(t1_id, "replica-1")()
-    inst2 = make_sync_task_class(t2_id, "replica-2")()
+    inst1 = dbas_sync.make_sync_task_class(t1_id, "replica-1")()
+    inst2 = dbas_sync.make_sync_task_class(t2_id, "replica-2")()
 
     both_in_flight = asyncio.Barrier(2)
 
@@ -637,3 +616,270 @@ def test_per_target_sync_ids_are_privileged():
     assert is_privileged_task_id("dbas_sync_12345")
     assert not is_privileged_task_id("cleanup")
     assert not is_privileged_task_id("stream_probe")
+
+
+# ---------------------------------------------------------------------------
+# 7. Migration preserves EFFECTIVE enabled state (PR #752 review, Block 1).
+#
+# Firing needs BOTH the parent ``scheduled_tasks.enabled`` gate AND an enabled
+# child ``task_schedules`` row (task_engine._check_and_run_due_tasks). The
+# migration re-keys enabled child rows and deletes the legacy parent, but the
+# registry creates each new per-target parent from ``default_enabled=False``
+# — so an operator upgrading with a WORKING hourly schedule would land on a
+# silently non-firing one. The effective pre-upgrade state (legacy parent
+# enabled AND child enabled) must survive the migration.
+# ---------------------------------------------------------------------------
+
+
+def _seed_legacy_schedule(session, target_id, *, parent_enabled=True,
+                          child_enabled=True, next_run_at=None):
+    """Seed the pre-7ipq2.3 row shape: one shared parent + a parameterized child."""
+    session.add(ScheduledTask(
+        task_id="dbas_sync", task_name="Cross-Instance Sync",
+        enabled=parent_enabled, schedule_type="manual",
+    ))
+    sched = TaskSchedule(
+        task_id="dbas_sync", name="hourly", enabled=child_enabled,
+        schedule_type="interval", interval_seconds=3600,
+        parameters=json.dumps({"sync_target_id": target_id, "confirm_apply": True}),
+        next_run_at=next_run_at,
+    )
+    session.add(sched)
+    session.commit()
+    return sched
+
+
+def test_migration_preserves_enabled_parent_gate(_wire_db, _clean_registry):
+    """A working legacy schedule (parent ON + child ON) migrates to a per-target
+    parent that is ALSO on — otherwise the child is re-keyed onto a disabled
+    parent and never fires again."""
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    _seed_legacy_schedule(session, target_id)
+    session.close()
+
+    dbas_sync.register_sync_target_tasks()
+
+    session = _wire_db()
+    parent = session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == dbas_sync.sync_task_id_for(target_id)
+    ).first()
+    assert parent is not None, "per-target parent row was not created"
+    assert parent.enabled is True, "effective enabled state lost in migration"
+    child = session.query(TaskSchedule).filter(
+        TaskSchedule.task_id == dbas_sync.sync_task_id_for(target_id)
+    ).one()
+    assert child.enabled is True
+    session.close()
+
+    # The registry instance must agree — sync_from_database reads the row, but
+    # the in-memory instance is what the engine's legacy fallback path checks.
+    instance = get_registry().get_task_instance(dbas_sync.sync_task_id_for(target_id))
+    assert instance._enabled is True
+
+
+def test_migration_does_not_enable_a_disabled_legacy_setup(_wire_db, _clean_registry):
+    """The migration PRESERVES effective state — it never turns a deliberately
+    stopped sync back on. Parent off (the documented kill switch) stays off."""
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    _seed_legacy_schedule(session, target_id, parent_enabled=False)
+    session.close()
+
+    dbas_sync.register_sync_target_tasks()
+
+    session = _wire_db()
+    parent = session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == dbas_sync.sync_task_id_for(target_id)
+    ).first()
+    assert parent is not None
+    assert parent.enabled is False
+    session.close()
+
+
+def test_migration_leaves_parent_off_when_child_was_disabled(_wire_db, _clean_registry):
+    """Parent ON but child OFF was NOT firing before — it must not start now."""
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    _seed_legacy_schedule(session, target_id, child_enabled=False)
+    session.close()
+
+    dbas_sync.register_sync_target_tasks()
+
+    session = _wire_db()
+    parent = session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == dbas_sync.sync_task_id_for(target_id)
+    ).first()
+    assert parent.enabled is False
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_migrated_schedule_fires_on_first_due_tick(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """END-TO-END through the scheduler, not just registration state: seed the
+    legacy working schedule with a DUE next_run_at, run the real startup
+    sequence (register_sync_target_tasks -> sync_from_database), then let the
+    engine's due-task scan run. The migrated schedule must actually FIRE.
+
+    This is the regression the review demanded: asserting on row/registry state
+    alone passed while the run silently never happened (parent gate off)."""
+    from task_engine import TaskEngine
+
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    _seed_legacy_schedule(
+        session, target_id,
+        next_run_at=datetime.utcnow() - timedelta(minutes=5),  # already due
+    )
+    session.close()
+
+    # --- real startup order (main.py): register, THEN engine start/sync ---
+    dbas_sync.register_sync_target_tasks()
+    registry = get_registry()
+    registry.sync_from_database()
+
+    fired = asyncio.Event()
+    seen = {}
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
+        seen["target_id"] = sync_target.id
+        seen["confirm_apply"] = confirm_apply
+        fired.set()
+        return _success_report()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        await engine._check_and_run_due_tasks()
+        await asyncio.wait_for(fired.wait(), timeout=5)
+        # Let the spawned run finish before the patch is torn down.
+        for _ in range(200):
+            if not engine._active_tasks:
+                break
+            await asyncio.sleep(0.01)
+
+    assert seen["target_id"] == target_id
+    # The migrated schedule's own parameters still drive the run.
+    assert seen["confirm_apply"] is True
+
+
+# ---------------------------------------------------------------------------
+# 8. Drift signal is FULL-APPLY-ONLY (PR #752 review, Block 2).
+#
+# The generic task engine stamps ecm_task_schedule_last_success_timestamp on
+# ANY TaskResult.success, and a dry-run PREVIEW legitimately reports success
+# (it produced a plan). The staleness alert defines its gauge as "last FULL
+# success" freshness, so a recurring preview would reset the drift clock
+# without ever writing B — masking real divergence. The alert therefore keys
+# on a dedicated apply-only gauge stamped by this task.
+# ---------------------------------------------------------------------------
+
+
+def _full_success_gauge(target_id: int) -> float:
+    gauge = observability.get_metric("sync_last_full_success_timestamp")
+    return gauge.labels(sync_target_id=str(target_id))._value.get()
+
+
+@pytest.mark.asyncio
+async def test_dry_run_preview_does_not_stamp_full_success_gauge(
+    _wire_db, _clean_registry, _reset_metrics, _fresh_semaphore
+):
+    """A preview writes nothing to B — it must NOT reset the drift clock."""
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    session.close()
+
+    inst = dbas_sync.make_sync_task_class(target_id, "replica-1")()
+
+    async def _fake_run_sync(sync_target, **_kw):
+        return RestoreReport(is_dry_run=True)
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        result = await inst.execute()
+
+    # The RUN succeeded (a preview that produced a plan is a success) ...
+    assert result.success is True
+    assert result.details["is_dry_run"] is True
+    # ... but the apply-only drift gauge stays untouched.
+    assert _full_success_gauge(target_id) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_successful_apply_stamps_full_success_gauge(
+    _wire_db, _clean_registry, _reset_metrics, _fresh_semaphore
+):
+    """A clean APPLY is the only thing that resets the drift clock."""
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    session.close()
+
+    inst = dbas_sync.make_sync_task_class(target_id, "replica-1")()
+
+    async def _fake_run_sync(sync_target, **_kw):
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        inst.update_config({"confirm_apply": True})
+        result = await inst.execute()
+
+    assert result.success is True
+    assert _full_success_gauge(target_id) > 0.0
+
+
+@pytest.mark.asyncio
+async def test_partial_apply_does_not_stamp_full_success_gauge(
+    _wire_db, _clean_registry, _reset_metrics, _fresh_semaphore
+):
+    """Tri-state discipline: a mixed/rolled-back apply leaves B drifting, so it
+    must not reset the clock either (the sustained-partial-loop case the
+    runbook calls out)."""
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    session.close()
+
+    inst = dbas_sync.make_sync_task_class(target_id, "replica-1")()
+
+    async def _fake_run_sync(sync_target, **_kw):
+        report = RestoreReport(is_dry_run=False)
+        report.outcome = RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+        return report
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        inst.update_config({"confirm_apply": True})
+        result = await inst.execute()
+
+    assert result.success is False
+    assert _full_success_gauge(target_id) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_full_success_gauge_is_attributed_per_target(
+    _wire_db, _clean_registry, _reset_metrics, _fresh_semaphore
+):
+    """Target 1 applying cleanly must NOT reset target 2's drift clock — the
+    per-target attribution the whole alert story depends on."""
+    session = _wire_db()
+    t1 = _make_target(session, name="replica-1")
+    t2 = _make_target(session, name="replica-2")
+    t1_id, t2_id = t1.id, t2.id
+    session.close()
+
+    inst1 = dbas_sync.make_sync_task_class(t1_id, "replica-1")()
+
+    async def _fake_run_sync(sync_target, **_kw):
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        inst1.update_config({"confirm_apply": True})
+        await inst1.execute()
+
+    assert _full_success_gauge(t1_id) > 0.0
+    assert _full_success_gauge(t2_id) == 0.0

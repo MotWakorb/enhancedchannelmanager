@@ -527,6 +527,16 @@ class DbasSyncTask(TaskScheduler):
         # ecm_task_schedule_last_success_timestamp.
         _bump_sync_metric("success" if succeeded else "partial")
 
+        # FULL-APPLY freshness (PR #752 review, Block 2). The task engine
+        # stamps the GENERIC per-task success gauge on any success — and a
+        # dry-run PREVIEW is a success (it produced a plan) — so that gauge
+        # cannot answer "when was B last actually converged": a recurring
+        # preview would reset the drift clock without ever writing B. This
+        # dedicated gauge is stamped ONLY here, on an APPLY that returned a
+        # clean SUCCESS, and it is what ECMSyncStalledTargetDrift keys on.
+        if succeeded and not is_dry_run and self.sync_target_id is not None:
+            observability.record_sync_full_success(self.sync_target_id)
+
         message = self._summary_message(report, is_dry_run, outcome)
         logger.info(
             "[DBAS_SYNC] Sync task complete (mode=%s, outcome=%s, %d categories)",
@@ -749,7 +759,19 @@ def register_sync_target_tasks() -> None:
        (non-silent WARN) rather than re-keyed to an id that can never run.
        The legacy ``scheduled_tasks`` parent row is deleted (its alert/
        notification preferences do NOT carry over to per-target rows).
-    3. **Prune stale per-target rows** for targets deleted while the
+    3. **Preserve EFFECTIVE enabled state** across that migration (PR #752
+       review, Block 1). Firing needs BOTH the parent ``scheduled_tasks``
+       gate AND an enabled child row (``task_engine._check_and_run_due_tasks``),
+       and the registry seeds every new per-target parent from
+       ``default_enabled = False``. Re-keying an enabled child onto a
+       default-disabled parent therefore SILENTLY stops a working operator
+       schedule. So a target whose pre-upgrade state was actually firing
+       (legacy parent enabled — or absent, which never blocked — AND at least
+       one migrated child enabled) gets its per-target parent written
+       ``enabled=True``. The mapping is preserve-only: it never enables a
+       setup that was not already firing (a disabled parent is the documented
+       kill switch; a disabled child stayed off).
+    4. **Prune stale per-target rows** for targets deleted while the
        container was down (the CRUD-hook path can't have seen them).
 
     Defensive: any failure here is logged and swallowed — sync registration
@@ -776,6 +798,18 @@ def register_sync_target_tasks() -> None:
                 )
 
             # --- Legacy v1 schedule migration (shared 'dbas_sync' id) -----
+            legacy_parent = session.query(ScheduledTask).filter(
+                ScheduledTask.task_id == LEGACY_SYNC_TASK_ID
+            ).first()
+            # An ABSENT legacy parent never blocked firing — the engine's gate
+            # is ``if parent_task and not parent_task.enabled`` — so absence
+            # maps to "not blocking", not to "disabled".
+            legacy_parent_enabled = (
+                bool(legacy_parent.enabled) if legacy_parent is not None else True
+            )
+            # Per-target task ids whose pre-upgrade state was actually FIRING.
+            was_firing: set[str] = set()
+
             legacy_schedules = session.query(TaskSchedule).filter(
                 TaskSchedule.task_id == LEGACY_SYNC_TASK_ID
             ).all()
@@ -790,9 +824,12 @@ def register_sync_target_tasks() -> None:
                         new_task_id = None
                 if new_task_id in valid_task_ids:
                     sched.task_id = new_task_id
+                    if legacy_parent_enabled and sched.enabled:
+                        was_firing.add(new_task_id)
                     logger.info(
-                        "[DBAS_SYNC] Migrated legacy sync schedule %s -> %s",
-                        sched.id, new_task_id,
+                        "[DBAS_SYNC] Migrated legacy sync schedule %s -> %s "
+                        "(was_firing=%s)",
+                        sched.id, new_task_id, new_task_id in was_firing,
                     )
                 else:
                     sched.enabled = False
@@ -823,5 +860,23 @@ def register_sync_target_tasks() -> None:
             session.commit()
         finally:
             session.close()
+
+        # --- Persist the per-target parent rows (after the migration txn
+        #     commits, so the registry's own session sees the re-keyed
+        #     children). Writing every registered target's row here — rather
+        #     than leaving it to sync_from_database — is what lets the
+        #     preserved enabled state land: sync_from_database only creates
+        #     MISSING rows, and it creates them from default_enabled=False.
+        for task_id in sorted(valid_task_ids):
+            instance = registry.get_task_instance(task_id)
+            if instance is None:  # pragma: no cover — just registered above
+                continue
+            if task_id in was_firing:
+                instance._enabled = True
+                logger.info(
+                    "[DBAS_SYNC] Preserved firing state for %s across the "
+                    "legacy schedule migration (parent gate enabled)", task_id,
+                )
+            registry.sync_to_database(task_id)
     except Exception as e:  # pragma: no cover — must never break startup
         logger.exception("[DBAS_SYNC] Failed to register sync target tasks: %s", e)

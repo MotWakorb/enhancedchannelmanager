@@ -825,6 +825,41 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             registry=registry,
         ),
         # ----------------------------------------------------------------
+        # Cross-instance sync FULL-APPLY freshness (PR #752 review, Block 2).
+        #
+        # ``ecm_task_schedule_last_success_timestamp`` is the GENERIC task
+        # health gauge: the task engine stamps it on ANY TaskResult.success,
+        # and a dry-run PREVIEW legitimately reports success (it produced a
+        # plan without writing B). Keying the drift alert on that gauge let a
+        # recurring preview reset the staleness clock while B kept diverging
+        # — a silent-drift mask, the exact failure ECMSyncStalledTargetDrift
+        # exists to catch.
+        #
+        # This gauge is stamped ONLY by DbasSyncTask on a run that actually
+        # APPLIED and returned a clean SUCCESS outcome (never a dry-run,
+        # never a partial/rolled-back apply, never a freshness abort). It is
+        # the SLI the alert keys on; the generic gauge stays as-is for
+        # "is this task running at all" task-health questions.
+        #
+        # Labeled by ``sync_target_id`` (the SyncTarget row pk as a string) —
+        # per-target attribution so one replica's healthy apply cannot reset
+        # another's clock. Cardinality is bounded by the operator's
+        # sync_targets rows (1-3 typical), and the values are DB pks from
+        # code-controlled call sites, never raw request input.
+        # ----------------------------------------------------------------
+        "sync_last_full_success_timestamp": Gauge(
+            "ecm_sync_last_full_success_timestamp",
+            "Unix-epoch seconds of the most recent FULL APPLIED cross-instance "
+            "sync (a confirm_apply run whose RestoreReport outcome was SUCCESS), "
+            "labeled by sync_target_id. A dry-run preview, a partial/rolled-back "
+            "apply, and a credential-freshness abort all leave this UNCHANGED — "
+            "unlike the generic ecm_task_schedule_last_success_timestamp, which "
+            "the task engine stamps on any successful run including a preview. "
+            "This is the freshness SLI behind ECMSyncStalledTargetDrift.",
+            ["sync_target_id"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
         # Database file size (bd-ygoqr — paired with the CleanupTask CRON
         # default flip; together they give operators "is my DB growing?"
         # signal AND an automatic weekly VACUUM that bounds the growth).
@@ -1445,6 +1480,43 @@ def record_task_success(task_id: str, timestamp: Optional[float] = None) -> None
         logging.getLogger(__name__).debug(
             "[OBSERVABILITY] record_task_success failed for task_id=%s",
             task_id, exc_info=True,
+        )
+
+
+def record_sync_full_success(
+    sync_target_id: int, timestamp: Optional[float] = None
+) -> None:
+    """Stamp ``ecm_sync_last_full_success_timestamp`` for one sync target.
+
+    Called by ``tasks.dbas_sync.DbasSyncTask`` ONLY when a run actually
+    APPLIED (``confirm_apply=True``) and the ``RestoreReport`` outcome was a
+    clean ``SUCCESS``. Dry-run previews, partial/rolled-back applies, and
+    credential-freshness aborts must NOT call this — the whole point of the
+    dedicated gauge is that it means "B was fully converged at time T",
+    which the generic per-task success gauge cannot express (the task engine
+    stamps that one on any success, preview included; PR #752 review Block 2).
+
+    Defensive: never raises. Observability must not break the sync path.
+
+    Parameters
+    ----------
+    sync_target_id:
+        The ``SyncTarget`` row pk. Rendered as the string label value;
+        cardinality is bounded by the operator's sync_targets rows.
+    timestamp:
+        Override for the Unix-epoch value. Defaults to ``time.time()``.
+        Exposed for tests so they can pin the value.
+    """
+    try:
+        if timestamp is None:
+            timestamp = time.time()
+        get_metric("sync_last_full_success_timestamp").labels(
+            sync_target_id=str(sync_target_id)
+        ).set(float(timestamp))
+    except Exception:  # pragma: no cover — must not break the sync path
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] record_sync_full_success failed for target=%s",
+            sync_target_id, exc_info=True,
         )
 
 

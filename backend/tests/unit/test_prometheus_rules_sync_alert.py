@@ -54,25 +54,37 @@ def test_sync_alert_mirrors_sibling_staleness_shape(_rules):
     alert = _find_alert(_rules, "ecm_task_scheduler", _ALERT_NAME)
     expr = alert["expr"]
 
-    # Staleness expression keyed on the per-task last-success gauge. 7ipq2.3 /
-    # ADR-013 S6: sync tasks are registered per target (dbas_sync_<target_id>),
-    # so the matcher is a regex over the per-target id family — an exact
-    # task_id="dbas_sync" matcher would match NOTHING and the alert would
-    # silently die. Per-series evaluation also fixes the k78ja blind spot:
-    # under the shared id, one healthy target's success reset the staleness
-    # clock for every other (possibly drifting) target.
-    assert (
-        'ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"}' in expr
+    # Staleness expression keyed on the FULL-APPLY freshness gauge (PR #752
+    # review, Block 2). The generic ecm_task_schedule_last_success_timestamp
+    # is stamped by the task engine on ANY successful run — including a
+    # dry-run PREVIEW, which writes nothing to B — so keying the drift alert
+    # on it let a recurring preview mask real divergence. The dedicated gauge
+    # is stamped only on an APPLY with a clean SUCCESS outcome.
+    assert "ecm_sync_last_full_success_timestamp" in expr
+    assert "ecm_task_schedule_last_success_timestamp" not in expr, (
+        "the generic per-task gauge is stamped on dry-run previews too — the "
+        "drift alert must key on the apply-only gauge"
     )
+    # Per-target evaluation (7ipq2.3 / ADR-013 S6) is a property of the
+    # metric's LABELS, not of the expression: PromQL evaluates a labeled
+    # vector per series, so one healthy replica cannot reset another's
+    # staleness clock without any matcher in the expr. The label's presence
+    # is pinned by the annotation test below (it can only render if the
+    # series carries it) and by the gauge's labelnames, exercised in
+    # backend/tests/tasks/test_dbas_sync_concurrency.py.
     assert 'task_id="dbas_sync"' not in expr
     assert "time() -" in expr
     # 3h budget = 3 missed hourly runs (ADR-013 S9 cheap-reads cadence basis).
     assert "10800" in expr
     # Fresh-install / operator-disabled guard — mirrors every sibling alert.
-    assert (
-        'AND ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"} > 0'
-        in expr
-    )
+    assert "AND ecm_sync_last_full_success_timestamp > 0" in expr
+
+
+def test_sync_alert_annotations_reference_the_target_label(_rules):
+    """The responder needs to know WHICH target drifted — the summary must
+    carry the per-target label, not a bare task name."""
+    alert = _find_alert(_rules, "ecm_task_scheduler", _ALERT_NAME)
+    assert "$labels.sync_target_id" in alert["annotations"]["summary"]
 
 
 def test_sync_alert_is_warning_not_page(_rules):

@@ -9,7 +9,7 @@
 
 **Alerts that route here:**
 
-- `ECMSyncStalledTargetDrift` (warning) — a per-target sync task (`dbas_sync_<sync_target_id>`) has not recorded a FULL success in over 3 hours (hourly cadence basis, 3-missed-run budget); sustained 1h. Fires PER TARGET — the `$labels.task_id` in the alert names which target is drifting (7ipq2.3: one task per `SyncTarget`; another target syncing cleanly does NOT clear this).
+- `ECMSyncStalledTargetDrift` (warning) — a sync target has not recorded a FULL APPLIED sync in over 3 hours (hourly cadence basis, 3-missed-run budget); sustained 1h. Fires PER TARGET — the `$labels.sync_target_id` in the alert names which target is drifting (7ipq2.3: one task per `SyncTarget`; another target syncing cleanly does NOT clear this). **Only a full apply clears it** — a dry-run preview writes nothing to B and deliberately does not advance the clock.
 
 **SLO:** [Task scheduler health](../sre/slos.md#capacity-planning-task-scheduler-health-bd-qxi02) (capacity-planning class, not a numbered SLO).
 
@@ -21,7 +21,8 @@ The cross-instance sync tasks (`dbas_sync_<sync_target_id>` — one registered t
 
 The alert fires when ONE target's task has not recorded a FULL success within its staleness budget. The metrics:
 
-- `ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"}` (gauge, per target) — Unix-epoch seconds of the last FULL success for that target. Stamped by the task_engine on `TaskResult.success`. The alert is `(time() - this) > 10800` per series, guarded `> 0` so it stays silent on fresh installs / targets the operator left MANUAL.
+- `ecm_sync_last_full_success_timestamp{sync_target_id}` (gauge, per target) — **the alert's SLI.** Unix-epoch seconds of the last FULL APPLIED sync for that target: stamped only by a `confirm_apply` run whose report outcome was a clean `SUCCESS`. A dry-run preview, a partial/rolled-back apply, and a credential-freshness abort all leave it unchanged. The alert is `(time() - this) > 10800` per series, guarded `> 0` so it stays silent on fresh installs, preview-only targets, and targets the operator left MANUAL.
+- `ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"}` (gauge, per target) — the GENERIC task-health gauge, advanced by the task_engine on ANY successful run **including a dry-run preview**. Useful for "is this task running at all"; do **not** read it as convergence freshness (that conflation is what let a recurring preview mask real drift — PR #752 review).
 - `ecm_sync_runs_total{result}` (counter) — tri-state run outcome, `result ∈ {success, partial, failed}` (mirrors `ecm_backup_runs_total`). The companion signal that tells you WHICH failure mode you are in. NOTE: this counter is result-only — an AGGREGATE across targets; use the per-target gauge (and per-task run history) to attribute a failure mode to a specific target on multi-target installs.
 
 ## Why this matters
@@ -38,11 +39,13 @@ The #1 operator risk for cross-instance sync is **silent drift discovered at fai
 
 ## First 10 minutes
 
-1. **Confirm the alert is real.** Read the staleness directly for the target named in the alert's `task_id` label:
+1. **Confirm the alert is real.** Read the staleness directly for the target named in the alert's `sync_target_id` label:
    ```promql
-   time() - ecm_task_schedule_last_success_timestamp{task_id="dbas_sync_<sync_target_id>"}
+   time() - ecm_sync_last_full_success_timestamp{sync_target_id="<sync_target_id>"}
    ```
-   If the gauge is `0` / absent, that target's task has never succeeded on this install (fresh install, target just created, or operator left it MANUAL) — the `> 0` guard should have suppressed the alert; treat as a false positive and capture for tuning.
+   If the gauge is `0` / absent, that target has never completed a full APPLY on this install (fresh install, target just created, operator left it MANUAL, or the operator only ever runs previews) — the `> 0` guard should have suppressed the alert; treat as a false positive and capture for tuning.
+
+   Note the distinction that matters here: a *preview* advances `ecm_task_schedule_last_success_timestamp{task_id="dbas_sync_<id>"}` but NOT the gauge above. If the task looks healthy in Task History while this alert fires, check whether the schedule is running previews (`confirm_apply` unset) rather than applies.
 
 2. **Failed vs partial — which mode?** Compare the tri-state counter:
    ```promql
