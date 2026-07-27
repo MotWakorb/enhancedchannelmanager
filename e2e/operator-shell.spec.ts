@@ -138,14 +138,106 @@ test.describe('operator shell at 200% equivalent', () => {
       await appPage.getByRole('link', { name: consumer.name }).click()
       const settled = await expectSettledRoute(appPage, consumer)
       await settled.scrollIntoViewIfNeeded()
-      expect(await appPage.evaluate(() =>
-        document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
-      ), `${consumer.name} must not cause document-level horizontal overflow`).toBe(true)
+      const overflow = await appPage.evaluate(() => ({
+        fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+        offenders: [...document.querySelectorAll<HTMLElement>('body *')]
+          .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth + 1)
+          .slice(0, 8)
+          .map((element) => `${element.tagName}.${element.className}`),
+      }))
+      expect(overflow.fits, `${consumer.name} must not cause document-level horizontal overflow; internal overflow: ${overflow.offenders.join(', ')}`).toBe(true)
     }
   })
 })
 
 test.describe('operator shell navigation behavior', () => {
+  test.use({ serviceWorkers: 'block' })
+
+  test('staged contextual navigation keeps editing or discards before landing on the exact settings page', async ({ page }) => {
+    await page.addInitScript(() => localStorage.clear())
+    await page.route(/\/api\/settings(?:\/|\?|$)/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          configured: true,
+          default_channel_profile_ids: [],
+          stream_sort_priority: [],
+          stream_sort_enabled: {},
+          m3u_account_priorities: {},
+          custom_network_prefixes: [],
+          hide_auto_sync_groups: false,
+          theme: 'dark',
+          date_format: 'en-US',
+        }),
+      })
+    })
+    await page.route(/\/api\/channel-groups(?:\/|\?|$)/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{ id: 91, name: 'Seeded Group', channel_count: 1 }]),
+      })
+    })
+    await page.route(/\/api\/channels(?:\/|\?|$)/, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue()
+        return
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          count: 1,
+          next: null,
+          previous: null,
+          results: [{
+            id: 701,
+            channel_number: 7,
+            name: 'Seeded News',
+            channel_group_id: 91,
+            tvg_id: null,
+            tvc_guide_stationid: null,
+            epg_data_id: null,
+            streams: [],
+            stream_profile_id: null,
+            uuid: 'operator-shell-seeded-channel',
+            logo_id: null,
+            auto_created: false,
+            auto_created_by: null,
+            auto_created_by_name: null,
+          }],
+        }),
+      })
+    })
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('.tab-navigation')).toBeVisible()
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByText('Seeded Group', { exact: true }).click()
+    await expect(page.locator('.channel-item', { hasText: 'Seeded News' })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Edit Mode' }).click()
+    const channelName = page.locator('.channel-item', { hasText: 'Seeded News' }).locator('.channel-name')
+    await channelName.dblclick()
+    const nameInput = page.locator('.channel-name-input')
+    await nameInput.fill('Seeded News Updated')
+    await nameInput.press('Enter')
+    await expect(page.getByText('1 change', { exact: true })).toBeVisible()
+
+    await page.getByRole('link', { name: 'Channel default settings' }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+    await page.getByRole('button', { name: 'Keep Editing' }).click()
+    await expect(page).toHaveURL(/#channel-manager$/)
+    await expect(page.getByText('1 change', { exact: true })).toBeVisible()
+    await expect(page.locator('.channel-item', { hasText: 'Seeded News Updated' })).toBeVisible()
+
+    await page.getByRole('link', { name: 'Channel default settings' }).click()
+    await page.getByRole('button', { name: 'Discard' }).click()
+    await expect(page).toHaveURL(/#settings\/channel-defaults$/)
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toHaveCount(0)
+  })
+
   test('enabled route links retain the browser new-tab affordance', async ({ appPage, context }) => {
     await dismissFirstRunPromptIfPresent(appPage)
     const [newTab] = await Promise.all([

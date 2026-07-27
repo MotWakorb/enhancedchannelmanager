@@ -1,6 +1,9 @@
 /* Bandwidth Panel (v0.11.0) - In/Out bandwidth tracking */
 
 .bandwidth-panel {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
@@ -13,6 +16,8 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .bandwidth-panel .header-left {
@@ -227,6 +232,9 @@
 
 /* Bar Chart */
 .bandwidth-panel .chart-container {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
