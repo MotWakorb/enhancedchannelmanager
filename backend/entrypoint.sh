@@ -64,15 +64,29 @@ print_info() {
 # use those everywhere. Both stay overridable (custom images may put the
 # venv elsewhere) and both fall back to a PATH lookup if the pinned path is
 # not executable, so an image without /opt/venv behaves as it did before.
+#
+# The [ ! -x ] fallbacks below cannot tell "the default pin is absent, fall
+# back" from "the operator set this explicitly and typo'd it, fall back
+# wrongly" (bead enhancedchannelmanager-wpzo6). Capture the override BEFORE
+# the default expansion erases the distinction, so check_python can say which
+# one happened — a discarded override that resolves something else silently
+# hands the operator back the same diagnostics that sent them here.
 VENV_BIN=/opt/venv/bin
 
+ECM_PYTHON_DISCARDED=""
+ECM_UVICORN_DISCARDED=""
+
+_ecm_python_override=${ECM_PYTHON:-}
 ECM_PYTHON="${ECM_PYTHON:-${VENV_BIN}/python}"
 if [ ! -x "$ECM_PYTHON" ]; then
+    ECM_PYTHON_DISCARDED=$_ecm_python_override
     ECM_PYTHON=$(command -v python3 2>/dev/null || echo "$ECM_PYTHON")
 fi
 
+_ecm_uvicorn_override=${ECM_UVICORN:-}
 ECM_UVICORN="${ECM_UVICORN:-${VENV_BIN}/uvicorn}"
 if [ ! -x "$ECM_UVICORN" ]; then
+    ECM_UVICORN_DISCARDED=$_ecm_uvicorn_override
     ECM_UVICORN=$(command -v uvicorn 2>/dev/null || echo "$ECM_UVICORN")
 fi
 
@@ -134,6 +148,16 @@ setup_user() {
 check_python() {
     print_info "Checking Python environment..."
 
+    # An explicit override we could not use (bead enhancedchannelmanager-wpzo6).
+    # Advisory, not fatal: whatever we fell back to still has to pass the
+    # checks below, and those report the path they actually used.
+    if [ -n "$ECM_PYTHON_DISCARDED" ]; then
+        print_warning "ECM_PYTHON=${ECM_PYTHON_DISCARDED} is not executable — falling back to a PATH lookup"
+    fi
+    if [ -n "$ECM_UVICORN_DISCARDED" ]; then
+        print_warning "ECM_UVICORN=${ECM_UVICORN_DISCARDED} is not executable — falling back to a PATH lookup"
+    fi
+
     # No pipe in the condition: piping to `cut` would mask the interpreter's
     # own exit status (the pipeline reports cut's), so a missing interpreter
     # would read as success.
@@ -154,6 +178,17 @@ check_python() {
         print_python_diagnostics
         return 1
     fi
+
+    # `import uvicorn` above proves the MODULE is importable, which says
+    # nothing about the launcher script this entrypoint execs — uvicorn ships
+    # only in the virtualenv, so an all-green preflight was still followed by
+    # a bare not-found from the exec line (bead enhancedchannelmanager-wpzo6).
+    if [ ! -x "$ECM_UVICORN" ]; then
+        print_error "Uvicorn launcher not executable: ${ECM_UVICORN}"
+        print_python_diagnostics
+        return 1
+    fi
+    print_success "Uvicorn launcher at ${ECM_UVICORN}"
 
     return 0
 }

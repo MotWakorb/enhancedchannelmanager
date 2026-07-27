@@ -41,6 +41,9 @@ ENTRYPOINT = BACKEND_DIR / "entrypoint.sh"
 # Resolved from the real environment: the harness below hands the script a
 # deliberately stripped PATH, which would otherwise hide the shell itself.
 SH = shutil.which("sh") or "/bin/sh"
+# The system half of the operator's stripped PATH — everything except the
+# image virtualenv.
+PATH_TAIL = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # A stand-in for the Debian system python3 the field case fell through to:
 # answers --version with a reassuring string, can report sys.prefix, and has
@@ -101,25 +104,72 @@ def decoy_bin(tmp_path):
 def decoy_path(decoy_bin):
     """The operator's stripped PATH: system directories, no ``/opt/venv/bin``,
     and a ``python3`` that has none of ECM's packages."""
-    return f"{decoy_bin}:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    return f"{decoy_bin}:{PATH_TAIL}"
+
+
+@pytest.fixture
+def launcher_stub(tmp_path):
+    """An executable stand-in for ``/opt/venv/bin/uvicorn``.
+
+    The field container HAS the launcher — only ``PATH`` is stripped — but the
+    test host has no ``/opt/venv``, so a scenario that means "the launcher is
+    where it belongs" has to supply one (bead enhancedchannelmanager-wpzo6).
+    """
+    launcher = tmp_path / "uvicorn-stub"
+    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.chmod(0o755)
+    return str(launcher)
+
+
+@pytest.fixture
+def launcherless_path(tmp_path):
+    """A PATH holding only the coreutils ``check_python`` shells out to.
+
+    Guarantees the ``command -v uvicorn`` fallback finds nothing, whatever the
+    test host happens to have installed — the host's own uvicorn must not be
+    able to satisfy a check about the image virtualenv.
+    """
+    bin_dir = tmp_path / "launcherless-bin"
+    bin_dir.mkdir()
+    for tool in ("cut",):
+        src = shutil.which(tool)
+        assert src, f"{tool} not found on the test host"
+        (bin_dir / tool).symlink_to(src)
+    assert shutil.which("uvicorn", path=str(bin_dir)) is None
+    return str(bin_dir)
 
 
 class TestPreflightUnderStrippedPath:
     """The regression the field case proved: preflight must not depend on
     PATH to find ECM's interpreter."""
 
-    def test_preflight_passes_when_path_hides_the_real_interpreter(self, decoy_path):
+    def test_preflight_passes_when_path_hides_the_real_interpreter(
+        self, decoy_path, launcher_stub
+    ):
         # PATH resolves python3 to an interpreter with none of ECM's
         # packages — exactly the operator's `docker run -e PATH=...` case.
         # The pinned interpreter must win anyway.
+        #
+        # Both binaries are pinned because that is what the field case looks
+        # like: /opt/venv is intact inside the image and only PATH is stripped.
+        # The test host has no /opt/venv, so the launcher has to be supplied
+        # explicitly (bead enhancedchannelmanager-wpzo6) — a container with no
+        # usable uvicorn at all is a different scenario, and one that must
+        # fail; see TestLauncherIsAsserted.
         rc, out = _run_check_python(
-            {"PATH": decoy_path, "ECM_PYTHON": sys.executable}
+            {
+                "PATH": decoy_path,
+                "ECM_PYTHON": sys.executable,
+                "ECM_UVICORN": launcher_stub,
+            }
         )
         assert rc == 0, f"preflight failed under stripped PATH:\n{out}"
         assert "FastAPI and Uvicorn available" in out
-        # Self-diagnosing on success too: the resolved path is printed next
-        # to the version, so a log paste always says which python ran.
+        # Self-diagnosing on success too: the resolved paths are printed next
+        # to the version, so a log paste always says which python ran and
+        # which launcher the exec below will use.
         assert sys.executable in out
+        assert launcher_stub in out
 
     def test_falls_back_to_path_when_pinned_interpreter_is_absent(self, decoy_bin, decoy_path):
         # No /opt/venv on the test host and no ECM_PYTHON override, so the
@@ -162,6 +212,105 @@ class TestFailureDiagnostics:
         assert "Python 3 not found" in out
         assert "/nonexistent/python" in out
         assert "resolved python :" in out
+
+
+class TestLauncherIsAsserted:
+    """Bead enhancedchannelmanager-wpzo6 (1). ``check_python`` probed the
+    uvicorn *module* but never the launcher it is about to exec, so preflight
+    printed all-green and ``exec gosu appuser "$ECM_UVICORN"`` then died with a
+    bare not-found and no diagnostics — the exact failure class the pin exists
+    to eliminate."""
+
+    def test_absent_default_pin_fails_preflight(self, launcherless_path):
+        # The field image-without-venv case: nothing at /opt/venv/bin/uvicorn
+        # and nothing on PATH to fall back to. Preflight must own this, not
+        # the exec line 300 lines later.
+        rc, out = _run_check_python(
+            {"PATH": launcherless_path, "ECM_PYTHON": sys.executable}
+        )
+        assert rc == 1, f"preflight passed with no usable uvicorn:\n{out}"
+        assert "Uvicorn launcher not executable: /opt/venv/bin/uvicorn" in out
+
+    def test_unusable_launcher_emits_interpreter_diagnostics(self, launcherless_path):
+        # print_python_diagnostics already computes the answer for this case
+        # ("NOT EXECUTABLE — the app launch would fail here too") but was
+        # reachable only from branches that could never be this one.
+        rc, out = _run_check_python(
+            {
+                "PATH": launcherless_path,
+                "ECM_PYTHON": sys.executable,
+                "ECM_UVICORN": "/nonexistent/uvicorn",
+            }
+        )
+        assert rc == 1
+        assert "Uvicorn launcher not executable: /nonexistent/uvicorn" in out
+        assert "resolved uvicorn: /nonexistent/uvicorn (NOT EXECUTABLE" in out
+        assert f"resolved python : {sys.executable}" in out
+
+    def test_module_import_alone_does_not_satisfy_the_check(self, launcherless_path):
+        # The distinction the bug rested on: `import uvicorn` succeeding says
+        # nothing about the launcher script being present and executable.
+        rc, out = _run_check_python(
+            {
+                "PATH": launcherless_path,
+                "ECM_PYTHON": sys.executable,
+                "ECM_UVICORN": "/nonexistent/uvicorn",
+            }
+        )
+        assert "FastAPI and Uvicorn available" in out, (
+            "precondition: the uvicorn MODULE must be importable here, so that "
+            "the failure below is attributable to the launcher alone"
+        )
+        assert rc == 1
+
+
+class TestDiscardedOverrideIsReported:
+    """Bead enhancedchannelmanager-wpzo6 (2). The ``[ ! -x ]`` fallback cannot
+    tell "the default pin is absent" (fall back — correct) from "the operator
+    set this explicitly and typo'd it" (fall back — wrong). Silently resolving
+    something else hands the operator back the same diagnostics that told them
+    to set the variable in the first place."""
+
+    def test_typoed_python_override_is_reported(self, decoy_bin, decoy_path):
+        rc, out = _run_check_python(
+            {"PATH": decoy_path, "ECM_PYTHON": "/nonexistent/pyhton"}
+        )
+        assert "ECM_PYTHON=/nonexistent/pyhton is not executable" in out
+        # ...and the log still says what actually ran instead.
+        assert f"{decoy_bin}/python3" in out
+        assert rc == 1
+
+    def test_typoed_uvicorn_override_is_reported(self, launcherless_path):
+        rc, out = _run_check_python(
+            {
+                "PATH": launcherless_path,
+                "ECM_PYTHON": sys.executable,
+                "ECM_UVICORN": "/nonexistent/uvicron",
+            }
+        )
+        assert "ECM_UVICORN=/nonexistent/uvicron is not executable" in out
+        assert rc == 1
+
+    def test_absent_default_pin_is_not_reported_as_a_discarded_override(
+        self, decoy_path
+    ):
+        # The half that makes the warning worth anything: an image without
+        # /opt/venv is a supported configuration, not an operator mistake, and
+        # must fall back silently. A warning that always fires says nothing.
+        _rc, out = _run_check_python({"PATH": decoy_path})
+        assert "is not executable — falling back" not in out
+
+    def test_working_override_is_not_reported(self, decoy_path, launcher_stub):
+        # An override that resolves is not a discarded one.
+        rc, out = _run_check_python(
+            {
+                "PATH": decoy_path,
+                "ECM_PYTHON": sys.executable,
+                "ECM_UVICORN": launcher_stub,
+            }
+        )
+        assert rc == 0
+        assert "is not executable — falling back" not in out
 
 
 class TestInterpreterPinningIsStructural:
