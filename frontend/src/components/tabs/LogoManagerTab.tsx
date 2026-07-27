@@ -29,6 +29,7 @@ export function LogoManagerTab() {
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
+  const [hasLoadedSourceData, setHasLoadedSourceData] = useState(false);
 
   // Search state
   const [searchInput, setSearchInput] = useState('');
@@ -76,6 +77,7 @@ export function LogoManagerTab() {
       });
       setLogos(response.results);
       setTotalCount(response.count);
+      setHasLoadedSourceData(true);
       setSourceLoadState('success');
     } catch (err) {
       setSourceLoadState(classifySourceLoadError(err));
@@ -167,11 +169,15 @@ export function LogoManagerTab() {
   };
 
   // Render loading state
-  if (loading && logos.length === 0 && totalCount === 0) {
+  if (loading && !hasLoadedSourceData) {
     return (
       <div className="logo-manager-tab">
         <RouteHeaderSlot name="status">
-          <SourceLoadStatus state={sourceLoadState} successText="0 total logos" />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="logos"
+            successText="0 total logos"
+          />
         </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
@@ -180,14 +186,24 @@ export function LogoManagerTab() {
       </div>
     );
   }
-  if (sourceLoadState !== 'success' && logos.length === 0) {
+  if (sourceLoadState === 'permission' || (sourceLoadState === 'error' && !hasLoadedSourceData)) {
     return (
       <div className="logo-manager-tab">
         <RouteHeaderSlot name="status">
-          <SourceLoadStatus state={sourceLoadState} successText="" />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="logos"
+            successText=""
+            onRetry={loadLogos}
+          />
         </RouteHeaderSlot>
         <div className="tab-load-unavailable">
-          <SourceLoadStatus state={sourceLoadState} successText="" />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="logos"
+            successText=""
+            announce={false}
+          />
         </div>
       </div>
     );
@@ -204,7 +220,13 @@ export function LogoManagerTab() {
         </button>
       </RouteHeaderSlot>
       <RouteHeaderSlot name="status">
-        <SourceLoadStatus state={sourceLoadState} successText={`${totalCount}${filtersActive ? ' matching' : ' total'} logos`} />
+        <SourceLoadStatus
+          state={sourceLoadState}
+          sourceName="logos"
+          successText={`${totalCount}${filtersActive ? ' matching' : ' total'} logos`}
+          stale={sourceLoadState === 'error'}
+          onRetry={loadLogos}
+        />
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
         <div className="logo-header header-actions">

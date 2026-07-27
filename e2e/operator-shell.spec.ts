@@ -236,9 +236,102 @@ test.describe('operator shell navigation behavior', () => {
     await expect(page.locator('.tab-navigation')).toBeVisible()
     await dismissFirstRunPromptIfPresent(page)
     await page.getByRole('link', { name: 'M3U Manager' }).click()
-    await expect(page.locator('.route-page-header').getByText('Source data requires administrator access', { exact: true })).toBeVisible()
+    await expect(page.locator('.route-page-header').getByText('Provider accounts require administrator access', { exact: true })).toBeVisible()
     await expect(page.getByText(/0 provider accounts/)).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Add M3U Account' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Retry loading provider accounts/i })).toHaveCount(0)
+  })
+
+  test('M3U source loading announces failure and recovers through its scoped Retry', async ({ page }) => {
+    let providerMode: 'healthy' | 'error' = 'healthy'
+    await page.route(/\/api\/settings(?:\/|\?|$)/, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: true,
+        default_channel_profile_ids: [],
+        stream_sort_priority: [],
+        stream_sort_enabled: {},
+        m3u_account_priorities: {},
+        custom_network_prefixes: [],
+        hide_auto_sync_groups: false,
+      }),
+    }))
+    await page.route(/\/api\/m3u\/server-groups(?:\/|\?|$)/, (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: '[]',
+    }))
+    await page.route(/\/api\/providers(?:\/|\?|$)/, (route) => route.fulfill({
+      status: providerMode === 'error' ? 503 : 200,
+      contentType: 'application/json',
+      body: providerMode === 'error' ? JSON.stringify({ detail: 'Temporarily unavailable' }) : '[]',
+    }))
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('.tab-navigation')).toBeVisible()
+    await dismissFirstRunPromptIfPresent(page)
+    await expect(page.locator('#main-content .tab-loading')).toHaveCount(0)
+
+    providerMode = 'error'
+    await page.getByRole('link', { name: 'M3U Manager' }).click()
+    await expect(page.getByRole('status', { name: 'Provider accounts unavailable' })).toBeVisible()
+    const retry = page.getByRole('button', { name: 'Retry loading provider accounts' })
+    await expect(retry).toBeVisible()
+
+    providerMode = 'healthy'
+    await retry.click()
+    await expect(page.getByRole('status', { name: 'Provider accounts loaded' })).toBeVisible()
+    await expect(page.locator('.route-page-header').getByText('0 provider accounts', { exact: true })).toBeVisible()
+    await expect(page.locator('.route-page-header').getByRole('button', { name: 'Add M3U Account' })).toBeVisible()
+  })
+
+  test('a later Logo permission denial removes cached protected content and actions', async ({ page }) => {
+    let logoPermissionDenied = false
+    await page.route(/\/api\/settings(?:\/|\?|$)/, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: true,
+        default_channel_profile_ids: [],
+        stream_sort_priority: [],
+        stream_sort_enabled: {},
+        m3u_account_priorities: {},
+        custom_network_prefixes: [],
+        hide_auto_sync_groups: false,
+      }),
+    }))
+    await page.route(/\/api\/channels\/logos(?:\/|\?|$)/, (route) => route.fulfill({
+      status: logoPermissionDenied ? 403 : 200,
+      contentType: 'application/json',
+      body: logoPermissionDenied
+        ? JSON.stringify({ detail: 'Administrator access required' })
+        : JSON.stringify({
+            count: 1,
+            next: null,
+            previous: null,
+            results: [{
+              id: 41,
+              name: 'Private Sports Logo',
+              url: 'https://example.test/private-sports.png',
+              cache_url: '',
+              channel_count: 1,
+              is_used: true,
+            }],
+          }),
+    }))
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('.tab-navigation')).toBeVisible()
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByRole('link', { name: 'Logo Manager' }).click()
+    await expect(page.getByText('Private Sports Logo', { exact: true })).toBeVisible()
+
+    logoPermissionDenied = true
+    await page.getByPlaceholder('Search logos...').fill('private')
+
+    await expect(page.getByRole('status', { name: 'Logos access denied' })).toBeVisible()
+    await expect(page.getByText('Private Sports Logo', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Add Logo' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Retry loading logos/i })).toHaveCount(0)
   })
 
   test('staged contextual navigation keeps editing or discards before landing on the exact settings page', async ({ page }) => {

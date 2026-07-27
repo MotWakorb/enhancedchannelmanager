@@ -903,7 +903,7 @@ export function StatsTab() {
     return (
       <div className="stats-tab">
         <RouteHeaderSlot name="status">
-          <SourceLoadStatus state="loading" successText="" />
+          <SourceLoadStatus state="loading" sourceName="statistics" successText="" />
         </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
@@ -960,7 +960,7 @@ export function StatsTab() {
                 </div>
               );
             })}
-          </div> : <SourceLoadStatus state="error" successText="" />}
+          </div> : <SourceLoadStatus state="error" sourceName="statistics" successText="" />}
 
           {/* Condensed provider table (bd-49obj / GH-481): with many
               providers, per-provider tile badges wrap into several rows and

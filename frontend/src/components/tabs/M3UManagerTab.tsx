@@ -330,6 +330,7 @@ export function M3UManagerTab({
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
+  const [hasLoadedSourceData, setHasLoadedSourceData] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<M3UAccount | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -371,6 +372,7 @@ export function M3UManagerTab({
   const [refreshingVodIds, setRefreshingVodIds] = useState<Set<number>>(new Set());
 
   const loadData = useCallback(async () => {
+    setLoading(true);
     setSourceLoadState('loading');
     try {
       const [accountsData, serverGroupsData, settings] = await Promise.all([
@@ -384,6 +386,7 @@ export function M3UManagerTab({
       const priorities = settings.m3u_account_priorities ?? {};
       setM3uAccountPriorities(priorities);
       setPendingPriorities(priorities);
+      setHasLoadedSourceData(true);
       setSourceLoadState('success');
     } catch (err) {
       setSourceLoadState(classifySourceLoadError(err));
@@ -811,11 +814,15 @@ export function M3UManagerTab({
     },
   ];
 
-  if (loading) {
+  if (loading && !hasLoadedSourceData) {
     return (
       <div className="m3u-manager-tab">
         <RouteHeaderSlot name="status">
-          <SourceLoadStatus state={sourceLoadState} successText={`${accounts.length} provider accounts`} />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="provider accounts"
+            successText={`${accounts.length} provider accounts`}
+          />
         </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
@@ -824,14 +831,24 @@ export function M3UManagerTab({
       </div>
     );
   }
-  if (sourceLoadState !== 'success') {
+  if (sourceLoadState === 'permission' || (sourceLoadState === 'error' && !hasLoadedSourceData)) {
     return (
       <div className="m3u-manager-tab">
         <RouteHeaderSlot name="status">
-          <SourceLoadStatus state={sourceLoadState} successText="" />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="provider accounts"
+            successText=""
+            onRetry={loadData}
+          />
         </RouteHeaderSlot>
         <div className="tab-load-unavailable">
-          <SourceLoadStatus state={sourceLoadState} successText="" />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="provider accounts"
+            successText=""
+            announce={false}
+          />
         </div>
       </div>
     );
@@ -848,7 +865,15 @@ export function M3UManagerTab({
       <RouteHeaderSlot name="status">
         {anyRefreshing
           ? <span>Provider refresh in progress</span>
-          : <SourceLoadStatus state={sourceLoadState} successText={`${accounts.length} provider account${accounts.length === 1 ? '' : 's'}`} />}
+          : (
+            <SourceLoadStatus
+              state={sourceLoadState}
+              sourceName="provider accounts"
+              successText={`${accounts.length} provider account${accounts.length === 1 ? '' : 's'}`}
+              stale={sourceLoadState === 'error'}
+              onRetry={loadData}
+            />
+          )}
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
         <div className="m3u-header header-actions">

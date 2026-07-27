@@ -819,6 +819,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   const [dummySources, setDummySources] = useState<EPGSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
+  const [hasLoadedSourceData, setHasLoadedSourceData] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<EPGSource | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
@@ -840,6 +841,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   );
 
   const loadSources = useCallback(async () => {
+    setLoading(true);
     setSourceLoadState('loading');
     try {
       const data = await api.getEPGSources();
@@ -852,6 +854,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         .sort((a, b) => a.name.localeCompare(b.name));
       setSources(standardSources);
       setDummySources(dummyEpgSources);
+      setHasLoadedSourceData(true);
       setSourceLoadState('success');
     } catch (err) {
       setSourceLoadState(classifySourceLoadError(err));
@@ -1068,11 +1071,15 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     }
   };
 
-  if (loading) {
+  if (loading && !hasLoadedSourceData) {
     return (
       <div className="epg-manager-tab">
         <RouteHeaderSlot name="status">
-          <SourceLoadStatus state={sourceLoadState} successText="0 EPG sources" />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="EPG sources"
+            successText="0 EPG sources"
+          />
         </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
@@ -1081,14 +1088,24 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       </div>
     );
   }
-  if (sourceLoadState !== 'success') {
+  if (sourceLoadState === 'permission' || (sourceLoadState === 'error' && !hasLoadedSourceData)) {
     return (
       <div className="epg-manager-tab">
         <RouteHeaderSlot name="status">
-          <SourceLoadStatus state={sourceLoadState} successText="" />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="EPG sources"
+            successText=""
+            onRetry={loadSources}
+          />
         </RouteHeaderSlot>
         <div className="tab-load-unavailable">
-          <SourceLoadStatus state={sourceLoadState} successText="" />
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="EPG sources"
+            successText=""
+            announce={false}
+          />
         </div>
       </div>
     );
@@ -1107,7 +1124,15 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       <RouteHeaderSlot name="status">
         {refreshingAll
           ? <span>EPG refresh in progress</span>
-          : <SourceLoadStatus state={sourceLoadState} successText={`${sources.length} EPG source${sources.length === 1 ? '' : 's'}`} />}
+          : (
+            <SourceLoadStatus
+              state={sourceLoadState}
+              sourceName="EPG sources"
+              successText={`${sources.length} EPG source${sources.length === 1 ? '' : 's'}`}
+              stale={sourceLoadState === 'error'}
+              onRetry={loadSources}
+            />
+          )}
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
         <div className="epg-header header-actions">

@@ -10,6 +10,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { M3UManagerTab } from './M3UManagerTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import type { M3UAccount } from '../../types';
+import { HttpError } from '../../services/httpClient';
 
 vi.mock('../../services/api');
 
@@ -74,10 +75,39 @@ function makeAccount(overrides: Partial<M3UAccount> = {}): M3UAccount {
 
 describe('M3UManagerTab', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(api.getSettings).mockResolvedValue({} as never);
     // Default: no catch-up anywhere (bead 4dpiz). Individual tests override.
     vi.mocked(api.getProviderCatchupStatus).mockResolvedValue({});
+  });
+
+  describe('source lifecycle', () => {
+    it('recovers from a transient failure through the scoped Retry action', async () => {
+      vi.mocked(api.getM3UAccounts)
+        .mockRejectedValueOnce(new Error('Network down'))
+        .mockResolvedValueOnce([makeAccount({ name: 'Recovered Provider' })]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+
+      expect(await screen.findByRole('status', { name: 'Provider accounts unavailable' })).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry loading provider accounts' }));
+
+      expect(await screen.findByText('Recovered Provider')).toBeVisible();
+      expect(screen.getByText('1 provider account')).toBeVisible();
+      expect(api.getM3UAccounts).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not offer Retry or protected actions for a permission failure', async () => {
+      vi.mocked(api.getM3UAccounts).mockRejectedValue(new HttpError('Forbidden', 403));
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+
+      expect(await screen.findByRole('status', { name: 'Provider accounts access denied' })).toBeVisible();
+      expect(screen.queryByRole('button', { name: /Retry loading/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Add M3U Account/i })).not.toBeInTheDocument();
+    });
   });
 
   describe('Server Groups management (bead hq3de.c)', () => {

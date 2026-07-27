@@ -10,9 +10,10 @@
  * a deprecation notice and NO new-creation affordance.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { EPGManagerTab, getTiedPriorities } from './EPGManagerTab';
 import type { EPGSource } from '../../types';
+import { HttpError } from '../../services/httpClient';
 
 vi.mock('../../services/api', () => ({
   getEPGSources: vi.fn(),
@@ -33,12 +34,14 @@ vi.mock('../DummyEPGSourceModal', () => ({
   DummyEPGSourceModal: () => null,
 }));
 
+const notificationMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  warning: vi.fn(),
+  error: vi.fn(),
+}));
+
 vi.mock('../../contexts/NotificationContext', () => ({
-  useNotifications: () => ({
-    success: vi.fn(),
-    warning: vi.fn(),
-    error: vi.fn(),
-  }),
+  useNotifications: () => notificationMocks,
 }));
 
 import * as api from '../../services/api';
@@ -67,7 +70,7 @@ function makeSource(overrides: Partial<EPGSource>): EPGSource {
 
 describe('EPGManagerTab — legacy Dummy EPG Sources section', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('hides the legacy section entirely when there are zero legacy dummy sources', async () => {
@@ -132,6 +135,37 @@ describe('EPGManagerTab — legacy Dummy EPG Sources section', () => {
   });
 });
 
+describe('EPGManagerTab — source lifecycle', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('recovers from a transient failure through the scoped Retry action', async () => {
+    vi.mocked(api.getEPGSources)
+      .mockRejectedValueOnce(new Error('Network down'))
+      .mockResolvedValueOnce([makeSource({ name: 'Recovered EPG' })]);
+
+    render(<EPGManagerTab />);
+
+    expect(await screen.findByRole('status', { name: 'EPG sources unavailable' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading EPG sources' }));
+
+    expect(await screen.findByText('Recovered EPG')).toBeVisible();
+    expect(screen.getByText('1 EPG source')).toBeVisible();
+    expect(api.getEPGSources).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not offer Retry or protected actions for a permission failure', async () => {
+    vi.mocked(api.getEPGSources).mockRejectedValue(new HttpError('Forbidden', 403));
+
+    render(<EPGManagerTab />);
+
+    expect(await screen.findByRole('status', { name: 'EPG sources access denied' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Retry loading/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add Standard EPG/i })).not.toBeInTheDocument();
+  });
+});
+
 describe('getTiedPriorities', () => {
   it('returns priorities shared by two or more sources', () => {
     const sources = [
@@ -156,7 +190,7 @@ describe('getTiedPriorities', () => {
 
 describe('EPGManagerTab — priority-tie badge (bead 09x38.15 item 1)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('renders a tie badge only on rows sharing a priority', async () => {
