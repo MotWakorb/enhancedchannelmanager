@@ -191,7 +191,12 @@ export interface ChannelManagerTabProps {
   // Manual entry trigger (opens bulk create modal without pre-selected streams)
   externalTriggerManualEntry?: boolean;
   onExternalTriggerHandled?: () => void;
-  onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
+  onStreamGroupDrop?: (
+    groupNames: string[],
+    streamIds: number[],
+    targetGroupId?: number,
+    suggestedStartingNumber?: number,
+  ) => void;
   // Bulk streams drop (for opening bulk create modal when dropping multiple streams)
   // Includes target group ID and starting channel number for pre-filling the modal
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
@@ -664,6 +669,11 @@ export function ChannelManagerTab({
           onGroupFilterChange={onStreamGroupFilterChange}
           loading={streamsLoading}
           matchingTotal={streamMatchingTotal}
+          channels={channels}
+          onBulkAddToChannel={(streamIds, channelId) => {
+            void onBulkStreamDrop(channelId, streamIds);
+          }}
+          onKeyboardCreateFromGroup={onStreamGroupDrop}
           selectedProviders={selectedProviders}
           onSelectedProvidersChange={onSelectedProvidersChange}
           selectedStreamGroups={selectedStreamGroups}

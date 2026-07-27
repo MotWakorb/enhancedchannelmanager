@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
+import { createPortal } from 'react-dom';
+import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
 import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
@@ -60,6 +61,12 @@ interface StreamsPaneProps {
   /** Total matches reported by the server; may exceed the loaded page. */
   matchingTotal?: number | null;
   onBulkAddToChannel?: (streamIds: number[], channelId: number) => void;
+  channels?: Channel[];
+  onKeyboardCreateFromGroup?: (
+    groupNames: string[],
+    streamIds: number[],
+    targetGroupId?: number,
+  ) => void;
   // Multi-select support
   selectedProviders?: number[];
   onSelectedProvidersChange?: (providerIds: number[]) => void;
@@ -151,6 +158,9 @@ export function StreamsPane({
   onGroupFilterChange,
   loading,
   matchingTotal = null,
+  onBulkAddToChannel,
+  channels = [],
+  onKeyboardCreateFromGroup,
   selectedProviders = [],
   onSelectedProvidersChange,
   selectedStreamGroups = [],
@@ -182,6 +192,75 @@ export function StreamsPane({
   defaultNormalizeOnCreate = false,
   dedupReturningStreamIds,
 }: StreamsPaneProps) {
+  const [keyboardDrag, setKeyboardDrag] = useState<
+    | { kind: 'stream'; label: string; streamIds: number[] }
+    | { kind: 'group'; label: string; groupNames: string[]; streamIds: number[] }
+    | null
+  >(null);
+  const [keyboardDragAnnouncement, setKeyboardDragAnnouncement] = useState('');
+  const keyboardDragTriggerRef = useRef<HTMLElement | null>(null);
+  const keyboardDestinationRef = useRef<HTMLDivElement>(null);
+
+  const cancelKeyboardDrag = useCallback(() => {
+    const label = keyboardDrag?.label;
+    setKeyboardDrag(null);
+    setKeyboardDragAnnouncement(label ? `Cancelled dragging ${label}.` : 'Drag cancelled.');
+    requestAnimationFrame(() => keyboardDragTriggerRef.current?.focus());
+  }, [keyboardDrag]);
+
+  useEffect(() => {
+    if (!keyboardDrag) return;
+    requestAnimationFrame(() => {
+      keyboardDestinationRef.current
+        ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
+        ?.focus();
+    });
+  }, [keyboardDrag]);
+
+  const beginKeyboardDrag = (
+    event: React.KeyboardEvent<HTMLElement>,
+    drag:
+      | { kind: 'stream'; label: string; streamIds: number[] }
+      | { kind: 'group'; label: string; groupNames: string[]; streamIds: number[] },
+  ) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    event.stopPropagation();
+    keyboardDragTriggerRef.current = event.currentTarget;
+    setKeyboardDrag(drag);
+    setKeyboardDragAnnouncement(
+      `Picked up ${drag.label}. Use Up and Down Arrow keys to choose a destination, Enter to drop, or Escape to cancel.`,
+    );
+  };
+
+  const handleKeyboardDestinationKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = [
+      ...(keyboardDestinationRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []),
+    ];
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelKeyboardDrag();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      items[(current + delta + items.length) % items.length]?.focus();
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    }
+  };
+
+  const completeKeyboardDrag = (destinationLabel: string, action: () => void) => {
+    const draggedLabel = keyboardDrag?.label ?? 'item';
+    action();
+    setKeyboardDrag(null);
+    setKeyboardDragAnnouncement(`Dropped ${draggedLabel} on ${destinationLabel}.`);
+    requestAnimationFrame(() => keyboardDragTriggerRef.current?.focus());
+  };
   // BD-I / bd-1lznl: dedup integration for the single-stream "Add Stream"
   // surface (context-menu "Create channel(s) in group"). On a single-stream
   // selection the hook intercepts the click, checks for a candidate, and
@@ -1905,11 +1984,19 @@ export function StreamsPane({
                     }}
                   >
                     {isEditMode && onBulkCreateFromGroup && (
-                      <span
+                      <button
+                        type="button"
                         className="group-drag-handle"
                         aria-label={`Drag stream group ${group.name} to Channels pane to create channels`}
                         title={`Drag stream group ${group.name} to Channels pane to create channels`}
                         draggable={true}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => beginKeyboardDrag(e, {
+                          kind: 'group',
+                          label: `stream group ${group.name}`,
+                          groupNames: [group.name],
+                          streamIds: group.streams.map((stream) => stream.id),
+                        })}
                         onDragStart={(e) => {
                           e.stopPropagation();
                           // Trigger lazy load for this group if streams not yet loaded
@@ -1920,8 +2007,8 @@ export function StreamsPane({
                           handleGroupDragStart(e, group);
                         }}
                       >
-                        <span className="material-icons">drag_indicator</span>
-                      </span>
+                        <span className="material-icons" aria-hidden="true">drag_indicator</span>
+                      </button>
                     )}
                     {isEditMode && onBulkCreateFromGroup && (() => {
                       // Semantic, keyboard-operable group select-all
@@ -2024,16 +2111,23 @@ export function StreamsPane({
                         >
                           {/* Drag handle - only in edit mode, positioned first like channel groups */}
                           {isEditMode && (
-                            <span
+                            <button
+                              type="button"
                               className="drag-handle"
                               aria-label={`Drag inventory stream ${stream.name} to assign it to a channel`}
                               title={`Drag inventory stream ${stream.name} to assign it to a channel`}
                               draggable={true}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => beginKeyboardDrag(e, {
+                                kind: 'stream',
+                                label: `inventory stream ${stream.name}`,
+                                streamIds: [stream.id],
+                              })}
                               onDragStart={(e) => handleDragStart(e, stream)}
                               onDragEnd={() => clearStreamDragData()}
                             >
                               ⋮⋮
-                            </span>
+                            </button>
                           )}
                           {isEditMode && (
                             /* Semantic, keyboard-operable selector (bead
@@ -2899,6 +2993,67 @@ export function StreamsPane({
       )}
 
       {/* Stream Preview Modal */}
+      <div
+        className="keyboard-drag-status"
+        role="status"
+        aria-live="assertive"
+        aria-atomic="true"
+      >
+        {keyboardDragAnnouncement}
+      </div>
+      {keyboardDrag && createPortal(
+        <div
+          ref={keyboardDestinationRef}
+          className="keyboard-drag-destinations"
+          role="menu"
+          aria-label={keyboardDrag.kind === 'stream' ? 'Choose channel destination' : 'Choose channel group destination'}
+          onKeyDown={handleKeyboardDestinationKeyDown}
+        >
+          <div className="keyboard-drag-destinations-title">
+            {keyboardDrag.kind === 'stream' ? 'Assign to channel' : 'Create channels in group'}
+          </div>
+          {keyboardDrag.kind === 'stream'
+            ? channels.map((channel) => (
+                <button
+                  key={channel.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => completeKeyboardDrag(
+                    `channel ${channel.name}`,
+                    () => onBulkAddToChannel?.(keyboardDrag.streamIds, channel.id),
+                  )}
+                  disabled={!onBulkAddToChannel}
+                >
+                  <span className="material-icons" aria-hidden="true">live_tv</span>
+                  {channel.name}
+                </button>
+              ))
+            : channelGroups.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => completeKeyboardDrag(
+                    `channel group ${group.name}`,
+                    () => onKeyboardCreateFromGroup?.(
+                      keyboardDrag.groupNames,
+                      keyboardDrag.streamIds,
+                      group.id,
+                    ),
+                  )}
+                  disabled={!onKeyboardCreateFromGroup}
+                >
+                  <span className="material-icons" aria-hidden="true">folder</span>
+                  {group.name}
+                </button>
+              ))}
+          <button type="button" role="menuitem" onClick={cancelKeyboardDrag}>
+            <span className="material-icons" aria-hidden="true">close</span>
+            Cancel drag
+          </button>
+        </div>,
+        document.body,
+      )}
       <PreviewStreamModal
         isOpen={previewStream !== null}
         onClose={() => setPreviewStream(null)}

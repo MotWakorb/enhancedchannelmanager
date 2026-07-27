@@ -15,7 +15,7 @@ import { http, HttpResponse } from 'msw';
 import { StreamsPane } from './StreamsPane';
 import { server } from '../test/mocks/server';
 import { tabUntil } from '../test/utils/keyboardNav';
-import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup } from '../types';
+import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup } from '../types';
 
 function makeStream(overrides: Partial<Stream> & { id: number; name: string; channel_group_name: string }): Stream {
   const defaults: Stream = {
@@ -197,6 +197,74 @@ describe('StreamsPane source inventory row contract (enhancedchannelmanager-2896
       'Drag inventory stream CA Documentary Stream 1 to assign it to a channel',
     );
     expect(edit.container.querySelector('.drag-handle')).toHaveTextContent('⋮⋮');
+  });
+
+  it('assigns an inventory row by keyboard with pickup, destination movement, drop, and announcements', async () => {
+    const user = userEvent.setup();
+    const onBulkAddToChannel = vi.fn();
+    renderPane({
+      isEditMode: true,
+      channels: [
+        {
+          id: 41, name: 'Alpha', channel_number: 1, channel_group_id: 10, streams: [],
+          logo_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+          stream_profile_id: null, uuid: 'alpha', auto_created: false,
+          auto_created_by: null, auto_created_by_name: null,
+        },
+        {
+          id: 42, name: 'Beta', channel_number: 2, channel_group_id: 10, streams: [],
+          logo_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+          stream_profile_id: null, uuid: 'beta', auto_created: false,
+          auto_created_by: null, auto_created_by_name: null,
+        },
+      ] satisfies Channel[],
+      onBulkAddToChannel,
+    });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    const handle = screen.getByRole('button', {
+      name: 'Drag inventory stream CA Documentary Stream 1 to assign it to a channel',
+    });
+    handle.focus();
+    await user.keyboard(' ');
+    expect(screen.getByRole('status')).toHaveTextContent(/Picked up inventory stream CA Documentary Stream 1/);
+    const destinations = screen.getByRole('menu', { name: 'Choose channel destination' });
+    await waitFor(() => expect(within(destinations).getByRole('menuitem', { name: /Alpha/ })).toHaveFocus());
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(onBulkAddToChannel).toHaveBeenCalledWith([1], 42);
+    expect(screen.getByRole('status')).toHaveTextContent(/Dropped inventory stream CA Documentary Stream 1 on channel Beta/);
+    await waitFor(() => expect(handle).toHaveFocus());
+  });
+
+  it('creates channels from an inventory group by keyboard and supports Escape cancellation', async () => {
+    const user = userEvent.setup();
+    const onKeyboardCreateFromGroup = vi.fn();
+    renderPane({
+      isEditMode: true,
+      channelGroups: [{ id: 10, name: 'News', channel_count: 0 }],
+      onBulkCreateFromGroup: vi.fn(),
+      onKeyboardCreateFromGroup,
+    });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    const handle = screen.getByRole('button', {
+      name: 'Drag stream group CA | Documentary to Channels pane to create channels',
+    });
+    handle.focus();
+    await user.keyboard('{Enter}');
+    const destinations = screen.getByRole('menu', { name: 'Choose channel group destination' });
+    await waitFor(() => expect(within(destinations).getByRole('menuitem', { name: /News/ })).toHaveFocus());
+    await user.keyboard('{Escape}');
+    expect(onKeyboardCreateFromGroup).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent(/Cancelled dragging stream group CA \| Documentary/);
+    await waitFor(() => expect(handle).toHaveFocus());
+
+    await user.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(screen.getByRole('menu', { name: 'Choose channel group destination' })
+        .querySelector('[role="menuitem"]')).toHaveFocus(),
+    );
+    await user.keyboard('{Enter}');
+    expect(onKeyboardCreateFromGroup).toHaveBeenCalledWith(['CA | Documentary'], [1], 10);
+    expect(screen.getByRole('status')).toHaveTextContent(/Dropped stream group CA \| Documentary on channel group News/);
   });
 
   it('keeps stable artwork, flexible identity, then fixed actions and renders no health noise', async () => {

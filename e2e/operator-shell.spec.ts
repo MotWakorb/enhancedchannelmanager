@@ -105,7 +105,12 @@ async function openShellWithPipelineFixture(
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+      body: JSON.stringify({
+        count: 1,
+        next: null,
+        previous: null,
+        results: [{ id: 9, name: 'Persisted fixture artwork', url: '/persisted-channel-artwork.png', cache_url: '/persisted-channel-artwork.png' }],
+      }),
     }))
   await page.route(/\/api\/channel-pipeline\/rules(?:\/|\?|$)/, (route) =>
     route.fulfill({
@@ -129,17 +134,34 @@ async function openShellWithPipelineFixture(
   await expect(page.locator('.tab-navigation')).toBeVisible()
 }
 
-async function seedChannelWorkspace(page: Page, populated: boolean) {
+async function seedChannelWorkspace(page: Page, populated: boolean, channelCount = 1) {
   const channel = {
     id: 41,
     name: 'A deliberately long channel identity that must remain inside the Channels pane',
     channel_number: 101,
     channel_group_id: 7,
     streams: [501],
-    logo_id: null,
+    logo_id: 9,
+    _stagedLogoUrl: '/staged-channel-artwork.png',
     tvg_id: 'espn.us',
     epg_data_id: 88,
   }
+  const channels = channelCount >= 2
+    ? [
+        channel,
+        {
+          ...channel,
+          id: 42,
+          uuid: 'channel-42',
+          name: 'Second fixture channel',
+          channel_number: 102,
+          streams: [],
+          tvg_id: null,
+          epg_data_id: null,
+          _stagedLogoUrl: undefined,
+        },
+      ]
+    : [channel]
   const stream = {
     id: 501,
     name: 'A deliberately long source stream identity that must ellipsize before inventory actions',
@@ -157,10 +179,10 @@ async function seedChannelWorkspace(page: Page, populated: boolean) {
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      count: populated ? 1 : 0,
+      count: populated ? channels.length : 0,
       next: null,
       previous: null,
-      results: populated ? [channel] : [],
+      results: populated ? channels : [],
     }),
   }))
   await page.route(/\/api\/stream-groups(?:\?|$)/, (route) => route.fulfill({
@@ -203,6 +225,14 @@ async function seedChannelWorkspace(page: Page, populated: boolean) {
       },
     } : {}),
   }))
+  await page.route(/\/api\/stream-stats\/probe\/bulk(?:\?|$)/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ probed: 1, results: [] }),
+    })
+  })
   await page.route(/\/api\/epg\/sources(?:\?|$)/, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -268,7 +298,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
     })
 
     test('Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
-      await seedChannelWorkspace(page, true)
+      await seedChannelWorkspace(page, true, 2)
       await openShellWithPipelineFixture(
         page,
         200,
@@ -283,7 +313,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByRole('region', { name: 'Streams' })).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Channels', level: 2 })).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Streams', level: 2 })).toBeVisible()
-      await expect(page.getByLabel('1 channels')).toBeVisible()
+      await expect(page.getByLabel('2 channels')).toBeVisible()
       await expect(page.getByLabel('1 total stream')).toBeVisible()
       const separator = page.getByRole('separator', { name: 'Resize Channels and Streams panes' })
       await expect(separator).toBeVisible()
@@ -353,6 +383,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       const copyAction = page.locator('.streams-pane').getByRole('button', { name: 'Copy stream URL' })
       await copyAction.focus()
       await copyAction.press('Enter')
+      await expect(page.locator('.streams-pane .copy-feedback')).toBeVisible()
       const inventoryVlc = page.locator('.streams-pane').getByRole('button', { name: 'Open in VLC' })
       await inventoryVlc.focus()
       await expect(inventoryVlc).toBeFocused()
@@ -366,10 +397,12 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
 
       await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
       await expect(page.locator('.channel-column-headers')).toHaveText(/NumberChannel \/ GuideStreams/)
-      await expect(page.locator('.channel-number-col')).toHaveText('101')
-      await expect(page.locator('.channel-number-col')).not.toContainText('#')
+      await expect(page.locator('.channel-number-col').first()).toHaveText('101')
+      await expect(page.locator('.channel-number-col').first()).not.toContainText('#')
       await expect(page.getByText('Schedules Direct – ESPN')).toBeVisible()
       await expect(page.getByLabel('1 stream; failed probe')).toBeVisible()
+      const channelArtwork = page.locator('.channel-logo').first()
+      await expect(channelArtwork).toHaveAttribute('src', '/persisted-channel-artwork.png')
       const expectChannelColumnsAligned = async () => {
         expect(await page.evaluate(() => {
           const center = (selector: string) => {
@@ -388,10 +421,60 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.locator('.channels-pane .channel-drag-handle')).toHaveCount(0)
       await page.getByRole('button', { name: 'Edit Mode' }).click()
       await expectChannelColumnsAligned()
+      await expect(channelArtwork).toHaveAttribute('src', '/staged-channel-artwork.png')
+      const expectEditContainment = async () => {
+        expect(await page.evaluate(() => {
+          const paneContained = (selector: string) => {
+            const pane = document.querySelector<HTMLElement>(selector)!
+            const paneRect = pane.getBoundingClientRect()
+            return [...pane.querySelectorAll<HTMLElement>('.channel-item, .stream-item, .inline-stream-item, button')]
+              .filter((element) => element.offsetParent !== null)
+              .every((element) => {
+                const rect = element.getBoundingClientRect()
+                return rect.left >= paneRect.left - 1 && rect.right <= paneRect.right + 1
+              })
+          }
+          return {
+            document: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+            channels: paneContained('.channels-pane'),
+            streams: paneContained('.streams-pane'),
+          }
+        })).toEqual({ document: true, channels: true, streams: true })
+      }
+      await expectEditContainment()
+      await page.getByRole('button', { name: 'Collapse navigation' }).click()
+      await expectEditContainment()
+      await page.getByRole('button', { name: 'Expand navigation' }).click()
+      await expectEditContainment()
       await expect(page.getByLabel('Drag channel group Sports to reorder')).toBeVisible()
       await expect(page.getByLabel(/^Drag channel A deliberately long channel identity .* to reorder$/)).toBeVisible()
       await expect(page.getByLabel('Drag stream group Provider Sports to Channels pane to create channels')).toBeVisible()
       await expect(page.getByLabel(/Drag inventory stream .* to assign it to a channel/)).toBeVisible()
+
+      const inventoryDrag = page.getByLabel(/Drag inventory stream .* to assign it to a channel/)
+      await inventoryDrag.focus()
+      await inventoryDrag.press('Enter')
+      const channelDestinations = page.getByRole('menu', { name: 'Choose channel destination' })
+      await expect(channelDestinations.getByRole('menuitem', { name: /A deliberately long channel identity/ })).toBeFocused()
+      await page.keyboard.press('ArrowDown')
+      await expect(channelDestinations.getByRole('menuitem', { name: 'Second fixture channel' })).toBeFocused()
+      await page.keyboard.press('Enter')
+      await expect(page.locator('.keyboard-drag-status')).toContainText(/Dropped inventory stream .* on channel Second fixture channel/)
+
+      const groupDrag = page.getByLabel('Drag stream group Provider Sports to Channels pane to create channels')
+      await groupDrag.focus()
+      await groupDrag.press('Enter')
+      const groupDestinations = page.getByRole('menu', { name: 'Choose channel group destination' })
+      await expect(groupDestinations.getByRole('menuitem', { name: 'Sports' })).toBeFocused()
+      await page.keyboard.press('Escape')
+      await expect(groupDestinations).toHaveCount(0)
+      await expect(groupDrag).toBeFocused()
+      await groupDrag.press('Enter')
+      await expect(page.getByRole('menu', { name: 'Choose channel group destination' })
+        .getByRole('menuitem', { name: 'Sports' })).toBeFocused()
+      await page.keyboard.press('Enter')
+      await expect(page.getByRole('heading', { name: /Create Channels from "Provider Sports"/ })).toBeVisible()
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click()
 
       await page.getByRole('checkbox', { name: /Select channel A deliberately long channel identity/ }).click()
       const selectionBar = page.getByRole('toolbar', { name: 'Selection actions' })
@@ -407,6 +490,25 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         'closeClear',
       ])
       await expect(selectionBar.getByRole('button', { name: 'Merge' })).toHaveCount(0)
+      await page.getByRole('checkbox', { name: 'Select channel Second fixture channel' }).click()
+      await expect(selectionBar.getByRole('status', { name: '2 channels selected' })).toBeVisible()
+      await expect(selectionBar.getByRole('button', { name: 'Merge' })).toBeVisible()
+      const probeSelected = selectionBar.getByRole('button', { name: 'Probe' })
+      await probeSelected.click()
+      const probingSelected = selectionBar.getByRole('button', { name: 'Probing…' })
+      await expect(probingSelected).toBeDisabled()
+      await expect(probingSelected.locator('.material-icons')).toHaveText('sync')
+      await expect(selectionBar.getByRole('button', { name: 'Probe' })).toBeEnabled()
+
+      await page.clock.install()
+      const assignEpg = selectionBar.getByRole('button', { name: 'Assign EPG' })
+      await assignEpg.click()
+      await expect(assignEpg).toBeDisabled()
+      await expect(assignEpg.locator('.material-icons')).toHaveText('sync')
+      await page.clock.runFor(60)
+      await expect(page.getByRole('heading', { name: 'Bulk EPG Assignment' })).toBeVisible()
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await page.clock.resume()
       const selectionMore = selectionBar.getByRole('button', { name: 'More selection actions' })
       await selectionMore.focus()
       await selectionMore.press('Enter')
@@ -450,6 +552,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(editPaneMenu).toHaveCount(0)
       await expect(moreActions).toBeFocused()
       await page.getByRole('button', { name: 'Done' }).click()
+      await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+      await page.getByRole('button', { name: 'Discard', exact: true }).click()
+      await expect(channelArtwork).toHaveAttribute('src', '/persisted-channel-artwork.png')
+      await expectEditContainment()
       await expect(page.locator('.channels-pane .channel-drag-handle')).toHaveCount(0)
       await expect(page.locator('.channels-pane .group-drag-handle')).toHaveCount(0)
       await expect(page.locator('.streams-pane .drag-handle')).toHaveCount(0)
