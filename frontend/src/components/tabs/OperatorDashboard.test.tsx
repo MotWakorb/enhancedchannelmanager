@@ -73,4 +73,18 @@ describe('OperatorDashboard', () => {
     await waitFor(() => expect(mocks.getTasks).toHaveBeenCalledTimes(2));
     expect(mocks.getM3UChangesSummary).toHaveBeenCalledTimes(1);
   });
+
+  it('retries only the failed half of the lineup snapshot', async () => {
+    const user = userEvent.setup();
+    const dashboardProps = props();
+    const retryChannels = vi.fn();
+    const retryStreams = vi.fn();
+    dashboardProps.channels = { value: 0, state: 'error', hasSnapshot: false, retry: retryChannels };
+    dashboardProps.streams = { ...dashboardProps.streams, retry: retryStreams };
+    render(<OperatorDashboard {...dashboardProps} />);
+    const lineup = screen.getByRole('heading', { name: 'Lineup inventory' }).closest('article')!;
+    await user.click(within(lineup).getByRole('button', { name: 'Retry' }));
+    expect(retryChannels).toHaveBeenCalledOnce();
+    expect(retryStreams).not.toHaveBeenCalled();
+  });
 });

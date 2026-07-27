@@ -131,6 +131,7 @@ function App() {
 
   // Channels state
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelInventoryTotal, setChannelInventoryTotal] = useState(0);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set());
@@ -152,6 +153,7 @@ function App() {
   const [providers, setProviders] = useState<M3UAccount[]>([]);
   const [providerSourceState, setProviderSourceState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
   const [streamGroups, setStreamGroups] = useState<StreamGroupInfo[]>([]);
+  const [streamInventoryTotal, setStreamInventoryTotal] = useState(0);
 
   // Accumulates every stream ever returned by a search so ChannelsPane can
   // resolve staged stream IDs even after the stream search term has changed.
@@ -203,9 +205,11 @@ function App() {
     groups: { state: 'loading', hasSnapshot: false },
     channels: { state: 'loading', hasSnapshot: false },
   });
+  const [channelInventoryState, setChannelInventoryState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
   const [streamSourceStates, setStreamSourceStates] = useState<Record<string, OperationLoadState>>({
     metadata: { state: 'loading', hasSnapshot: false },
   });
+  const [streamInventoryState, setStreamInventoryState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
   const [streamMatchingTotal, setStreamMatchingTotal] = useState<number | null>(null);
   const streamRetryOperations = useRef<Record<string, () => Promise<unknown>>>({});
 
@@ -1000,6 +1004,10 @@ function App() {
   }, []);
 
   const loadChannels = async (signal?: AbortSignal) => {
+    const isUnfilteredInventory = channelFilters.search === '';
+    if (isUnfilteredInventory) {
+      setChannelInventoryState((current) => ({ ...current, state: 'loading' }));
+    }
     setLoadingStates(prev => ({ ...prev, channels: true }));
     setChannelSourceStates((current) => ({
       ...current,
@@ -1008,6 +1016,7 @@ function App() {
     try {
       // Fetch all pages of channels
       const allChannels: Channel[] = [];
+      let responseTotal = 0;
       let page = 1;
       let hasMore = true;
 
@@ -1019,11 +1028,16 @@ function App() {
           signal,
         });
         allChannels.push(...response.results);
+        if (page === 1) responseTotal = response.count;
         hasMore = response.next !== null;
         page++;
       }
 
       setChannels(allChannels);
+      if (isUnfilteredInventory) {
+        setChannelInventoryTotal(responseTotal);
+        setChannelInventoryState({ state: 'success', hasSnapshot: true });
+      }
       setChannelSourceStates((current) => ({
         ...current,
         channels: { state: 'success', hasSnapshot: true },
@@ -1036,9 +1050,23 @@ function App() {
           ...current,
           channels: { ...current.channels, state: classifySourceLoadError(err) },
         }));
+        if (isUnfilteredInventory) {
+          setChannelInventoryState((current) => ({ ...current, state: classifySourceLoadError(err) }));
+        }
       }
     } finally {
       setLoadingStates(prev => ({ ...prev, channels: false }));
+    }
+  };
+
+  const loadChannelInventoryTotal = async () => {
+    setChannelInventoryState((current) => ({ ...current, state: 'loading' }));
+    try {
+      const response = await api.getChannels({ page: 1, pageSize: 1 });
+      setChannelInventoryTotal(response.count);
+      setChannelInventoryState({ state: 'success', hasSnapshot: true });
+    } catch (err) {
+      setChannelInventoryState((current) => ({ ...current, state: classifySourceLoadError(err) }));
     }
   };
 
@@ -1087,6 +1115,10 @@ function App() {
   };
 
   const loadStreamGroups = async (m3uAccountId?: number | null) => {
+    const isUnfilteredInventory = m3uAccountId == null;
+    if (isUnfilteredInventory) {
+      setStreamInventoryState((current) => ({ ...current, state: 'loading' }));
+    }
     streamRetryOperations.current.metadata = () => loadStreamGroups(m3uAccountId);
     setStreamSourceStates((current) => ({
       ...current,
@@ -1095,6 +1127,10 @@ function App() {
     try {
       const groups = await api.getStreamGroups(false, m3uAccountId);
       setStreamGroups(groups);
+      if (isUnfilteredInventory) {
+        setStreamInventoryTotal(groups.reduce((total, group) => total + group.count, 0));
+        setStreamInventoryState({ state: 'success', hasSnapshot: true });
+      }
       setStreamSourceStates((current) => ({
         ...current,
         metadata: { state: 'success', hasSnapshot: true },
@@ -1105,6 +1141,9 @@ function App() {
         ...current,
         metadata: { ...current.metadata, state: classifySourceLoadError(err) },
       }));
+      if (isUnfilteredInventory) {
+        setStreamInventoryState((current) => ({ ...current, state: classifySourceLoadError(err) }));
+      }
     }
   };
 
@@ -2597,10 +2636,10 @@ function App() {
                   });
                 },
               }}
-              channels={{ value: channels.length, ...channelSourceStates.channels, retry: () => { void loadChannels(); } }}
+              channels={{ value: channelInventoryTotal, ...channelInventoryState, retry: () => { void loadChannelInventoryTotal(); } }}
               streams={{
-                value: streamGroups.reduce((total, group) => total + group.count, 0),
-                ...streamSourceStates.metadata,
+                value: streamInventoryTotal,
+                ...streamInventoryState,
                 retry: () => { void loadStreamGroups(null); },
               }}
               providers={{ value: providers.length, ...providerSourceState, retry: () => { void loadProviders(); } }}

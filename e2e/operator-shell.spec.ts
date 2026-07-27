@@ -353,6 +353,35 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       })).toEqual({ aboveFold: true, contained: true, noDocumentOverflow: true })
     })
 
+    test('Dashboard preserves unfiltered totals after channel search and provider-scoped stream metadata', async ({ page }) => {
+      await seedChannelWorkspace(page, true, 2)
+      await page.route(/\/api\/channels(?:\?|$)/, (route) => {
+        const filtered = new URL(route.request().url()).searchParams.has('search')
+        return route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ count: filtered ? 1 : 2, next: null, previous: null, results: [] }),
+        })
+      })
+      await page.route(/\/api\/stream-groups(?:\?|$)/, (route) => {
+        const scoped = new URL(route.request().url()).searchParams.has('m3u_account_id')
+        return route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify(scoped ? [{ name: 'Provider Sports', count: 1 }] : [
+            { name: 'Provider Sports', count: 4 }, { name: 'Provider News', count: 3 },
+          ]),
+        })
+      })
+      await openShellWithPipelineFixture(page, 200, [{ id: 3, name: 'Fixture Provider' }])
+      await dismissFirstRunPromptIfPresent(page)
+      await page.getByRole('textbox', { name: 'Search channels' }).fill('subset')
+      await page.locator('.streams-pane').getByRole('button', { name: /All Providers/ }).click()
+      await page.getByRole('checkbox', { name: 'Fixture Provider' }).check()
+      await page.getByRole('link', { name: 'Dashboard' }).click()
+      const dashboard = page.getByRole('region', { name: 'System summary' })
+      await expect(dashboard.getByText('2 channels', { exact: true })).toBeVisible()
+      await expect(dashboard.getByText('7 streams', { exact: true })).toBeVisible()
+    })
+
     test('Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
       await seedChannelWorkspace(page, true, 2)
       await openShellWithPipelineFixture(

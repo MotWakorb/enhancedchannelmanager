@@ -125,7 +125,10 @@ export function OperatorDashboard({ health, channels, streams, providers }: Oper
   };
   const retries: Record<CardId, () => void> = {
     service: health.retry,
-    lineup: () => { channels.retry(); streams.retry(); },
+    lineup: () => {
+      if (channels.state !== 'success') channels.retry();
+      if (streams.state !== 'success') streams.retry();
+    },
     sources: providers.retry,
     changes: changes.retry, tasks: tasks.retry, journal: journal.retry,
   };
