@@ -7,6 +7,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { M3UChangesTab } from './M3UChangesTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import * as api from '../../services/api';
+import { HttpError } from '../../services/httpClient';
 import type { M3UChangeLog, M3UChangeSummary, M3UAccount } from '../../types';
 
 // Mock the API module
@@ -232,6 +233,42 @@ describe('M3UChangesTab', () => {
       });
     });
 
+    it('clears protected rows and suppresses the retry action on 403', async () => {
+      vi.mocked(api.getM3UChanges).mockRejectedValue(new HttpError('Forbidden', 403));
+
+      renderWithProviders(<M3UChangesTab />);
+
+      expect(await screen.findByText(/don't have permission/i)).toBeInTheDocument();
+      expect(screen.queryByText('Sports')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    });
+
+    it('retries a recoverable load failure', async () => {
+      vi.mocked(api.getM3UChanges)
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockResolvedValueOnce(mockChangesResponse);
+
+      renderWithProviders(<M3UChangesTab />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+      expect(await screen.findByText('Sports')).toBeInTheDocument();
+    });
+
+  });
+
+  it('uses native sort buttons and exposes the active sort direction', async () => {
+    renderWithProviders(<M3UChangesTab />);
+    const timeButton = await screen.findByRole('button', { name: 'Sort by Time' });
+    expect(timeButton.closest('[role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
+
+    fireEvent.click(timeButton);
+
+    await waitFor(() => {
+      expect(api.getM3UChanges).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortBy: 'change_time', sortOrder: 'asc' }),
+      );
+    });
+    expect(timeButton.closest('[role="columnheader"]')).toHaveAttribute('aria-sort', 'ascending');
   });
 
   describe('row expansion', () => {

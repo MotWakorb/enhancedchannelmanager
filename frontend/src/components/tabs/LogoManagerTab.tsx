@@ -121,6 +121,15 @@ export function LogoManagerTab() {
     return sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward';
   };
 
+  const renderSortHeader = (column: SortColumn, label: string) => (
+    <span role="columnheader" aria-sort={sortBy === column ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" className="sortable" onClick={() => handleSort(column)} aria-label={`Sort by ${label}`}>
+        {label}
+        {getSortIndicator(column) && <span className="material-icons sort-icon" aria-hidden="true">{getSortIndicator(column)}</span>}
+      </button>
+    </span>
+  );
+
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const handleAddLogo = () => {
@@ -173,6 +182,17 @@ export function LogoManagerTab() {
   if (loading && !hasLoadedSourceData) {
     return (
       <div className="logo-manager-tab">
+        <RouteHeaderSlot name="controls">
+          <DenseToolbar
+            label="Logo inventory controls"
+            secondaryActions={(
+              <button className="btn-secondary" type="button" disabled>
+                <span className="material-icons spinning">sync</span>
+                Loading logos
+              </button>
+            )}
+          />
+        </RouteHeaderSlot>
         <RouteHeaderSlot name="status">
           <SourceLoadStatus
             state={sourceLoadState}
@@ -314,22 +334,12 @@ export function LogoManagerTab() {
         ) : viewMode === 'list' ? (
           // List View
           <div className="logos-list">
-            <div className="list-header">
-              <span>Logo</span>
-              <span className="sortable" onClick={() => handleSort('name')}>
-                Name
-                {getSortIndicator('name') && (
-                  <span className="material-icons sort-icon">{getSortIndicator('name')}</span>
-                )}
-              </span>
-              <span>URL</span>
-              <span className="sortable" onClick={() => handleSort('channel_count')}>
-                Used By
-                {getSortIndicator('channel_count') && (
-                  <span className="material-icons sort-icon">{getSortIndicator('channel_count')}</span>
-                )}
-              </span>
-              <span>Actions</span>
+            <div className="list-header" role="row">
+              <span role="columnheader">Logo</span>
+              {renderSortHeader('name', 'Name')}
+              <span role="columnheader">URL</span>
+              {renderSortHeader('channel_count', 'Used By')}
+              <span role="columnheader">Actions</span>
             </div>
             {logos.map((logo) => (
               <div key={logo.id} className="logo-row">

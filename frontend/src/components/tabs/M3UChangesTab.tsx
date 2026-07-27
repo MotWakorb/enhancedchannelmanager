@@ -8,6 +8,7 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { DenseToolbar } from '../DenseToolbar';
+import { HttpError } from '../../services/httpClient';
 
 // Get icon for change type
 function getChangeTypeIcon(changeType: M3UChangeType): string {
@@ -68,6 +69,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
   const [summary, setSummary] = useState<M3UChangeSummary | null>(null);
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [requestState, setRequestState] = useState<'loading' | 'success' | 'error' | 'permission'>('loading');
   const notifications = useNotifications();
 
   // Pagination state
@@ -100,6 +102,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
   // Fetch changes
   const fetchChanges = useCallback(async () => {
     setLoading(true);
+    setRequestState('loading');
     try {
       const [changesRes, summaryRes] = await Promise.all([
         api.getM3UChanges({
@@ -121,7 +124,14 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       setTotalCount(changesRes.total);
       setTotalPages(changesRes.total_pages);
       setSummary(summaryRes);
+      setRequestState('success');
     } catch (err) {
+      const permission = err instanceof HttpError && err.status === 403;
+      setChanges([]);
+      setSummary(null);
+      setTotalCount(0);
+      setTotalPages(1);
+      setRequestState(permission ? 'permission' : 'error');
       notifications.error(err instanceof Error ? err.message : 'Failed to fetch changes', 'Changes');
     } finally {
       setLoading(false);
@@ -180,6 +190,15 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
     if (sortBy !== column) return null;
     return sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward';
   };
+
+  const renderSortHeader = (column: string, label: string) => (
+    <span role="columnheader" aria-sort={sortBy === column ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" className="sortable" onClick={() => handleSort(column)} aria-label={`Sort by ${label}`}>
+        {label}
+        {getSortIndicator(column) && <span className="material-icons sort-icon" aria-hidden="true">{getSortIndicator(column)}</span>}
+      </button>
+    </span>
+  );
 
   // Change type options for filter
   const changeTypeOptions = [
@@ -337,7 +356,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       </RouteHeaderSlot>
 
       {/* Loading State */}
-      {loading && changes.length === 0 && (
+      {requestState === 'loading' && changes.length === 0 && (
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <span>Loading changes...</span>
@@ -345,7 +364,15 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       )}
 
       {/* Empty State */}
-      {!loading && changes.length === 0 && (
+      {requestState === 'error' && <div className="tab-load-unavailable" role="alert">
+        <p>M3U changes could not be loaded.</p>
+        <button className="btn-secondary" onClick={() => void fetchChanges()}>Retry</button>
+      </div>}
+      {requestState === 'permission' && <div className="tab-load-unavailable" role="alert">
+        <p>You don't have permission to view M3U changes.</p>
+      </div>}
+
+      {requestState === 'success' && changes.length === 0 && (
         <div className="empty-state">
           <span className="material-icons">check_circle</span>
           <h3>No Changes Detected</h3>
@@ -356,43 +383,13 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       {/* Changes List */}
       {changes.length > 0 && (
         <div className="changes-list">
-          <div className="list-header">
-            <span className="sortable" onClick={() => handleSort('change_time')}>
-              Time
-              {getSortIndicator('change_time') && (
-                <span className="material-icons sort-icon">{getSortIndicator('change_time')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('m3u_account_id')}>
-              M3U Account
-              {getSortIndicator('m3u_account_id') && (
-                <span className="material-icons sort-icon">{getSortIndicator('m3u_account_id')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('change_type')}>
-              Type
-              {getSortIndicator('change_type') && (
-                <span className="material-icons sort-icon">{getSortIndicator('change_type')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('group_name')}>
-              Group
-              {getSortIndicator('group_name') && (
-                <span className="material-icons sort-icon">{getSortIndicator('group_name')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('count')}>
-              Streams
-              {getSortIndicator('count') && (
-                <span className="material-icons sort-icon">{getSortIndicator('count')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('enabled')}>
-              Enabled
-              {getSortIndicator('enabled') && (
-                <span className="material-icons sort-icon">{getSortIndicator('enabled')}</span>
-              )}
-            </span>
+          <div className="list-header" role="row">
+            {renderSortHeader('change_time', 'Time')}
+            {renderSortHeader('m3u_account_id', 'M3U Account')}
+            {renderSortHeader('change_type', 'Type')}
+            {renderSortHeader('group_name', 'Group')}
+            {renderSortHeader('count', 'Streams')}
+            {renderSortHeader('enabled', 'Enabled')}
             <span></span>
           </div>
           <div className="changes-list-content">

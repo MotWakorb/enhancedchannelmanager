@@ -874,6 +874,61 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await page.keyboard.press('Escape')
       await expect(more).toBeFocused()
     })
+
+    test('renders the dense-route loading, empty, error, and permission state matrix', async ({ page }) => {
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+
+      let releaseLogos!: () => void
+      await page.route(/\/api\/channels\/logos(?:\/|\?|$)/, async (route) => {
+        await new Promise<void>((resolve) => {
+          releaseLogos = () => {
+            void route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+            })
+            resolve()
+          }
+        })
+      })
+      await page.getByRole('link', { name: 'Logo Manager', exact: true }).click()
+      await expect(page.getByRole('toolbar', { name: 'Logo inventory controls' })).toBeVisible()
+      await expect(page.getByText('Loading logos...')).toBeVisible()
+      releaseLogos()
+      await expect(page.getByText('No logos yet')).toBeVisible()
+
+      await page.route(/\/api\/epg\/sources(?:\/|\?|$)/, (route) => route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'EPG fixture unavailable' }),
+      }))
+      await page.getByRole('link', { name: 'EPG Manager', exact: true }).click()
+      await expect(page.getByRole('status', { name: 'EPG sources unavailable' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Retry loading EPG sources' })).toBeVisible()
+
+      await page.route(/\/api\/m3u\/changes(?:\?|$)/, (route) => route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Forbidden' }),
+      }))
+      await page.getByRole('link', { name: 'M3U Changes', exact: true }).click()
+      await expect(page.getByText(/don't have permission to view M3U changes/i)).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0)
+
+      await page.route(/\/api\/journal(?:\?|$)/, (route) => route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Forbidden' }),
+      }))
+      await page.getByRole('link', { name: 'Journal', exact: true }).click()
+      await expect(page.getByText(/don't have permission to view journal entries/i)).toBeVisible()
+      await expect(page.getByRole('button', { name: /purge old entries/i })).toHaveCount(0)
+
+      expect(await page.evaluate(() =>
+        document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+      )).toBe(true)
+    })
   })
 }
 

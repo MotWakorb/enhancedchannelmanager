@@ -1,5 +1,5 @@
 import { logger } from '../../utils/logger';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams, MutationSource } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
@@ -8,6 +8,7 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { DenseToolbar } from '../DenseToolbar';
+import { HttpError } from '../../services/httpClient';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {
@@ -101,6 +102,8 @@ export function JournalTab() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [stats, setStats] = useState<JournalStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [requestState, setRequestState] = useState<'loading' | 'success' | 'error' | 'permission'>('loading');
+  const entriesRequestFailedRef = useRef(false);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -126,6 +129,8 @@ export function JournalTab() {
   // Load entries
   const loadEntries = useCallback(async () => {
     setLoading(true);
+    setRequestState('loading');
+    entriesRequestFailedRef.current = false;
     try {
       const params: JournalQueryParams = {
         page,
@@ -140,7 +145,15 @@ export function JournalTab() {
       setEntries(result.results);
       setTotalPages(result.total_pages);
       setTotalCount(result.count);
+      setRequestState('success');
     } catch (err) {
+      entriesRequestFailedRef.current = true;
+      const permission = err instanceof HttpError && err.status === 403;
+      setEntries([]);
+      setTotalCount(0);
+      setTotalPages(1);
+      setStats(null);
+      setRequestState(permission ? 'permission' : 'error');
       notifications.error(err instanceof Error ? err.message : 'Failed to load journal entries', 'Journal');
     } finally {
       setLoading(false);
@@ -151,8 +164,9 @@ export function JournalTab() {
   const loadStats = useCallback(async () => {
     try {
       const result = await api.getJournalStats();
-      setStats(result);
+      if (!entriesRequestFailedRef.current) setStats(result);
     } catch (err) {
+      setStats(null);
       logger.error('Failed to load journal stats:', err);
     }
   }, []);
@@ -271,31 +285,6 @@ export function JournalTab() {
             Refresh
           </button>
         </RouteHeaderSlot>
-        <RouteHeaderSlot name="controls"><div className="header-actions">
-          <div className="journal-purge-control">
-            <input
-              type="number"
-              className="journal-purge-days-input"
-              min={1}
-              value={purgeDays}
-              onChange={(e) => setPurgeDays(parseInt(e.target.value, 10) || 0)}
-              aria-label="Days to keep"
-              disabled={purging}
-            />
-            <span className="journal-purge-label">days</span>
-            <button
-              className="btn-secondary journal-purge-btn"
-              onClick={handlePurge}
-              disabled={purging || purgeDays < 1}
-              title="Delete journal entries older than the given number of days"
-            >
-              <span className={`material-icons ${purging ? 'spinning' : ''}`}>
-                {purging ? 'sync' : 'delete_sweep'}
-              </span>
-              {purging ? 'Purging…' : 'Purge Old Entries'}
-            </button>
-          </div>
-        </div></RouteHeaderSlot>
       </div>
 
       {/* Filters */}
@@ -367,17 +356,46 @@ export function JournalTab() {
             { value: 'auto_creation', label: 'Channel Pipeline' },
           ]}
         />
-      </>} />
+      </>} secondaryActions={requestState !== 'permission' ? <div className="journal-purge-control">
+        <input
+          type="number"
+          className="journal-purge-days-input"
+          min={1}
+          value={purgeDays}
+          onChange={(e) => setPurgeDays(parseInt(e.target.value, 10) || 0)}
+          aria-label="Days to keep"
+          disabled={purging}
+        />
+        <span className="journal-purge-label">days</span>
+        <button
+          className="btn-secondary journal-purge-btn"
+          onClick={handlePurge}
+          disabled={purging || purgeDays < 1}
+          title="Delete journal entries older than the given number of days"
+        >
+          <span className={`material-icons ${purging ? 'spinning' : ''}`}>{purging ? 'sync' : 'delete_sweep'}</span>
+          {purging ? 'Purging…' : 'Purge Old Entries'}
+        </button>
+      </div> : undefined} />
       </RouteHeaderSlot>
 
+      {requestState === 'loading' && entries.length === 0 && <div className="tab-loading">Loading journal entries…</div>}
+      {requestState === 'error' && <div className="tab-load-unavailable" role="alert">
+        <p>Journal entries could not be loaded.</p>
+        <button className="btn-secondary" onClick={() => void loadEntries()}>Retry</button>
+      </div>}
+      {requestState === 'permission' && <div className="tab-load-unavailable" role="alert">
+        <p>You don't have permission to view journal entries.</p>
+      </div>}
+
       {/* Entries List */}
-      {entries.length === 0 ? (
+      {requestState === 'success' && entries.length === 0 ? (
         <div className="empty-state">
           <span className="material-icons">history</span>
           <h3>No journal entries</h3>
           <p>Changes to channels, EPG sources, and M3U accounts will appear here.</p>
         </div>
-      ) : (
+      ) : requestState === 'success' || entries.length > 0 ? (
         <>
           <div className="entries-list">
             <div className="list-header">
@@ -544,7 +562,7 @@ export function JournalTab() {
             </div>
           </div>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

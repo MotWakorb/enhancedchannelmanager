@@ -170,6 +170,21 @@ describe('LogoManagerTab', () => {
     });
   });
 
+  it('uses native sort buttons and exposes the active sort direction', async () => {
+    await renderAndSettle();
+    const nameButton = screen.getByRole('button', { name: 'Sort by Name' });
+
+    expect(nameButton.closest('[role="columnheader"]')).toHaveAttribute('aria-sort', 'ascending');
+    fireEvent.click(nameButton);
+
+    await waitFor(() => {
+      expect(api.getLogos).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortBy: 'name', sortOrder: 'desc' }),
+      );
+    });
+    expect(nameButton.closest('[role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
+  });
+
   it('toggling "Unused only" re-fetches with unusedOnly=true, then back off', async () => {
     await renderAndSettle();
 

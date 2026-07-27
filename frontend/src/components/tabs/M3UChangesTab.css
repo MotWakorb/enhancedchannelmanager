@@ -225,6 +225,12 @@
 }
 
 .m3u-changes-tab .list-header .sortable {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
   cursor: pointer;
   display: flex;
   align-items: center;

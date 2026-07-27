@@ -105,6 +105,12 @@
    .sortable / .sort-icon pattern (docs/style_guide.md: follow the in-app
    precedent rather than inventing a new sort-header idiom). */
 .logos-list .list-header .sortable {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
   cursor: pointer;
   display: flex;
   align-items: center;

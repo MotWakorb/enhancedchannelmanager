@@ -1075,6 +1075,17 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   if (loading && !hasLoadedSourceData) {
     return (
       <div className="epg-manager-tab">
+        <RouteHeaderSlot name="controls">
+          <DenseToolbar
+            label="EPG source controls"
+            secondaryActions={(
+              <button className="btn-secondary" type="button" disabled>
+                <span className="material-icons spinning">sync</span>
+                Loading sources
+              </button>
+            )}
+          />
+        </RouteHeaderSlot>
         <RouteHeaderSlot name="status">
           <SourceLoadStatus
             state={sourceLoadState}

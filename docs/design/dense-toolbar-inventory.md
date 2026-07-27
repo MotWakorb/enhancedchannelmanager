@@ -21,6 +21,16 @@ move route-primary creation actions out of the page header.
 | M3U Changes | time/account/type/status filters; sortable columns | Existing request parameters and page reset remain unchanged. `hours` remains shareable in `#m3u-changes?hours=` because it is the only supported route query. |
 | Journal | debounced search; category/action/source filters | Existing `getJournalEntries` parameters and page reset remain unchanged. The hash router has no Journal query schema, so these values remain session-local. |
 
+## Route-state contract
+
+| State | M3U / EPG / Logo | M3U Changes / Journal |
+| --- | --- | --- |
+| Initial loading | Keep a labelled toolbar region with a disabled loading action so the page does not reflow when controls arrive. | Keep the filter toolbar visible and show an inline loading status. |
+| True empty | Show the route's setup-oriented empty state. | Show the route's no-history empty state only after a successful request. |
+| Filtered zero | Explain that filters produced no matches and provide a clear-filter action where filters are active. | Preserve filters and show the existing filtered-empty result. |
+| Recoverable error | Show the source error and a retry action; protected rows and counts are cleared. | Show an inline error and Retry; protected rows, summaries, and counts are cleared. |
+| HTTP 403 | Suppress unsafe controls and show the permission state. | Suppress Retry and destructive actions, clear protected data, and show the permission state. |
+
 ## Deliberate deviations
 
 - Primary create actions remain in the route header to preserve the approved

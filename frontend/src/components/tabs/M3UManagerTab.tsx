@@ -784,6 +784,9 @@ export function M3UManagerTab({
         return naturalCompare(a.name, b.name);
       });
   }, [accounts, filterServerGroup]);
+  const visibleAccountCount = accounts.filter(
+    account => account.name.toLowerCase() !== 'custom',
+  ).length;
 
   // Setup/admin actions surfaced through the header kebab (bead 09x38.2).
   const adminMenuItems: OverflowMenuItem[] = [
@@ -818,6 +821,17 @@ export function M3UManagerTab({
   if (loading && !hasLoadedSourceData) {
     return (
       <div className="m3u-manager-tab">
+        <RouteHeaderSlot name="controls">
+          <DenseToolbar
+            label="M3U account controls"
+            secondaryActions={(
+              <button className="btn-secondary" type="button" disabled>
+                <span className="material-icons spinning">sync</span>
+                Loading accounts
+              </button>
+            )}
+          />
+        </RouteHeaderSlot>
         <RouteHeaderSlot name="status">
           <SourceLoadStatus
             state={sourceLoadState}
@@ -915,12 +929,14 @@ export function M3UManagerTab({
       {filteredAccounts.length === 0 ? (
         <div className="empty-state">
           <span className="material-icons">playlist_play</span>
-          <h3>No M3U Accounts</h3>
-          <p>Add an M3U account to start importing streams.</p>
-          <button className="btn-primary" onClick={handleAddAccount}>
-            <span className="material-icons">add</span>
-            Add M3U Account
-          </button>
+          <h3>{visibleAccountCount > 0 ? 'No matching M3U accounts' : 'No M3U Accounts'}</h3>
+          <p>{visibleAccountCount > 0 ? 'No accounts belong to the selected server group.' : 'Add an M3U account to start importing streams.'}</p>
+          {visibleAccountCount > 0
+            ? <button className="btn-secondary" onClick={() => setFilterServerGroup(null)}>Clear filters</button>
+            : <button className="btn-primary" onClick={handleAddAccount}>
+                <span className="material-icons">add</span>
+                Add M3U Account
+              </button>}
         </div>
       ) : (
         <div className="m3u-accounts-list">
