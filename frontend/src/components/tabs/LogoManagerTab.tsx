@@ -122,8 +122,13 @@ export function LogoManagerTab() {
   };
 
   const renderSortHeader = (column: SortColumn, label: string) => (
-    <span role="columnheader" aria-sort={sortBy === column ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}>
-      <button type="button" className="sortable" onClick={() => handleSort(column)} aria-label={`Sort by ${label}`}>
+    <span>
+      <button
+        type="button"
+        className="sortable"
+        onClick={() => handleSort(column)}
+        aria-label={`Sort by ${label}${sortBy === column ? `, currently ${sortOrder === 'asc' ? 'ascending' : 'descending'}` : ''}`}
+      >
         {label}
         {getSortIndicator(column) && <span className="material-icons sort-icon" aria-hidden="true">{getSortIndicator(column)}</span>}
       </button>
@@ -334,12 +339,12 @@ export function LogoManagerTab() {
         ) : viewMode === 'list' ? (
           // List View
           <div className="logos-list">
-            <div className="list-header" role="row">
-              <span role="columnheader">Logo</span>
+            <div className="list-header">
+              <span>Logo</span>
               {renderSortHeader('name', 'Name')}
-              <span role="columnheader">URL</span>
+              <span>URL</span>
               {renderSortHeader('channel_count', 'Used By')}
-              <span role="columnheader">Actions</span>
+              <span>Actions</span>
             </div>
             {logos.map((logo) => (
               <div key={logo.id} className="logo-row">

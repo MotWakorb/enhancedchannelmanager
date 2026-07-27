@@ -103,8 +103,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
   const fetchChanges = useCallback(async () => {
     setLoading(true);
     setRequestState('loading');
-    try {
-      const [changesRes, summaryRes] = await Promise.all([
+    const [changesResult, summaryResult] = await Promise.allSettled([
         api.getM3UChanges({
           page,
           pageSize,
@@ -119,18 +118,30 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
           m3uAccountId: accountFilter || undefined,
         }),
       ]);
+    try {
+      if (changesResult.status === 'rejected' || summaryResult.status === 'rejected') {
+        const errors = [changesResult, summaryResult]
+          .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          .map(result => result.reason);
+        const permissionError = errors.find(
+          error => error instanceof HttpError && (error.status === 401 || error.status === 403),
+        );
+        throw permissionError ?? errors[0];
+      }
 
-      setChanges(changesRes.results);
-      setTotalCount(changesRes.total);
-      setTotalPages(changesRes.total_pages);
-      setSummary(summaryRes);
+      setChanges(changesResult.value.results);
+      setTotalCount(changesResult.value.total);
+      setTotalPages(changesResult.value.total_pages);
+      setSummary(summaryResult.value);
       setRequestState('success');
     } catch (err) {
-      const permission = err instanceof HttpError && err.status === 403;
-      setChanges([]);
-      setSummary(null);
-      setTotalCount(0);
-      setTotalPages(1);
+      const permission = err instanceof HttpError && (err.status === 401 || err.status === 403);
+      if (permission) {
+        setChanges([]);
+        setSummary(null);
+        setTotalCount(0);
+        setTotalPages(1);
+      }
       setRequestState(permission ? 'permission' : 'error');
       notifications.error(err instanceof Error ? err.message : 'Failed to fetch changes', 'Changes');
     } finally {
@@ -192,8 +203,13 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
   };
 
   const renderSortHeader = (column: string, label: string) => (
-    <span role="columnheader" aria-sort={sortBy === column ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}>
-      <button type="button" className="sortable" onClick={() => handleSort(column)} aria-label={`Sort by ${label}`}>
+    <span>
+      <button
+        type="button"
+        className="sortable"
+        onClick={() => handleSort(column)}
+        aria-label={`Sort by ${label}${sortBy === column ? `, currently ${sortOrder === 'asc' ? 'ascending' : 'descending'}` : ''}`}
+      >
         {label}
         {getSortIndicator(column) && <span className="material-icons sort-icon" aria-hidden="true">{getSortIndicator(column)}</span>}
       </button>
@@ -257,14 +273,14 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
           </RouteHeaderSlot>}
         </div>
         <RouteHeaderSlot name="primary-action"><div className="header-actions">
-          <button
+          {requestState !== 'permission' && <button
             className="btn-secondary"
             onClick={fetchChanges}
             disabled={loading}
           >
             <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
             Refresh
-          </button>
+          </button>}
         </div></RouteHeaderSlot>
       </div>
 
@@ -365,7 +381,9 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
 
       {/* Empty State */}
       {requestState === 'error' && <div className="tab-load-unavailable" role="alert">
-        <p>M3U changes could not be loaded.</p>
+        <p>{changes.length > 0
+          ? 'M3U changes refresh failed — showing previously loaded changes.'
+          : 'M3U changes could not be loaded.'}</p>
         <button className="btn-secondary" onClick={() => void fetchChanges()}>Retry</button>
       </div>}
       {requestState === 'permission' && <div className="tab-load-unavailable" role="alert">
@@ -383,7 +401,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       {/* Changes List */}
       {changes.length > 0 && (
         <div className="changes-list">
-          <div className="list-header" role="row">
+          <div className="list-header">
             {renderSortHeader('change_time', 'Time')}
             {renderSortHeader('m3u_account_id', 'M3U Account')}
             {renderSortHeader('change_type', 'Type')}

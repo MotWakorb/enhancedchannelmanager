@@ -28,8 +28,8 @@ move route-primary creation actions out of the page header.
 | Initial loading | Keep a labelled toolbar region with a disabled loading action so the page does not reflow when controls arrive. | Keep the filter toolbar visible and show an inline loading status. |
 | True empty | Show the route's setup-oriented empty state. | Show the route's no-history empty state only after a successful request. |
 | Filtered zero | Explain that filters produced no matches and provide a clear-filter action where filters are active. | Preserve filters and show the existing filtered-empty result. |
-| Recoverable error | Show the source error and a retry action; protected rows and counts are cleared. | Show an inline error and Retry; protected rows, summaries, and counts are cleared. |
-| HTTP 403 | Suppress unsafe controls and show the permission state. | Suppress Retry and destructive actions, clear protected data, and show the permission state. |
+| Recoverable error | Show the source error and a retry action; previously loaded rows remain visible and are explicitly labelled stale. | Show an inline error and Retry; previously loaded rows, summaries, and counts remain visible and are explicitly labelled stale. |
+| HTTP 401/403 | Suppress unsafe controls and show the permission state. | Suppress Retry and destructive actions, clear protected data, and show the permission state. Permission takes precedence when parallel protected requests return mixed failures. |
 
 ## Deliberate deviations
 

@@ -254,12 +254,47 @@ describe('M3UChangesTab', () => {
       expect(await screen.findByText('Sports')).toBeInTheDocument();
     });
 
+    it('retains populated rows as stale after refresh failure and recovers on retry', async () => {
+      vi.mocked(api.getM3UChanges).mockReset()
+        .mockResolvedValueOnce(mockChangesResponse)
+        .mockRejectedValueOnce(new Error('Refresh failed'))
+        .mockResolvedValueOnce(mockChangesResponse);
+      vi.mocked(api.getM3UChangesSummary).mockReset()
+        .mockResolvedValueOnce(mockSummary)
+        .mockResolvedValueOnce(mockSummary)
+        .mockResolvedValueOnce(mockSummary);
+      renderWithProviders(<M3UChangesTab />);
+      expect(await screen.findByText('Sports')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+
+      expect(await screen.findByText(/showing previously loaded changes/i)).toBeInTheDocument();
+      expect(screen.getByText('Sports')).toBeInTheDocument();
+      expect(screen.getByText('3 total changes')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(screen.queryByText(/showing previously loaded changes/i)).not.toBeInTheDocument());
+      expect(screen.getByText('Sports')).toBeInTheDocument();
+    });
+
+    it('gives permission precedence for mixed summary 403 and changes 502 failures', async () => {
+      vi.mocked(api.getM3UChanges).mockReset();
+      vi.mocked(api.getM3UChangesSummary).mockReset();
+      vi.mocked(api.getM3UChanges).mockRejectedValue(new HttpError('Unavailable', 502));
+      vi.mocked(api.getM3UChangesSummary).mockRejectedValue(new HttpError('Forbidden', 403));
+
+      renderWithProviders(<M3UChangesTab />);
+
+      expect(await screen.findByText(/don't have permission/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    });
+
   });
 
   it('uses native sort buttons and exposes the active sort direction', async () => {
     renderWithProviders(<M3UChangesTab />);
-    const timeButton = await screen.findByRole('button', { name: 'Sort by Time' });
-    expect(timeButton.closest('[role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
+    const timeButton = await screen.findByRole('button', { name: /Sort by Time, currently descending/ });
 
     fireEvent.click(timeButton);
 
@@ -268,7 +303,7 @@ describe('M3UChangesTab', () => {
         expect.objectContaining({ sortBy: 'change_time', sortOrder: 'asc' }),
       );
     });
-    expect(timeButton.closest('[role="columnheader"]')).toHaveAttribute('aria-sort', 'ascending');
+    expect(screen.getByRole('button', { name: /Sort by Time, currently ascending/ })).toBeInTheDocument();
   });
 
   describe('row expansion', () => {

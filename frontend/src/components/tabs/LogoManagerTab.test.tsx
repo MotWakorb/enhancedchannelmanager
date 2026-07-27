@@ -172,9 +172,8 @@ describe('LogoManagerTab', () => {
 
   it('uses native sort buttons and exposes the active sort direction', async () => {
     await renderAndSettle();
-    const nameButton = screen.getByRole('button', { name: 'Sort by Name' });
+    const nameButton = screen.getByRole('button', { name: /Sort by Name, currently ascending/ });
 
-    expect(nameButton.closest('[role="columnheader"]')).toHaveAttribute('aria-sort', 'ascending');
     fireEvent.click(nameButton);
 
     await waitFor(() => {
@@ -182,7 +181,7 @@ describe('LogoManagerTab', () => {
         expect.objectContaining({ sortBy: 'name', sortOrder: 'desc' }),
       );
     });
-    expect(nameButton.closest('[role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
+    expect(screen.getByRole('button', { name: /Sort by Name, currently descending/ })).toBeInTheDocument();
   });
 
   it('toggling "Unused only" re-fetches with unusedOnly=true, then back off', async () => {

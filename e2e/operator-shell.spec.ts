@@ -929,6 +929,121 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
       )).toBe(true)
     })
+
+    test('retains stale history through refresh failure and gives mixed permission failures precedence', async ({ page }) => {
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+
+      let journalCall = 0
+      let releaseInitialJournal!: () => void
+      await page.route(/\/api\/journal(?:\?|$)/, async (route) => {
+        journalCall += 1
+        if (journalCall === 1) {
+          await new Promise<void>((resolve) => {
+            releaseInitialJournal = () => {
+              void route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                  count: 1, page: 1, page_size: 50, total_pages: 1,
+                  results: [{
+                    id: 91, timestamp: '2026-07-27T12:00:00Z', category: 'channel',
+                    action_type: 'create', entity_id: 41, entity_name: 'Retained journal row',
+                    description: 'Fixture entry', before_value: null, after_value: null,
+                    user_initiated: true, mutation_source: 'ui', batch_id: null,
+                  }],
+                }),
+              })
+              resolve()
+            }
+          })
+        } else if (journalCall === 2) {
+          await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ detail: 'Refresh failed' }) })
+        } else {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              count: 1, page: 1, page_size: 50, total_pages: 1,
+              results: [{
+                id: 91, timestamp: '2026-07-27T12:00:00Z', category: 'channel',
+                action_type: 'create', entity_id: 41, entity_name: 'Retained journal row',
+                description: 'Fixture entry', before_value: null, after_value: null,
+                user_initiated: true, mutation_source: 'ui', batch_id: null,
+              }],
+            }),
+          })
+        }
+      })
+      await page.route(/\/api\/journal\/stats(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          total_entries: 1, by_category: { channel: 1 }, by_action_type: { create: 1 },
+          date_range: { oldest: '2026-07-27T12:00:00Z', newest: '2026-07-27T12:00:00Z' },
+        }),
+      }))
+
+      await page.getByRole('link', { name: 'Journal', exact: true }).click()
+      const journalToolbar = page.getByRole('toolbar', { name: 'Journal entry controls' })
+      await expect(journalToolbar).toBeVisible()
+      await expect(journalToolbar.getByPlaceholder('Search entries...')).toBeDisabled()
+      await expect(journalToolbar.getByRole('button', { name: /purge old entries/i })).toBeDisabled()
+      releaseInitialJournal()
+      await expect(page.getByText('Retained journal row')).toBeVisible()
+      await page.getByRole('button', { name: /refresh/i }).click()
+      await expect(page.getByText(/showing previously loaded entries/i)).toBeVisible()
+      await expect(page.getByText('Retained journal row')).toBeVisible()
+      await page.getByRole('button', { name: 'Retry', exact: true }).click()
+      await expect(page.getByText(/showing previously loaded entries/i)).toHaveCount(0)
+      await expect(page.getByText('Retained journal row')).toBeVisible()
+
+      let changesCall = 0
+      let mixedPermission = false
+      await page.route(/\/api\/m3u\/changes(?:\?|$)/, (route) => {
+        changesCall += 1
+        if (mixedPermission || changesCall === 2) {
+          return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ detail: 'Changes failed' }) })
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            results: [{
+              id: 71, m3u_account_id: 3, change_time: '2026-07-27T12:00:00Z',
+              change_type: 'group_added', group_name: 'Retained changes row',
+              stream_names: [], count: 4, enabled: true, snapshot_id: 1,
+            }],
+            total: 1, page: 1, page_size: 50, total_pages: 1,
+          }),
+        })
+      })
+      await page.route(/\/api\/m3u\/changes\/summary(?:\?|$)/, (route) => route.fulfill({
+        status: mixedPermission ? 403 : 200,
+        contentType: 'application/json',
+        body: mixedPermission
+          ? JSON.stringify({ detail: 'Forbidden' })
+          : JSON.stringify({
+              total_changes: 1, groups_added: 1, groups_removed: 0, streams_added: 0,
+              streams_removed: 0, accounts_affected: [3], since: '2026-07-27T00:00:00Z',
+            }),
+      }))
+
+      await page.getByRole('link', { name: 'M3U Changes', exact: true }).click()
+      await expect(page.getByText('Retained changes row')).toBeVisible()
+      await page.getByRole('button', { name: /refresh/i }).click()
+      await expect(page.getByText(/showing previously loaded changes/i)).toBeVisible()
+      await expect(page.getByText('Retained changes row')).toBeVisible()
+      await expect(page.getByText('1 total changes')).toBeVisible()
+      await page.getByRole('button', { name: 'Retry', exact: true }).click()
+      await expect(page.getByText(/showing previously loaded changes/i)).toHaveCount(0)
+
+      mixedPermission = true
+      await page.getByRole('button', { name: /refresh/i }).click()
+      await expect(page.getByText(/don't have permission to view M3U changes/i)).toBeVisible()
+      await expect(page.getByText('Retained changes row')).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
+    })
   })
 }
 
