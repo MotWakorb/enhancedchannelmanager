@@ -221,6 +221,29 @@ animation frames, and completed subtree animations before retaining the same
 focus-clearance and horizontal-overflow assertions. The affected ordered prefix
 passes five consecutive exact-build, single-worker, no-retry runs.
 
+The evidence was produced from commit `21b48eee569450066c58ffe2337fe41f243ef5f3`.
+The complete-suite command was:
+
+```bash
+E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/operator-shell.spec.ts --project=chromium --workers=1 --retries=0 --reporter=line
+```
+
+It completed twice as two separate serial, no-retry runs: run 1 passed 63/63
+and run 2 passed 63/63. The affected-prefix command was run independently five
+consecutive times:
+
+```bash
+E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/operator-shell.spec.ts --project=chromium --grep 'Channel Manager group text|every primary route preserves the audited vertical working-area budget|moves a channel drag overlay|audited sticky controls' --workers=1 --retries=0 --reporter=line
+```
+
+All five runs passed, totaling 40/40 checks. This establishes the causal class:
+the assertions lacked a deterministic completed-layout boundary. The historical
+failure artifacts do not identify which individual subcondition—async task
+content, font readiness, or an active CSS/focus/theme transition—was decisive
+in each occurrence, so no narrower subcondition claim is made. The
+machine-readable run record is
+[`evidence/a0ekz-layout-settling-runs.json`](evidence/a0ekz-layout-settling-runs.json).
+
 ## Sign-off
 
 - [x] QA validation evidence complete for the target matrix.

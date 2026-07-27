@@ -1,0 +1,44 @@
+{
+  "bead": "enhancedchannelmanager-a0ekz",
+  "recorded_at": "2026-07-27T18:42:00Z",
+  "commit": "21b48eee569450066c58ffe2337fe41f243ef5f3",
+  "causal_class_evidence": "Geometry and contrast assertions were sampled without a deterministic completed-layout boundary.",
+  "subcondition_uncertainty": "Historical artifacts do not establish whether async task content, web-font readiness, or an active CSS/focus/theme transition was decisive in each occurrence.",
+  "runs": [
+    {
+      "run_index": 1,
+      "scope": "full-suite",
+      "command": "E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/operator-shell.spec.ts --project=chromium --workers=1 --retries=0 --reporter=line",
+      "workers": 1,
+      "retries": 0,
+      "result": {
+        "passed": 63,
+        "total": 63
+      }
+    },
+    {
+      "run_index": 2,
+      "scope": "full-suite",
+      "command": "E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/operator-shell.spec.ts --project=chromium --workers=1 --retries=0 --reporter=line",
+      "workers": 1,
+      "retries": 0,
+      "result": {
+        "passed": 63,
+        "total": 63
+      }
+    },
+    {
+      "run_index": 1,
+      "scope": "affected-ordered-prefix",
+      "command": "E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/operator-shell.spec.ts --project=chromium --grep 'Channel Manager group text|every primary route preserves the audited vertical working-area budget|moves a channel drag overlay|audited sticky controls' --workers=1 --retries=0 --reporter=line",
+      "workers": 1,
+      "retries": 0,
+      "consecutive_runs": 5,
+      "checks_per_run": 8,
+      "result": {
+        "passed": 40,
+        "total": 40
+      }
+    }
+  ]
+}
