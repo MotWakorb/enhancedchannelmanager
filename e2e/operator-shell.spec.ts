@@ -942,6 +942,7 @@ test.describe('operator shell navigation behavior', () => {
   test('Channel Manager gives a named scoped error and recovers through Retry', async ({ page }) => {
     await seedChannelWorkspace(page, false)
     let attempts = 0
+    let channelsHealthy = false
     await page.route(/\/api\/channels(?:\?|$)/, (route) => {
       const isWorkspaceList = new URL(route.request().url()).searchParams.get('page_size') === '500'
       if (!isWorkspaceList) {
@@ -953,15 +954,16 @@ test.describe('operator shell navigation behavior', () => {
       }
       attempts += 1
       return route.fulfill({
-        status: attempts === 1 ? 503 : 200,
+        status: channelsHealthy ? 200 : 503,
         contentType: 'application/json',
-        body: attempts === 1
-          ? JSON.stringify({ detail: 'Channels source unavailable' })
-          : JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+        body: channelsHealthy
+          ? JSON.stringify({ count: 0, next: null, previous: null, results: [] })
+          : JSON.stringify({ detail: 'Channels source unavailable' }),
       })
     })
     await openShellWithPipelineFixture(page)
     await expect(page.getByText('Channels unavailable')).toBeVisible()
+    channelsHealthy = true
     await page.getByRole('button', { name: 'Retry loading channels' }).click()
     await expect(page.getByText('Loading channels...')).toBeVisible()
     await expect(page.getByLabel('0 channels')).toBeVisible()
