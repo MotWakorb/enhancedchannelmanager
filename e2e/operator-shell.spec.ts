@@ -304,22 +304,45 @@ type RequestSnapshot = {
   normalized: Readonly<Record<string, number>>
 }
 
-const intendedPeriodicRequests: Readonly<Record<string, number>> = {
+type PeriodicRequestPolicy = {
+  owner: 'global' | 'Stats' | 'Settings'
+  maximumPerWindow: number
+  reason: string
+}
+
+const intendedPeriodicRequests: Readonly<Record<string, PeriodicRequestPolicy>> = {
   // Global notification freshness and the Channel Manager pending-merge badge
   // are deliberate 30-second background polls. The value is the maximum
   // normalized requests permitted in each 31-second observation window.
-  'GET /api/notifications?page_size': 2,
-  'GET /api/channel-merges?page&page_size&status': 2,
+  'GET /api/notifications?page_size': {
+    owner: 'global', maximumPerWindow: 2,
+    reason: 'Global notification-center freshness, including accelerated active-operation cadence.',
+  },
+  'GET /api/channel-merges?page&page_size&status': {
+    owner: 'global', maximumPerWindow: 2,
+    reason: 'Global app-shell pending-merge badge freshness.',
+  },
   // The visible Stats overview intentionally refreshes its four primary
   // metrics once per configured interval. The deterministic settings fixture
   // yields one refresh per observation window.
-  'GET /api/stats/activity?limit': 1,
-  'GET /api/stats/bandwidth': 1,
-  'GET /api/stats/channels': 1,
-  'GET /api/stats/top-watched?limit&sort_by': 1,
+  'GET /api/stats/activity?limit': {
+    owner: 'Stats', maximumPerWindow: 1, reason: 'Visible Stats overview auto-refresh.',
+  },
+  'GET /api/stats/bandwidth': {
+    owner: 'Stats', maximumPerWindow: 1, reason: 'Visible Stats overview auto-refresh.',
+  },
+  'GET /api/stats/channels': {
+    owner: 'Stats', maximumPerWindow: 1, reason: 'Visible Stats overview auto-refresh.',
+  },
+  'GET /api/stats/top-watched?limit&sort_by': {
+    owner: 'Stats', maximumPerWindow: 1, reason: 'Visible Stats overview auto-refresh.',
+  },
   // Settings detects a scheduled stream probe every five seconds so an
   // externally-started operation becomes visible without user action.
-  'GET /api/stream-stats/probe/progress': 7,
+  'GET /api/stream-stats/probe/progress': {
+    owner: 'Settings', maximumPerWindow: 7,
+    reason: 'Settings detects externally scheduled stream probes every five seconds.',
+  },
 }
 
 function normalizedRequestKey(method: string, rawUrl: string) {
@@ -346,16 +369,32 @@ function requestWindowGrowth(
     const deltas = snapshots.slice(1).map((snapshot, index) =>
       (snapshot.normalized[key] ?? 0) - (snapshots[index].normalized[key] ?? 0))
     const allowance = periodicAllowances[key] ?? 0
-    return deltas.length >= 2 && deltas.every((delta) => delta > allowance)
+    return deltas.length >= 2 && deltas.some((delta) => delta > allowance)
       ? [{ key, deltas, allowance }]
       : []
   })
+}
+
+function periodicAllowancesForRoute(route: string) {
+  return Object.fromEntries(
+    Object.entries(intendedPeriodicRequests)
+      .filter(([, policy]) => policy.owner === 'global' || policy.owner === route)
+      .map(([key, policy]) => [key, policy.maximumPerWindow]),
+  )
+}
+
+function requestOwner(normalizedKey: string): PeriodicRequestPolicy['owner'] | null {
+  return intendedPeriodicRequests[normalizedKey]?.owner ?? null
 }
 
 async function computedTextContrast(page: Page, selector: string) {
   return page.locator(selector).first().evaluate((element, evaluatedSelector) => {
     type Rgba = { r: number; g: number; b: number; a: number }
     const parse = (value: string): Rgba => {
+      // Detached/non-painting ancestors can report an empty computed
+      // background during a concurrent React commit; it is equivalent to a
+      // transparent paint layer, not an unsupported foreground color.
+      if (value === '' || value === 'transparent') return { r: 0, g: 0, b: 0, a: 0 }
       const channels = value.match(/[\d.]+/g)?.map(Number) ?? []
       if (channels.length < 3) throw new Error(`Unsupported computed color: ${value}`)
       return { r: channels[0], g: channels[1], b: channels[2], a: channels[3] ?? 1 }
@@ -719,23 +758,43 @@ test('request storm detector catches delayed query-changing growth after an init
     { elapsedMs: 0, exact: {}, normalized: {} },
     {
       elapsedMs: 31_000,
-      exact: { '/api/search?cursor=first': 1 },
-      normalized: { 'GET /api/search?cursor': 1 },
+      exact: {},
+      normalized: {},
     },
     {
       elapsedMs: 62_000,
-      exact: { '/api/search?cursor=first': 1, '/api/search?cursor=second': 1 },
+      exact: { '/api/search?cursor=late-loop-1': 1, '/api/search?cursor=late-loop-2': 1 },
       normalized: { 'GET /api/search?cursor': 2 },
     },
   ]
 
   expect(requestWindowGrowth(snapshots, {})).toEqual([{
     key: 'GET /api/search?cursor',
-    deltas: [1, 1],
+    deltas: [0, 2],
     allowance: 0,
   }])
   expect(normalizedRequestKey('get', 'https://ecm.test/api/search?z=1&cursor=two&z=2'))
     .toBe('GET /api/search?cursor&z')
+})
+
+test('route-scoped poll policy rejects a leaked Stats refresh on Dashboard', () => {
+  expect(periodicAllowancesForRoute('Stats')).toMatchObject({
+    'GET /api/stats/bandwidth': 1,
+  })
+  expect(periodicAllowancesForRoute('Dashboard')).not.toHaveProperty('GET /api/stats/bandwidth')
+  expect(requestWindowGrowth([
+    { elapsedMs: 0, exact: {}, normalized: {} },
+    { elapsedMs: 31_000, exact: {}, normalized: {} },
+    {
+      elapsedMs: 62_000,
+      exact: { '/api/stats/bandwidth': 1 },
+      normalized: { 'GET /api/stats/bandwidth': 1 },
+    },
+  ], periodicAllowancesForRoute('Dashboard'))).toEqual([{
+    key: 'GET /api/stats/bandwidth',
+    deltas: [0, 1],
+    allowance: 0,
+  }])
 })
 
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
@@ -798,18 +857,28 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await seedPrimaryRouteBudgetData(page)
       await openShellWithPipelineFixture(page)
       await dismissFirstRunPromptIfPresent(page)
-      const apiRequests: Array<{ exact: string; normalized: string }> = []
+      let currentRoute = 'Shell'
+      const apiRequests: Array<{
+        exact: string
+        normalized: string
+        routeAtRequest: string
+        owner: PeriodicRequestPolicy['owner'] | null
+      }> = []
       page.on('request', (request) => {
         const url = new URL(request.url())
         if (request.method() === 'GET' && url.pathname.startsWith('/api/')) {
+          const normalized = normalizedRequestKey(request.method(), request.url())
           apiRequests.push({
             exact: `${url.pathname}${url.search}`,
-            normalized: normalizedRequestKey(request.method(), request.url()),
+            normalized,
+            routeAtRequest: currentRoute,
+            owner: requestOwner(normalized),
           })
         }
       })
 
       for (const consumer of routeConsumers) {
+        currentRoute = consumer.name
         const requestStart = apiRequests.length
         await page.getByRole('link', { name: consumer.name }).click()
         await expectSettledRoute(page, consumer)
@@ -883,6 +952,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           `${consumer.name} repeated an identical GET more than twice`,
         ).toEqual([])
 
+        // The route has settled and its synchronous/dependent loads have
+        // completed. Requests after this lifecycle grace boundary must either
+        // be owned by the current route or be a documented global-shell poll.
+        const quietStart = apiRequests.length
         const snapshots: RequestSnapshot[] = [{
           elapsedMs: 0,
           exact: counts,
@@ -900,10 +973,25 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
             normalized: countRequestKeys(observed.map((request) => request.normalized)),
           })
         }
-        const continuedGrowth = requestWindowGrowth(snapshots, intendedPeriodicRequests)
+        const routeAllowances = periodicAllowancesForRoute(consumer.name)
+        const continuedGrowth = requestWindowGrowth(snapshots, routeAllowances)
+        const leakedOwners = apiRequests.slice(quietStart).flatMap((request) =>
+          request.owner && request.owner !== 'global' && request.owner !== consumer.name
+            ? [{
+                exact: request.exact,
+                normalized: request.normalized,
+                owner: request.owner,
+                currentRoute: consumer.name,
+                routeAtRequest: request.routeAtRequest,
+              }]
+            : [])
         expect(
           continuedGrowth,
           `${consumer.name} has delayed/query-changing request growth in consecutive quiet windows`,
+        ).toEqual([])
+        expect(
+          leakedOwners,
+          `${consumer.name} received requests owned by a prior route after its lifecycle grace boundary`,
         ).toEqual([])
         await writeFile(
           resolve(
@@ -920,9 +1008,18 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
             normalizedInitialCounts: snapshots[0].normalized,
             quietWindowMs: 31_000,
             observedWindows: 2,
-            intendedPeriodicRequests,
+            lifecycleGraceBoundary: 'route settled, transient toasts dismissed, axe and geometry complete',
+            allowedPeriodicRequests: Object.fromEntries(
+              Object.entries(intendedPeriodicRequests)
+                .filter(([, policy]) => policy.owner === 'global' || policy.owner === consumer.name),
+            ),
             timeSeries: snapshots,
             continuedGrowth,
+            leakedOwners,
+            observedRequests: apiRequests.slice(requestStart).map((request) => ({
+              ...request,
+              allowedOnCurrentRoute: request.owner === 'global' || request.owner === consumer.name,
+            })),
           }, null, 2)}\n`,
         )
       }

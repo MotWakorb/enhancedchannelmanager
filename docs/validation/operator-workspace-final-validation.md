@@ -176,16 +176,24 @@ After each route settles, deterministic browser time advances through two
 31-second observation windows. Request evidence is sampled at 0, 31, and 62
 seconds. The storm detector groups requests by HTTP method, pathname, and
 sorted query-key shape, while retaining exact full URLs and their original
-budgets. This catches delayed loops whose query values change on each request.
-A synthetic regression proves that changing `cursor` values cannot evade the
-detector.
+budgets. The lifecycle grace boundary is after route settlement, transient
+toast cleanup, axe, and geometry checks. Any request growth beyond a
+route-scoped allowance in either subsequent window fails. A synthetic
+regression stays fully quiet through the first checkpoint, starts a
+query-changing `cursor` loop only in the second window, and proves that delayed
+value churn cannot evade the detector.
 
 The only continuing requests allowed are bounded, documented product polls:
-global notifications and Channel Manager pending-merge freshness (30 seconds),
-the four visible Stats overview metrics (configured refresh interval), and
-Settings detection of externally scheduled stream probes (5 seconds). Finite
-dependent loads are included in the initial exact-URL route budgets and may not
-continue growing across both quiet windows.
+global notifications and app-shell pending-merge freshness (30 seconds), the
+four visible Stats overview metrics (configured refresh interval, allowed only
+while Stats is current), and Settings detection of externally scheduled stream
+probes (5 seconds, allowed only while Settings is current). Each request
+artifact records the policy owner, reason, active route, whether the request is
+allowed there, and leaked-owner results. A prior-route-owned poll after the
+next route's grace boundary fails even when its cadence would have been valid
+on its owning route; a synthetic Stats-on-Dashboard case locks this behavior.
+Finite dependent loads are included in the initial exact-URL route budgets and
+may not continue after the lifecycle grace boundary.
 
 ## Artifacts
 
