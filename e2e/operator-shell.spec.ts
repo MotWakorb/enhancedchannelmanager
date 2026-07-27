@@ -943,7 +943,9 @@ test.describe('operator shell navigation behavior', () => {
     await seedChannelWorkspace(page, false)
     let attempts = 0
     let channelsHealthy = false
-    await page.route(/\/api\/channels(?:\?|$)/, (route) => {
+    let releaseRecovery!: () => void
+    const recoveryGate = new Promise<void>((resolve) => { releaseRecovery = resolve })
+    await page.route(/\/api\/channels(?:\?|$)/, async (route) => {
       const isWorkspaceList = new URL(route.request().url()).searchParams.get('page_size') === '500'
       if (!isWorkspaceList) {
         return route.fulfill({
@@ -953,6 +955,7 @@ test.describe('operator shell navigation behavior', () => {
         })
       }
       attempts += 1
+      if (channelsHealthy) await recoveryGate
       return route.fulfill({
         status: channelsHealthy ? 200 : 503,
         contentType: 'application/json',
@@ -966,6 +969,7 @@ test.describe('operator shell navigation behavior', () => {
     channelsHealthy = true
     await page.getByRole('button', { name: 'Retry loading channels' }).click()
     await expect(page.getByText('Loading channels...')).toBeVisible()
+    releaseRecovery()
     await expect(page.getByLabel('0 channels')).toBeVisible()
     expect(attempts).toBeGreaterThanOrEqual(2)
   })
