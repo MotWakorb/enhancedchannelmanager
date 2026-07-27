@@ -42,7 +42,7 @@
 .header-left h2 {
   margin: 0;
   font-size: 1.5rem;
-  color: var(--text-primary);
+  color: var(--button-text);
 }
 
 .header-stats {
@@ -130,7 +130,7 @@
   font-size: 1.1rem;
   font-weight: 600;
   line-height: 1.2;
-  color: var(--text-primary);
+  color: var(--button-text);
 }
 
 .summary-card.added .summary-value {
@@ -175,7 +175,7 @@
 }
 
 .filter-select .custom-select-trigger:hover {
-  color: var(--text-primary);
+  color: var(--button-text);
 }
 
 .filter-select .custom-select.open .custom-select-trigger {
@@ -240,7 +240,7 @@
 }
 
 .m3u-changes-tab .list-header .sortable:hover {
-  color: var(--text-primary);
+  color: var(--button-text);
 }
 
 .m3u-changes-tab .list-header .sort-icon {
@@ -290,7 +290,7 @@
 
 .change-account {
   font-size: 0.875rem;
-  color: var(--text-primary);
+  color: var(--button-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -304,19 +304,19 @@
 .change-added,
 .type-badge.change-added {
   background-color: var(--success-bg);
-  color: var(--success);
+  color: var(--text-primary);
 }
 
 .change-removed,
 .type-badge.change-removed {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--text-primary);
 }
 
 .change-other,
 .type-badge.change-other {
   background-color: var(--border-primary);
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .change-group {
@@ -347,12 +347,12 @@
 
 .enabled-badge.enabled {
   background-color: var(--success-bg);
-  color: var(--success);
+  color: var(--text-primary);
 }
 
 .enabled-badge.disabled {
   background-color: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-primary);
 }
 
 .change-expand {

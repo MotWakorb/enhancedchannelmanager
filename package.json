@@ -19,6 +19,7 @@
     "test:visual:update": "playwright test --config=playwright.visual.config.ts --update-snapshots"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
     "@playwright/test": "1.59.1"
   }
 }

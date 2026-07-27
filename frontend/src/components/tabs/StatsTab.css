@@ -330,13 +330,13 @@
 
 .stream-name-badge {
   font-size: 0.75rem;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 250px;
   flex-shrink: 1;
-  opacity: 0.8;
+  opacity: 1;
 }
 
 .m3u-source {

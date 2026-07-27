@@ -36,6 +36,11 @@
   color: var(--button-text);
 }
 
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .settings-nav-item.active {
   background-color: var(--accent-10);
   color: var(--accent-secondary);

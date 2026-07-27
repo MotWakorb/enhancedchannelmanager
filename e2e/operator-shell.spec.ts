@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/base'
 import type { TestInfo } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -282,6 +283,20 @@ const routeConsumers: readonly RouteConsumer[] = [
   { name: 'Journal', heading: 'INSIGHTS / JOURNAL', settled: 'button:has-text("Refresh")', task: '.entry-wrapper, .empty-state, .tab-load-unavailable', focus: 'button:has-text("Refresh")', status: '.header-stats, .page-header-status', alternate: { state: 'request error', selector: '.tab-load-unavailable', recovery: 'button:has-text("Retry")' } },
   { name: 'Settings', heading: 'SYSTEM / SETTINGS', settled: 'button:has-text("Save Settings")', task: '.settings-section', focus: 'button:has-text("Save Settings")', alternate: null },
 ]
+
+const primaryRouteRequestBudgets: Readonly<Record<string, number>> = {
+  Dashboard: 12,
+  'Channel Manager': 20,
+  Guide: 12,
+  'M3U Manager': 10,
+  'EPG Manager': 12,
+  'Logo Manager': 8,
+  'Channel Pipeline': 12,
+  'M3U Changes': 8,
+  Stats: 30,
+  Journal: 8,
+  Settings: 40,
+}
 
 async function expectSettledRoute(page: Page, consumer: RouteConsumer) {
   const heading = page.locator('#main-content h1')
@@ -649,6 +664,113 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           return rect.left >= main.left - 1 && rect.right <= main.right + 1
             && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
         })).toBe(true)
+      }
+    })
+
+    test('all primary routes have no serious automated accessibility violations or clipped required controls', async ({ page }) => {
+      await seedPrimaryRouteBudgetData(page)
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+      const apiRequests: string[] = []
+      page.on('request', (request) => {
+        const url = new URL(request.url())
+        if (request.method() === 'GET' && url.pathname.startsWith('/api/')) {
+          apiRequests.push(`${url.pathname}${url.search}`)
+        }
+      })
+
+      for (const consumer of routeConsumers) {
+        const requestStart = apiRequests.length
+        await page.getByRole('link', { name: consumer.name }).click()
+        await expectSettledRoute(page, consumer)
+        if (await page.locator('.toast').count()) await dismissReleaseToasts(page)
+
+        const accessibility = await new AxeBuilder({ page })
+          .include('#root')
+          .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+          .analyze()
+        const axeArtifact = {
+          viewport,
+          route: consumer.name,
+          violations: accessibility.violations.map((violation) => ({
+            id: violation.id,
+            impact: violation.impact,
+            help: violation.help,
+            nodes: violation.nodes.map((node) => node.target),
+          })),
+        }
+        await mkdir(resolve(process.cwd(), 'test-results/operator-workspace-final-validation'), { recursive: true })
+        await writeFile(
+          resolve(
+            process.cwd(),
+            'test-results/operator-workspace-final-validation',
+            `axe--${viewport.width}x${viewport.height}--${consumer.name.toLowerCase().replaceAll(' ', '-')}.json`,
+          ),
+          `${JSON.stringify(axeArtifact, null, 2)}\n`,
+        )
+        const blocking = accessibility.violations.filter(
+          (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+        )
+        expect(blocking, `${consumer.name} serious/critical axe violations`).toEqual([])
+
+        const geometry = await page.evaluate(() => {
+          const viewport = { right: document.documentElement.clientWidth, bottom: window.innerHeight }
+          const required = [...document.querySelectorAll<HTMLElement>(
+            '#main-content a[href], #main-content button:not(:disabled), #main-content input:not(:disabled), #main-content select:not(:disabled), #main-content textarea:not(:disabled)',
+          )].filter((element) => element.offsetParent !== null)
+          const clipped = required.flatMap((element) => {
+            const rect = element.getBoundingClientRect()
+            const style = getComputedStyle(element)
+            const recoverableHorizontalOwner = [...document.querySelectorAll<HTMLElement>('#main-content *')]
+              .some((owner) => owner !== element && owner.contains(element)
+                && /(auto|scroll)/.test(getComputedStyle(owner).overflowX)
+                && owner.scrollWidth > owner.clientWidth + 1)
+            const horizontallyClipped = !recoverableHorizontalOwner
+              && (rect.left < -1 || rect.right > viewport.right + 1)
+            const ownTextClipped = element.scrollWidth > element.clientWidth + 1
+              && style.textOverflow !== 'ellipsis'
+              && !/(auto|scroll)/.test(style.overflowX)
+            return horizontallyClipped || ownTextClipped
+              ? [`${element.tagName}.${element.className}:${element.getAttribute('aria-label') ?? element.textContent?.trim()}`]
+              : []
+          })
+          return {
+            documentFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+            clipped,
+          }
+        })
+        expect(geometry.documentFits, `${consumer.name} document horizontal overflow`).toBe(true)
+        expect(geometry.clipped, `${consumer.name} clipped required controls`).toEqual([])
+
+        const routeRequests = apiRequests.slice(requestStart)
+        const counts = Object.fromEntries(
+          [...new Set(routeRequests)].sort().map((url) => [
+            url,
+            routeRequests.filter((candidate) => candidate === url).length,
+          ]),
+        )
+        expect(
+          routeRequests.length,
+          `${consumer.name} exceeded its exact GET request budget: ${JSON.stringify(counts)}`,
+        ).toBeLessThanOrEqual(primaryRouteRequestBudgets[consumer.name])
+        expect(
+          Object.entries(counts).filter(([, count]) => count > 2),
+          `${consumer.name} repeated an identical GET more than twice`,
+        ).toEqual([])
+        await writeFile(
+          resolve(
+            process.cwd(),
+            'test-results/operator-workspace-final-validation',
+            `requests--${viewport.width}x${viewport.height}--${consumer.name.toLowerCase().replaceAll(' ', '-')}.json`,
+          ),
+          `${JSON.stringify({
+            viewport,
+            route: consumer.name,
+            budget: primaryRouteRequestBudgets[consumer.name],
+            total: routeRequests.length,
+            counts,
+          }, null, 2)}\n`,
+        )
       }
     })
 

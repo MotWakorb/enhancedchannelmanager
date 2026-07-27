@@ -325,6 +325,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  const settingsNavItemProps = (page: SettingsPage) => ({
+    role: 'button',
+    tabIndex: 0,
+    'aria-current': activePage === page ? ('page' as const) : undefined,
+    onClick: () => setActivePage(page),
+    onKeyDown: (event: React.KeyboardEvent<HTMLLIElement>) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        setActivePage(page);
+      }
+    },
+  });
+
   // Sync with external initialSettingsPage changes (e.g., browser back/forward)
   useEffect(() => {
     const nextPage = initialSettingsPage || 'general';
@@ -5869,60 +5882,60 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   return (
     <div className="settings-tab">
-      <nav className="settings-sidebar">
-        <ul className="settings-nav">
+      <nav className="settings-sidebar" aria-label="Settings sections">
+        <ul className="settings-nav" role="none">
           <li
             className={`settings-nav-item ${activePage === 'general' ? 'active' : ''}`}
-            onClick={() => setActivePage('general')}
+            {...settingsNavItemProps('general')}
           >
             <span className="material-icons">settings</span>
             General
           </li>
           <li
             className={`settings-nav-item ${activePage === 'channel-defaults' ? 'active' : ''}`}
-            onClick={() => setActivePage('channel-defaults')}
+            {...settingsNavItemProps('channel-defaults')}
           >
             <span className="material-icons">tv</span>
             Channel Defaults
           </li>
           <li
             className={`settings-nav-item ${activePage === 'normalization' ? 'active' : ''}`}
-            onClick={() => setActivePage('normalization')}
+            {...settingsNavItemProps('normalization')}
           >
             <span className="material-icons">auto_fix_high</span>
             Channel Normalization
           </li>
           <li
             className={`settings-nav-item ${activePage === 'tag-engine' ? 'active' : ''}`}
-            onClick={() => setActivePage('tag-engine')}
+            {...settingsNavItemProps('tag-engine')}
           >
             <span className="material-icons">label</span>
             Tags
           </li>
           <li
             className={`settings-nav-item ${activePage === 'lookup-tables' ? 'active' : ''}`}
-            onClick={() => setActivePage('lookup-tables')}
+            {...settingsNavItemProps('lookup-tables')}
           >
             <span className="material-icons">table_view</span>
             Lookup Tables
           </li>
           <li
             className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
-            onClick={() => setActivePage('appearance')}
+            {...settingsNavItemProps('appearance')}
           >
             <span className="material-icons">palette</span>
             Appearance
           </li>
           <li
             className={`settings-nav-item ${activePage === 'email' ? 'active' : ''}`}
-            onClick={() => setActivePage('email')}
+            {...settingsNavItemProps('email')}
           >
             <span className="material-icons">notifications</span>
             Notification Settings
           </li>
           <li
             className={`settings-nav-item ${activePage === 'integrations' ? 'active' : ''}`}
-            onClick={() => setActivePage('integrations')}
+            {...settingsNavItemProps('integrations')}
             data-testid="settings-nav-integrations"
           >
             <span className="material-icons">extension</span>
@@ -5930,73 +5943,73 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </li>
           <li
             className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
-            onClick={() => setActivePage('scheduled-tasks')}
+            {...settingsNavItemProps('scheduled-tasks')}
           >
             <span className="material-icons">schedule</span>
             Scheduled Tasks
           </li>
           <li
             className={`settings-nav-item ${activePage === 'channel-pipeline' ? 'active' : ''}`}
-            onClick={() => setActivePage('channel-pipeline')}
+            {...settingsNavItemProps('channel-pipeline')}
           >
             <span className="material-icons">auto_awesome</span>
             Channel Pipeline
           </li>
           <li
             className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
-            onClick={() => setActivePage('m3u-digest')}
+            {...settingsNavItemProps('m3u-digest')}
           >
             <span className="material-icons">mail</span>
             M3U Digest
           </li>
           <li
             className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
-            onClick={() => setActivePage('maintenance')}
+            {...settingsNavItemProps('maintenance')}
           >
             <span className="material-icons">build</span>
             Maintenance
           </li>
           <li
             className={`settings-nav-item ${activePage === 'linked-accounts' ? 'active' : ''}`}
-            onClick={() => setActivePage('linked-accounts')}
+            {...settingsNavItemProps('linked-accounts')}
           >
             <span className="material-icons">link</span>
             Linked Accounts
           </li>
           <li
             className={`settings-nav-item ${activePage === 'backup-restore' ? 'active' : ''}`}
-            onClick={() => setActivePage('backup-restore')}
+            {...settingsNavItemProps('backup-restore')}
           >
             <span className="material-icons">backup</span>
             Backup & Restore
           </li>
           {user?.is_admin && (
             <>
-              <li className="settings-nav-divider">Administration</li>
+              <li className="settings-nav-divider" role="presentation">Administration</li>
               <li
                 className={`settings-nav-item ${activePage === 'auth-settings' ? 'active' : ''}`}
-                onClick={() => setActivePage('auth-settings')}
+                {...settingsNavItemProps('auth-settings')}
               >
                 <span className="material-icons">security</span>
                 Authentication
               </li>
               <li
                 className={`settings-nav-item ${activePage === 'user-management' ? 'active' : ''}`}
-                onClick={() => setActivePage('user-management')}
+                {...settingsNavItemProps('user-management')}
               >
                 <span className="material-icons">people</span>
                 User Management
               </li>
               <li
                 className={`settings-nav-item ${activePage === 'tls-settings' ? 'active' : ''}`}
-                onClick={() => setActivePage('tls-settings')}
+                {...settingsNavItemProps('tls-settings')}
               >
                 <span className="material-icons">https</span>
                 TLS Certificates
               </li>
               <li
                 className={`settings-nav-item ${activePage === 'mcp-settings' ? 'active' : ''}`}
-                onClick={() => setActivePage('mcp-settings')}
+                {...settingsNavItemProps('mcp-settings')}
               >
                 <span className="material-icons">smart_toy</span>
                 MCP Integration

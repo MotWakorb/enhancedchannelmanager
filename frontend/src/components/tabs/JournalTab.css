@@ -273,7 +273,7 @@
 
 .action-create {
   background-color: var(--success-bg);
-  color: var(--success);
+  color: var(--button-text);
 }
 
 .action-update {
@@ -283,7 +283,7 @@
 
 .action-delete {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--button-text);
 }
 
 .action-refresh {
@@ -293,7 +293,7 @@
 
 .action-other {
   background-color: var(--border-primary);
-  color: var(--text-secondary);
+  color: var(--button-text);
 }
 
 /* Source column */

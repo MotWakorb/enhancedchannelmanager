@@ -140,8 +140,9 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
       {/* Filters */}
       <div className="filters-bar">
         <div className="filter-group">
-          <label>Time Period:</label>
+          <label htmlFor="watch-history-time-period">Time Period:</label>
           <select
+            id="watch-history-time-period"
             value={daysFilter || 'all'}
             onChange={(e) => setDaysFilter(e.target.value === 'all' ? undefined : Number(e.target.value))}
           >
@@ -153,8 +154,9 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
           </select>
         </div>
         <div className="filter-group">
-          <label>Channel:</label>
+          <label htmlFor="watch-history-channel-filter">Channel:</label>
           <input
+            id="watch-history-channel-filter"
             type="text"
             placeholder="Filter by channel ID"
             value={channelFilter}
