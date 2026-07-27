@@ -943,6 +943,14 @@ test.describe('operator shell navigation behavior', () => {
     await seedChannelWorkspace(page, false)
     let attempts = 0
     await page.route(/\/api\/channels(?:\?|$)/, (route) => {
+      const isWorkspaceList = new URL(route.request().url()).searchParams.get('page_size') === '500'
+      if (!isWorkspaceList) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+        })
+      }
       attempts += 1
       return route.fulfill({
         status: attempts === 1 ? 503 : 200,
