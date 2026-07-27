@@ -736,7 +736,63 @@ def ensure_sync_target_task(target_id: int, target_name: str) -> None:
         instance.task_name = "Cross-Instance Sync: %s" % target_name
     # Persist/update the scheduled_tasks row so the task appears in the
     # Scheduled Tasks UI immediately (sync_from_database only runs at boot).
+    _persist_sync_task_row(registry, task_id)
+
+
+def _persist_sync_task_row(
+    registry, task_id: str, *, seed_enabled: Optional[bool] = None
+) -> bool:
+    """Persist ONE per-target ``scheduled_tasks`` row without touching its gate.
+
+    INVARIANT: **registration never changes the ``enabled`` state of an
+    existing per-target parent row.** The row is the authority; registration
+    only chooses the initial value for a row that does not exist yet.
+
+    Why this has to be a property of registration rather than of any one
+    caller: ``registry.sync_to_database`` writes ``instance._enabled`` straight
+    over whatever row it finds (``task_registry._save_task_to_db``), and the
+    per-target sync classes are created dynamically — so on EVERY startup the
+    registry hands back a freshly constructed instance still carrying
+    ``default_enabled = False``, with ``sync_from_database`` only hydrating it
+    afterwards. Persisting before that hydration therefore switched an
+    operator's ENABLED sync off on each ordinary restart, and the engine's
+    parent gate (``task_engine._check_and_run_due_tasks``) then silently
+    stopped the enabled child schedule from firing.
+
+    Hydrating the instance from the row first makes the ``enabled`` write a
+    no-op while the rest of the save (display name after a rename, schedule
+    fields, run bookkeeping) still lands.
+
+    ``seed_enabled`` is consulted ONLY when no row exists — that is where the
+    legacy-migration's preserved firing state enters, as a seed for a row being
+    created, never as an override of a row an operator already owns. ``None``
+    means "keep whatever the instance already carries".
+
+    Returns the gate state now persisted for ``task_id``.
+    """
+    from database import get_session
+    from models import ScheduledTask
+
+    instance = registry.get_task_instance(task_id)
+    if instance is None:  # pragma: no cover — callers register first
+        return False
+    existing_enabled: Optional[bool] = None
+    session = get_session()
+    try:
+        row = session.query(ScheduledTask).filter(
+            ScheduledTask.task_id == task_id
+        ).first()
+        if row is not None:
+            existing_enabled = bool(row.enabled)
+    finally:
+        session.close()
+
+    if existing_enabled is not None:
+        instance._enabled = existing_enabled
+    elif seed_enabled is not None:
+        instance._enabled = seed_enabled
     registry.sync_to_database(task_id)
+    return bool(instance._enabled)
 
 
 def remove_sync_target_task(target_id: int) -> None:
@@ -777,7 +833,7 @@ def register_sync_target_tasks() -> None:
 
     Called from ``main.py`` after the task modules import and BEFORE the task
     engine starts (``sync_from_database`` then creates any missing
-    ``scheduled_tasks`` rows for the freshly registered ids). Three concerns:
+    ``scheduled_tasks`` rows for the freshly registered ids). Four concerns:
 
     1. **Register** a bound class for every ``sync_targets`` row.
     2. **Migrate legacy v1 rows** (single shared ``dbas_sync`` id, bead
@@ -787,18 +843,22 @@ def register_sync_target_tasks() -> None:
        (non-silent WARN) rather than re-keyed to an id that can never run.
        The legacy ``scheduled_tasks`` parent row is deleted (its alert/
        notification preferences do NOT carry over to per-target rows).
-    3. **Preserve EFFECTIVE enabled state** across that migration (PR #752
-       review, Block 1). Firing needs BOTH the parent ``scheduled_tasks``
-       gate AND an enabled child row (``task_engine._check_and_run_due_tasks``),
-       and the registry seeds every new per-target parent from
-       ``default_enabled = False``. Re-keying an enabled child onto a
-       default-disabled parent therefore SILENTLY stops a working operator
-       schedule. So a target whose pre-upgrade state was actually firing
-       (legacy parent enabled — or absent, which never blocked — AND at least
-       one migrated child enabled) gets its per-target parent written
-       ``enabled=True``. The mapping is preserve-only: it never enables a
-       setup that was not already firing (a disabled parent is the documented
-       kill switch; a disabled child stayed off).
+    3. **Never move an existing per-target parent's enabled gate** (PR #752
+       review, Block 1 + its delta). Firing needs BOTH the parent
+       ``scheduled_tasks`` gate AND an enabled child row
+       (``task_engine._check_and_run_due_tasks``), and the registry
+       materialises every per-target instance from ``default_enabled = False``
+       on EVERY boot — so persisting a fresh instance is what silently stops a
+       working operator schedule. ``_persist_sync_task_row`` holds the
+       invariant: an existing row is authoritative and registration only
+       chooses the value for a row it creates. That covers both cases with one
+       rule — the steady-state restart (row exists: enabled stays enabled,
+       disabled stays disabled) and the upgrade (no row yet: seeded from the
+       EFFECTIVE pre-upgrade state, i.e. legacy parent enabled — or absent,
+       which never blocked — AND at least one migrated child enabled). The
+       seed is preserve-only: it never starts a setup that was not firing (a
+       disabled parent is the documented kill switch; a disabled child stayed
+       off).
     4. **Prune stale per-target rows** for targets deleted while the
        container was down (the CRUD-hook path can't have seen them).
 
@@ -895,16 +955,28 @@ def register_sync_target_tasks() -> None:
         #     than leaving it to sync_from_database — is what lets the
         #     preserved enabled state land: sync_from_database only creates
         #     MISSING rows, and it creates them from default_enabled=False.
+        #
+        #     ``_persist_sync_task_row`` holds the invariant that makes this
+        #     safe on EVERY boot, not just the upgrade one: an existing row's
+        #     gate is never rewritten by registration, so the migration's
+        #     ``was_firing`` state is a seed for the row being created and the
+        #     steady-state restart leaves an operator's enabled (or
+        #     deliberately disabled) parent exactly as it found it.
         for task_id in sorted(valid_task_ids):
-            instance = registry.get_task_instance(task_id)
-            if instance is None:  # pragma: no cover — just registered above
-                continue
-            if task_id in was_firing:
-                instance._enabled = True
+            enabled_now = _persist_sync_task_row(
+                registry, task_id, seed_enabled=task_id in was_firing
+            )
+            if task_id in was_firing and enabled_now:
                 logger.info(
                     "[DBAS_SYNC] Preserved firing state for %s across the "
                     "legacy schedule migration (parent gate enabled)", task_id,
                 )
-            registry.sync_to_database(task_id)
+            elif task_id in was_firing:
+                logger.warning(
+                    "[DBAS_SYNC] Legacy schedule for %s was firing, but the "
+                    "per-target task is already DISABLED — leaving it off "
+                    "(the existing row wins; enable the task to resume)",
+                    task_id,
+                )
     except Exception as e:  # pragma: no cover — must never break startup
         logger.exception("[DBAS_SYNC] Failed to register sync target tasks: %s", e)

@@ -970,3 +970,241 @@ async def test_freshness_abort_is_attributed_to_its_target(
     assert result.error == "CREDENTIAL_FRESHNESS_ABORT"
     assert _sync_counter_value("failed", t2_id) == 1.0
     assert _sync_counter_value("failed", t1_id) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 10. Registration NEVER downgrades an existing per-target parent gate
+#     (PR #752 delta review — regression introduced BY the Block 1 fix).
+#
+# ``register_sync_target_tasks`` persists every registered target's parent row
+# at startup. Per-target task classes are created dynamically, so on EVERY
+# boot the registry hands back a freshly constructed instance still carrying
+# ``default_enabled = False``; ``task_registry._save_task_to_db`` writes that
+# straight over the existing row, and ``sync_from_database`` only hydrates the
+# instance afterwards. Net effect for an operator: the upgrade works, sync
+# runs, and then the next ordinary container restart silently turns it off.
+#
+# Section 7's tests all observe the FIRST startup, which is exactly why they
+# missed this — every case below drives a genuine SECOND process startup
+# (registry memory dropped, database kept) and then a real engine due-tick.
+# ---------------------------------------------------------------------------
+
+
+def _simulate_process_restart(registry) -> None:
+    """Drop ALL in-memory registry state while keeping the database.
+
+    A container restart re-imports the task modules into an EMPTY registry and
+    re-runs ``register_sync_target_tasks`` against the SAME rows. Per-target
+    sync classes are not statically registered, so nothing survives in memory
+    — reproducing that (rather than re-invoking registration over already-
+    hydrated instances) is what makes these second-startup regressions real.
+    """
+    registry._tasks.clear()
+    registry._instances.clear()
+    registry._initialized = False
+
+
+def _startup(registry) -> None:
+    """The real main.py order: register per-target tasks, then hydrate."""
+    dbas_sync.register_sync_target_tasks()
+    registry.sync_from_database()
+
+
+def _seed_per_target_schedule(session, task_id, *, enabled=True, next_run_at=None,
+                              parameters=None):
+    session.add(TaskSchedule(
+        task_id=task_id, name="hourly", enabled=enabled,
+        schedule_type="interval", interval_seconds=3600,
+        parameters=json.dumps(parameters or {"confirm_apply": True}),
+        next_run_at=next_run_at,
+    ))
+    session.commit()
+
+
+def _parent_enabled(session, task_id) -> bool:
+    row = session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).first()
+    assert row is not None, "per-target parent row %s is missing" % task_id
+    return bool(row.enabled)
+
+
+async def _tick_and_wait(engine, fired, *, timeout=5) -> bool:
+    """Run one due-task scan; report whether the sync actually fired."""
+    await engine._check_and_run_due_tasks()
+    try:
+        await asyncio.wait_for(fired.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+    finally:
+        for _ in range(200):
+            if not engine._active_tasks:
+                break
+            await asyncio.sleep(0.01)
+    return True
+
+
+@pytest.mark.asyncio
+async def test_enabled_parent_survives_a_normal_restart_and_fires(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """No legacy rows anywhere — just an operator who enabled per-target sync.
+    The SECOND startup must leave the parent gate on and the due child must
+    still fire."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    session.close()
+    task_id = dbas_sync.sync_task_id_for(target_id)
+
+    # --- first startup creates the (disabled) parent row -------------------
+    _startup(registry)
+
+    # --- operator enables the task and gives it a due hourly schedule ------
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    _seed_per_target_schedule(
+        session, task_id, next_run_at=datetime.utcnow() - timedelta(minutes=5)
+    )
+    session.close()
+
+    # --- ordinary container restart ---------------------------------------
+    _simulate_process_restart(registry)
+    _startup(registry)
+
+    fired = asyncio.Event()
+    seen = {}
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
+        seen["target_id"] = sync_target.id
+        fired.set()
+        return _success_report()
+
+    # Behaviour first — the row assertion below only localises the cause.
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        assert await _tick_and_wait(engine, fired), (
+            "enabled schedule did not fire after a normal restart"
+        )
+    assert seen["target_id"] == target_id
+
+    session = _wire_db()
+    assert _parent_enabled(session, task_id) is True, (
+        "registration downgraded an ENABLED per-target parent on restart"
+    )
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_parent_stays_disabled_across_restart(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """The other half of the invariant: registration must not ACCIDENTALLY
+    re-enable a parent the operator deliberately switched off (the documented
+    kill switch), even with an enabled, due child schedule sitting there."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    session.close()
+    task_id = dbas_sync.sync_task_id_for(target_id)
+
+    _startup(registry)
+
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": False})
+    _seed_per_target_schedule(
+        session, task_id, next_run_at=datetime.utcnow() - timedelta(minutes=5)
+    )
+    session.close()
+
+    _simulate_process_restart(registry)
+    _startup(registry)
+
+    session = _wire_db()
+    assert _parent_enabled(session, task_id) is False
+    session.close()
+
+    fired = asyncio.Event()
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=AssertionError(
+        "a disabled parent must never fire"
+    )):
+        assert not await _tick_and_wait(engine, fired, timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_migrated_schedule_still_fires_on_the_second_startup(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """The upgrade path end to end: legacy migration on startup #1 (fires), then
+    a plain restart on startup #2 with NO legacy rows left. The second boot is
+    where the freshly materialized default-disabled instance used to overwrite
+    the parent the migration had just enabled."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    _seed_legacy_schedule(
+        session, target_id,
+        next_run_at=datetime.utcnow() - timedelta(minutes=5),
+    )
+    session.close()
+    task_id = dbas_sync.sync_task_id_for(target_id)
+
+    fired = asyncio.Event()
+    seen = {}
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
+        seen["target_id"] = sync_target.id
+        seen["confirm_apply"] = confirm_apply
+        fired.set()
+        return _success_report()
+
+    # --- startup #1: migration + first due run ----------------------------
+    _startup(registry)
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        assert await _tick_and_wait(engine, fired), "migrated schedule never fired"
+
+    session = _wire_db()
+    assert session.query(TaskSchedule).filter(
+        TaskSchedule.task_id == dbas_sync.LEGACY_SYNC_TASK_ID
+    ).first() is None, "legacy rows should be gone after the migration"
+    # Make it due again for the next boot's tick.
+    session.query(TaskSchedule).filter(
+        TaskSchedule.task_id == task_id
+    ).update({"next_run_at": datetime.utcnow() - timedelta(minutes=5)})
+    session.commit()
+    session.close()
+
+    # --- startup #2: ordinary restart, nothing left to migrate ------------
+    _simulate_process_restart(registry)
+    _startup(registry)
+
+    fired.clear()
+    seen.clear()
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        assert await _tick_and_wait(engine, fired), (
+            "migrated schedule stopped firing after a restart"
+        )
+    assert seen["target_id"] == target_id
+    assert seen["confirm_apply"] is True
+
+    session = _wire_db()
+    assert _parent_enabled(session, task_id) is True, (
+        "the migrated parent was disabled by the second startup"
+    )
+    session.close()

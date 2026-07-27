@@ -968,8 +968,9 @@ groups:
         # PARTIAL-APPLY LOOP also trips this alert even though the task is
         # "running." That is correct: B is drifting from A whether the
         # cycle failed outright or only half-applied. Cross-reference
-        # ecm_sync_runs_total{result="partial"} to tell the two apart
-        # (that counter stays result-only — aggregate across targets).
+        # ecm_sync_runs_total{result="partial", sync_target_id="..."} to
+        # tell the two apart — that counter is labeled by the same target
+        # pk as this gauge, so filter it to the target that alerted.
         # A preview-only operator (never runs Apply) will also trip this
         # once the first apply has happened — correct, B is not converging.
         #
