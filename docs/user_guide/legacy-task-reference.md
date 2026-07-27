@@ -144,10 +144,10 @@ After saving, the account automatically refreshes to load your channels.
 ### Understanding Account Status
 
 
-| Status | Icon | Meaning |
+| Status | Indicator | Meaning |
 |--------|------|---------|
 | Ready | Green check | Account loaded successfully |
-| Error | Red X | Connection or parsing failed |
+| Error | Error status | Connection or parsing failed |
 | Downloading | Spinner | Fetching playlist data |
 | Processing | Spinner | Parsing M3U content |
 | Disabled | Gray | Account turned off |
@@ -171,7 +171,7 @@ After saving, the account automatically refreshes to load your channels.
 
 For automatic channel creation from a group:
 
-1. Click the **gear icon** next to a group
+1. Select **Configure auto-sync settings** next to a group
 2. Configure auto-sync options:
    - **EPG Source Override**: Force specific EPG source
    - **Channel Group Override**: Place channels in different group
@@ -183,7 +183,7 @@ For automatic channel creation from a group:
 ### Refreshing M3U Data
 
 
-- Click the **refresh icon** on any account to update its playlist
+- Select **Refresh account** on an account to update its playlist
 - Use **Refresh All** in the toolbar to refresh all accounts
 
 ### M3U Filters
@@ -196,7 +196,8 @@ Filters let you include or exclude streams:
 3. Choose **Type**: Group, Name, or URL
 4. Choose **Action**: Include or Exclude
 5. Enter a **Regex Pattern**
-6. Drag filters to reorder (executed top to bottom)
+6. Select **Create Filter**. Existing filters use **Save Changes**.
+7. Drag filters to reorder (executed top to bottom)
 
 ---
 
@@ -354,9 +355,11 @@ right-click menu is no longer part of this workflow.
 ### Managing Streams Within Channels
 
 
-- **Add**: Drag streams from right pane onto channel
-- **Remove**: Click the **X** on a stream
-- **Reorder**: Drag streams up/down (higher = higher priority)
+- **Add**: Drag streams from the Streams pane onto a channel.
+- **Remove**: Select the assigned row's **Remove stream** button
+  (`remove_circle`).
+- **Reorder**: Drag assigned streams up or down; the highest row has the
+  highest priority.
 
 ### Sort & Renumber
 
@@ -374,9 +377,11 @@ Sort and renumber channels within a group:
 
 ### Copy Channel & Stream URLs
 
-- Click the **copy icon** on any channel to copy its Dispatcharr proxy stream URL
-- Click the **copy icon** on any stream to copy its direct URL
-- Useful for testing streams in external players
+- For a channel, open **Channel actions** and select **Copy URL** to copy its
+  Dispatcharr proxy stream URL.
+- For an assigned stream, select its inline **Copy stream URL** button to copy
+  the direct URL.
+- These URLs are useful for testing in external players.
 
 ### Channel Profiles
 
@@ -428,7 +433,8 @@ The EPG Manager configures your Electronic Program Guide data sources.
 1. Enter a **Name** for the source
 2. Paste the **XMLTV URL**
 3. Set **Refresh Interval** (hours between updates; set to 0 for manual refresh only)
-4. Click **Save**
+4. Select **Add EPG**. When editing an existing source, the confirmation is
+   **Save Changes**.
 
 **Step 3: Source Refreshes**
 
@@ -538,15 +544,19 @@ Preview streams and channels directly in your browser before assigning them.
 
 ### Previewing a Stream
 
-1. Click the **play icon** on any stream in the streams pane
-2. The preview modal opens with embedded video player
-3. Stream metadata is displayed (name, TVG-ID, group, M3U provider)
+1. On an assigned stream row, select **Preview stream in browser**
+   (`visibility`).
+2. The preview modal opens with an embedded video player.
+3. Stream metadata is displayed (name, TVG-ID, group, M3U provider).
+
+The adjacent **Open in VLC** button uses `play_circle`; it does not open the
+browser preview.
 
 ### Previewing a Channel
 
-1. Click the **play icon** on any channel
-2. This tests the actual Dispatcharr proxy stream output
-3. Verifies the channel is working correctly end-to-end
+1. Open the channel's **Channel actions** menu and select **Preview**.
+2. This tests the actual Dispatcharr proxy stream output.
+3. It verifies that the channel works correctly end to end.
 
 ### Preview Modes
 
@@ -579,7 +589,8 @@ The Channel Pipeline page lets you automate channel creation with a rules-based 
 2. Enter a **Rule Name** and optional **Description**
 3. Configure **Conditions** to match streams
 4. Configure **Actions** to define what happens
-5. Click **Save**
+5. Select **Create Rule**. An existing rule's editor uses its displayed update
+   action instead.
 
 ### Conditions
 
@@ -989,12 +1000,13 @@ The Stats page also includes advanced analytics:
 
 ### Notification Center
 
-Access the notification center from the **bell icon** in the header bar.
+Open **Notifications** in the header.
 
 - **Unread Badge** - Shows count of unread notifications
 - **Notification List** - View past notifications with timestamps
 - **Mark as Read** - Mark individual or all notifications as read
-- **Delete** - Clear individual or all notifications
+- **Delete notification** clears one item. **Clear read notifications** clears
+  read items, and **Delete all notifications** clears the list.
 - **Color-Coded Types** - Info (blue), Success (green), Warning (yellow), Error (red)
 
 ### Alert Methods
@@ -1206,6 +1218,7 @@ Create custom rules to automatically transform stream names:
 2. Enter a descriptive **Rule Name**
 3. Configure the **Condition** (when the rule applies)
 4. Configure the **Action** (what transformation to apply)
+5. Select **Create Rule**. Existing rules use **Save Changes**.
 
 **Step 2: Configure Conditions**
 
@@ -1255,11 +1268,10 @@ Configure automated tasks:
 ### Alert Methods Configuration
 
 
-1. Click **Add Method**
-2. Choose type (Discord, Telegram, Email)
-3. Enter configuration (webhook URL, bot token, SMTP settings)
-4. Select notification types to receive
-5. **Test** the configuration
+Configure SMTP, Discord, or Telegram in the settings above **Alert Methods**,
+then save the settings. **Alert Methods** lists the resulting methods. Use
+**Send test to _name_** to test one, or **Delete _name_** and the typed
+confirmation dialog to remove it.
 
 ---
 

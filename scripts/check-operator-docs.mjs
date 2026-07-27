@@ -19,6 +19,13 @@ const STALE_WORKFLOWS = [
   /\bctrl\+click\b/i,
   /\bctrl\+a\b/i,
   /\b(?:click|use)\s+bulk remove\b/i,
+  /\bclick the x on a stream\b/i,
+  /\bclick the copy icon on any (?:channel|stream)\b/i,
+  /\bclick the play icon on any (?:channel|stream)\b/i,
+  /\bepg manager.{0,240}\bclick save\b/i,
+  /\bchannel pipeline.{0,240}\bclick save\b/i,
+  /\bclick add method\b/i,
+  /\bnotification center from the bell icon\b/i,
 ]
 
 const REQUIRED_WORKSPACE_IMAGES = new Map([

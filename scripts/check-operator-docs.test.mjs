@@ -53,6 +53,13 @@ test('rejects retired operator controls and selection workflows', () => {
     'In Channel Pipeline, click **Add Rule**.',
     'Click **Add Source**.',
     'Use **Bulk Remove**.',
+    'Click the **X** on a stream.',
+    'Click the **copy icon** on any channel.',
+    'Click the **play icon** on any stream.',
+    'In EPG Manager, select Add Standard EPG, enter the URL, then click **Save**.',
+    'In Channel Pipeline, configure the actions, then click **Save**.',
+    'Click **Add Method** to configure an alert.',
+    'Access the notification center from the **bell icon**.',
   ]
   for (const example of staleExamples) {
     const root = fixture()
