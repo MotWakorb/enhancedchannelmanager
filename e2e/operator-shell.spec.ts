@@ -5,6 +5,27 @@ async function dismissFirstRunPromptIfPresent(page: Page) {
   if (await close.isVisible().catch(() => false)) await close.click()
 }
 
+async function seedDeterministicNoAuthBoot(page: Page) {
+  await page.route(/\/api\/auth\/status(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      require_auth: false,
+      setup_complete: true,
+      dispatcharr_enabled: false,
+    }),
+  }))
+  await page.route(/\/api\/auth\/setup-required(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ required: false }),
+  }))
+  await page.route(/\/api\/session-start(?:\?|$)/, (route) => route.fulfill({
+    status: 204,
+    body: '',
+  }))
+}
+
 async function shellMetrics(page: Page) {
   return page.evaluate(() => {
     const sidebar = document.querySelector<HTMLElement>('.primary-sidebar')!
@@ -218,6 +239,7 @@ async function openShellWithPipelineFixture(
       contentType: 'application/json',
       body: JSON.stringify({ disabled: false, reason: null }),
     }))
+  await seedDeterministicNoAuthBoot(page)
   await page.goto('/', { waitUntil: 'domcontentloaded' })
   await expect(page.locator('.tab-navigation')).toBeVisible()
 }
@@ -1717,6 +1739,7 @@ test.describe('operator shell navigation behavior', () => {
     await page.route(/\/api\/providers(?:\/|\?|$)/, (route) => route.fulfill({
       status: 403, contentType: 'application/json', body: JSON.stringify({ detail: 'Administrator access required' }),
     }))
+    await seedDeterministicNoAuthBoot(page)
     await page.goto('/', { waitUntil: 'domcontentloaded' })
     await expect(page.locator('.tab-navigation')).toBeVisible()
     await dismissFirstRunPromptIfPresent(page)
@@ -1751,6 +1774,7 @@ test.describe('operator shell navigation behavior', () => {
       body: providerMode === 'error' ? JSON.stringify({ detail: 'Temporarily unavailable' }) : '[]',
     }))
 
+    await seedDeterministicNoAuthBoot(page)
     await page.goto('/', { waitUntil: 'domcontentloaded' })
     await expect(page.locator('.tab-navigation')).toBeVisible()
     await dismissFirstRunPromptIfPresent(page)
@@ -1804,6 +1828,7 @@ test.describe('operator shell navigation behavior', () => {
           }),
     }))
 
+    await seedDeterministicNoAuthBoot(page)
     await page.goto('/', { waitUntil: 'domcontentloaded' })
     await expect(page.locator('.tab-navigation')).toBeVisible()
     await dismissFirstRunPromptIfPresent(page)
@@ -1876,6 +1901,7 @@ test.describe('operator shell navigation behavior', () => {
         }),
       })
     })
+    await seedDeterministicNoAuthBoot(page)
     await page.goto('/', { waitUntil: 'domcontentloaded' })
     await expect(page.locator('.tab-navigation')).toBeVisible()
     await dismissFirstRunPromptIfPresent(page)
