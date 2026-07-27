@@ -289,6 +289,21 @@ function App() {
     status: null as HTMLDivElement | null,
     controls: null as HTMLDivElement | null,
   });
+  const setPrimaryActionTarget = useCallback((target: HTMLDivElement | null) => {
+    setRouteHeaderTargets((current) => (
+      current['primary-action'] === target ? current : { ...current, 'primary-action': target }
+    ));
+  }, []);
+  const setStatusTarget = useCallback((target: HTMLDivElement | null) => {
+    setRouteHeaderTargets((current) => (
+      current.status === target ? current : { ...current, status: target }
+    ));
+  }, []);
+  const setControlsTarget = useCallback((target: HTMLDivElement | null) => {
+    setRouteHeaderTargets((current) => (
+      current.controls === target ? current : { ...current, controls: target }
+    ));
+  }, []);
   const routeHeadingRef = useRef<HTMLHeadingElement>(null);
   const focusHeadingOnRouteChangeRef = useRef(false);
 
@@ -2384,26 +2399,20 @@ function App() {
               {channelManagerPageAction}
               <div
                 className="route-page-action-outlet"
-                ref={(target) => setRouteHeaderTargets((current) => (
-                  current['primary-action'] === target ? current : { ...current, 'primary-action': target }
-                ))}
+                ref={setPrimaryActionTarget}
               />
             </>
           )}
           status={(
             <div
               className="route-page-status-outlet"
-              ref={(target) => setRouteHeaderTargets((current) => (
-                current.status === target ? current : { ...current, status: target }
-              ))}
+              ref={setStatusTarget}
             />
           )}
           controls={(
             <div
               className="route-page-controls-outlet"
-              ref={(target) => setRouteHeaderTargets((current) => (
-                current.controls === target ? current : { ...current, controls: target }
-              ))}
+              ref={setControlsTarget}
             />
           )}
           relatedLinks={ROUTE_HIERARCHY[activeTab].settingsLinks?.map((link) => ({
