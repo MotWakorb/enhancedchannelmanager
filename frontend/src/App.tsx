@@ -729,6 +729,7 @@ function App() {
         loadProviders();
         loadProviderGroupSettings();
         loadStreamGroups();
+        loadStreamInventoryTotal();
         // NOTE: Streams are loaded lazily when user interacts with the streams pane
         // This prevents loading 27,000+ streams on app startup which causes high CPU
         loadLogos();
@@ -916,6 +917,7 @@ function App() {
     loadProviders();
     loadProviderGroupSettings();
     loadStreamGroups();
+    loadStreamInventoryTotal();
     // Only reset streams if they were already loaded (lazy loading preservation)
     if (streamsExplicitlyRequested.current) {
       resetStreams(false);
@@ -1115,10 +1117,6 @@ function App() {
   };
 
   const loadStreamGroups = async (m3uAccountId?: number | null) => {
-    const isUnfilteredInventory = m3uAccountId == null;
-    if (isUnfilteredInventory) {
-      setStreamInventoryState((current) => ({ ...current, state: 'loading' }));
-    }
     streamRetryOperations.current.metadata = () => loadStreamGroups(m3uAccountId);
     setStreamSourceStates((current) => ({
       ...current,
@@ -1127,10 +1125,6 @@ function App() {
     try {
       const groups = await api.getStreamGroups(false, m3uAccountId);
       setStreamGroups(groups);
-      if (isUnfilteredInventory) {
-        setStreamInventoryTotal(groups.reduce((total, group) => total + group.count, 0));
-        setStreamInventoryState({ state: 'success', hasSnapshot: true });
-      }
       setStreamSourceStates((current) => ({
         ...current,
         metadata: { state: 'success', hasSnapshot: true },
@@ -1141,9 +1135,17 @@ function App() {
         ...current,
         metadata: { ...current.metadata, state: classifySourceLoadError(err) },
       }));
-      if (isUnfilteredInventory) {
-        setStreamInventoryState((current) => ({ ...current, state: classifySourceLoadError(err) }));
-      }
+    }
+  };
+
+  const loadStreamInventoryTotal = async () => {
+    setStreamInventoryState((current) => ({ ...current, state: 'loading' }));
+    try {
+      const response = await api.getStreams({ page: 1, pageSize: 1 });
+      setStreamInventoryTotal(response.count);
+      setStreamInventoryState({ state: 'success', hasSnapshot: true });
+    } catch (err) {
+      setStreamInventoryState((current) => ({ ...current, state: classifySourceLoadError(err) }));
     }
   };
 
@@ -2640,7 +2642,7 @@ function App() {
               streams={{
                 value: streamInventoryTotal,
                 ...streamInventoryState,
-                retry: () => { void loadStreamGroups(null); },
+                retry: () => { void loadStreamInventoryTotal(); },
               }}
               providers={{ value: providers.length, ...providerSourceState, retry: () => { void loadProviders(); } }}
             />

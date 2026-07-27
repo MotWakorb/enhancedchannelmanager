@@ -371,6 +371,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           ]),
         })
       })
+      await page.route(/\/api\/streams(?:\?|$)/, (route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ count: 9, next: null, previous: null, results: [] }),
+      }))
       await openShellWithPipelineFixture(page, 200, [{ id: 3, name: 'Fixture Provider' }])
       await dismissFirstRunPromptIfPresent(page)
       await page.getByRole('textbox', { name: 'Search channels' }).fill('subset')
@@ -379,7 +383,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await page.getByRole('link', { name: 'Dashboard' }).click()
       const dashboard = page.getByRole('region', { name: 'System summary' })
       await expect(dashboard.getByText('2 channels', { exact: true })).toBeVisible()
-      await expect(dashboard.getByText('7 streams', { exact: true })).toBeVisible()
+      await expect(dashboard.getByText('9 streams', { exact: true })).toBeVisible()
     })
 
     test('Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
