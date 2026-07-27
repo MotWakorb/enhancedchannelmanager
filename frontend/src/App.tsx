@@ -2210,13 +2210,11 @@ function App() {
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
   // Supports multiple groups being dropped at once
   // Now includes optional target group and suggested starting number for positional drops
-  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[], _targetGroupId?: number, suggestedStartingNumber?: number) => {
+  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[], targetGroupId?: number, suggestedStartingNumber?: number) => {
     // Set the dropped group names - StreamsPane will react to this and open the modal
     setDroppedStreamGroupNames(groupNames);
-    // If a suggested starting number was provided, use it
-    if (suggestedStartingNumber !== undefined) {
-      setDroppedStreamStartingNumber(suggestedStartingNumber);
-    }
+    setDroppedStreamTargetGroupId(targetGroupId ?? null);
+    setDroppedStreamStartingNumber(suggestedStartingNumber ?? null);
   }, []);
 
   // Dedup-on-drop integration (bd-u6ftw / BD-H, ADR-008 §D1).
@@ -2268,6 +2266,8 @@ function App() {
   // Clear the dropped stream group/streams trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
     setDroppedStreamGroupNames(null);
+    setDroppedStreamTargetGroupId(null);
+    setDroppedStreamStartingNumber(null);
     setDroppedStreamIds(null);
     setDroppedStreamTargetGroupId(null);
     setDroppedStreamStartingNumber(null);

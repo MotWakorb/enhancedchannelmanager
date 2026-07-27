@@ -473,9 +473,16 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByRole('menu', { name: 'Choose channel group destination' })
         .getByRole('menuitem', { name: 'Sports' })).toBeFocused()
       await page.keyboard.press('Enter')
-      await expect(page.getByRole('heading', { name: /Create Channels from "Provider Sports"/ })).toBeVisible()
-      await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+      const createFromGroupDialog = page.getByRole('dialog', {
+        name: 'Create Channels from "Provider Sports"',
+      })
+      await expect(createFromGroupDialog).toBeVisible()
+      await expect(createFromGroupDialog.getByText('"Sports"')).toBeVisible()
+      await expect(createFromGroupDialog.locator('input:focus')).toHaveCount(1)
+      await createFromGroupDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(groupDrag).toBeFocused()
 
+      await expect(page.getByRole('toolbar', { name: 'Selection actions' })).toHaveCount(0)
       await page.getByRole('checkbox', { name: /Select channel A deliberately long channel identity/ }).click()
       const selectionBar = page.getByRole('toolbar', { name: 'Selection actions' })
       await expect(selectionBar).toBeVisible()
@@ -674,6 +681,27 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
     })
   })
 }
+
+test.describe('Channel Manager dnd-kit keyboard path', () => {
+  test.use({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' })
+
+  test('moves a channel drag overlay through a keyboard reorder destination', async ({ page }) => {
+    await seedChannelWorkspace(page, true, 2)
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByRole('button', { name: 'Edit Mode' }).click()
+    await page.locator('.channels-pane .group-toggle-btn').filter({ hasText: 'Sports' }).click()
+
+    const channelDrag = page.getByLabel(/^Drag channel A deliberately long channel identity .* to reorder$/)
+    await channelDrag.focus()
+    await channelDrag.press('Space')
+    await expect(page.locator('.drag-overlay-item')).toBeVisible()
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByRole('status').filter({
+      hasText: /Draggable item 41 was moved over droppable area/,
+    })).toHaveCount(1)
+  })
+})
 
 test.describe('operator shell at 200% equivalent', () => {
   test.use({ viewport: { width: 640, height: 360 }, serviceWorkers: 'block' })

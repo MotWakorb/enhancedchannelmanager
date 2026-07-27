@@ -9,6 +9,7 @@
  * auto-surface while a search is active.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, afterAll } from 'vitest';
+import { useState } from 'react';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -238,12 +239,35 @@ describe('StreamsPane source inventory row contract (enhancedchannelmanager-2896
   it('creates channels from an inventory group by keyboard and supports Escape cancellation', async () => {
     const user = userEvent.setup();
     const onKeyboardCreateFromGroup = vi.fn();
-    renderPane({
-      isEditMode: true,
-      channelGroups: [{ id: 10, name: 'News', channel_count: 0 }],
-      onBulkCreateFromGroup: vi.fn(),
-      onKeyboardCreateFromGroup,
-    });
+    function KeyboardGroupHarness() {
+      const [trigger, setTrigger] = useState<{ names: string[]; targetGroupId: number } | null>(null);
+      return (
+        <StreamsPane
+          streams={STREAMS}
+          providers={PROVIDERS}
+          streamGroups={STREAM_GROUPS}
+          searchTerm=""
+          onSearchChange={vi.fn()}
+          providerFilter={null}
+          onProviderFilterChange={vi.fn()}
+          groupFilter={null}
+          onGroupFilterChange={vi.fn()}
+          loading={false}
+          onGroupExpand={vi.fn()}
+          isEditMode
+          channelGroups={[{ id: 10, name: 'News', channel_count: 0 }]}
+          onBulkCreateFromGroup={vi.fn()}
+          onKeyboardCreateFromGroup={(names, streamIds, targetGroupId) => {
+            onKeyboardCreateFromGroup(names, streamIds, targetGroupId);
+            setTrigger({ names, targetGroupId: targetGroupId! });
+          }}
+          externalTriggerGroupNames={trigger?.names ?? null}
+          externalTriggerTargetGroupId={trigger?.targetGroupId ?? null}
+          onExternalTriggerHandled={() => setTrigger(null)}
+        />
+      );
+    }
+    render(<KeyboardGroupHarness />);
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
     const handle = screen.getByRole('button', {
       name: 'Drag stream group CA | Documentary to Channels pane to create channels',
@@ -265,6 +289,15 @@ describe('StreamsPane source inventory row contract (enhancedchannelmanager-2896
     await user.keyboard('{Enter}');
     expect(onKeyboardCreateFromGroup).toHaveBeenCalledWith(['CA | Documentary'], [1], 10);
     expect(screen.getByRole('status')).toHaveTextContent(/Dropped stream group CA \| Documentary on channel group News/);
+    expect(handle).not.toHaveFocus();
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Create Channels from "CA | Documentary"',
+    });
+    expect(within(dialog).getByText('"News"')).toBeInTheDocument();
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement | null));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(handle).toHaveFocus());
   });
 
   it('keeps stable artwork, flexible identity, then fixed actions and renders no health noise', async () => {

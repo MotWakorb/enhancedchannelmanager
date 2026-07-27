@@ -199,6 +199,7 @@ export function StreamsPane({
   >(null);
   const [keyboardDragAnnouncement, setKeyboardDragAnnouncement] = useState('');
   const keyboardDragTriggerRef = useRef<HTMLElement | null>(null);
+  const bulkCreateReturnFocusRef = useRef<HTMLElement | null>(null);
   const keyboardDestinationRef = useRef<HTMLDivElement>(null);
 
   const cancelKeyboardDrag = useCallback(() => {
@@ -254,12 +255,18 @@ export function StreamsPane({
     }
   };
 
-  const completeKeyboardDrag = (destinationLabel: string, action: () => void) => {
+  const completeKeyboardDrag = (
+    destinationLabel: string,
+    action: () => void,
+    returnFocusToTrigger = true,
+  ) => {
     const draggedLabel = keyboardDrag?.label ?? 'item';
     action();
     setKeyboardDrag(null);
     setKeyboardDragAnnouncement(`Dropped ${draggedLabel} on ${destinationLabel}.`);
-    requestAnimationFrame(() => keyboardDragTriggerRef.current?.focus());
+    if (returnFocusToTrigger) {
+      requestAnimationFrame(() => keyboardDragTriggerRef.current?.focus());
+    }
   };
   // BD-I / bd-1lznl: dedup integration for the single-stream "Add Stream"
   // surface (context-menu "Create channel(s) in group"). On a single-stream
@@ -817,12 +824,16 @@ export function StreamsPane({
   );
 
   // Bulk create handlers - apply settings defaults
-  const openBulkCreateModal = useCallback((group: StreamGroup, startingNumber?: number | null) => {
+  const openBulkCreateModal = useCallback((
+    group: StreamGroup,
+    startingNumber?: number | null,
+    targetGroupId?: number | null,
+  ) => {
     setBulkCreateGroup(group);
     setBulkCreateStreams([]);
     setBulkCreateStartingNumber(startingNumber != null ? startingNumber.toString() : '');
-    setBulkCreateGroupOption('same');
-    setBulkCreateSelectedGroupId(null);
+    setBulkCreateGroupOption(targetGroupId != null ? 'existing' : 'same');
+    setBulkCreateSelectedGroupId(targetGroupId ?? null);
     setBulkCreateNewGroupName('');
     // Apply settings defaults
     setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
@@ -930,6 +941,11 @@ export function StreamsPane({
     setBulkCreateCustomGroupNames(new Map());
     setBulkCreateGroupStartNumbers(new Map());
     setBulkCreateSelectedProfiles(new Set());
+    const returnTarget = bulkCreateReturnFocusRef.current;
+    bulkCreateReturnFocusRef.current = null;
+    if (returnTarget) {
+      requestAnimationFrame(() => returnTarget.focus());
+    }
   }, []);
 
   // Open bulk create modal for manual entry (no streams pre-selected)
@@ -1206,7 +1222,11 @@ export function StreamsPane({
         // Single group - use single group modal
         const matchingGroup = groupedStreams.find(g => g.name === externalTriggerGroupNames[0]);
         if (matchingGroup) {
-          openBulkCreateModal(matchingGroup, externalTriggerStartingNumber);
+          openBulkCreateModal(
+            matchingGroup,
+            externalTriggerStartingNumber,
+            externalTriggerTargetGroupId,
+          );
         }
       } else {
         // Multiple groups - use multi-group modal
@@ -1218,7 +1238,7 @@ export function StreamsPane({
       // Signal that we've handled the trigger
       onExternalTriggerHandled?.();
     }
-  }, [externalTriggerGroupNames, externalTriggerStartingNumber, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
+  }, [externalTriggerGroupNames, externalTriggerStartingNumber, externalTriggerTargetGroupId, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Handle external trigger to open bulk create modal for specific stream IDs
   useEffect(() => {
@@ -2253,10 +2273,15 @@ export function StreamsPane({
 
       {/* Bulk Create Modal */}
       {bulkCreateModalOpen && (streamsToCreate.length > 0 || isManualEntry) && (
-        <ModalOverlay onClose={closeBulkCreateModal}>
+        <ModalOverlay
+          onClose={closeBulkCreateModal}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-create-modal-title"
+        >
           <div className="bulk-create-modal">
             <div className="modal-header">
-              <h3>
+              <h3 id="bulk-create-modal-title">
                 {isManualEntry
                   ? 'Create Channel'
                   : isFromGroup
@@ -2996,7 +3021,7 @@ export function StreamsPane({
       <div
         className="keyboard-drag-status"
         role="status"
-        aria-live="assertive"
+        aria-live="polite"
         aria-atomic="true"
       >
         {keyboardDragAnnouncement}
@@ -3035,11 +3060,15 @@ export function StreamsPane({
                   role="menuitem"
                   onClick={() => completeKeyboardDrag(
                     `channel group ${group.name}`,
-                    () => onKeyboardCreateFromGroup?.(
-                      keyboardDrag.groupNames,
-                      keyboardDrag.streamIds,
-                      group.id,
-                    ),
+                    () => {
+                      bulkCreateReturnFocusRef.current = keyboardDragTriggerRef.current;
+                      onKeyboardCreateFromGroup?.(
+                        keyboardDrag.groupNames,
+                        keyboardDrag.streamIds,
+                        group.id,
+                      );
+                    },
+                    false,
                   )}
                   disabled={!onKeyboardCreateFromGroup}
                 >
