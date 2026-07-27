@@ -1016,3 +1016,84 @@ async def test_run_sync_logos_apply_uploads_misses_skips_matches(tmp_path):
     cat = report.category(EntityType.LOGO)
     assert cat.created == 1
     assert cat.skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# Persisted sync state (bead 7ipq2.2 — live-validation finding): the DBA-ruled
+# sync_targets columns (last_full_sync_at / last_outcome, migration 0024) were
+# never stamped by any code path — the operator status surface stayed NULL
+# forever. run_sync stamps them post-run when it has a session.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_sync_apply_success_stamps_persisted_state(tmp_path):
+    """A realized apply stamps last_outcome; a FULL success also stamps
+    last_full_sync_at. Committed through the caller's session."""
+    src = _source_client()
+    dest = _empty_dest_client()
+    target = _sync_target()
+    target.last_outcome = None
+    target.last_full_sync_at = None
+    session = MagicMock()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=session, ledger_dir=tmp_path,
+        )
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert target.last_outcome == "success"
+    assert target.last_full_sync_at is not None
+    session.commit.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_sync_dry_run_does_not_stamp_persisted_state(tmp_path):
+    """A dry-run is a plan, not a sync — it must NOT stamp last_outcome or
+    last_full_sync_at (the staleness surface would otherwise read a preview
+    as B being kept current)."""
+    src = _source_client()
+    dest = _empty_dest_client()
+    target = _sync_target()
+    target.last_outcome = None
+    target.last_full_sync_at = None
+    session = MagicMock()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=False, session=session, ledger_dir=tmp_path,
+        )
+
+    assert report.is_dry_run is True
+    assert target.last_outcome is None
+    assert target.last_full_sync_at is None
+
+
+@pytest.mark.asyncio
+async def test_run_sync_partial_apply_stamps_outcome_but_not_full_sync_time(tmp_path):
+    """A mixed apply stamps last_outcome with the tri-state value but NEVER
+    advances last_full_sync_at — only a FULL success counts as 'B was current
+    as of this time' (mirrors the last-success gauge contract)."""
+    src = _source_client_with_duplicate_channel_groups()
+    dest = _empty_dest_client()
+    target = _sync_target()
+    target.last_outcome = None
+    target.last_full_sync_at = None
+    session = MagicMock()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=session, ledger_dir=tmp_path,
+        )
+
+    # The duplicate-name CONFLICT makes the realized outcome non-SUCCESS.
+    assert report.outcome != RestoreOutcome.SUCCESS
+    assert target.last_outcome == report.outcome.value
+    assert target.last_full_sync_at is None

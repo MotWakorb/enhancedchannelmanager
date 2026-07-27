@@ -681,7 +681,7 @@ async def import_logos(
             del data
             continue
 
-        content_type = _safe_content_type(archive_logo)
+        content_type = _safe_content_type(archive_logo, data)
         try:
             created = await client.upload_logo_file(
                 label, basename, data, content_type
@@ -721,13 +721,45 @@ async def import_logos(
     return result
 
 
-def _safe_content_type(archive_logo: dict) -> str:
+# Validated-magic -> content-type map for _safe_content_type's fallback. Keyed
+# by the SAME signatures _MAGIC_PREFIXES accepts (plus the BMP path), so the
+# derived type can only ever describe bytes the magic gate already validated.
+_MAGIC_CONTENT_TYPES: tuple[tuple[bytes, int, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", 0, "image/png"),
+    (b"\xff\xd8\xff", 0, "image/jpeg"),
+    (b"GIF87a", 0, "image/gif"),
+    (b"GIF89a", 0, "image/gif"),
+    (b"WEBP", 8, "image/webp"),
+)
+
+
+def _content_type_from_magic(data: bytes) -> Optional[str]:
+    """Derive the image content-type from ALREADY-VALIDATED magic bytes.
+
+    Called only after :func:`_validate_logo` accepted ``data``, so this is a
+    classification of known-image bytes, not a validation step. Returns ``None``
+    for a magic outside the map (BMP falls back to its own type below).
+    """
+    head = data[:_MAGIC_INSPECT_LEN]
+    for prefix, offset, content_type in _MAGIC_CONTENT_TYPES:
+        if head[offset:offset + len(prefix)] == prefix:
+            return content_type
+    if _bmp_ok(data):
+        return "image/bmp"
+    return None
+
+
+def _safe_content_type(archive_logo: dict, data: bytes = b"") -> str:
     """Return a SAFE content-type for the multipart upload.
 
-    The archive's declared content-type is advisory only (the magic-byte check is
-    the real gate). We pass it through when it looks like an image content-type,
-    else default to ``application/octet-stream`` so we never forward an arbitrary
-    attacker-controlled header value.
+    The archive's declared content-type is advisory only (the magic-byte check
+    is the real gate). We pass it through when it looks like an image
+    content-type. When the record declares no usable type — the sync
+    live-gather records are METADATA-ONLY and carry none (bead 7ipq2.2) — the
+    type is derived from the already-validated magic bytes: a real Dispatcharr
+    0.28.2 upload endpoint REJECTS ``application/octet-stream`` outright
+    ("Unsupported file type"), so the octet-stream fallback is a last resort
+    only when even the magic is outside the map.
     """
     declared = archive_logo.get("content_type")
     if isinstance(declared, str) and declared.lower().startswith("image/"):
@@ -735,6 +767,9 @@ def _safe_content_type(archive_logo: dict) -> str:
         clean = declared.split(";", 1)[0].strip().lower()
         if clean and all(ord(c) >= 0x20 for c in clean):
             return clean
+    derived = _content_type_from_magic(data) if data else None
+    if derived:
+        return derived
     return "application/octet-stream"
 
 
