@@ -67,11 +67,18 @@ to their per-target id, and prunes rows for deleted targets;
 :func:`ensure_sync_target_task` / :func:`remove_sync_target_task` are called
 from the SyncTarget CRUD router. The base class is NOT statically registered.
 
-Metric attribution: ``ecm_sync_runs_total{result}`` stays result-only
-(aggregate across targets — one increment per run, unchanged). The per-task
-last-success gauge (``ecm_task_schedule_last_success_timestamp``, k78ja
-staleness alert) is stamped per task_id, so per-target ids make it
-per-target-accurate — the alert rule matches ``task_id=~"dbas_sync_.+"``.
+Metric attribution — all three sync signals are keyed on the SAME target
+identifier (the ``SyncTarget`` pk), so a responder can pivot between them:
+
+* ``ecm_sync_runs_total{result, sync_target_id}`` — tri-state run outcome
+  per target (the runbook's "unreachable vs half-applying" triage step).
+* ``ecm_sync_last_full_success_timestamp{sync_target_id}`` — freshness of the
+  last FULL APPLIED sync; the SLI ``ECMSyncStalledTargetDrift`` keys on.
+  Deliberately NOT the generic per-task gauge: the task engine stamps that
+  one on any success, and a dry-run PREVIEW succeeds without writing B, so a
+  recurring preview would reset the drift clock (PR #752 review).
+* ``ecm_task_schedule_last_success_timestamp{task_id="dbas_sync_<id>"}`` —
+  generic task health ("did this task run at all"), previews included.
 
 Trigger: MANUAL by default (the operator opts into an interval schedule).
 Manual force-sync uses the generic ``POST /api/tasks/dbas_sync_<id>/run``
@@ -181,17 +188,36 @@ def reset_sync_concurrency_for_tests() -> None:
     _sync_semaphore_loop = None
 
 
-def _bump_sync_metric(result: str) -> None:
+def _bump_sync_metric(result: str, sync_target_id: Optional[int]) -> None:
     """Increment ecm_sync_runs_total for a result label, best-effort.
 
     Mirrors :func:`tasks.dbas_backup._bump_metric`. ``result`` is the bounded
-    tri-state {success, partial, failed}; a 'success' increment is the run that
-    ALSO stamps ecm_task_schedule_last_success_timestamp (via the task_engine),
-    so a sustained absence of 'success' is what the ECMSyncStalledTargetDrift
-    staleness alert detects.
+    tri-state {success, partial, failed}.
+
+    ``sync_target_id`` attributes the run to ONE target. Without it the
+    counter was an aggregate across every target, so the runbook's triage
+    step ("is this 'B unreachable' or 'applies but half-fails'?") could not
+    say WHICH replica was broken once targets began running concurrently —
+    while the freshness gauge was already per-target, leaving the two signals
+    disagreeing in granularity.
+
+    The label key is the SyncTarget row **pk**, not its name: the pk is
+    immutable, so a rename cannot fork the series and break the continuity
+    that ``rate()``/``increase()`` depend on. It is also the key the
+    freshness gauge uses and the one the per-target task id is derived from
+    — one identifier for a target across all three surfaces.
+
+    ``None`` (only reachable on the unbound base class, where no target was
+    ever selected) renders as the literal ``"unknown"`` rather than dropping
+    the increment: losing a failure signal entirely is strictly worse than
+    parking it on a clearly-named catch-all series.
     """
     try:
-        observability.get_metric("sync_runs_total").labels(result=result).inc()
+        observability.get_metric("sync_runs_total").labels(
+            result=result,
+            sync_target_id=str(sync_target_id) if sync_target_id is not None
+            else "unknown",
+        ).inc()
     except Exception as e:  # pragma: no cover — metrics best-effort
         logger.warning("[DBAS_SYNC] Failed to increment sync_runs_total: %s", e)
 
@@ -457,7 +483,7 @@ class DbasSyncTask(TaskScheduler):
         # A freshness-gate abort is a non-clean terminal run — count it as
         # 'failed' (the target drifted because no sync was applied). The
         # WARN/journal/notification side effects are emitted by _emit_abort.
-        _bump_sync_metric("failed")
+        _bump_sync_metric("failed", self.sync_target_id)
         self._set_progress(current=0, total=1, status="failed", skipped_count=1)
         return TaskResult(
             success=False,
@@ -525,7 +551,9 @@ class DbasSyncTask(TaskScheduler):
         # (target B drifting — never reported as a clean success). Only the
         # 'success' increment coincides with the task_engine stamping
         # ecm_task_schedule_last_success_timestamp.
-        _bump_sync_metric("success" if succeeded else "partial")
+        _bump_sync_metric(
+            "success" if succeeded else "partial", self.sync_target_id
+        )
 
         # FULL-APPLY freshness (PR #752 review, Block 2). The task engine
         # stamps the GENERIC per-task success gauge on any success — and a
@@ -645,7 +673,7 @@ class DbasSyncTask(TaskScheduler):
     ) -> TaskResult:
         """Build a failed TaskResult and mark progress failed (sanitized message)."""
         logger.warning("[DBAS_SYNC] %s", message)
-        _bump_sync_metric("failed")
+        _bump_sync_metric("failed", self.sync_target_id)
         self._set_progress(status="failed", current_item="finalize")
         return TaskResult(
             success=False,

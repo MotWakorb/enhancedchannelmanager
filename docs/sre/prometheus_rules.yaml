@@ -1001,7 +1001,8 @@ groups:
             this clock. A dry-run preview does NOT (it writes nothing to B),
             and neither does a sustained PARTIAL-apply loop — both leave this
             alert firing while the task looks "healthy" in Task History.
-            Check ecm_sync_runs_total{result="partial"} vs
+            Check ecm_sync_runs_total{result="partial",
+            sync_target_id="{{ $labels.sync_target_id }}"} vs
             {result="failed"} to distinguish "B unreachable / aborting"
             from "applies but keeps half-failing." Common causes: B is
             unreachable, the sync target's credentials were rotated/revoked

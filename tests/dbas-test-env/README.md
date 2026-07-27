@@ -209,7 +209,8 @@ curl -s -X POST http://127.0.0.1:9292/api/accounts/token/ \
 #    simultaneous runs is ECM_SYNC_MAX_CONCURRENT (default 3).
 
 # 5. Verify from both sides: the sync report (task result JSON), the
-#    sync_outbound journal rows, /metrics — ecm_sync_runs_total{result},
+#    sync_outbound journal rows, /metrics —
+#    ecm_sync_runs_total{result,sync_target_id} (filter by target),
 #    ecm_sync_last_full_success_timestamp{sync_target_id="<id>"} (the
 #    APPLY-ONLY freshness gauge the drift alert keys on — a dry-run preview
 #    deliberately does NOT advance it), and the generic task-health gauge

@@ -71,10 +71,17 @@ def _reset_metrics():
     observability.reset_for_tests()
 
 
-def _sync_counter_value(result_label: str) -> float:
-    """Read the current ecm_sync_runs_total value for a result label."""
+def _sync_counter_value(result_label: str, sync_target_id="unknown") -> float:
+    """Read ecm_sync_runs_total for one result label on one target's series.
+
+    ``sync_target_id`` defaults to the ``"unknown"`` catch-all series — the
+    label the no-target-selected failure path renders (PO-authorized
+    per-target counter attribution; see tasks/dbas_sync._bump_sync_metric).
+    """
     counter = observability.get_metric("sync_runs_total")
-    return counter.labels(result=result_label)._value.get()
+    return counter.labels(
+        result=result_label, sync_target_id=str(sync_target_id)
+    )._value.get()
 
 
 def _make_target(session, **overrides) -> SyncTarget:
@@ -677,11 +684,19 @@ async def test_apply_partial_counts_reflect_real_failures(_wire_db):
 
 def test_sync_runs_total_is_registered(_reset_metrics):
     """The tri-state run-outcome counter must be registered (mirrors
-    ecm_backup_runs_total)."""
+    ecm_backup_runs_total) and carry PER-TARGET attribution.
+
+    The sync_target_id label (the SyncTarget pk) is what lets the runbook's
+    "unreachable vs half-applying" triage step name WHICH replica is broken
+    once targets run concurrently — see test_dbas_sync_concurrency.py for the
+    behavioural attribution tests."""
     counter = observability.get_metric("sync_runs_total")
-    # Bounded label set — each result label materializes its own series.
+    assert set(counter._labelnames) == {"result", "sync_target_id"}
+    # Bounded label set — each (result, target) pair materializes its own series.
     for result in ("success", "partial", "failed"):
-        assert counter.labels(result=result)._value.get() == 0.0
+        assert counter.labels(
+            result=result, sync_target_id="1"
+        )._value.get() == 0.0
 
 
 @pytest.mark.asyncio
@@ -705,9 +720,9 @@ async def test_success_run_bumps_success_metric(_wire_db, _reset_metrics):
         result = await task.execute()
 
     assert result.success is True
-    assert _sync_counter_value("success") == 1.0
-    assert _sync_counter_value("partial") == 0.0
-    assert _sync_counter_value("failed") == 0.0
+    assert _sync_counter_value("success", target_id) == 1.0
+    assert _sync_counter_value("partial", target_id) == 0.0
+    assert _sync_counter_value("failed", target_id) == 0.0
 
 
 @pytest.mark.asyncio
@@ -730,9 +745,9 @@ async def test_dry_run_bumps_success_metric(_wire_db, _reset_metrics):
         task.update_config({"sync_target_id": target_id})
         await task.execute()
 
-    assert _sync_counter_value("success") == 1.0
-    assert _sync_counter_value("partial") == 0.0
-    assert _sync_counter_value("failed") == 0.0
+    assert _sync_counter_value("success", target_id) == 1.0
+    assert _sync_counter_value("partial", target_id) == 0.0
+    assert _sync_counter_value("failed", target_id) == 0.0
 
 
 @pytest.mark.asyncio
@@ -757,9 +772,9 @@ async def test_partial_run_bumps_partial_metric(_wire_db, _reset_metrics):
         result = await task.execute()
 
     assert result.success is False
-    assert _sync_counter_value("partial") == 1.0
-    assert _sync_counter_value("success") == 0.0
-    assert _sync_counter_value("failed") == 0.0
+    assert _sync_counter_value("partial", target_id) == 1.0
+    assert _sync_counter_value("success", target_id) == 0.0
+    assert _sync_counter_value("failed", target_id) == 0.0
 
 
 @pytest.mark.asyncio
@@ -782,9 +797,9 @@ async def test_exception_run_bumps_failed_metric(_wire_db, _reset_metrics):
         result = await task.execute()
 
     assert result.success is False
-    assert _sync_counter_value("failed") == 1.0
-    assert _sync_counter_value("success") == 0.0
-    assert _sync_counter_value("partial") == 0.0
+    assert _sync_counter_value("failed", target_id) == 1.0
+    assert _sync_counter_value("success", target_id) == 0.0
+    assert _sync_counter_value("partial", target_id) == 0.0
 
 
 @pytest.mark.asyncio
@@ -799,6 +814,9 @@ async def test_no_target_bumps_failed_metric(_wire_db, _reset_metrics):
 
     assert mock_run.await_count == 0
     assert result.success is False
+    # No target was ever selected, so the increment lands on the "unknown"
+    # catch-all series rather than being dropped (losing a failure signal
+    # would be strictly worse) — see tasks/dbas_sync._bump_sync_metric.
     assert _sync_counter_value("failed") == 1.0
 
 
@@ -823,9 +841,9 @@ async def test_freshness_abort_bumps_failed_metric(_wire_db, _reset_metrics):
 
     assert mock_run.await_count == 0
     assert result.error == "CREDENTIAL_FRESHNESS_ABORT"
-    assert _sync_counter_value("failed") == 1.0
-    assert _sync_counter_value("success") == 0.0
-    assert _sync_counter_value("partial") == 0.0
+    assert _sync_counter_value("failed", target_id) == 1.0
+    assert _sync_counter_value("success", target_id) == 0.0
+    assert _sync_counter_value("partial", target_id) == 0.0
 
 
 # ---------------------------------------------------------------------------

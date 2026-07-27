@@ -130,9 +130,12 @@ def _success_report() -> RestoreReport:
     return report
 
 
-def _sync_counter_value(result_label: str) -> float:
+def _sync_counter_value(result_label: str, sync_target_id: int) -> float:
+    """Read ecm_sync_runs_total for one result label on ONE target's series."""
     counter = observability.get_metric("sync_runs_total")
-    return counter.labels(result=result_label)._value.get()
+    return counter.labels(
+        result=result_label, sync_target_id=str(sync_target_id)
+    )._value.get()
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +463,7 @@ async def test_foreign_sync_target_id_parameter_hard_fails(
     assert mock_run.await_count == 0
     assert result.success is False
     assert str(t2_id) in (result.message or "")
-    assert _sync_counter_value("failed") == 1.0
+    assert _sync_counter_value("failed", t1_id) == 1.0
 
     # Disarmed back to the bound target — the conflict does not stick.
     assert inst.sync_target_id == t1_id
@@ -594,9 +597,10 @@ async def test_concurrent_runs_attribute_metrics_per_result(
 
     assert r1.success is True
     assert r2.success is False
-    assert _sync_counter_value("success") == 1.0
-    assert _sync_counter_value("failed") == 1.0
-    assert _sync_counter_value("partial") == 0.0
+    assert _sync_counter_value("success", t1_id) == 1.0
+    assert _sync_counter_value("failed", t2_id) == 1.0
+    assert _sync_counter_value("partial", t1_id) == 0.0
+    assert _sync_counter_value("partial", t2_id) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -883,3 +887,86 @@ async def test_full_success_gauge_is_attributed_per_target(
 
     assert _full_success_gauge(t1_id) > 0.0
     assert _full_success_gauge(t2_id) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 9. Per-target attribution on ecm_sync_runs_total (PO-authorized scope).
+#
+# With per-target concurrency the runbook's triage step ("compare
+# ecm_sync_runs_total{result=failed} vs {result=partial}") could no longer say
+# WHICH target was failing, while the freshness gauge had already become
+# per-target — the two signals disagreed in granularity. The counter now
+# carries the same target key the gauge uses.
+#
+# Label key: sync_target_id (the SyncTarget row pk), NOT the target name —
+# a rename would fork the series and break rate()/increase() continuity, and
+# the pk is the same key the freshness gauge and the task id are derived from.
+# ---------------------------------------------------------------------------
+
+
+def test_sync_runs_total_is_labeled_by_result_and_target():
+    """Label shape is exactly {result, sync_target_id} — the counter must be
+    filterable per target, keyed on the immutable pk."""
+    observability.reset_for_tests()
+    observability.install_metrics()
+    try:
+        counter = observability.get_metric("sync_runs_total")
+        assert set(counter._labelnames) == {"result", "sync_target_id"}
+    finally:
+        observability.reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_run_outcomes_are_attributed_to_their_own_target(
+    _wire_db, _clean_registry, _reset_metrics, _fresh_semaphore
+):
+    """Two targets, opposite outcomes, run concurrently: each result lands on
+    its OWN target's series. Under the aggregate counter a responder could see
+    one success and one failure but not which replica was broken."""
+    session = _wire_db()
+    t1 = _make_target(session, name="replica-1")
+    t2 = _make_target(session, name="replica-2")
+    t1_id, t2_id = t1.id, t2.id
+    session.close()
+
+    inst1 = dbas_sync.make_sync_task_class(t1_id, "replica-1")()
+    inst2 = dbas_sync.make_sync_task_class(t2_id, "replica-2")()
+
+    both_in_flight = asyncio.Barrier(2)
+
+    async def _fake_run_sync(sync_target, **_kw):
+        await asyncio.wait_for(both_in_flight.wait(), timeout=5)
+        if sync_target.id == t2_id:
+            raise RuntimeError("B unreachable")
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        inst1.update_config({"confirm_apply": True})
+        inst2.update_config({"confirm_apply": True})
+        await asyncio.gather(inst1.execute(), inst2.execute())
+
+    # Target 1 succeeded; target 2 failed. Neither leaks onto the other.
+    assert _sync_counter_value("success", t1_id) == 1.0
+    assert _sync_counter_value("failed", t1_id) == 0.0
+    assert _sync_counter_value("failed", t2_id) == 1.0
+    assert _sync_counter_value("success", t2_id) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_freshness_abort_is_attributed_to_its_target(
+    _wire_db, _clean_registry, _reset_metrics, _fresh_semaphore
+):
+    """The credential-freshness abort path carries the target label too — it is
+    the single most common 'why is this target failing' cause in the runbook."""
+    session = _wire_db()
+    t1 = _make_target(session, name="replica-1")
+    t2 = _make_target(session, name="replica-2", enabled=False)
+    t1_id, t2_id = t1.id, t2.id
+    session.close()
+
+    inst2 = dbas_sync.make_sync_task_class(t2_id, "replica-2")()
+    result = await inst2.execute()
+
+    assert result.error == "CREDENTIAL_FRESHNESS_ABORT"
+    assert _sync_counter_value("failed", t2_id) == 1.0
+    assert _sync_counter_value("failed", t1_id) == 0.0

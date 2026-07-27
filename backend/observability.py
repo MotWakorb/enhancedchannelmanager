@@ -804,24 +804,33 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         # is the time-since-success counterpart. Cardinality is fixed at three
         # series.
         #
-        # 7ipq2.3 (per-target sync tasks): this counter stays RESULT-ONLY —
-        # an AGGREGATE across sync targets (one increment per run, whichever
-        # target ran). Per-target attribution lives in the last-success gauge
-        # instead (task_id=dbas_sync_<target_id> series). Adding a target
-        # label here is a deliberate cardinality/design decision deferred to
-        # the PO — do not add it casually.
+        # 7ipq2.3 (per-target sync tasks) + PO-authorized follow-on: the
+        # counter also carries ``sync_target_id``. Aggregate-only, it could
+        # tell an operator that SOMETHING was failing but not WHICH replica —
+        # while the freshness gauge had already become per-target, leaving
+        # the runbook's triage step reading two signals at different
+        # granularities. The label key is the SyncTarget row **pk**, matching
+        # ecm_sync_last_full_success_timestamp and the per-target task id:
+        # the pk is immutable, so a target rename cannot fork the series and
+        # break rate()/increase() continuity the way a name label would.
+        # Cardinality stays small and bounded: 3 results x the operator's
+        # sync_targets rows (1-3 typical), plus at most one "unknown" series
+        # for the no-target-selected failure path.
         # ----------------------------------------------------------------
         "sync_runs_total": Counter(
             "ecm_sync_runs_total",
             "Cumulative count of DBAS cross-instance sync task runs, labeled by "
-            "result. result ∈ {success, partial, failed}. 'success' = a clean "
+            "result AND sync_target_id (the SyncTarget row pk — immutable, so a "
+            "rename cannot fork the series; 'unknown' only on the no-target-"
+            "selected failure path). result ∈ {success, partial, failed}. "
+            "'success' = a clean "
             "dry-run plan or an APPLY with a SUCCESS outcome (also the heartbeat "
             "that stamps ecm_task_schedule_last_success_timestamp). 'partial' = "
             "an APPLY with a mixed/rolled-back outcome (target B drifting; "
             "tri-state discipline — never a clean success, and does NOT stamp "
             "the last-success gauge). 'failed' = the run raised, the credential-"
             "freshness gate aborted, or no target was configured.",
-            ["result"],
+            ["result", "sync_target_id"],
             registry=registry,
         ),
         # ----------------------------------------------------------------

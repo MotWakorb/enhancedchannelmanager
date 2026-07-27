@@ -23,19 +23,19 @@ The alert fires when ONE target's task has not recorded a FULL success within it
 
 - `ecm_sync_last_full_success_timestamp{sync_target_id}` (gauge, per target) — **the alert's SLI.** Unix-epoch seconds of the last FULL APPLIED sync for that target: stamped only by a `confirm_apply` run whose report outcome was a clean `SUCCESS`. A dry-run preview, a partial/rolled-back apply, and a credential-freshness abort all leave it unchanged. The alert is `(time() - this) > 10800` per series, guarded `> 0` so it stays silent on fresh installs, preview-only targets, and targets the operator left MANUAL.
 - `ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"}` (gauge, per target) — the GENERIC task-health gauge, advanced by the task_engine on ANY successful run **including a dry-run preview**. Useful for "is this task running at all"; do **not** read it as convergence freshness (that conflation is what let a recurring preview mask real drift — PR #752 review).
-- `ecm_sync_runs_total{result}` (counter) — tri-state run outcome, `result ∈ {success, partial, failed}` (mirrors `ecm_backup_runs_total`). The companion signal that tells you WHICH failure mode you are in. NOTE: this counter is result-only — an AGGREGATE across targets; use the per-target gauge (and per-task run history) to attribute a failure mode to a specific target on multi-target installs.
+- `ecm_sync_runs_total{result, sync_target_id}` (counter) — tri-state run outcome per target, `result ∈ {success, partial, failed}` (mirrors `ecm_backup_runs_total`). The companion signal that tells you WHICH failure mode you are in, and on WHICH replica. **Always filter by `sync_target_id`** on a multi-target install — the unfiltered counter sums every target and will read as "something is failing" without saying what. The label is the SyncTarget pk (immutable, so a rename does not fork the series); the value `unknown` only appears on the no-target-selected failure path.
 
 ## Why this matters
 
 The #1 operator risk for cross-instance sync is **silent drift discovered at failover** — a sync quietly failing (or looping on partial) for N cycles while B diverges from A, noticed only when you actually fail over to B and find it stale. This alert is the cheapest catch for that: a stale last-success timestamp means B is not being kept current.
 
-**Partial-apply caveat (read this first):** ONLY a full success stamps the last-success gauge. A tri-state `partial` run — an APPLY that mixed / rolled-back — does NOT stamp it. So this alert ALSO fires on a *sustained partial-apply loop*, not just on outright failures. That is correct (B is drifting either way), but it means "the task is running" is not the same as "the alert should clear." Always check `ecm_sync_runs_total{result="partial"}` vs `{result="failed"}` before concluding the task is dead.
+**Partial-apply caveat (read this first):** ONLY a full success stamps the last-success gauge. A tri-state `partial` run — an APPLY that mixed / rolled-back — does NOT stamp it. So this alert ALSO fires on a *sustained partial-apply loop*, not just on outright failures. That is correct (B is drifting either way), but it means "the task is running" is not the same as "the alert should clear." Always check `ecm_sync_runs_total{result="partial", sync_target_id="<id>"}` vs `{result="failed", sync_target_id="<id>"}` before concluding the task is dead.
 
 ## Symptoms
 
 - `ECMSyncStalledTargetDrift` firing (last success > 3h).
 - TODO: capture the operator-visible signal from the first real incident — likely "I failed over to B and it was missing recent channels/EPG."
-- TODO: `ecm_sync_runs_total{result="partial"}` or `{result="failed"}` climbing while `{result="success"}` is flat.
+- TODO: `ecm_sync_runs_total{result="partial", sync_target_id="<id>"}` or `{result="failed", ...}` climbing while `{result="success", ...}` is flat for that same target.
 
 ## First 10 minutes
 
@@ -49,8 +49,12 @@ The #1 operator risk for cross-instance sync is **silent drift discovered at fai
 
 2. **Failed vs partial — which mode?** Compare the tri-state counter:
    ```promql
-   sum(increase(ecm_sync_runs_total{result="failed"}[1h]))
-   sum(increase(ecm_sync_runs_total{result="partial"}[1h]))
+   # Filter to the target named in the alert's sync_target_id label —
+   # an unfiltered sum blends every replica together.
+   sum(increase(ecm_sync_runs_total{result="failed",  sync_target_id="<sync_target_id>"}[1h]))
+   sum(increase(ecm_sync_runs_total{result="partial", sync_target_id="<sync_target_id>"}[1h]))
+   # Or break every target out at once:
+   sum by (sync_target_id, result) (increase(ecm_sync_runs_total[1h]))
    ```
    - `failed` climbing → the run is aborting BEFORE touching B (credential-freshness abort — target disabled/revoked/rotated — no target configured, or an SSRF refusal of the `base_url`). Go to **Branch A**.
    - `partial` climbing → the run reached the apply phase but did not finish clean. **Live-validated 2026-07-27 (bead `7ipq2.2`): a fully UNREACHABLE B lands HERE, not in `failed`** — the importers degrade per-item (fail-soft), every category fails, and the compensating rollback yields a `partial_failed_rolled_back` outcome. So check B reachability on this branch too, before assuming a single-category loop. Go to **Branch B**.
