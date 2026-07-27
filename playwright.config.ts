@@ -6,6 +6,8 @@ import { defineConfig, devices } from '@playwright/test'
  * Environment variables:
  *   E2E_BASE_URL - Base URL for tests (default: http://localhost:6100)
  *   E2E_START_SERVER - Set to 'true' to auto-start dev server (default: false)
+ *   E2E_EXACT_BUILD - Build and serve the checked-out source on an isolated
+ *                     preview port instead of using a possibly stale dev server
  *
  * Usage:
  *   npx playwright test                              # Test against running app at :6100
@@ -15,7 +17,8 @@ import { defineConfig, devices } from '@playwright/test'
  * @see https://playwright.dev/docs/test-configuration
  */
 
-const baseURL = process.env.E2E_BASE_URL || 'http://localhost:6100'
+const exactBuild = process.env.E2E_EXACT_BUILD === 'true'
+const baseURL = process.env.E2E_BASE_URL || (exactBuild ? 'http://127.0.0.1:4173' : 'http://localhost:6100')
 const startServer = process.env.E2E_START_SERVER === 'true'
 
 export default defineConfig({
@@ -100,10 +103,12 @@ export default defineConfig({
   // Web server configuration - only starts if E2E_START_SERVER=true
   ...(startServer && {
     webServer: {
-      command: 'npm run dev',
+      command: exactBuild
+        ? 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173'
+        : 'npm run dev',
       cwd: './frontend',
-      url: 'http://localhost:5173',
-      reuseExistingServer: !process.env.CI,
+      url: exactBuild ? 'http://127.0.0.1:4173' : 'http://localhost:5173',
+      reuseExistingServer: exactBuild ? false : !process.env.CI,
       timeout: 120 * 1000,
     },
   }),

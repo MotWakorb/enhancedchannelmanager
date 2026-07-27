@@ -3,6 +3,10 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TabNavigation } from './TabNavigation';
 
+function middleClick(element: Element): boolean {
+  return element.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+}
+
 describe('grouped primary navigation', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -56,11 +60,31 @@ describe('grouped primary navigation', () => {
   });
 
   it('keeps all destinations disabled with explanatory names during guarded work', () => {
-    render(<TabNavigation activeTab="channel-manager" onTabChange={vi.fn()} disabled />);
+    const onTabChange = vi.fn();
+    render(<TabNavigation activeTab="channel-manager" onTabChange={onTabChange} disabled />);
     for (const link of screen.getByRole('navigation', { name: 'Primary' }).querySelectorAll('a')) {
       expect(link).toHaveAttribute('aria-disabled', 'true');
+      expect(link).not.toHaveAttribute('href');
       expect(link).toHaveAttribute('title');
+      expect(fireEvent.click(link)).toBe(false);
+      expect(fireEvent.click(link, { ctrlKey: true })).toBe(false);
+      expect(middleClick(link)).toBe(false);
+      expect(fireEvent.contextMenu(link)).toBe(false);
     }
+    expect(onTabChange).not.toHaveBeenCalled();
+  });
+
+  it('intercepts only unmodified primary activation for enabled route links', () => {
+    const onTabChange = vi.fn();
+    render(<TabNavigation activeTab="channel-manager" onTabChange={onTabChange} />);
+    const guide = screen.getByRole('link', { name: 'Guide' });
+
+    expect(fireEvent.click(guide)).toBe(false);
+    expect(fireEvent.click(guide, { ctrlKey: true })).toBe(true);
+    expect(fireEvent.click(guide, { metaKey: true })).toBe(true);
+    expect(fireEvent.click(guide, { shiftKey: true })).toBe(true);
+    expect(middleClick(guide)).toBe(true);
+    expect(onTabChange).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to expanded navigation when localStorage is unavailable', () => {

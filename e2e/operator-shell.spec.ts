@@ -30,6 +30,28 @@ async function shellMetrics(page: Page) {
   })
 }
 
+async function expectContentWithinMain(page: Page, route: 'channel-manager' | 'guide') {
+  const selectors = route === 'channel-manager'
+    ? ['.channel-manager-tab', '.channels-pane', '.streams-pane', '.channels-pane h2', '.streams-pane h2', 'input[placeholder="Search streams..."]']
+    : ['.guide-tab', '.guide-controls', 'button[title="Refresh program data"]', 'button[title="Print channel guide"]', '.guide-container', '.guide-footer']
+
+  for (const selector of selectors) {
+    const item = page.locator(selector).first()
+    await expect(item).toBeVisible()
+    await item.scrollIntoViewIfNeeded()
+    const bounds = await item.evaluate((element) => {
+      const rect = element.getBoundingClientRect()
+      const main = document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect()
+      return {
+        withinMainX: rect.left >= main.left - 1 && rect.right <= main.right + 1,
+        intersectsViewportY: rect.bottom > 0 && rect.top < window.innerHeight,
+      }
+    })
+    expect(bounds.withinMainX, `${selector} must stay within usable main width`).toBe(true)
+    expect(bounds.intersectsViewportY, `${selector} must remain vertically reachable`).toBe(true)
+  }
+}
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
   test.describe(`operator shell geometry at ${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport })
@@ -48,6 +70,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           targetsPractical: true,
           labelsHidden: false,
         })
+        await expectContentWithinMain(appPage, route as 'channel-manager' | 'guide')
 
         await appPage.getByRole('button', { name: 'Collapse navigation' }).click()
         await expect(appPage.locator('.primary-sidebar')).toHaveCSS('width', '68px')
@@ -61,12 +84,25 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           labelsHidden: true,
           iconsCentered: true,
         })
+        await expectContentWithinMain(appPage, route as 'channel-manager' | 'guide')
       })
     }
   })
 }
 
 test.describe('operator shell navigation behavior', () => {
+  test('enabled route links retain the browser new-tab affordance', async ({ appPage, context }) => {
+    await dismissFirstRunPromptIfPresent(appPage)
+    const [newTab] = await Promise.all([
+      context.waitForEvent('page'),
+      appPage.getByRole('link', { name: 'Guide' }).click({ modifiers: ['Control'] }),
+    ])
+    await newTab.waitForLoadState('domcontentloaded')
+    await expect(newTab).toHaveURL(/#guide$/)
+    await newTab.close()
+    await expect(appPage).toHaveURL(/#channel-manager$/)
+  })
+
   test('all primary routes are real links and keyboard reachable', async ({ appPage }) => {
     await dismissFirstRunPromptIfPresent(appPage)
     const expected = [
@@ -132,6 +168,13 @@ test.describe('operator shell navigation behavior', () => {
       await link.focus()
       await expect(link).toBeFocused()
     }
-    expect((await shellMetrics(appPage)).noSidebarXOverflow).toBe(true)
+    const metrics = await shellMetrics(appPage)
+    expect(metrics.noSidebarXOverflow).toBe(true)
+    expect(metrics.noDocumentXOverflow).toBe(true)
+
+    await appPage.getByRole('link', { name: 'Channel Manager' }).press('Enter')
+    await expectContentWithinMain(appPage, 'channel-manager')
+    await appPage.getByRole('link', { name: 'Guide' }).press('Enter')
+    await expectContentWithinMain(appPage, 'guide')
   })
 })

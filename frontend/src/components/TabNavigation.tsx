@@ -77,7 +77,9 @@ export function TabNavigation({ activeTab, onTabChange, disabled, editModeActive
               {group.destinations.map((destination) => (
                 <li key={destination.id}>
                   <a
-                    href={`#${destination.id}`}
+                    href={disabled ? undefined : `#${destination.id}`}
+                    role="link"
+                    tabIndex={0}
                     data-tab={destination.id}
                     className={`navigation-destination tab-button ${activeTab === destination.id ? 'active' : ''}`}
                     aria-label={destination.label}
@@ -86,8 +88,21 @@ export function TabNavigation({ activeTab, onTabChange, disabled, editModeActive
                     title={disabled ? `${destination.label} — unavailable while changes are being saved` : destination.label}
                     aria-disabled={disabled ? 'true' : undefined}
                     onClick={(event) => {
+                      if (disabled) {
+                        event.preventDefault();
+                        return;
+                      }
+                      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+                        return;
+                      }
                       event.preventDefault();
-                      if (!disabled) onTabChange(destination.id);
+                      onTabChange(destination.id);
+                    }}
+                    onAuxClick={(event) => {
+                      if (disabled) event.preventDefault();
+                    }}
+                    onContextMenu={(event) => {
+                      if (disabled) event.preventDefault();
                     }}
                   >
                     <span className="material-icons" aria-hidden="true">{destination.icon}</span>

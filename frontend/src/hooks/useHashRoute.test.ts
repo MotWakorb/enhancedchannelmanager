@@ -29,6 +29,7 @@ describe('parseHash', () => {
     expect(_parseHash('#settings/channel-defaults')).toEqual({ tab: 'settings', settingsPage: 'channel-defaults' });
     expect(_parseHash('#settings/email')).toEqual({ tab: 'settings', settingsPage: 'email' });
     expect(_parseHash('#settings/scheduled-tasks')).toEqual({ tab: 'settings', settingsPage: 'scheduled-tasks' });
+    expect(_parseHash('#settings/auth-settings')).toEqual({ tab: 'settings', settingsPage: 'auth-settings' });
     expect(_parseHash('#settings/tls-settings')).toEqual({ tab: 'settings', settingsPage: 'tls-settings' });
   });
 
