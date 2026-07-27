@@ -74,3 +74,22 @@ export const ROUTE_HIERARCHY: Record<TabId, RouteHierarchy> = {
   journal: route('INSIGHTS', 'journal', 'Trace recorded channel, guide, provider, and automation events.'),
   settings: route('SYSTEM', 'settings', 'Configure ECM behavior, integrations, access, and maintenance.'),
 };
+
+export interface RouteHeaderPolicy {
+  primaryAction: string | null;
+  exception?: string;
+}
+
+export const ROUTE_HEADER_POLICIES: Record<TabId, RouteHeaderPolicy> = {
+  dashboard: { primaryAction: null, exception: 'Read-only placeholder until the Dashboard delivery.' },
+  'channel-manager': { primaryAction: 'Edit Mode' },
+  guide: { primaryAction: null, exception: 'Guide refresh, print, and temporal selectors remain one source-scoped control group.' },
+  'm3u-manager': { primaryAction: 'Add M3U Account' },
+  'epg-manager': { primaryAction: 'Add Standard EPG' },
+  'logo-manager': { primaryAction: 'Add Logo' },
+  'channel-pipeline': { primaryAction: 'Create Rule' },
+  'm3u-changes': { primaryAction: 'Refresh' },
+  stats: { primaryAction: 'Refresh' },
+  journal: { primaryAction: 'Refresh' },
+  settings: { primaryAction: null, exception: 'Save remains form-scoped for the long-page/save-safety delivery (.5).' },
+};

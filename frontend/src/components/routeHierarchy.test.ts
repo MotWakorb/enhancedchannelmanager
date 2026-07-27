@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './routeHierarchy';
+import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HEADER_POLICIES, ROUTE_HIERARCHY } from './routeHierarchy';
 import { ROUTE_TITLES } from './routeTitles';
 
 describe('primary route hierarchy', () => {
@@ -10,6 +10,15 @@ describe('primary route hierarchy', () => {
       expect(hierarchy.purpose).toMatch(/^[A-Z].*[.!?]$/);
     }
     expect(ROUTE_HIERARCHY['channel-manager'].heading).toBe('OPERATIONS / CHANNEL MANAGER');
+  });
+
+  it('identifies one primary action or records an approved route exception', () => {
+    expect(Object.keys(ROUTE_HEADER_POLICIES).sort()).toEqual(Object.keys(ROUTE_HIERARCHY).sort());
+    for (const policy of Object.values(ROUTE_HEADER_POLICIES)) {
+      expect(Boolean(policy.primaryAction) !== Boolean(policy.exception)).toBe(true);
+    }
+    expect(ROUTE_HEADER_POLICIES.settings.exception).toContain('.5');
+    expect(ROUTE_HEADER_POLICIES.guide.exception).toContain('source-scoped');
   });
 
   it('uses only current stable Settings hashes for directly related configuration', () => {

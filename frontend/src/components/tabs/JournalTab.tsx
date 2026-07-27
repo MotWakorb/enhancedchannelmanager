@@ -6,7 +6,7 @@ import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
-import { RouteHeaderActions } from '../RouteHeaderSlots';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {
@@ -230,7 +230,7 @@ export function JournalTab() {
       <div className="journal-header">
         <div className="header-left">
           <span className="visually-hidden">Journal</span>
-          {stats && (
+          {stats && <RouteHeaderSlot name="status">
             <div className="header-stats">
               <span className="header-stat" title="Channel entries">
                 <span className="material-icons">tv</span>
@@ -262,9 +262,15 @@ export function JournalTab() {
               </span>
               <span className="header-total" title="Total journal entries">({stats.total_entries.toLocaleString()} total)</span>
             </div>
-          )}
+          </RouteHeaderSlot>}
         </div>
-        <RouteHeaderActions><div className="header-actions">
+        <RouteHeaderSlot name="primary-action">
+          <button className="btn-primary" onClick={handleRefresh} disabled={loading}>
+            <span className="material-icons">refresh</span>
+            Refresh
+          </button>
+        </RouteHeaderSlot>
+        <RouteHeaderSlot name="controls"><div className="header-actions">
           <div className="journal-purge-control">
             <input
               type="number"
@@ -288,14 +294,11 @@ export function JournalTab() {
               {purging ? 'Purging…' : 'Purge Old Entries'}
             </button>
           </div>
-          <button className="btn-secondary" onClick={handleRefresh} disabled={loading}>
-            <span className="material-icons">refresh</span>
-            Refresh
-          </button>
-        </div></RouteHeaderActions>
+        </div></RouteHeaderSlot>
       </div>
 
       {/* Filters */}
+      <RouteHeaderSlot name="controls">
       <div className="filters-bar">
         <div className="search-box">
           <span className="material-icons">search</span>
@@ -363,6 +366,7 @@ export function JournalTab() {
           ]}
         />
       </div>
+      </RouteHeaderSlot>
 
       {/* Entries List */}
       {entries.length === 0 ? (

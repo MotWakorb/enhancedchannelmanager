@@ -78,4 +78,22 @@ describe('PageHeader', () => {
       expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
   });
+
+  it('exposes distinct hierarchy slots instead of an opaque toolbar cluster', () => {
+    render(
+      <PageHeader
+        title="Stats"
+        actions={<button>Refresh</button>}
+        status={<span>Auto-refresh: 30s</span>}
+        controls={<button>Refresh interval</button>}
+        relatedLinks={[{ href: '#settings/general', label: 'General settings' }]}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Refresh' }).closest('[data-page-header-slot]'))
+      .toHaveAttribute('data-page-header-slot', 'primary-action');
+    expect(screen.getByText('Auto-refresh: 30s').closest('[data-page-header-slot]'))
+      .toHaveAttribute('data-page-header-slot', 'status');
+    expect(screen.getByRole('button', { name: 'Refresh interval' }).closest('[data-page-header-slot]'))
+      .toHaveAttribute('data-page-header-slot', 'controls');
+  });
 });

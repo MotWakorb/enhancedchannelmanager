@@ -1,28 +1,38 @@
-/* eslint-disable react-refresh/only-export-components -- the shared target hook and its provider must use the same context */
 import { createContext, type ReactNode, useContext } from 'react';
 import { createPortal } from 'react-dom';
 
-const RouteHeaderActionTargetContext = createContext<HTMLElement | null>(null);
+export type RouteHeaderSlotName = 'primary-action' | 'status' | 'controls';
+export type RouteHeaderTargets = Record<RouteHeaderSlotName, HTMLElement | null>;
 
-export function RouteHeaderActionTargetProvider({
-  target,
+const RouteHeaderTargetsContext = createContext<RouteHeaderTargets>({
+  'primary-action': null,
+  status: null,
+  controls: null,
+});
+
+export function RouteHeaderTargetProvider({
+  targets,
   children,
 }: {
-  target: HTMLElement | null;
+  targets: RouteHeaderTargets;
   children: ReactNode;
 }) {
   return (
-    <RouteHeaderActionTargetContext.Provider value={target}>
+    <RouteHeaderTargetsContext.Provider value={targets}>
       {children}
-    </RouteHeaderActionTargetContext.Provider>
+    </RouteHeaderTargetsContext.Provider>
   );
 }
 
-export function RouteHeaderActions({ children }: { children: ReactNode }) {
-  const target = useContext(RouteHeaderActionTargetContext);
-  return target ? createPortal(children, target) : <>{children}</>;
-}
-
-export function useRouteHeaderActionTarget() {
-  return useContext(RouteHeaderActionTargetContext);
+export function RouteHeaderSlot({
+  name,
+  children,
+}: {
+  name: RouteHeaderSlotName;
+  children: ReactNode;
+}) {
+  const target = useContext(RouteHeaderTargetsContext)[name];
+  return target
+    ? createPortal(<div data-route-header-slot={name}>{children}</div>, target)
+    : <div data-route-header-slot={name}>{children}</div>;
 }

@@ -12,7 +12,7 @@ import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
 import { CatchupBadge } from '../CatchupBadge';
-import { PageHeader } from '../PageHeader';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { OverflowMenu } from '../OverflowMenu';
 import type { OverflowMenuItem } from '../OverflowMenu';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -818,17 +818,17 @@ export function M3UManagerTab({
 
   return (
     <div className="m3u-manager-tab">
-      <PageHeader
-        routeConsumer
-        className="m3u-header"
-        title="M3U Accounts"
-        description="Manage your M3U playlist sources and XtreamCodes accounts."
-        actions={(
-          <>
-            <button className="btn-primary" onClick={handleAddAccount}>
-              <span className="material-icons">add</span>
-              Add M3U Account
-            </button>
+      <RouteHeaderSlot name="primary-action">
+        <button className="btn-primary" onClick={handleAddAccount}>
+          <span className="material-icons">add</span>
+          Add M3U Account
+        </button>
+      </RouteHeaderSlot>
+      <RouteHeaderSlot name="status">
+        <span>{anyRefreshing ? 'Provider refresh in progress' : `${accounts.length} provider account${accounts.length === 1 ? '' : 's'}`}</span>
+      </RouteHeaderSlot>
+      <RouteHeaderSlot name="controls">
+        <div className="m3u-header header-actions">
             <button
               className="btn-secondary save-priorities-btn"
               onClick={handleSavePriorities}
@@ -862,9 +862,8 @@ export function M3UManagerTab({
                 toolbar no longer squeezes the title column at 1280 (bead
                 09x38.2). Refresh All + Add M3U Account stay primary. */}
             <OverflowMenu items={adminMenuItems} label="M3U setup actions" />
-          </>
-        )}
-      />
+        </div>
+      </RouteHeaderSlot>
 
       {filteredAccounts.length === 0 ? (
         <div className="empty-state">

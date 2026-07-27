@@ -24,6 +24,7 @@ import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { PageHeader } from '../PageHeader';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { GuideMigrationModal } from '../GuideMigrationModal';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
@@ -1076,17 +1077,17 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
 
   return (
     <div className="epg-manager-tab">
-      <PageHeader
-        routeConsumer
-        className="epg-header"
-        title="EPG Sources"
-        description="Manage your Electronic Program Guide sources. Click Reorder to change priority."
-        actions={(
-          <>
-            <button className="btn-primary" onClick={handleAddSource}>
-              <span className="material-icons">add</span>
-              Add Standard EPG
-            </button>
+      <RouteHeaderSlot name="primary-action">
+        <button className="btn-primary" onClick={handleAddSource}>
+          <span className="material-icons">add</span>
+          Add Standard EPG
+        </button>
+      </RouteHeaderSlot>
+      <RouteHeaderSlot name="status">
+        <span>{refreshingAll ? 'EPG refresh in progress' : `${sources.length} EPG source${sources.length === 1 ? '' : 's'}`}</span>
+      </RouteHeaderSlot>
+      <RouteHeaderSlot name="controls">
+        <div className="epg-header header-actions">
             {sources.length > 1 && (
               <button
                 className="btn-secondary"
@@ -1109,9 +1110,8 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                 Migrate Guides
               </button>
             )}
-          </>
-        )}
-      />
+        </div>
+      </RouteHeaderSlot>
 
       {sources.length === 0 ? (
         <div className="empty-state">

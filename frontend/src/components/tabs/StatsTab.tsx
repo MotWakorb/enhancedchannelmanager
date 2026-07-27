@@ -29,7 +29,7 @@ import { AttributionBadge } from '../AttributionBadge';
 import { ChannelStatsDetailModal } from '../ChannelStatsDetailModal';
 import type { Viewer } from '../../types';
 import './StatsTab.css';
-import { RouteHeaderActions } from '../RouteHeaderSlots';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
 
 // Historical data point for charts
 interface HistoricalDataPoint {
@@ -913,7 +913,7 @@ export function StatsTab() {
     <div className="stats-tab">
       {/* Header */}
       <div className="stats-header">
-        <div className="header-left">
+        <RouteHeaderSlot name="status"><div className="header-left">
           <div className="header-summary">
             <div className="summary-stat">
               <span className="material-icons">live_tv</span>
@@ -994,16 +994,25 @@ export function StatsTab() {
               </table>
             </div>
           )}
-        </div>
-
-        <RouteHeaderActions><div className="header-actions">
           <div className={`refresh-indicator ${refreshInterval > 0 ? 'active' : ''}`}>
             <span className={`material-icons ${refreshing ? 'spinning' : ''}`}>
               {refreshing ? 'sync' : 'schedule'}
             </span>
             {refreshInterval > 0 ? `Auto-refresh: ${refreshInterval}s` : 'Manual refresh'}
           </div>
+        </div></RouteHeaderSlot>
 
+        <RouteHeaderSlot name="primary-action">
+          <button
+            className="btn-primary"
+            onClick={() => fetchData(false)}
+            disabled={refreshing}
+          >
+            <span className="material-icons">refresh</span>
+            Refresh
+          </button>
+        </RouteHeaderSlot>
+        <RouteHeaderSlot name="controls"><div className="header-actions">
           <CustomSelect
             className="refresh-select"
             value={String(refreshInterval)}
@@ -1014,17 +1023,8 @@ export function StatsTab() {
             }))}
           />
 
-          <button
-            className="btn-secondary"
-            onClick={() => fetchData(false)}
-            disabled={refreshing}
-          >
-            <span className="material-icons">refresh</span>
-            Refresh
-          </button>
-
           <OverflowMenu items={statsSectionNavItems} label="Jump to section" icon="list" />
-        </div></RouteHeaderActions>
+        </div></RouteHeaderSlot>
       </div>
 
       {/* Error state */}

@@ -1,5 +1,4 @@
 import type { MouseEventHandler, ReactNode, Ref } from 'react';
-import { RouteHeaderActions, useRouteHeaderActionTarget } from './RouteHeaderSlots';
 import './PageHeader.css';
 
 interface PageHeaderProps {
@@ -16,7 +15,6 @@ interface PageHeaderProps {
     label: string;
     onClick?: MouseEventHandler<HTMLAnchorElement>;
   }>;
-  routeConsumer?: boolean;
   /**
    * Extra class name(s) applied to the outer row, for tabs whose own CSS
    * still targets a legacy wrapper class (e.g. `.logo-header` in a
@@ -53,12 +51,7 @@ export function PageHeader({
   headingLevel = 2,
   headingRef,
   relatedLinks,
-  routeConsumer = false,
 }: PageHeaderProps) {
-  const routeActionTarget = useRouteHeaderActionTarget();
-  if (routeConsumer && routeActionTarget) {
-    return actions ? <RouteHeaderActions>{actions}</RouteHeaderActions> : null;
-  }
   const heading = group ? `${group} / ${title}` : title;
   return (
     <div className={`page-header${className ? ` ${className}` : ''}`}>
@@ -68,9 +61,9 @@ export function PageHeader({
           : <h2 ref={headingRef}>{heading}</h2>}
         {description && <p className="header-description">{description}</p>}
       </div>
-      {actions && <div className="header-actions">{actions}</div>}
-      {status && <div className="page-header-status" aria-live="polite">{status}</div>}
-      {controls && <div className="page-header-controls">{controls}</div>}
+      {actions && <div className="header-actions" data-page-header-slot="primary-action">{actions}</div>}
+      {status && <div className="page-header-status" data-page-header-slot="status" aria-live="polite">{status}</div>}
+      {controls && <div className="page-header-controls" data-page-header-slot="controls">{controls}</div>}
       {relatedLinks && relatedLinks.length > 0 && (
         <nav className="page-header-related-links" aria-label="Related settings">
           {relatedLinks.map((link) => (

@@ -6,7 +6,7 @@ import { CustomSelect } from '../CustomSelect';
 import './M3UChangesTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
-import { RouteHeaderActions } from '../RouteHeaderSlots';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
 
 // Get icon for change type
 function getChangeTypeIcon(changeType: M3UChangeType): string {
@@ -217,7 +217,7 @@ export function M3UChangesTab() {
       <div className="changes-header">
         <div className="header-left">
           <span className="visually-hidden">M3U Changes</span>
-          {summary && (
+          {summary && <RouteHeaderSlot name="status">
             <div className="header-stats">
               {/* bd-fzny4: this count is `total_changes` from the /changes/summary
                   endpoint, scoped to the selected Time Range filter below — a
@@ -234,9 +234,9 @@ export function M3UChangesTab() {
                 {summary.total_changes} changes ({(hoursOptions.find((o) => Number(o.value) === hoursFilter)?.label ?? 'selected range').toLowerCase()})
               </span>
             </div>
-          )}
+          </RouteHeaderSlot>}
         </div>
-        <RouteHeaderActions><div className="header-actions">
+        <RouteHeaderSlot name="primary-action"><div className="header-actions">
           <button
             className="btn-secondary"
             onClick={fetchChanges}
@@ -245,10 +245,11 @@ export function M3UChangesTab() {
             <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
             Refresh
           </button>
-        </div></RouteHeaderActions>
+        </div></RouteHeaderSlot>
       </div>
 
       {/* Filters and Summary Row */}
+      <RouteHeaderSlot name="controls">
       <div className="filters-summary-row">
         <div className="filters-bar">
           <div className="filter-select">
@@ -328,6 +329,7 @@ export function M3UChangesTab() {
           </div>
         )}
       </div>
+      </RouteHeaderSlot>
 
       {/* Loading State */}
       {loading && changes.length === 0 && (

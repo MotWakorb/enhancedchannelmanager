@@ -52,6 +52,30 @@ async function expectContentWithinMain(page: Page, route: 'channel-manager' | 'g
   }
 }
 
+const routeConsumers = [
+  { name: 'Dashboard', heading: 'OVERVIEW / DASHBOARD', settled: '.dashboard-route' },
+  { name: 'Channel Manager', heading: 'OPERATIONS / CHANNEL MANAGER', settled: '.enter-edit-mode-btn' },
+  { name: 'Guide', heading: 'OPERATIONS / GUIDE', settled: 'button[title="Refresh program data"]' },
+  { name: 'M3U Manager', heading: 'OPERATIONS / M3U MANAGER', settled: 'button:has-text("Add M3U Account")' },
+  { name: 'EPG Manager', heading: 'OPERATIONS / EPG MANAGER', settled: 'button:has-text("Add Standard EPG")' },
+  { name: 'Logo Manager', heading: 'OPERATIONS / LOGO MANAGER', settled: 'button:has-text("Add Logo")' },
+  { name: 'Channel Pipeline', heading: 'AUTOMATION / CHANNEL PIPELINE', settled: 'button[aria-label="Retry"]' },
+  { name: 'M3U Changes', heading: 'AUTOMATION / M3U CHANGES', settled: 'button:has-text("Refresh")' },
+  { name: 'Stats', heading: 'INSIGHTS / STATS', settled: 'button:has-text("Refresh")' },
+  { name: 'Journal', heading: 'INSIGHTS / JOURNAL', settled: 'button:has-text("Refresh")' },
+  { name: 'Settings', heading: 'SYSTEM / SETTINGS', settled: 'button:has-text("Save Settings")' },
+] as const
+
+async function expectSettledRoute(page: Page, consumer: typeof routeConsumers[number]) {
+  const heading = page.locator('#main-content h1')
+  await expect(heading).toHaveText(consumer.heading)
+  await expect(heading).toHaveCount(1)
+  await expect(page.locator('#main-content .tab-loading')).toHaveCount(0)
+  const settled = page.locator(consumer.settled).first()
+  await expect(settled).toBeVisible()
+  return settled
+}
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
   test.describe(`operator shell geometry at ${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport })
@@ -90,47 +114,36 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
 
     test('all primary route consumers preserve hierarchy and required controls or source-backed recovery', async ({ appPage }) => {
       await dismissFirstRunPromptIfPresent(appPage)
-      const consumers = [
-        { name: 'Dashboard', heading: 'OVERVIEW / DASHBOARD', required: '.dashboard-route' },
-        { name: 'Channel Manager', heading: 'OPERATIONS / CHANNEL MANAGER', required: '.enter-edit-mode-btn' },
-        { name: 'Guide', heading: 'OPERATIONS / GUIDE', required: 'button[title="Refresh program data"]' },
-        { name: 'M3U Manager', heading: 'OPERATIONS / M3U MANAGER', required: 'button:has-text("Add M3U Account")' },
-        { name: 'EPG Manager', heading: 'OPERATIONS / EPG MANAGER', required: 'button:has-text("Add Standard EPG")' },
-        { name: 'Logo Manager', heading: 'OPERATIONS / LOGO MANAGER', required: 'button:has-text("Add Logo")' },
-        { name: 'Channel Pipeline', heading: 'AUTOMATION / CHANNEL PIPELINE', required: 'button[aria-label="Create rule"], button[aria-label="Retry"]' },
-        { name: 'M3U Changes', heading: 'AUTOMATION / M3U CHANGES', required: 'button:has-text("Refresh")' },
-        { name: 'Stats', heading: 'INSIGHTS / STATS', required: 'button:has-text("Refresh")' },
-        { name: 'Journal', heading: 'INSIGHTS / JOURNAL', required: 'button:has-text("Refresh")' },
-        { name: 'Settings', heading: 'SYSTEM / SETTINGS', required: 'button:has-text("Save Settings")' },
-      ]
-
-      for (const consumer of consumers) {
+      for (const consumer of routeConsumers) {
         await appPage.getByRole('link', { name: consumer.name }).click()
-        const heading = appPage.locator('#main-content h1')
-        await expect(heading).toHaveText(consumer.heading)
-        await expect(heading).toHaveCount(1)
-        await expect(appPage.locator('#main-content h2').filter({ hasText: new RegExp(`^${consumer.name}$`, 'i') })).toHaveCount(0)
-
-        const requiredOrRecoverySelector =
-          `${consumer.required}, #main-content .tab-loading, #main-content .error-boundary, #main-content [role="alert"]`
-        await expect(async () => {
-          const requiredOrRecovery = appPage.locator(requiredOrRecoverySelector).first()
-          await expect(requiredOrRecovery).toBeVisible()
-          await requiredOrRecovery.scrollIntoViewIfNeeded()
-          const geometry = await requiredOrRecovery.evaluate((element) => {
-            const rect = element.getBoundingClientRect()
-            const main = document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect()
-            return {
-              withinMain: rect.left >= main.left - 1 && rect.right <= main.right + 1,
-              noDocumentOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
-            }
-          })
-          expect(geometry).toEqual({ withinMain: true, noDocumentOverflow: true })
-        }).toPass()
+        const settled = await expectSettledRoute(appPage, consumer)
+        await settled.scrollIntoViewIfNeeded()
+        expect(await settled.evaluate((element) => {
+          const rect = element.getBoundingClientRect()
+          const main = document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect()
+          return rect.left >= main.left - 1 && rect.right <= main.right + 1
+            && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
+        })).toBe(true)
       }
     })
   })
 }
+
+test.describe('operator shell at 200% equivalent', () => {
+  test.use({ viewport: { width: 640, height: 360 } })
+
+  test('all primary routes settle with their exact control and remain horizontally usable', async ({ appPage }) => {
+    await dismissFirstRunPromptIfPresent(appPage)
+    for (const consumer of routeConsumers) {
+      await appPage.getByRole('link', { name: consumer.name }).click()
+      const settled = await expectSettledRoute(appPage, consumer)
+      await settled.scrollIntoViewIfNeeded()
+      expect(await appPage.evaluate(() =>
+        document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+      ), `${consumer.name} must not cause document-level horizontal overflow`).toBe(true)
+    }
+  })
+})
 
 test.describe('operator shell navigation behavior', () => {
   test('enabled route links retain the browser new-tab affordance', async ({ appPage, context }) => {

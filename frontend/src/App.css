@@ -239,7 +239,9 @@
   outline-offset: 3px;
 }
 
-.route-page-action-outlet {
+.route-page-action-outlet,
+.route-page-status-outlet,
+.route-page-controls-outlet {
   display: contents;
 }
 

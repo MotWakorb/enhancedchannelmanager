@@ -4,7 +4,7 @@ import type { Logo } from '../../types';
 import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
 import { ModalOverlay } from '../ModalOverlay';
-import { PageHeader } from '../PageHeader';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import './LogoManagerTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 
@@ -176,18 +176,17 @@ export function LogoManagerTab() {
 
   return (
     <div className="logo-manager-tab">
-      {/* Header */}
-      <PageHeader
-        routeConsumer
-        className="logo-header"
-        title="Logos"
-        description={`Manage logos for your channels (${totalCount}${filtersActive ? ' matching' : ' total'})`}
-        actions={(
-          <>
-            <button className="btn-primary" onClick={handleAddLogo}>
-              <span className="material-icons">add</span>
-              Add Logo
-            </button>
+      <RouteHeaderSlot name="primary-action">
+        <button className="btn-primary" onClick={handleAddLogo}>
+          <span className="material-icons">add</span>
+          Add Logo
+        </button>
+      </RouteHeaderSlot>
+      <RouteHeaderSlot name="status">
+        <span>{totalCount}{filtersActive ? ' matching' : ' total'} logos</span>
+      </RouteHeaderSlot>
+      <RouteHeaderSlot name="controls">
+        <div className="logo-header header-actions">
             {/* Search */}
             <div className="search-box">
               <span className="material-icons">search</span>
@@ -245,9 +244,8 @@ export function LogoManagerTab() {
               </button>
             </div>
 
-          </>
-        )}
-      />
+        </div>
+      </RouteHeaderSlot>
 
       {/* Content */}
       <div className="logos-container">

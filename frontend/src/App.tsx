@@ -33,7 +33,7 @@ import { SkipToMainContent } from './components/AppLandmarks';
 import { ROUTE_TITLES } from './components/routeTitles';
 import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './components/routeHierarchy';
 import type { SettingsPage } from './hooks/useHashRoute';
-import { RouteHeaderActionTargetProvider } from './components/RouteHeaderSlots';
+import { RouteHeaderTargetProvider } from './components/RouteHeaderSlots';
 import {
   setTelemetryRuntimeEnabled,
   withImportTelemetry,
@@ -284,7 +284,11 @@ function App() {
   // Tab navigation state (hash-based routing)
   const { activeTab, settingsPage, setHash, setSettingsPage } = useHashRoute();
   const [pendingRouteChange, setPendingRouteChange] = useState<{ tab: TabId; settingsPage?: SettingsPage } | null>(null);
-  const [routeActionTarget, setRouteActionTarget] = useState<HTMLDivElement | null>(null);
+  const [routeHeaderTargets, setRouteHeaderTargets] = useState({
+    'primary-action': null as HTMLDivElement | null,
+    status: null as HTMLDivElement | null,
+    controls: null as HTMLDivElement | null,
+  });
   const routeHeadingRef = useRef<HTMLHeadingElement>(null);
   const focusHeadingOnRouteChangeRef = useRef(false);
 
@@ -2367,7 +2371,7 @@ function App() {
       />
 
       <main id="main-content" className="main" tabIndex={-1}>
-        <RouteHeaderActionTargetProvider target={routeActionTarget}>
+        <RouteHeaderTargetProvider targets={routeHeaderTargets}>
         <PageHeader
           className="route-page-header"
           headingLevel={1}
@@ -2378,8 +2382,29 @@ function App() {
           actions={(
             <>
               {channelManagerPageAction}
-              <div className="route-page-action-outlet" ref={setRouteActionTarget} />
+              <div
+                className="route-page-action-outlet"
+                ref={(target) => setRouteHeaderTargets((current) => (
+                  current['primary-action'] === target ? current : { ...current, 'primary-action': target }
+                ))}
+              />
             </>
+          )}
+          status={(
+            <div
+              className="route-page-status-outlet"
+              ref={(target) => setRouteHeaderTargets((current) => (
+                current.status === target ? current : { ...current, status: target }
+              ))}
+            />
+          )}
+          controls={(
+            <div
+              className="route-page-controls-outlet"
+              ref={(target) => setRouteHeaderTargets((current) => (
+                current.controls === target ? current : { ...current, controls: target }
+              ))}
+            />
           )}
           relatedLinks={ROUTE_HIERARCHY[activeTab].settingsLinks?.map((link) => ({
             ...link,
@@ -2626,7 +2651,7 @@ function App() {
             </ErrorBoundary>
           )}
         </Suspense>
-        </RouteHeaderActionTargetProvider>
+        </RouteHeaderTargetProvider>
       </main>
 
       <footer className="footer">

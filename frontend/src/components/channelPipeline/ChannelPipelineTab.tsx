@@ -33,7 +33,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { getDateLocale } from '../../utils/formatting';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
-import { RouteHeaderActions } from '../RouteHeaderSlots';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import '../ModalBase.css';
 import './ChannelPipelineTab.css';
 
@@ -896,7 +896,7 @@ export function ChannelPipelineTab() {
       {/* Header */}
       <header className="tab-header">
         <span className="visually-hidden">Channel Pipeline</span>
-        <RouteHeaderActions><div className="header-actions">
+        <RouteHeaderSlot name="primary-action">
           <button
             className="btn-primary"
             onClick={handleCreateRule}
@@ -905,6 +905,8 @@ export function ChannelPipelineTab() {
             <span className="material-icons">add</span>
             Create Rule
           </button>
+        </RouteHeaderSlot>
+        <RouteHeaderSlot name="controls"><div className="header-actions">
           <button
             className="btn-secondary"
             onClick={() => handleRun(false)}
@@ -958,7 +960,7 @@ export function ChannelPipelineTab() {
             <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
             {debugBundleLoading ? 'Generating...' : 'Pipeline Debug Bundle'}
           </button>
-        </div></RouteHeaderActions>
+        </div></RouteHeaderSlot>
       </header>
 
       {/* Circuit-breaker banner — shown when run-on-refresh auto-fire is suppressed */}
@@ -975,7 +977,7 @@ export function ChannelPipelineTab() {
       <AutoCreationGateBanner rules={rules} />
 
       {/* Statistics Summary */}
-      <div className="channel-pipeline-stats">
+      <RouteHeaderSlot name="status"><div className="channel-pipeline-stats">
         <div className="stat-item">
           <span className="stat-value">{stats.totalRules}</span>
           <span className="stat-label">{stats.totalRules === 1 ? 'Rule' : 'Rules'}</span>
@@ -988,7 +990,7 @@ export function ChannelPipelineTab() {
           <span className="stat-value">{stats.totalMatches}</span>
           <span className="stat-label">Matches</span>
         </div>
-      </div>
+      </div></RouteHeaderSlot>
 
       {/* Event Sync review queue (ti939.3.2) — only meaningful when an
           event_sync rule exists; the component self-fetches its rows. */}
