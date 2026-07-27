@@ -5,6 +5,8 @@ import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
 import { ModalOverlay } from '../ModalOverlay';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import './LogoManagerTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 
@@ -26,6 +28,7 @@ export function LogoManagerTab() {
   const [logos, setLogos] = useState<Logo[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
 
   // Search state
   const [searchInput, setSearchInput] = useState('');
@@ -60,6 +63,7 @@ export function LogoManagerTab() {
   // search/sort/unused-only filter composed into one request.
   const loadLogos = useCallback(async () => {
     setLoading(true);
+    setSourceLoadState('loading');
     setFailedImages(new Set());
     try {
       const response = await api.getLogos({
@@ -72,7 +76,9 @@ export function LogoManagerTab() {
       });
       setLogos(response.results);
       setTotalCount(response.count);
+      setSourceLoadState('success');
     } catch (err) {
+      setSourceLoadState(classifySourceLoadError(err));
       notifications.error(err instanceof Error ? err.message : 'Failed to load logos', 'Logos');
     } finally {
       setLoading(false);
@@ -164,9 +170,24 @@ export function LogoManagerTab() {
   if (loading && logos.length === 0 && totalCount === 0) {
     return (
       <div className="logo-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus state={sourceLoadState} successText="0 total logos" />
+        </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading logos...</p>
+        </div>
+      </div>
+    );
+  }
+  if (sourceLoadState !== 'success' && logos.length === 0) {
+    return (
+      <div className="logo-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus state={sourceLoadState} successText="" />
+        </RouteHeaderSlot>
+        <div className="tab-load-unavailable">
+          <SourceLoadStatus state={sourceLoadState} successText="" />
         </div>
       </div>
     );
@@ -183,7 +204,7 @@ export function LogoManagerTab() {
         </button>
       </RouteHeaderSlot>
       <RouteHeaderSlot name="status">
-        <span>{totalCount}{filtersActive ? ' matching' : ' total'} logos</span>
+        <SourceLoadStatus state={sourceLoadState} successText={`${totalCount}${filtersActive ? ' matching' : ' total'} logos`} />
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
         <div className="logo-header header-actions">

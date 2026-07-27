@@ -6,6 +6,7 @@ interface PageHeaderProps {
   description?: ReactNode;
   actions?: ReactNode;
   status?: ReactNode;
+  statusLive?: boolean;
   controls?: ReactNode;
   group?: string;
   headingLevel?: 1 | 2;
@@ -45,6 +46,7 @@ export function PageHeader({
   description,
   actions,
   status,
+  statusLive = false,
   controls,
   className,
   group,
@@ -62,7 +64,15 @@ export function PageHeader({
         {description && <p className="header-description">{description}</p>}
       </div>
       {actions && <div className="header-actions" data-page-header-slot="primary-action">{actions}</div>}
-      {status && <div className="page-header-status" data-page-header-slot="status" aria-live="polite">{status}</div>}
+      {status && (
+        <div
+          className="page-header-status"
+          data-page-header-slot="status"
+          {...(statusLive ? { 'aria-live': 'polite' as const } : {})}
+        >
+          {status}
+        </div>
+      )}
       {controls && <div className="page-header-controls" data-page-header-slot="controls">{controls}</div>}
       {relatedLinks && relatedLinks.length > 0 && (
         <nav className="page-header-related-links" aria-label="Related settings">

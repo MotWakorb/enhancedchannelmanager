@@ -95,5 +95,13 @@ describe('PageHeader', () => {
       .toHaveAttribute('data-page-header-slot', 'status');
     expect(screen.getByRole('button', { name: 'Refresh interval' }).closest('[data-page-header-slot]'))
       .toHaveAttribute('data-page-header-slot', 'controls');
+    expect(screen.getByText('Auto-refresh: 30s').closest('[data-page-header-slot]'))
+      .not.toHaveAttribute('aria-live');
+  });
+
+  it('only creates a concise live status region when explicitly requested', () => {
+    render(<PageHeader title="M3U Manager" status={<span>Refresh complete</span>} statusLive />);
+    expect(screen.getByText('Refresh complete').closest('[data-page-header-slot]'))
+      .toHaveAttribute('aria-live', 'polite');
   });
 });

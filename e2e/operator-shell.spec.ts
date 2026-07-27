@@ -59,7 +59,7 @@ const routeConsumers = [
   { name: 'M3U Manager', heading: 'OPERATIONS / M3U MANAGER', settled: 'button:has-text("Add M3U Account")' },
   { name: 'EPG Manager', heading: 'OPERATIONS / EPG MANAGER', settled: 'button:has-text("Add Standard EPG")' },
   { name: 'Logo Manager', heading: 'OPERATIONS / LOGO MANAGER', settled: 'button:has-text("Add Logo")' },
-  { name: 'Channel Pipeline', heading: 'AUTOMATION / CHANNEL PIPELINE', settled: 'button[aria-label="Retry"]' },
+  { name: 'Channel Pipeline', heading: 'AUTOMATION / CHANNEL PIPELINE', settled: 'button[aria-label="Create rule"]' },
   { name: 'M3U Changes', heading: 'AUTOMATION / M3U CHANGES', settled: 'button:has-text("Refresh")' },
   { name: 'Stats', heading: 'INSIGHTS / STATS', settled: 'button:has-text("Refresh")' },
   { name: 'Journal', heading: 'INSIGHTS / JOURNAL', settled: 'button:has-text("Refresh")' },
@@ -76,9 +76,57 @@ async function expectSettledRoute(page: Page, consumer: typeof routeConsumers[nu
   return settled
 }
 
+async function openShellWithPipelineFixture(page: Page, rulesStatus = 200) {
+  await page.route(/\/api\/settings(?:\/|\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      configured: true,
+      default_channel_profile_ids: [],
+      stream_sort_priority: [],
+      stream_sort_enabled: {},
+      m3u_account_priorities: {},
+      custom_network_prefixes: [],
+      hide_auto_sync_groups: false,
+    }),
+  }))
+  await page.route(/\/api\/providers(?:\/|\?|$)/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
+  await page.route(/\/api\/m3u\/server-groups(?:\/|\?|$)/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
+  await page.route(/\/api\/epg\/sources(?:\/|\?|$)/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
+  await page.route(/\/api\/channels\/logos(?:\/|\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+    }))
+  await page.route(/\/api\/channel-pipeline\/rules(?:\/|\?|$)/, (route) =>
+    route.fulfill({
+      status: rulesStatus,
+      contentType: 'application/json',
+      body: rulesStatus === 200 ? JSON.stringify({ rules: [] }) : JSON.stringify({ detail: 'Pipeline unavailable' }),
+    }))
+  await page.route(/\/api\/channel-pipeline\/executions(?:\/|\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ executions: [], total: 0, page: 1, page_size: 25 }),
+    }))
+  await page.route(/\/api\/channel-pipeline\/circuit-breaker(?:\/|\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ disabled: false, reason: null }),
+    }))
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('.tab-navigation')).toBeVisible()
+}
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
   test.describe(`operator shell geometry at ${viewport.width}x${viewport.height}`, () => {
-    test.use({ viewport })
+    test.use({ viewport, serviceWorkers: 'block' })
 
     for (const route of ['channel-manager', 'guide']) {
       test(`${route} clears expanded and collapsed navigation`, async ({ appPage }) => {
@@ -112,11 +160,12 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       })
     }
 
-    test('all primary route consumers preserve hierarchy and required controls or source-backed recovery', async ({ appPage }) => {
-      await dismissFirstRunPromptIfPresent(appPage)
+    test('all primary route consumers preserve hierarchy and exact healthy controls', async ({ page }) => {
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
       for (const consumer of routeConsumers) {
-        await appPage.getByRole('link', { name: consumer.name }).click()
-        const settled = await expectSettledRoute(appPage, consumer)
+        await page.getByRole('link', { name: consumer.name }).click()
+        const settled = await expectSettledRoute(page, consumer)
         await settled.scrollIntoViewIfNeeded()
         expect(await settled.evaluate((element) => {
           const rect = element.getBoundingClientRect()
@@ -130,15 +179,16 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
 }
 
 test.describe('operator shell at 200% equivalent', () => {
-  test.use({ viewport: { width: 640, height: 360 } })
+  test.use({ viewport: { width: 640, height: 360 }, serviceWorkers: 'block' })
 
-  test('all primary routes settle with their exact control and remain horizontally usable', async ({ appPage }) => {
-    await dismissFirstRunPromptIfPresent(appPage)
+  test('all primary routes settle with their exact control and remain horizontally usable', async ({ page }) => {
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
     for (const consumer of routeConsumers) {
-      await appPage.getByRole('link', { name: consumer.name }).click()
-      const settled = await expectSettledRoute(appPage, consumer)
+      await page.getByRole('link', { name: consumer.name }).click()
+      const settled = await expectSettledRoute(page, consumer)
       await settled.scrollIntoViewIfNeeded()
-      const overflow = await appPage.evaluate(() => ({
+      const overflow = await page.evaluate(() => ({
         fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
         offenders: [...document.querySelectorAll<HTMLElement>('body *')]
           .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth + 1)
@@ -152,6 +202,44 @@ test.describe('operator shell at 200% equivalent', () => {
 
 test.describe('operator shell navigation behavior', () => {
   test.use({ serviceWorkers: 'block' })
+
+  test('Channel Pipeline exposes deterministic named recovery when rule loading fails', async ({ page }) => {
+    await openShellWithPipelineFixture(page, 503)
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByRole('link', { name: 'Channel Pipeline' }).click()
+    await expect(page.getByText('Failed to load channel pipeline rules', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Create rule' })).toHaveCount(0)
+  })
+
+  test('protected M3U source data explains permission denial without exposing data or actions', async ({ page }) => {
+    await page.route(/\/api\/settings(?:\/|\?|$)/, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: true,
+        default_channel_profile_ids: [],
+        stream_sort_priority: [],
+        stream_sort_enabled: {},
+        m3u_account_priorities: {},
+        custom_network_prefixes: [],
+        hide_auto_sync_groups: false,
+      }),
+    }))
+    await page.route(/\/api\/m3u\/server-groups(?:\/|\?|$)/, (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: '[]',
+    }))
+    await page.route(/\/api\/providers(?:\/|\?|$)/, (route) => route.fulfill({
+      status: 403, contentType: 'application/json', body: JSON.stringify({ detail: 'Administrator access required' }),
+    }))
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('.tab-navigation')).toBeVisible()
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByRole('link', { name: 'M3U Manager' }).click()
+    await expect(page.locator('.route-page-header').getByText('Source data requires administrator access', { exact: true })).toBeVisible()
+    await expect(page.getByText(/0 provider accounts/)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Add M3U Account' })).toHaveCount(0)
+  })
 
   test('staged contextual navigation keeps editing or discards before landing on the exact settings page', async ({ page }) => {
     await page.addInitScript(() => localStorage.clear())

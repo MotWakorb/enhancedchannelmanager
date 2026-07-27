@@ -13,6 +13,8 @@ import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
 import { CatchupBadge } from '../CatchupBadge';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import { OverflowMenu } from '../OverflowMenu';
 import type { OverflowMenuItem } from '../OverflowMenu';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -327,6 +329,7 @@ export function M3UManagerTab({
   const [catchupStatus, setCatchupStatus] = useState<Record<string, api.ProviderCatchupStatus>>({});
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<M3UAccount | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -368,6 +371,7 @@ export function M3UManagerTab({
   const [refreshingVodIds, setRefreshingVodIds] = useState<Set<number>>(new Set());
 
   const loadData = useCallback(async () => {
+    setSourceLoadState('loading');
     try {
       const [accountsData, serverGroupsData, settings] = await Promise.all([
         api.getM3UAccounts(),
@@ -380,7 +384,9 @@ export function M3UManagerTab({
       const priorities = settings.m3u_account_priorities ?? {};
       setM3uAccountPriorities(priorities);
       setPendingPriorities(priorities);
+      setSourceLoadState('success');
     } catch (err) {
+      setSourceLoadState(classifySourceLoadError(err));
       notifications.error(err instanceof Error ? err.message : 'Failed to load M3U accounts', 'M3U Manager');
     } finally {
       setLoading(false);
@@ -808,9 +814,24 @@ export function M3UManagerTab({
   if (loading) {
     return (
       <div className="m3u-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus state={sourceLoadState} successText={`${accounts.length} provider accounts`} />
+        </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading M3U accounts...</p>
+        </div>
+      </div>
+    );
+  }
+  if (sourceLoadState !== 'success') {
+    return (
+      <div className="m3u-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus state={sourceLoadState} successText="" />
+        </RouteHeaderSlot>
+        <div className="tab-load-unavailable">
+          <SourceLoadStatus state={sourceLoadState} successText="" />
         </div>
       </div>
     );
@@ -825,7 +846,9 @@ export function M3UManagerTab({
         </button>
       </RouteHeaderSlot>
       <RouteHeaderSlot name="status">
-        <span>{anyRefreshing ? 'Provider refresh in progress' : `${accounts.length} provider account${accounts.length === 1 ? '' : 's'}`}</span>
+        {anyRefreshing
+          ? <span>Provider refresh in progress</span>
+          : <SourceLoadStatus state={sourceLoadState} successText={`${accounts.length} provider account${accounts.length === 1 ? '' : 's'}`} />}
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
         <div className="m3u-header header-actions">

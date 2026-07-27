@@ -30,6 +30,7 @@ import { ChannelStatsDetailModal } from '../ChannelStatsDetailModal';
 import type { Viewer } from '../../types';
 import './StatsTab.css';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { SourceLoadStatus } from '../SourceLoadStatus';
 
 // Historical data point for charts
 interface HistoricalDataPoint {
@@ -901,6 +902,9 @@ export function StatsTab() {
   if (loading) {
     return (
       <div className="stats-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus state="loading" successText="" />
+        </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading stats...</p>
@@ -914,7 +918,7 @@ export function StatsTab() {
       {/* Header */}
       <div className="stats-header">
         <RouteHeaderSlot name="status"><div className="header-left">
-          <div className="header-summary">
+          {channelStats ? <div className="header-summary">
             <div className="summary-stat">
               <span className="material-icons">live_tv</span>
               <div>
@@ -956,7 +960,7 @@ export function StatsTab() {
                 </div>
               );
             })}
-          </div>
+          </div> : <SourceLoadStatus state="error" successText="" />}
 
           {/* Condensed provider table (bd-49obj / GH-481): with many
               providers, per-provider tile badges wrap into several rows and

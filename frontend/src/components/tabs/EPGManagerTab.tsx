@@ -25,6 +25,8 @@ import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { PageHeader } from '../PageHeader';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import { GuideMigrationModal } from '../GuideMigrationModal';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
@@ -816,6 +818,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   const [sources, setSources] = useState<EPGSource[]>([]);
   const [dummySources, setDummySources] = useState<EPGSource[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<EPGSource | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
@@ -837,6 +840,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   );
 
   const loadSources = useCallback(async () => {
+    setSourceLoadState('loading');
     try {
       const data = await api.getEPGSources();
       // Separate standard and dummy EPG sources, sort by priority (descending)
@@ -848,7 +852,9 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         .sort((a, b) => a.name.localeCompare(b.name));
       setSources(standardSources);
       setDummySources(dummyEpgSources);
+      setSourceLoadState('success');
     } catch (err) {
+      setSourceLoadState(classifySourceLoadError(err));
       notifications.error(err instanceof Error ? err.message : 'Failed to load EPG sources', 'EPG Manager');
     } finally {
       setLoading(false);
@@ -1065,9 +1071,24 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   if (loading) {
     return (
       <div className="epg-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus state={sourceLoadState} successText="0 EPG sources" />
+        </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading EPG sources...</p>
+        </div>
+      </div>
+    );
+  }
+  if (sourceLoadState !== 'success') {
+    return (
+      <div className="epg-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus state={sourceLoadState} successText="" />
+        </RouteHeaderSlot>
+        <div className="tab-load-unavailable">
+          <SourceLoadStatus state={sourceLoadState} successText="" />
         </div>
       </div>
     );
@@ -1084,7 +1105,9 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         </button>
       </RouteHeaderSlot>
       <RouteHeaderSlot name="status">
-        <span>{refreshingAll ? 'EPG refresh in progress' : `${sources.length} EPG source${sources.length === 1 ? '' : 's'}`}</span>
+        {refreshingAll
+          ? <span>EPG refresh in progress</span>
+          : <SourceLoadStatus state={sourceLoadState} successText={`${sources.length} EPG source${sources.length === 1 ? '' : 's'}`} />}
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
         <div className="epg-header header-actions">
