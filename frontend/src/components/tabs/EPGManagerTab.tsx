@@ -25,6 +25,7 @@ import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { PageHeader } from '../PageHeader';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import { GuideMigrationModal } from '../GuideMigrationModal';
@@ -1135,19 +1136,17 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
           )}
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
-        <div className="epg-header header-actions">
-            {sources.length > 1 && (
-              <button
-                className="btn-secondary"
-                onClick={() => setIsReorderMode((v) => !v)}
-                title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
-              >
-                <span className="material-icons">
-                  {isReorderMode ? 'check' : 'reorder'}
-                </span>
-                {isReorderMode ? 'Done' : 'Reorder'}
-              </button>
-            )}
+        <DenseToolbar
+          label="EPG source controls"
+          sortView={sources.length > 1 ? <button
+            className="btn-secondary"
+            onClick={() => setIsReorderMode((v) => !v)}
+            title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
+          >
+            <span className="material-icons">{isReorderMode ? 'check' : 'reorder'}</span>
+            {isReorderMode ? 'Done' : 'Reorder'}
+          </button> : undefined}
+          secondaryActions={<>
             <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
               <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
               {refreshingAll ? 'Refreshing...' : 'Refresh All'}
@@ -1158,7 +1157,8 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                 Migrate Guides
               </button>
             )}
-        </div>
+          </>}
+        />
       </RouteHeaderSlot>
 
       {sources.length === 0 ? (

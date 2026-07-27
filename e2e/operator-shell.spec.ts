@@ -842,6 +842,41 @@ for (const viewport of [
   })
 }
 
+for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+  test.describe(`dense route toolbars at ${viewport.width}x${viewport.height}`, () => {
+    test.use({ viewport, serviceWorkers: 'block' })
+    test('keeps primary groups visible and secondary actions recoverable without clipping', async ({ page }) => {
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+      for (const route of [
+        { link: 'M3U Manager', toolbar: 'M3U account controls' },
+        { link: 'EPG Manager', toolbar: 'EPG source controls' },
+        { link: 'Logo Manager', toolbar: 'Logo inventory controls' },
+        { link: 'M3U Changes', toolbar: 'M3U change filters' },
+        { link: 'Journal', toolbar: 'Journal entry controls' },
+      ]) {
+        await page.getByRole('link', { name: route.link, exact: true }).click()
+        const toolbar = page.getByRole('toolbar', { name: route.toolbar })
+        await expect(toolbar).toBeVisible()
+        expect(await toolbar.evaluate((element) => {
+          const rect = element.getBoundingClientRect()
+          return {
+            insideViewport: rect.left >= 0 && rect.right <= document.documentElement.clientWidth + 1,
+            noDocumentOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+          }
+        })).toEqual({ insideViewport: true, noDocumentOverflow: true })
+      }
+      await page.getByRole('link', { name: 'M3U Manager', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'Save Priorities' })).toBeDisabled()
+      const more = page.getByRole('button', { name: 'M3U setup actions' })
+      await more.focus()
+      await more.click()
+      await page.keyboard.press('Escape')
+      await expect(more).toBeFocused()
+    })
+  })
+}
+
 test.describe('operator shell at 200% equivalent', () => {
   test.use({ viewport: { width: 640, height: 360 }, serviceWorkers: 'block' })
 

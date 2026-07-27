@@ -7,6 +7,7 @@ import './JournalTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {
@@ -299,7 +300,7 @@ export function JournalTab() {
 
       {/* Filters */}
       <RouteHeaderSlot name="controls">
-      <div className="filters-bar">
+      <DenseToolbar label="Journal entry controls" search={
         <div className="search-box">
           <span className="material-icons">search</span>
           <input
@@ -320,6 +321,7 @@ export function JournalTab() {
             </button>
           )}
         </div>
+      } filters={<>
         <CustomSelect
           value={category}
           onChange={(val) => setCategory(val as JournalCategory | '')}
@@ -365,7 +367,7 @@ export function JournalTab() {
             { value: 'auto_creation', label: 'Channel Pipeline' },
           ]}
         />
-      </div>
+      </>} />
       </RouteHeaderSlot>
 
       {/* Entries List */}

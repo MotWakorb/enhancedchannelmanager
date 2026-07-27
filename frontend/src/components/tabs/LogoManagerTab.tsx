@@ -5,6 +5,7 @@ import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
 import { ModalOverlay } from '../ModalOverlay';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import './LogoManagerTab.css';
@@ -229,8 +230,9 @@ export function LogoManagerTab() {
         />
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
-        <div className="logo-header header-actions">
-            {/* Search */}
+        <DenseToolbar
+          label="Logo inventory controls"
+          search={
             <div className="search-box">
               <span className="material-icons">search</span>
               <input
@@ -251,8 +253,8 @@ export function LogoManagerTab() {
                 </button>
               )}
             </div>
-
-            {/* Unused-only filter toggle */}
+          }
+          filters={
             <button
               type="button"
               className={`unused-only-toggle${unusedOnly ? ' active' : ''}`}
@@ -264,8 +266,8 @@ export function LogoManagerTab() {
               <span className="material-icons" aria-hidden="true">filter_alt</span>
               Unused only
             </button>
-
-            {/* View Toggle */}
+          }
+          sortView={
             <div className="view-toggle">
               <button
                 className={viewMode === 'list' ? 'active' : ''}
@@ -286,8 +288,8 @@ export function LogoManagerTab() {
                 <span className="material-icons" aria-hidden="true">grid_view</span>
               </button>
             </div>
-
-        </div>
+          }
+        />
       </RouteHeaderSlot>
 
       {/* Content */}

@@ -17,6 +17,7 @@ import { SourceLoadStatus } from '../SourceLoadStatus';
 import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import { OverflowMenu } from '../OverflowMenu';
 import type { OverflowMenuItem } from '../OverflowMenu';
+import { DenseToolbar } from '../DenseToolbar';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
 import './M3UManagerTab.css';
@@ -876,32 +877,29 @@ export function M3UManagerTab({
           )}
       </RouteHeaderSlot>
       <RouteHeaderSlot name="controls">
-        <div className="m3u-header header-actions">
-            <button
-              className="btn-secondary save-priorities-btn"
-              onClick={handleSavePriorities}
-              disabled={savingPriorities || !hasPriorityChanges}
-              title={hasPriorityChanges ? "Save priority changes" : "No priority changes to save"}
-            >
-              <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
-                {savingPriorities ? 'sync' : 'save'}
-              </span>
-              {savingPriorities ? 'Saving...' : 'Save Priorities'}
-            </button>
-            {serverGroups.length > 0 && (
-              <CustomSelect
-                className="server-group-filter"
-                value={filterServerGroup?.toString() ?? ''}
-                onChange={(val) => setFilterServerGroup(val ? Number(val) : null)}
-                options={[
-                  { value: '', label: 'All Server Groups' },
-                  ...serverGroups.map(sg => ({
-                    value: sg.id.toString(),
-                    label: sg.name,
-                  })),
-                ]}
-              />
-            )}
+        <DenseToolbar
+          label="M3U account controls"
+          filters={serverGroups.length > 0 ? <CustomSelect
+            className="server-group-filter"
+            value={filterServerGroup?.toString() ?? ''}
+            onChange={(val) => setFilterServerGroup(val ? Number(val) : null)}
+            options={[
+              { value: '', label: 'All Server Groups' },
+              ...serverGroups.map(sg => ({ value: sg.id.toString(), label: sg.name })),
+            ]}
+          /> : undefined}
+          sortView={<button
+            className="btn-secondary save-priorities-btn"
+            onClick={handleSavePriorities}
+            disabled={savingPriorities || !hasPriorityChanges}
+            title={hasPriorityChanges ? 'Save priority changes' : 'No priority changes to save'}
+          >
+            <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
+              {savingPriorities ? 'sync' : 'save'}
+            </span>
+            {savingPriorities ? 'Saving...' : 'Save Priorities'}
+          </button>}
+          secondaryActions={<>
             <button className="btn-secondary" onClick={handleRefreshAll} disabled={anyRefreshing}>
               <span className={`material-icons ${anyRefreshing ? 'spinning' : ''}`}>sync</span>
               {anyRefreshing ? 'Refreshing...' : 'Refresh All'}
@@ -910,7 +908,8 @@ export function M3UManagerTab({
                 toolbar no longer squeezes the title column at 1280 (bead
                 09x38.2). Refresh All + Add M3U Account stay primary. */}
             <OverflowMenu items={adminMenuItems} label="M3U setup actions" />
-        </div>
+          </>}
+        />
       </RouteHeaderSlot>
 
       {filteredAccounts.length === 0 ? (

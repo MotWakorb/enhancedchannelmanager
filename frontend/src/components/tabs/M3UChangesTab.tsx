@@ -7,6 +7,7 @@ import './M3UChangesTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
 
 // Get icon for change type
 function getChangeTypeIcon(changeType: M3UChangeType): string {
@@ -251,7 +252,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       {/* Filters and Summary Row */}
       <RouteHeaderSlot name="controls">
       <div className="filters-summary-row">
-        <div className="filters-bar">
+        <DenseToolbar label="M3U change filters" filters={<>
           <div className="filter-select">
             <CustomSelect
               value={String(hoursFilter)}
@@ -291,7 +292,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
               placeholder="Filter by Status"
             />
           </div>
-        </div>
+        </>} />
         {summary && (
           <div className="summary-cards">
             <div className="summary-card added">
