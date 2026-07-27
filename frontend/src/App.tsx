@@ -35,6 +35,7 @@ import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } fr
 import type { SettingsPage } from './hooks/useHashRoute';
 import { RouteHeaderTargetProvider } from './components/RouteHeaderSlots';
 import { classifySourceLoadError, type SourceLoadState } from './components/sourceLoadState';
+import type { WorkspaceSource } from './components/workspaceLoadState';
 import {
   setTelemetryRuntimeEnabled,
   withImportTelemetry,
@@ -189,10 +190,16 @@ function App() {
     streams: true,
     epgData: false,
   });
-  const [channelWorkspaceErrors, setChannelWorkspaceErrors] = useState<{
-    channels: Extract<SourceLoadState, 'error' | 'permission'> | null;
-    streams: Extract<SourceLoadState, 'error' | 'permission'> | null;
-  }>({ channels: null, streams: null });
+  type OperationLoadState = { state: SourceLoadState; hasSnapshot: boolean };
+  const [channelSourceStates, setChannelSourceStates] = useState<Record<'groups' | 'channels', OperationLoadState>>({
+    groups: { state: 'loading', hasSnapshot: false },
+    channels: { state: 'loading', hasSnapshot: false },
+  });
+  const [streamSourceStates, setStreamSourceStates] = useState<Record<string, OperationLoadState>>({
+    metadata: { state: 'loading', hasSnapshot: false },
+  });
+  const [streamMatchingTotal, setStreamMatchingTotal] = useState<number | null>(null);
+  const streamRetryOperations = useRef<Record<string, () => Promise<unknown>>>({});
 
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -901,15 +908,22 @@ function App() {
   };
 
   const loadChannelGroups = async () => {
+    setChannelSourceStates((current) => ({
+      ...current,
+      groups: { ...current.groups, state: 'loading' },
+    }));
     try {
       const groups = await api.getChannelGroups();
       setChannelGroups(groups);
-      setChannelWorkspaceErrors((current) => ({ ...current, channels: null }));
+      setChannelSourceStates((current) => ({
+        ...current,
+        groups: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       logger.error('Failed to load channel groups:', err);
-      setChannelWorkspaceErrors((current) => ({
+      setChannelSourceStates((current) => ({
         ...current,
-        channels: classifySourceLoadError(err),
+        groups: { ...current.groups, state: classifySourceLoadError(err) },
       }));
     }
   };
@@ -971,6 +985,10 @@ function App() {
 
   const loadChannels = async (signal?: AbortSignal) => {
     setLoadingStates(prev => ({ ...prev, channels: true }));
+    setChannelSourceStates((current) => ({
+      ...current,
+      channels: { ...current.channels, state: 'loading' },
+    }));
     try {
       // Fetch all pages of channels
       const allChannels: Channel[] = [];
@@ -990,14 +1008,17 @@ function App() {
       }
 
       setChannels(allChannels);
-      setChannelWorkspaceErrors((current) => ({ ...current, channels: null }));
+      setChannelSourceStates((current) => ({
+        ...current,
+        channels: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       // Don't log errors for aborted requests
       if (err instanceof Error && err.name !== 'AbortError') {
         logger.error('Failed to load channels:', err);
-        setChannelWorkspaceErrors((current) => ({
+        setChannelSourceStates((current) => ({
           ...current,
-          channels: classifySourceLoadError(err),
+          channels: { ...current.channels, state: classifySourceLoadError(err) },
         }));
       }
     } finally {
@@ -1047,15 +1068,23 @@ function App() {
   };
 
   const loadStreamGroups = async (m3uAccountId?: number | null) => {
+    streamRetryOperations.current.metadata = () => loadStreamGroups(m3uAccountId);
+    setStreamSourceStates((current) => ({
+      ...current,
+      metadata: { ...current.metadata, state: 'loading' },
+    }));
     try {
       const groups = await api.getStreamGroups(false, m3uAccountId);
       setStreamGroups(groups);
-      setChannelWorkspaceErrors((current) => ({ ...current, streams: null }));
+      setStreamSourceStates((current) => ({
+        ...current,
+        metadata: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       logger.error('Failed to load stream groups:', err);
-      setChannelWorkspaceErrors((current) => ({
+      setStreamSourceStates((current) => ({
         ...current,
-        streams: classifySourceLoadError(err),
+        metadata: { ...current.metadata, state: classifySourceLoadError(err) },
       }));
     }
   };
@@ -1118,9 +1147,10 @@ function App() {
   // Actual stream data loads per-group on demand via loadStreamGroup().
   const resetStreams = async (_bypassCache: boolean = false) => {
     setLoadingStates(prev => ({ ...prev, streams: true }));
+    setStreamSourceStates((current) => ({ metadata: current.metadata }));
     try {
-      // Clear all loaded streams and group tracking
-      setStreams([]);
+      // Keep the last successful rows until replacement data settles. This
+      // makes transient metadata failures explicitly stale instead of blank.
       loadedStreamGroupsRef.current.clear();
 
       // Refresh stream group metadata (lightweight — just names + counts)
@@ -1137,30 +1167,51 @@ function App() {
   };
 
   // Search streams: fetch just the first page of server-filtered results
-  const searchStreams = async (signal?: AbortSignal) => {
+  const searchStreams = async (
+    signal?: AbortSignal,
+    query = {
+      search: streamFilters.search,
+      providerFilter: streamFilters.providerFilter,
+      groupFilter: streamFilters.groupFilter,
+    },
+  ) => {
+    const sourceKey = 'search';
+    streamRetryOperations.current[sourceKey] = () => searchStreams(undefined, query);
     setLoadingStates(prev => ({ ...prev, streams: true }));
+    setStreamSourceStates((current) => ({
+      ...current,
+      [sourceKey]: {
+        ...(current[sourceKey] ?? { hasSnapshot: streams.length > 0 }),
+        state: 'loading',
+      },
+    }));
     try {
-      setStreams([]);
-      loadedStreamGroupsRef.current.clear();
-
       const response = await api.getStreams({
         page: 1,
         pageSize: 500,
-        search: streamFilters.search || undefined,
-        m3uAccount: streamFilters.providerFilter ?? undefined,
-        channelGroup: streamFilters.groupFilter ?? undefined,
+        search: query.search || undefined,
+        m3uAccount: query.providerFilter ?? undefined,
+        channelGroup: query.groupFilter ?? undefined,
         signal,
       });
       setStreams(response.results);
+      setStreamMatchingTotal(response.count);
+      loadedStreamGroupsRef.current.clear();
       rememberSeenStreams(response.results);
-
-      // Also refresh group metadata so groups show correct filtered counts
-      const m3uAccountId = streamFilters.selectedProviders?.length === 1
-        ? streamFilters.selectedProviders[0] : null;
-      await loadStreamGroups(m3uAccountId);
+      setStreamSourceStates((current) => ({
+        ...current,
+        [sourceKey]: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       if (err instanceof Error && err.name !== 'AbortError') {
         logger.error('Failed to search streams:', err);
+        setStreamSourceStates((current) => ({
+          ...current,
+          [sourceKey]: {
+            ...(current[sourceKey] ?? { hasSnapshot: false }),
+            state: classifySourceLoadError(err),
+          },
+        }));
       }
     } finally {
       setLoadingStates(prev => ({ ...prev, streams: false }));
@@ -1189,11 +1240,26 @@ function App() {
   // Load streams for a single group (per-group lazy loading)
   // This allows loading only the streams for an expanded group instead of all streams
   // When search is active, loads only matching streams for that group
-  const loadStreamGroup = useCallback(async (groupName: string) => {
+  const loadStreamGroup = useCallback(async (
+    groupName: string,
+    force = false,
+    search = streamFilters.search,
+  ) => {
     // Skip if this group's streams are already loaded
-    if (loadedStreamGroupsRef.current.has(groupName)) {
+    if (!force && loadedStreamGroupsRef.current.has(groupName)) {
       return;
     }
+
+    const sourceKey = `group:${groupName}`;
+    const query = { groupName, search };
+    streamRetryOperations.current[sourceKey] = () => loadStreamGroup(query.groupName, true, query.search);
+    setStreamSourceStates((current) => ({
+      ...current,
+      [sourceKey]: {
+        ...(current[sourceKey] ?? { hasSnapshot: streams.length > 0 }),
+        state: 'loading',
+      },
+    }));
 
     // Mark as loaded immediately to prevent duplicate requests
     loadedStreamGroupsRef.current.add(groupName);
@@ -1209,7 +1275,7 @@ function App() {
           page,
           pageSize: 500,
           channelGroup: groupName,
-          search: streamFilters.search || undefined,
+          search: query.search || undefined,
         });
         allGroupStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -1223,11 +1289,22 @@ function App() {
         return [...prevStreams, ...newStreams];
       });
       rememberSeenStreams(allGroupStreams);
+      setStreamSourceStates((current) => ({
+        ...current,
+        [sourceKey]: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       // Remove from loaded set on error so user can retry
       loadedStreamGroupsRef.current.delete(groupName);
       if (err instanceof Error && err.name !== 'AbortError') {
         logger.error(`Failed to load streams for group ${groupName}:`, err);
+        setStreamSourceStates((current) => ({
+          ...current,
+          [sourceKey]: {
+            ...(current[sourceKey] ?? { hasSnapshot: false }),
+            state: classifySourceLoadError(err),
+          },
+        }));
       }
     }
   }, [streamFilters.search, rememberSeenStreams]);
@@ -2278,9 +2355,31 @@ function App() {
     ? [...channelGroups, ...stagedGroups]
     : channelGroups;
 
+  const channelWorkspaceSources: WorkspaceSource[] = [
+    {
+      key: 'groups',
+      label: 'channel groups',
+      ...channelSourceStates.groups,
+      retry: loadChannelGroups,
+    },
+    {
+      key: 'channels',
+      label: 'channels',
+      ...channelSourceStates.channels,
+      retry: () => loadChannels(),
+    },
+  ];
+  const streamWorkspaceSources: WorkspaceSource[] = Object.entries(streamSourceStates).map(([key, value]) => ({
+    key,
+    label: key === 'metadata' ? 'stream groups' : key === 'search' ? 'stream search' : key.slice('group:'.length),
+    ...value,
+    retry: streamRetryOperations.current[key] ?? (() => Promise.resolve()),
+  }));
+  const workspacePermissionDenied = [...channelWorkspaceSources, ...streamWorkspaceSources]
+    .some((source) => source.state === 'permission');
+
   const channelManagerPageAction = activeTab === 'channel-manager'
-    && channelWorkspaceErrors.channels !== 'permission'
-    && channelWorkspaceErrors.streams !== 'permission' && (
+    && !workspacePermissionDenied && (
     isEditMode ? (
       <div className="edit-mode-header-controls">
         <span className="edit-mode-label">
@@ -2473,11 +2572,7 @@ function App() {
               onCreateChannel={handleCreateChannel}
               onDeleteChannel={handleDeleteChannel}
               channelsLoading={loadingStates.channels}
-              channelsError={channelWorkspaceErrors.channels}
-              onRetryChannels={async () => {
-                setChannelWorkspaceErrors((current) => ({ ...current, channels: null }));
-                await Promise.all([loadChannelGroups(), loadChannels()]);
-              }}
+              channelSources={channelWorkspaceSources}
 
               // Channel Search & Filter
               channelSearch={channelFilters.search}
@@ -2556,20 +2651,8 @@ function App() {
               providers={providers}
               streamGroups={streamGroups}
               streamsLoading={loadingStates.streams}
-              streamsError={channelWorkspaceErrors.streams}
-              onRetryStreams={async () => {
-                setChannelWorkspaceErrors((current) => ({ ...current, streams: null }));
-                setLoadingStates((current) => ({ ...current, streams: true }));
-                try {
-                  await loadStreamGroups(
-                    streamFilters.selectedProviders.length === 1
-                      ? streamFilters.selectedProviders[0]
-                      : null,
-                  );
-                } finally {
-                  setLoadingStates((current) => ({ ...current, streams: false }));
-                }
-              }}
+              streamSources={streamWorkspaceSources}
+              streamMatchingTotal={streamMatchingTotal}
 
               // Stream Search & Filter (server-side search via useEffect debounce)
               streamSearch={streamFilters.search}

@@ -195,6 +195,19 @@ describe('StreamsPane inventory count semantics', () => {
     expect(screen.queryByLabelText('87 total streams')).toBeNull();
   });
 
+  it('uses the server matching total when the loaded page is capped', () => {
+    renderPane({
+      searchTerm: 'documentary',
+      streams: Array.from({ length: 500 }, (_, index) => makeStream({
+        id: index + 100,
+        name: `Documentary ${index + 1}`,
+        channel_group_name: 'CA | Documentary',
+      })),
+      matchingTotal: 650,
+    });
+    expect(screen.getByLabelText('650 matching streams')).toHaveTextContent('650');
+  });
+
   it('sums only selected inventory groups and returns to total when cleared', () => {
     const { rerender } = renderPane({
       selectedStreamGroups: ['CA | Documentary', 'UK | Sports'],

@@ -269,6 +269,16 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByLabel('1 matching stream')).toBeVisible()
       await page.locator('.streams-pane').getByRole('button', { name: 'Clear search' }).click()
 
+      const providerFilter = page.locator('.streams-pane').getByRole('button', { name: /All Providers/ })
+      await providerFilter.click()
+      await page.getByRole('checkbox', { name: 'Fixture Provider' }).check()
+      await expect(page.locator('.streams-pane').getByRole('button', { name: /1 provider/ })).toBeVisible()
+      const groupFilter = page.locator('.streams-pane').getByRole('button', { name: /All Groups/ })
+      await groupFilter.press('Enter')
+      await page.getByRole('checkbox', { name: 'Provider Sports' }).check()
+      await expect(page.getByLabel('1 filtered stream')).toBeVisible()
+      await page.getByRole('button', { name: 'Clear all filters' }).click()
+
       const moreActions = page.locator('.channels-pane').getByRole('button', { name: 'More actions' })
       await moreActions.focus()
       await moreActions.press('Enter')
@@ -283,6 +293,12 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         hasText: 'A deliberately long source stream identity that must ellipsize before inventory actions',
       })
       await expect(inventoryIdentity).toBeVisible()
+      const previewAction = page.locator('.streams-pane').getByRole('button', { name: 'Preview stream in browser' })
+      await previewAction.click()
+      await page.getByRole('button', { name: 'Close', exact: true }).first().click()
+      const copyAction = page.locator('.streams-pane').getByRole('button', { name: 'Copy stream URL' })
+      await copyAction.focus()
+      await copyAction.press('Enter')
 
       await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
       const channelIdentity = page.getByText('A deliberately long channel identity that must remain inside the Channels pane')
@@ -303,6 +319,18 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           noOverlap: actions.every((action) => action.getBoundingClientRect().left >= infoRect.right - 1),
         }
       })).toEqual({ ellipsisContract: true, actionsVisible: true, noOverlap: true })
+      expect(await page.evaluate(() => {
+        const pane = document.querySelector<HTMLElement>('.streams-pane')!.getBoundingClientRect()
+        const streamUrl = document.querySelector<HTMLElement>('.streams-pane .stream-url')!.getBoundingClientRect()
+        const channel = document.querySelector<HTMLElement>('.channels-pane .channel-name')!.getBoundingClientRect()
+        const channelPane = document.querySelector<HTMLElement>('.channels-pane')!.getBoundingClientRect()
+        const inlineName = document.querySelector<HTMLElement>('.inline-stream-name')!.getBoundingClientRect()
+        return {
+          urlContained: streamUrl.left >= pane.left && streamUrl.right <= pane.right + 1,
+          channelContained: channel.left >= channelPane.left && channel.right <= channelPane.right + 1,
+          inlineContained: inlineName.left >= channelPane.left && inlineName.right <= channelPane.right + 1,
+        }
+      })).toEqual({ urlContained: true, channelContained: true, inlineContained: true })
 
       for (const collapsed of [false, true]) {
         if (collapsed) await page.getByRole('button', { name: 'Collapse navigation' }).click()
@@ -374,8 +402,52 @@ test.describe('operator shell navigation behavior', () => {
     await expect(page.getByText('Loading channels...')).toBeVisible()
     await expect(page.getByLabel('0 channels')).toBeVisible()
     await expect(page.getByLabel('0 total streams')).toBeVisible()
+    await expect(page.getByText('No channels are configured.')).toBeVisible()
+    await expect(page.getByText('No source streams are available.')).toBeVisible()
     await expect(page.getByRole('region', { name: 'Channels' })).toBeVisible()
     await expect(page.getByRole('region', { name: 'Streams' })).toBeVisible()
+  })
+
+  test('Channel Manager retries the exact failed stream search and recovers its matching total', async ({ page }) => {
+    await seedChannelWorkspace(page, true)
+    let searchAttempts = 0
+    await page.route(/\/api\/streams(?:\?|$)/, (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get('search') !== 'needle') return route.fallback()
+      searchAttempts += 1
+      return route.fulfill({
+        status: searchAttempts === 1 ? 503 : 200,
+        contentType: 'application/json',
+        body: searchAttempts === 1
+          ? JSON.stringify({ detail: 'Search unavailable' })
+          : JSON.stringify({ count: 650, next: null, previous: null, results: [] }),
+      })
+    })
+    await openShellWithPipelineFixture(page)
+    await page.getByRole('textbox', { name: 'Search streams' }).fill('needle')
+    await expect(page.getByText('Streams unavailable')).toBeVisible()
+    await page.getByRole('button', { name: 'Retry loading streams' }).click()
+    await expect(page.getByLabel('650 matching streams')).toBeVisible()
+    expect(searchAttempts).toBe(2)
+  })
+
+  test('Channel Manager treats a lazy stream-group 403 as protected pane denial', async ({ page }) => {
+    await seedChannelWorkspace(page, true)
+    await page.route(/\/api\/streams(?:\?|$)/, (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get('channel_group_name') !== 'Provider Sports') return route.fallback()
+      return route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Forbidden' }),
+      })
+    })
+    await openShellWithPipelineFixture(page)
+    await page.getByRole('button', { name: /^Other/ }).click()
+    await page.getByRole('button', { name: /Provider Sports/ }).click()
+    await expect(page.getByText('Streams require administrator access')).toBeVisible()
+    await expect(page.locator('.channels-pane')).toHaveCount(0)
+    await expect(page.locator('.streams-pane')).toHaveCount(0)
   })
 
   test('Channel Manager gives a named scoped error and recovers through Retry', async ({ page }) => {

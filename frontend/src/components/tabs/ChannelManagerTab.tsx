@@ -8,6 +8,7 @@ import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../ser
 import type { ChannelDefaults } from '../StreamsPane';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import type { SourceLoadState } from '../sourceLoadState';
+import { aggregateWorkspaceSources, retryFailedSources, type WorkspaceSource } from '../workspaceLoadState';
 import './ChannelManagerTab.css';
 
 /**
@@ -56,6 +57,7 @@ export interface ChannelManagerTabProps {
   channelsLoading: boolean;
   channelsError?: Extract<SourceLoadState, 'error' | 'permission'> | null;
   onRetryChannels?: () => void;
+  channelSources?: WorkspaceSource[];
 
   // Channel Search & Filter
   channelSearch: string;
@@ -136,6 +138,8 @@ export interface ChannelManagerTabProps {
   streamsLoading: boolean;
   streamsError?: Extract<SourceLoadState, 'error' | 'permission'> | null;
   onRetryStreams?: () => void;
+  streamSources?: WorkspaceSource[];
+  streamMatchingTotal?: number | null;
 
   // Stream Search & Filter
   streamSearch: string;
@@ -252,6 +256,7 @@ export function ChannelManagerTab({
   channelsLoading,
   channelsError = null,
   onRetryChannels,
+  channelSources,
 
   // Channel Search & Filter
   channelSearch,
@@ -332,6 +337,8 @@ export function ChannelManagerTab({
   streamsLoading,
   streamsError = null,
   onRetryStreams,
+  streamSources,
+  streamMatchingTotal = null,
 
   // Stream Search & Filter
   streamSearch,
@@ -451,7 +458,23 @@ export function ChannelManagerTab({
   // operator is already on the page (so a single-resolve doesn't strand the
   // operator on a view with no way back to the default panes via the subnav).
   const showSubnavLink = pendingMergesCount > 0 || view === 'pending-merges';
-  const permissionDenied = channelsError === 'permission' || streamsError === 'permission';
+  const effectiveChannelSources = channelSources ?? [{
+    key: 'channels',
+    label: 'channels',
+    state: channelsError ?? (channelsLoading ? 'loading' : 'success'),
+    hasSnapshot: channelsError === 'error' && channels.length > 0,
+    retry: onRetryChannels ?? (() => undefined),
+  }];
+  const effectiveStreamSources = streamSources ?? [{
+    key: 'streams',
+    label: 'streams',
+    state: streamsError ?? (streamsLoading ? 'loading' : 'success'),
+    hasSnapshot: streamsError === 'error' && streams.length > 0,
+    retry: onRetryStreams ?? (() => undefined),
+  }];
+  const channelLoad = aggregateWorkspaceSources(effectiveChannelSources);
+  const streamLoad = aggregateWorkspaceSources(effectiveStreamSources);
+  const permissionDenied = channelLoad.state === 'permission' || streamLoad.state === 'permission';
 
   const unavailablePane = (
     heading: 'Channels' | 'Streams',
@@ -515,7 +538,22 @@ export function ChannelManagerTab({
       leftLabel="Channels"
       rightLabel="Streams"
       left={
-        channelsError === 'error' ? unavailablePane('Channels', 'error', onRetryChannels) : <ChannelsPane
+        channelLoad.state === 'error' && !channelLoad.stale
+          ? unavailablePane('Channels', 'error', () => { void retryFailedSources(effectiveChannelSources); })
+          : <div className="channel-workspace-pane-content">
+          {channelLoad.state === 'error' && (
+            <SourceLoadStatus
+              state="error"
+              stale
+              successText="Channels loaded"
+              sourceName="channels"
+              onRetry={() => { void retryFailedSources(effectiveChannelSources); }}
+            />
+          )}
+          {channelLoad.state === 'success' && channels.length === 0 && channelGroups.length === 0 && (
+            <p className="channel-workspace-empty" role="status">No channels are configured.</p>
+          )}
+          <ChannelsPane
           channelGroups={channelGroups}
           channels={channels}
           streams={allStreams}
@@ -596,10 +634,25 @@ export function ChannelManagerTab({
           gracenoteConflictMode={gracenoteConflictMode}
           externalChannelToEdit={externalChannelToEdit}
           onExternalChannelEditHandled={onExternalChannelEditHandled}
-        />
+        /></div>
       }
       right={
-        streamsError === 'error' ? unavailablePane('Streams', 'error', onRetryStreams) : <StreamsPane
+        streamLoad.state === 'error' && !streamLoad.stale
+          ? unavailablePane('Streams', 'error', () => { void retryFailedSources(effectiveStreamSources); })
+          : <div className="channel-workspace-pane-content">
+          {streamLoad.state === 'error' && (
+            <SourceLoadStatus
+              state="error"
+              stale
+              successText="Streams loaded"
+              sourceName="streams"
+              onRetry={() => { void retryFailedSources(effectiveStreamSources); }}
+            />
+          )}
+          {streamLoad.state === 'success' && streams.length === 0 && streamGroups.length === 0 && (
+            <p className="channel-workspace-empty" role="status">No source streams are available.</p>
+          )}
+          <StreamsPane
           streams={streams}
           providers={providers}
           streamGroups={streamGroups}
@@ -610,6 +663,7 @@ export function ChannelManagerTab({
           groupFilter={streamGroupFilter}
           onGroupFilterChange={onStreamGroupFilterChange}
           loading={streamsLoading}
+          matchingTotal={streamMatchingTotal}
           selectedProviders={selectedProviders}
           onSelectedProvidersChange={onSelectedProvidersChange}
           selectedStreamGroups={selectedStreamGroups}
@@ -641,7 +695,7 @@ export function ChannelManagerTab({
           onGroupExpand={onStreamGroupExpand}
           defaultNormalizeOnCreate={defaultNormalizeOnCreate}
           dedupReturningStreamIds={dedupReturningStreamIds}
-        />
+        /></div>
       }
     />
       )}

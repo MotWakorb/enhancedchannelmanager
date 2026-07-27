@@ -316,4 +316,35 @@ describe('ChannelManagerTab — workspace source states', () => {
     expect(screen.getAllByText('Streams require administrator access')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /Retry loading/i })).toBeNull();
   });
+
+  it('retains cached pane content with an explicit stale label and retries every failed operation', async () => {
+    const retryGroups = vi.fn().mockResolvedValue(undefined);
+    const retryChannels = vi.fn().mockResolvedValue(undefined);
+    render(<ChannelManagerTab
+      {...makeMinimalProps()}
+      channelSources={[
+        { key: 'groups', label: 'channel groups', state: 'error', hasSnapshot: true, retry: retryGroups },
+        { key: 'channels', label: 'channels', state: 'error', hasSnapshot: true, retry: retryChannels },
+      ]}
+    />);
+    expect(screen.getByText('Channels unavailable — showing previously loaded data')).toBeInTheDocument();
+    expect(screen.getByTestId('channels-pane')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading channels' }));
+    await waitFor(() => {
+      expect(retryGroups).toHaveBeenCalledOnce();
+      expect(retryChannels).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('lets any independently failing protected source hide both panes', () => {
+    render(<ChannelManagerTab
+      {...makeMinimalProps()}
+      channelSources={[
+        { key: 'groups', label: 'channel groups', state: 'success', hasSnapshot: true, retry: vi.fn() },
+        { key: 'channels', label: 'channels', state: 'permission', hasSnapshot: false, retry: vi.fn() },
+      ]}
+    />);
+    expect(screen.queryByTestId('channels-pane')).toBeNull();
+    expect(screen.queryByTestId('streams-pane')).toBeNull();
+  });
 });

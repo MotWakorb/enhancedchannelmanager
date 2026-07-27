@@ -47,6 +47,30 @@
   letter-spacing: 0.05em;
 }
 
+.channel-workspace-pane-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.channel-workspace-pane-content > .channels-pane,
+.channel-workspace-pane-content > .streams-pane {
+  min-height: 0;
+  flex: 1;
+}
+
+.channel-workspace-pane-content > .source-load-status,
+.channel-workspace-empty {
+  margin: 0.5rem 0.75rem 0;
+}
+
+.channel-workspace-empty {
+  color: var(--text-secondary);
+}
+
 .channel-manager-subnav {
   display: flex;
   align-items: center;

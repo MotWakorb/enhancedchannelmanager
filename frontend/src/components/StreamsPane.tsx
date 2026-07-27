@@ -58,6 +58,8 @@ interface StreamsPaneProps {
   groupFilter: string | null;
   onGroupFilterChange: (group: string | null) => void;
   loading: boolean;
+  /** Total matches reported by the server; may exceed the loaded page. */
+  matchingTotal?: number | null;
   onBulkAddToChannel?: (streamIds: number[], channelId: number) => void;
   // Multi-select support
   selectedProviders?: number[];
@@ -149,6 +151,7 @@ export function StreamsPane({
   groupFilter,
   onGroupFilterChange,
   loading,
+  matchingTotal = null,
   selectedProviders = [],
   onSelectedProvidersChange,
   selectedStreamGroups = [],
@@ -1512,7 +1515,7 @@ export function StreamsPane({
   };
 
   const inventoryCount = searchTerm.trim()
-    ? streams.length
+    ? matchingTotal ?? streams.length
     : selectedStreamGroups.length > 0
       ? streamGroups
         .filter((group) => selectedStreamGroups.includes(group.name))
