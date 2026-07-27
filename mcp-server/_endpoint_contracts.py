@@ -693,6 +693,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/sync-targets",
         request_fields=frozenset({
             "name", "base_url", "credentials", "enabled", "insecure", "fuzzy_stream_matching",
+            "sync_logos",
         }),
     ),
     "sync_update_target": Endpoint(
@@ -701,6 +702,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/sync-targets/{target_id}",
         request_fields=frozenset({
             "name", "base_url", "credentials", "enabled", "insecure", "fuzzy_stream_matching",
+            "sync_logos",
         }),
     ),
     "sync_delete_target": Endpoint(

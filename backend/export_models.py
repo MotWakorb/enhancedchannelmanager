@@ -156,6 +156,14 @@ class SyncTarget(Base):
     # Opt-in: include the stream floor in the sync and fuzzy-match streams on the
     # remote instead of requiring exact identity. Default False (exact matching).
     fuzzy_stream_matching = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    # Opt-in (v0.18.1, bead 7ipq2.1 — the ADR-013 S9 exit path): include the
+    # LOGO slice in this target's sync cycles. Default False — logos stay out
+    # of the unconditional per-cycle set S9 ratified. When on, the sync path
+    # streams missed logos one at a time (D8) and can never bulk-delete B's
+    # logos (clear_existing is hard-disabled in the sync logos step). NOT NULL
+    # add to a possibly-populated table, so it carries a server_default like
+    # fuzzy_stream_matching above.
+    sync_logos = Column(Boolean, nullable=False, server_default=text("0"), default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -173,6 +181,7 @@ class SyncTarget(Base):
             "last_outcome": self.last_outcome,
             "last_source_fingerprint": self.last_source_fingerprint,
             "fuzzy_stream_matching": self.fuzzy_stream_matching,
+            "sync_logos": self.sync_logos,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
         }

@@ -242,6 +242,12 @@ class StatefulDispatcharrFake:
         self.stream_profiles = _Store("stream_profile", _name_key, id_base=id_base + 500)
         self.channels = _Store("channel", _channel_key, id_base=id_base + 600)
         self.streams = _Store("stream", _stream_key, id_base=id_base + 700)
+        # Logos (bead 7ipq2.1): keyed by normalized name — the importer's tier-2
+        # match key, and the natural key upload_logo_file writes under.
+        self.logos = _Store("logo", _name_key, id_base=id_base + 800)
+        # Every bulk_delete_logos invocation is recorded so tests can pin the
+        # sync-path invariant: the destructive pre-step NEVER fires (ADR-013 S9).
+        self.bulk_logo_delete_calls: list[list[int]] = []
 
         # Optional write-fault injection: a callable invoked at the start of every
         # mutating call with (method_name, payload). If it raises, the fake raises
@@ -406,7 +412,7 @@ class StatefulDispatcharrFake:
         # references ``client.delete_user``. A 404 is the correct "already gone".
         raise FakeNotFoundError("user", user_id)
 
-    # ----- user agents / DVR rules / logos (not in the sync category set, but
+    # ----- user agents / DVR rules (not in the sync category set, but
     #        _delete_dispatch references their compensators eagerly — kxcjf) ---
 
     async def delete_user_agent(self, user_agent_id: int) -> None:
@@ -415,8 +421,39 @@ class StatefulDispatcharrFake:
     async def delete_dvr_rule(self, rule_id: int) -> None:
         raise FakeNotFoundError("dvr_rule", rule_id)
 
+    # ----- logos (bead 7ipq2.1 — the opt-in sync slice's write surface) -----
+
+    async def get_all_logos_paginated(self, page_size: int = 500) -> list:
+        return self.logos.list()
+
+    async def upload_logo_file(
+        self, name: str, filename: str, data: bytes, content_type: str
+    ) -> dict:
+        """Store an uploaded logo; the row carries the url the tier-3 (file)
+        match reads, so a re-run matches what a previous run uploaded."""
+        self._check_fault("upload_logo_file", {"name": name, "filename": filename})
+        return self.logos.create(
+            {"name": name, "url": "/data/logos/%s" % filename}
+        )
+
     async def delete_logo(self, logo_id: int) -> None:
-        raise FakeNotFoundError("logo", logo_id)
+        # Real compensating delete (rollback target for an uploaded logo);
+        # 404 (FakeNotFoundError) when already gone — the rollback's
+        # 404-as-success shape.
+        self.logos.delete(logo_id)
+
+    async def bulk_delete_logos(self, logo_ids: list[int]) -> dict:
+        # The DESTRUCTIVE pre-step. Recorded so tests can assert the sync path
+        # NEVER invokes it (clear_existing is hard-disabled in the sync step).
+        self.bulk_logo_delete_calls.append(list(logo_ids))
+        for logo_id in list(logo_ids):
+            if logo_id in self.logos.rows:
+                del self.logos.rows[logo_id]
+        return {"deleted": len(logo_ids)}
+
+    def logo_names(self) -> set:
+        """Normalized logo names on this instance — the logo convergence key."""
+        return {_name_key(r) for r in self.logos.list()}
 
     # ----- state snapshot (the convergence assertion surface) --------------
 
@@ -450,6 +487,7 @@ class StatefulDispatcharrFake:
                 self.stream_profiles,
                 self.channels,
                 self.streams,
+                self.logos,
             )
         )
 
@@ -527,13 +565,16 @@ class StatefulDispatcharrFake:
 
 
 def make_sync_target(
-    *, credential_version: int = 1, fuzzy_stream_matching: bool = False
+    *,
+    credential_version: int = 1,
+    fuzzy_stream_matching: bool = False,
+    sync_logos: bool = False,
 ) -> MagicMock:
     """A fake ``SyncTarget`` row — enabled, fresh, never-insecure.
 
     Mirrors the shape ``run_sync`` reads (``id``/``name``/``base_url``/
     ``credentials``/``enabled``/``token_revoked_at``/``credential_version``/
-    ``insecure``/``fuzzy_stream_matching``).
+    ``insecure``/``fuzzy_stream_matching``/``sync_logos``).
     """
     target = MagicMock()
     target.id = 7
@@ -545,6 +586,7 @@ def make_sync_target(
     target.credential_version = credential_version
     target.credentials = "encrypted-blob"
     target.fuzzy_stream_matching = fuzzy_stream_matching
+    target.sync_logos = sync_logos
     return target
 
 
@@ -587,6 +629,7 @@ class SyncHarness:
         dest: StatefulDispatcharrFake,
         target: Optional[MagicMock] = None,
         freshness_reason: Optional[str] = None,
+        config_dir=None,
     ):
         self.source = source
         self.dest = dest
@@ -596,20 +639,40 @@ class SyncHarness:
             ) if target else False
         )
         self.freshness_reason = freshness_reason
+        # Optional CONFIG_DIR override (a tmp_path): the logo slice (7ipq2.1)
+        # gathers source logo FILES from <CONFIG_DIR>/uploads/logos — pointing
+        # this at a tmp dir gives a test real on-disk source logos without
+        # touching the real config partition. None leaves CONFIG_DIR alone
+        # (safe for targets that never opt into sync_logos).
+        self.config_dir = config_dir
 
     @contextmanager
     def _patched(self):
-        """Apply the three engine seams (local gather / remote factory / freshness)."""
+        """Apply the engine seams (local gather / remote factory / freshness /
+        optional logo source dir)."""
         # Imported lazily so importing the harness module never drags the engine in
         # at collection time (keeps the fixture import cheap + cycle-free).
+        from contextlib import ExitStack
+
         from routers import backup as backup_mod
         from tasks import dbas_sync_engine as engine
 
-        with patch.object(backup_mod, "get_client", return_value=self.source), \
-             patch.object(engine, "make_remote_client", return_value=self.dest), \
-             patch.object(
-                 engine, "sync_freshness_reason", return_value=self.freshness_reason
-             ):
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(backup_mod, "get_client", return_value=self.source)
+            )
+            stack.enter_context(
+                patch.object(engine, "make_remote_client", return_value=self.dest)
+            )
+            stack.enter_context(
+                patch.object(
+                    engine, "sync_freshness_reason", return_value=self.freshness_reason
+                )
+            )
+            if self.config_dir is not None:
+                stack.enter_context(
+                    patch.object(backup_mod, "CONFIG_DIR", self.config_dir)
+                )
             yield
 
     async def run(self, *, confirm_apply: bool = False, ledger_dir=None, **kwargs):
