@@ -1,0 +1,18 @@
+.operator-dashboard { padding: 0 1.5rem 1.5rem; overflow: auto; }
+.operator-dashboard h2 { margin: 0; font-size: 1.05rem; }
+.operator-dashboard-intro { margin: .25rem 0 1rem; color: var(--text-secondary); font-size: .875rem; }
+.operator-dashboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
+.operator-dashboard-card { min-width: 0; min-height: 164px; padding: 1rem; display: flex; flex-direction: column; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); }
+.operator-dashboard-card h3 { margin: 0 0 .5rem; color: var(--text-secondary); font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; }
+.dashboard-card-value { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: 1.45rem; font-weight: 700; }
+.dashboard-card-status { display: flex; align-items: center; gap: .35rem; margin: .5rem 0 .2rem; font-size: .82rem; }
+.dashboard-card-status .material-icons { font-size: 1rem; }
+.dashboard-card-freshness { margin: 0; color: var(--text-muted); font-size: .75rem; }
+.dashboard-card-link { margin-top: auto; min-height: 44px; display: inline-flex; align-items: center; gap: .25rem; width: fit-content; font-weight: 600; }
+.dashboard-card-link .material-icons { font-size: 1rem; }
+.dashboard-card-skeleton span { display: block; height: 1rem; margin: .45rem 0; border-radius: 4px; background: var(--bg-tertiary); }
+.dashboard-card-skeleton span:first-child { width: 55%; height: 1.7rem; }
+.dashboard-card-error { font-size: .82rem; }
+.dashboard-card-error p { margin: .25rem 0; }
+.dashboard-card-error button { min-height: 44px; }
+@media (max-width: 850px) { .operator-dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

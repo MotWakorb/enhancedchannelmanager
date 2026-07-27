@@ -53,7 +53,7 @@ async function expectContentWithinMain(page: Page, route: 'channel-manager' | 'g
 }
 
 const routeConsumers = [
-  { name: 'Dashboard', heading: 'OVERVIEW / DASHBOARD', settled: '.dashboard-route' },
+  { name: 'Dashboard', heading: 'OVERVIEW / DASHBOARD', settled: '.operator-dashboard' },
   { name: 'Channel Manager', heading: 'OPERATIONS / CHANNEL MANAGER', settled: '.enter-edit-mode-btn' },
   { name: 'Guide', heading: 'OPERATIONS / GUIDE', settled: 'button[title="Refresh program data"]' },
   { name: 'M3U Manager', heading: 'OPERATIONS / M3U MANAGER', settled: 'button:has-text("Add M3U Account")' },
@@ -295,6 +295,62 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
             && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
         })).toBe(true)
       }
+    })
+
+    test('Dashboard renders the approved compact inventory with actionable links above the fold', async ({ page }) => {
+      await seedChannelWorkspace(page, true, 2)
+      await page.route(/\/api\/health(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'healthy', service: 'ECM', version: '9.9.9', release_channel: 'stable', git_commit: 'fixture' }),
+      }))
+      await page.route(/\/api\/m3u\/changes\/summary(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          total_changes: 3, groups_added: 0, groups_removed: 0, streams_added: 2,
+          streams_removed: 1, accounts_affected: [3], since: '2026-07-26T12:00:00Z',
+        }),
+      }))
+      await page.route(/\/api\/tasks(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ tasks: [
+          { task_id: 'refresh', enabled: true, effective_enabled: true, status: 'running', last_run: '2026-07-27T01:00:00Z' },
+          { task_id: 'cleanup', enabled: true, effective_enabled: true, status: 'failed', last_run: '2026-07-27T02:00:00Z' },
+        ] }),
+      }))
+      await page.route(/\/api\/journal\/stats(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          total_entries: 9, by_category: { channel: 5, stream: 4 }, by_action_type: {},
+          date_range: { oldest: '2026-07-20T00:00:00Z', newest: '2026-07-27T02:00:00Z' },
+        }),
+      }))
+      await openShellWithPipelineFixture(page, 200, [{ id: 3, name: 'Fixture Provider' }])
+      await dismissFirstRunPromptIfPresent(page)
+      await page.getByRole('link', { name: 'Dashboard' }).click()
+
+      const dashboard = page.getByRole('region', { name: 'System summary' })
+      await expect(dashboard).toBeVisible()
+      await expect(dashboard.locator('article')).toHaveCount(6)
+      for (const value of ['healthy', '2 channels', '1 stream', '1 account', '3 changes', '2 enabled', '9 entries']) {
+        await expect(dashboard.getByText(value, { exact: true })).toBeVisible()
+      }
+      await expect(dashboard.getByRole('link', { name: /Open Scheduled work/ }))
+        .toHaveAttribute('href', '#settings/scheduled-tasks')
+      await expect(dashboard.getByRole('link', { name: /Open Recent M3U changes/ }))
+        .toHaveAttribute('href', '#m3u-changes')
+      expect(await dashboard.evaluate((element) => {
+        const rect = element.getBoundingClientRect()
+        const cards = [...element.querySelectorAll<HTMLElement>('article')]
+        return {
+          aboveFold: cards.every((card) => card.getBoundingClientRect().bottom <= window.innerHeight),
+          contained: rect.right <= document.documentElement.clientWidth + 1,
+          noDocumentOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+        }
+      })).toEqual({ aboveFold: true, contained: true, noDocumentOverflow: true })
     })
 
     test('Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {

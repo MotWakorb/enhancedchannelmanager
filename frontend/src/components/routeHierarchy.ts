@@ -81,7 +81,7 @@ export interface RouteHeaderPolicy {
 }
 
 export const ROUTE_HEADER_POLICIES: Record<TabId, RouteHeaderPolicy> = {
-  dashboard: { primaryAction: null, exception: 'Read-only placeholder until the Dashboard delivery.' },
+  dashboard: { primaryAction: null, exception: 'Read-only operational summary; actions remain on destination pages.' },
   'channel-manager': { primaryAction: 'Edit Mode' },
   guide: { primaryAction: null, exception: 'Guide refresh, print, and temporal selectors remain one source-scoped control group.' },
   'm3u-manager': { primaryAction: 'Add M3U Account' },

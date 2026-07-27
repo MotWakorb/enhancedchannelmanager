@@ -15,6 +15,7 @@ import {
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
+import { OperatorDashboard } from './components/tabs/OperatorDashboard';
 import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
@@ -2568,9 +2569,7 @@ function App() {
         />
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
           {activeTab === 'dashboard' && (
-            <section className="dashboard-route">
-              <p>Operational overview cards will be added in the Dashboard delivery.</p>
-            </section>
+            <OperatorDashboard initialHealth={health} />
           )}
           {activeTab === 'channel-manager' && (
             <ErrorBoundary key="tab-channel-manager" scopeLabel="Channel Manager tab" reloadMode="reset">
