@@ -41,6 +41,7 @@ interface HashRoute {
   tab: TabId;
   settingsPage: SettingsPage | null;
   m3uChangesHours?: number;
+  section?: string;
 }
 
 function parseHash(hash: string): HashRoute {
@@ -51,22 +52,24 @@ function parseHash(hash: string): HashRoute {
   const hoursParam = new URLSearchParams(query).get('hours');
   const m3uChangesHours = hoursParam && ['24', '72', '168', '720', '2160'].includes(hoursParam)
     ? Number(hoursParam) : null;
+  const sectionParam = new URLSearchParams(query).get('section');
+  const section = sectionParam && /^[a-z0-9-]+$/.test(sectionParam) ? sectionParam : undefined;
 
   // Check for settings/sub-page format
   if (path.startsWith('settings/')) {
     const subPage = path.slice('settings/'.length);
     if (subPage in LEGACY_SETTINGS_PAGE_ALIASES) {
-      return { tab: 'settings', settingsPage: LEGACY_SETTINGS_PAGE_ALIASES[subPage] };
+      return { tab: 'settings', settingsPage: LEGACY_SETTINGS_PAGE_ALIASES[subPage], ...(section ? { section } : {}) };
     }
     if (VALID_SETTINGS_PAGES.has(subPage)) {
-      return { tab: 'settings', settingsPage: subPage as SettingsPage };
+      return { tab: 'settings', settingsPage: subPage as SettingsPage, ...(section ? { section } : {}) };
     }
     // Invalid settings sub-page → fall back to settings/general
     return { tab: 'settings', settingsPage: null };
   }
 
   if (path === 'settings') {
-    return { tab: 'settings', settingsPage: null };
+    return { tab: 'settings', settingsPage: null, ...(section ? { section } : {}) };
   }
 
   if (path in LEGACY_TAB_ALIASES) {
@@ -76,18 +79,20 @@ function parseHash(hash: string): HashRoute {
   if (VALID_TABS.has(path)) {
     return path === 'm3u-changes' && m3uChangesHours
       ? { tab: path, settingsPage: null, m3uChangesHours }
-      : { tab: path as TabId, settingsPage: null };
+      : { tab: path as TabId, settingsPage: null, ...(section ? { section } : {}) };
   }
 
   // Invalid hash → default
   return { tab: DEFAULT_TAB, settingsPage: null };
 }
 
-function buildHash(tab: TabId, settingsPage?: SettingsPage | null, m3uChangesHours?: number | null): string {
+function buildHash(tab: TabId, settingsPage?: SettingsPage | null, m3uChangesHours?: number | null, section?: string): string {
+  const query = section ? `?section=${encodeURIComponent(section)}` : '';
   if (tab === 'settings' && settingsPage && settingsPage !== 'general') {
-    return `#settings/${settingsPage}`;
+    return `#settings/${settingsPage}${query}`;
   }
-  return tab === 'm3u-changes' && m3uChangesHours ? `#${tab}?hours=${m3uChangesHours}` : `#${tab}`;
+  if (tab === 'm3u-changes' && m3uChangesHours) return `#${tab}?hours=${m3uChangesHours}`;
+  return `#${tab}${query}`;
 }
 
 export interface UseHashRouteReturn {
@@ -123,7 +128,7 @@ export function useHashRoute(): UseHashRouteReturn {
   useEffect(() => {
     const canonicalizeCurrentHash = () => {
       const parsed = parseHash(window.location.hash);
-      const canonicalHash = buildHash(parsed.tab, parsed.settingsPage, parsed.m3uChangesHours);
+      const canonicalHash = buildHash(parsed.tab, parsed.settingsPage, parsed.m3uChangesHours, parsed.section);
       if (window.location.hash !== canonicalHash) {
         window.history.replaceState(null, '', canonicalHash);
       }

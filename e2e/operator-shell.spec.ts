@@ -817,6 +817,88 @@ test.describe('operator shell at 200% equivalent', () => {
 test.describe('operator shell navigation behavior', () => {
   test.use({ serviceWorkers: 'block' })
 
+  test('audited long pages provide direct section entry and protect pending Settings edits', async ({ page }) => {
+    await seedChannelWorkspace(page, false)
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await page.route(/\/api\/settings(?:\?|$)/, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: true,
+        url: 'http://dispatcharr.test',
+        auth_method: 'password',
+        username: 'operator',
+        default_channel_profile_ids: [],
+        stream_sort_priority: [],
+        stream_sort_enabled: {},
+        m3u_account_priorities: {},
+        custom_network_prefixes: [],
+        hide_auto_sync_groups: false,
+      }),
+    }))
+    await page.getByRole('link', { name: 'Settings', exact: true }).click()
+    const sectionNav = page.getByRole('navigation', { name: 'On this page' })
+    await expect(sectionNav).toBeVisible()
+    await sectionNav.getByRole('button', { name: 'Stats Polling' }).click()
+    await expect(page).toHaveURL(/#settings\?section=settings-general-section-stats-polling$/)
+    await page.getByLabel('Poll interval (seconds)').fill('45')
+    await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
+    page.once('dialog', (dialog) => dialog.dismiss())
+    await page.getByRole('link', { name: 'Dashboard' }).click()
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await page.getByRole('button', { name: 'Cancel changes' }).click()
+    await expect(page.getByRole('status', { name: 'Unsaved settings' })).toHaveCount(0)
+
+    await page.goto('/#stats?section=stats-section-enhanced')
+    await expect(page.locator('#stats-section-enhanced')).toBeVisible()
+    await expect(page.getByRole('navigation', { name: 'On this page' })
+      .getByRole('button', { name: 'Enhanced Statistics' })).toHaveAttribute('aria-current', 'location')
+  })
+
+  test('Settings pending actions retain edits on save failure and settle on success', async ({ page }) => {
+    let saveSucceeds = false
+    await seedChannelWorkspace(page, false)
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await page.route(/\/api\/settings(?:\?|$)/, async (route) => {
+      if (route.request().method() !== 'POST') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            configured: true,
+            url: 'http://dispatcharr.test',
+            auth_method: 'password',
+            username: 'operator',
+            default_channel_profile_ids: [],
+            stream_sort_priority: [],
+            stream_sort_enabled: {},
+            m3u_account_priorities: {},
+            custom_network_prefixes: [],
+            hide_auto_sync_groups: false,
+          }),
+        })
+      }
+      return route.fulfill({
+        status: saveSucceeds ? 200 : 500,
+        contentType: 'application/json',
+        body: saveSucceeds
+          ? JSON.stringify({ success: true, requires_restart: false })
+          : JSON.stringify({ detail: 'Settings write unavailable' }),
+      })
+    })
+    await page.getByRole('link', { name: 'Settings', exact: true }).click()
+    await page.getByLabel('Poll interval (seconds)').fill('45')
+    await page.getByRole('button', { name: 'Save changes' }).click()
+    await expect(page.getByText('Settings could not be saved. Your changes are still available.')).toBeAttached()
+    await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
+    saveSucceeds = true
+    await page.getByRole('button', { name: 'Save changes' }).click()
+    await expect(page.getByRole('status', { name: 'Unsaved settings' })).toHaveCount(0)
+    await expect(page.getByText('Settings saved successfully')).toBeAttached()
+  })
+
   test('Channel Manager distinguishes loading and true-empty inventory', async ({ page }) => {
     await seedChannelWorkspace(page, false)
     await page.route(/\/api\/channels(?:\?|$)/, async (route) => {

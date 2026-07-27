@@ -28,6 +28,7 @@ import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { useScrollTopReset } from '../../hooks/useScrollTopReset';
+import { StickySectionNav } from '../StickySectionNav';
 import {
   DndContext,
   closestCenter,
@@ -300,6 +301,9 @@ import type { SettingsPage } from '../../hooks';
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete, initialSettingsPage, onSettingsPageChange }: SettingsTabProps) {
   const [activePage, setActivePageInternal] = useState<SettingsPage>(initialSettingsPage || 'general');
   const settingsContentRef = useRef<HTMLDivElement>(null);
+  const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<'idle' | 'success' | 'error'>('idle');
+  const supportsPageSave = ['general', 'channel-defaults', 'appearance', 'email', 'integrations', 'channel-pipeline', 'maintenance'].includes(activePage);
   // Reset scroll position when navigating between Settings sub-pages — the
   // content pane otherwise preserves scrollTop from the previously viewed
   // sub-page, landing mid-page and burying top-of-page warnings (bead 09x38.11).
@@ -307,6 +311,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // Wrap setActivePage to also notify parent for hash routing
   const setActivePage = (page: SettingsPage) => {
+    if (page !== activePage && hasPendingChanges && !window.confirm('Discard unsaved settings and open another settings page?')) {
+      return;
+    }
+    setHasPendingChanges(false);
     setActivePageInternal(page);
     onSettingsPageChange?.(page);
   };
@@ -322,6 +330,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const notifications = useNotifications();
   const { user } = useAuth();
   const restartToastIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasPendingChanges) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const protectHashNavigation = (event: MouseEvent) => {
+      if (!hasPendingChanges) return;
+      const link = (event.target as Element | null)?.closest<HTMLAnchorElement>('a[href^="#"]');
+      if (link && !window.confirm('Discard unsaved settings and leave this page?')) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    document.addEventListener('click', protectHashNavigation, true);
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload);
+      document.removeEventListener('click', protectHashNavigation, true);
+    };
+  }, [hasPendingChanges]);
 
   // Listen for restart events from NotificationCenter to dismiss the restart toast
   useEffect(() => {
@@ -1454,10 +1484,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.success('Settings saved successfully');
       }
       onSaved();
+      setHasPendingChanges(false);
+      setSaveFeedback('success');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to save settings';
       logger.error('Failed to save settings', err);
       notifications.error(errorMessage, 'Save Failed');
+      setSaveFeedback('error');
     } finally {
       setLoading(false);
     }
@@ -5891,7 +5924,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </ul>
       </nav>
 
-      <div className="settings-content" ref={settingsContentRef}>
+      <div
+        className="settings-content"
+        ref={settingsContentRef}
+        onChangeCapture={() => {
+          if (supportsPageSave) {
+            setHasPendingChanges(true);
+            setSaveFeedback('idle');
+          }
+        }}
+      >
+        <StickySectionNav
+          containerRef={settingsContentRef}
+          selector=".settings-page > .settings-section"
+          routeKey={`settings-${activePage}`}
+        />
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
@@ -5910,6 +5957,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'tls-settings' && <TLSSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'mcp-settings' && <MCPSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={!user || user.is_admin} />}
+        {supportsPageSave && hasPendingChanges && <div className="settings-pending-actions" role="status" aria-label="Unsaved settings">
+          <span><span className="material-icons" aria-hidden="true">edit</span>Unsaved changes</span>
+          <button type="button" className="btn-secondary" disabled={loading} onClick={() => {
+            void loadSettings().then(() => {
+              setHasPendingChanges(false);
+              setSaveFeedback('idle');
+            });
+          }}>Cancel changes</button>
+          <button type="button" className="btn-primary" disabled={loading} onClick={() => void handleSave()}>
+            {loading ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>}
+        <div className="sr-only" role="status" aria-live="polite">
+          {saveFeedback === 'success' ? 'Settings saved successfully' : saveFeedback === 'error' ? 'Settings could not be saved. Your changes are still available.' : ''}
+        </div>
       </div>
 
       <DeleteOrphanedGroupsModal

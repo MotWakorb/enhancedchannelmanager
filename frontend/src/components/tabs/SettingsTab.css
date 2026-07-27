@@ -73,6 +73,27 @@
   padding: 1.5rem 2rem;
 }
 
+.settings-pending-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .75rem;
+  padding: .75rem 1rem;
+  margin-top: 1rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: 0 -3px 12px rgba(0, 0, 0, .22);
+}
+.settings-pending-actions > span { display: inline-flex; align-items: center; gap: .4rem; margin-right: auto; font-weight: 600; color: var(--warning, #f0ad4e); }
+@media (max-width: 850px) {
+  .settings-pending-actions { flex-wrap: wrap; }
+  .settings-pending-actions > span { flex-basis: 100%; }
+}
+
 .settings-page {
   max-width: 800px;
 }

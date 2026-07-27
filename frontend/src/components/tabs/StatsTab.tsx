@@ -31,6 +31,7 @@ import type { Viewer } from '../../types';
 import './StatsTab.css';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { SourceLoadStatus } from '../SourceLoadStatus';
+import { StickySectionNav } from '../StickySectionNav';
 
 // Historical data point for charts
 interface HistoricalDataPoint {
@@ -241,6 +242,7 @@ function formatProgramTime(date: Date): string {
 }
 
 export function StatsTab() {
+  const statsContentRef = useRef<HTMLDivElement>(null);
   // Data state
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
   const [events, setEvents] = useState<SystemEvent[]>([]);
@@ -1040,7 +1042,12 @@ export function StatsTab() {
       )}
 
       {/* Content */}
-      <div className="stats-content">
+      <div className="stats-content" ref={statsContentRef}>
+        <StickySectionNav
+          containerRef={statsContentRef}
+          selector=".active-channels, .events-section, .top-watched-section, .bandwidth-section, [id^='stats-section-']"
+          routeKey="stats"
+        />
         {/* No streams */}
         {!error && activeChannels === 0 && (
           <div className="no-streams">

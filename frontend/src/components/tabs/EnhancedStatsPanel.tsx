@@ -92,7 +92,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
 
   if (loading && !uniqueViewers) {
     return (
-      <div className="enhanced-stats-panel" id="stats-section-enhanced">
+      <div className="enhanced-stats-panel" id="stats-section-enhanced" data-section-label="Enhanced Statistics">
         <div className="loading-state">Loading enhanced statistics...</div>
       </div>
     );
@@ -100,7 +100,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
 
   if (error) {
     return (
-      <div className="enhanced-stats-panel" id="stats-section-enhanced">
+      <div className="enhanced-stats-panel" id="stats-section-enhanced" data-section-label="Enhanced Statistics">
         <div className="error-state">{error}</div>
       </div>
     );
@@ -113,7 +113,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
   })) || [];
 
   return (
-    <div className="enhanced-stats-panel" id="stats-section-enhanced">
+    <div className="enhanced-stats-panel" id="stats-section-enhanced" data-section-label="Enhanced Statistics">
       <div className="panel-header">
         <h3 className="section-title">Enhanced Statistics</h3>
         <div className="view-toggle">

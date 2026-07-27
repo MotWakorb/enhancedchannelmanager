@@ -3,6 +3,13 @@ import { renderHook, act } from '@testing-library/react';
 import { useHashRoute, _parseHash, _buildHash } from './useHashRoute';
 
 describe('parseHash', () => {
+  it('preserves supported section deep links on audited long pages', () => {
+    expect(_parseHash('#stats?section=stats-section-watch-history')).toEqual({
+      tab: 'stats', settingsPage: null, section: 'stats-section-watch-history',
+    });
+    expect(_buildHash('settings', 'integrations', null, 'settings-integrations-section-plex'))
+      .toBe('#settings/integrations?section=settings-integrations-section-plex');
+  });
   it('preserves the supported M3U changes time window', () => {
     expect(_parseHash('#m3u-changes?hours=24')).toEqual({
       tab: 'm3u-changes', settingsPage: null, m3uChangesHours: 24,
